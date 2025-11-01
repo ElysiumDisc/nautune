@@ -158,6 +158,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                       scrollController: _albumsScrollController,
                       onRefresh: () => widget.appState.refreshAlbums(),
                       onAlbumTap: (album) => _navigateToAlbum(context, album),
+                      appState: widget.appState,
                     ),
                     // Artists Tab (placeholder)
                     _PlaceholderTab(
@@ -234,7 +235,10 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   void _playTrack(JellyfinTrack track) {
-    // TODO: Play single track
+    widget.appState.audioPlayerService.playTrack(
+      track,
+      queueContext: widget.appState.recentTracks,
+    );
   }
 }
 
@@ -387,6 +391,7 @@ class _AlbumsTab extends StatelessWidget {
     required this.scrollController,
     required this.onRefresh,
     required this.onAlbumTap,
+    required this.appState,
   });
 
   final List<JellyfinAlbum>? albums;
@@ -395,6 +400,7 @@ class _AlbumsTab extends StatelessWidget {
   final ScrollController scrollController;
   final VoidCallback onRefresh;
   final Function(JellyfinAlbum) onAlbumTap;
+  final NautuneAppState appState;
 
   @override
   Widget build(BuildContext context) {
@@ -442,7 +448,11 @@ class _AlbumsTab extends StatelessWidget {
             return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
           }
           final album = albums![index];
-          return _AlbumCard(album: album, onTap: () => onAlbumTap(album));
+          return _AlbumCard(
+            album: album,
+            onTap: () => onAlbumTap(album),
+            appState: appState,
+          );
         },
       ),
     );
@@ -450,13 +460,18 @@ class _AlbumsTab extends StatelessWidget {
 }
 
 class _AlbumCard extends StatelessWidget {
-  const _AlbumCard({required this.album, required this.onTap});
+  const _AlbumCard({required this.album, required this.onTap, required this.appState});
   final JellyfinAlbum album;
   final VoidCallback onTap;
+  final NautuneAppState appState;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final imageUrl = album.primaryImageTag != null
+        ? appState.buildImageUrl(itemId: album.id, tag: album.primaryImageTag)
+        : null;
+
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -468,9 +483,13 @@ class _AlbumCard extends StatelessWidget {
               aspectRatio: 1,
               child: Container(
                 color: theme.colorScheme.surfaceContainerHighest,
-                child: album.primaryImageTag != null
-                    ? Image.network(album.primaryImageTag!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.album, size: 64))
-                    : const Icon(Icons.album, size: 64),
+                child: imageUrl != null
+                    ? Image.network(
+                        imageUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Icon(Icons.album, size: 64, color: theme.colorScheme.secondary.withValues(alpha: 0.3)),
+                      )
+                    : Icon(Icons.album, size: 64, color: theme.colorScheme.secondary.withValues(alpha: 0.3)),
               ),
             ),
             Padding(

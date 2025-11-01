@@ -368,4 +368,12 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   AudioPlayerService get audioService => _audioPlayerService;
+
+  String buildImageUrl({required String itemId, String? tag, int maxWidth = 400}) {
+    return _jellyfinService.buildImageUrl(
+      itemId: itemId,
+      tag: tag,
+      maxWidth: maxWidth,
+    );
+  }
 }
