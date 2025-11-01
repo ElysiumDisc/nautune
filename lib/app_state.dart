@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'jellyfin/jellyfin_album.dart';
 import 'jellyfin/jellyfin_library.dart';
 import 'jellyfin/jellyfin_service.dart';
 import 'jellyfin/jellyfin_session.dart';
@@ -22,6 +23,9 @@ class NautuneAppState extends ChangeNotifier {
   bool _isLoadingLibraries = false;
   Object? _librariesError;
   List<JellyfinLibrary>? _libraries;
+  bool _isLoadingAlbums = false;
+  Object? _albumsError;
+  List<JellyfinAlbum>? _albums;
 
   bool get isInitialized => _initialized;
   bool get isAuthenticating => _isAuthenticating;
@@ -30,6 +34,9 @@ class NautuneAppState extends ChangeNotifier {
   bool get isLoadingLibraries => _isLoadingLibraries;
   Object? get librariesError => _librariesError;
   List<JellyfinLibrary>? get libraries => _libraries;
+  bool get isLoadingAlbums => _isLoadingAlbums;
+  Object? get albumsError => _albumsError;
+  List<JellyfinAlbum>? get albums => _albums;
   String? get selectedLibraryId => _session?.selectedLibraryId;
   JellyfinLibrary? get selectedLibrary {
     final libs = _libraries;
@@ -53,6 +60,7 @@ class NautuneAppState extends ChangeNotifier {
       _session = storedSession;
       _jellyfinService.restoreSession(storedSession);
       await _loadLibraries();
+      await _loadAlbumsForSelectedLibrary();
     }
     _initialized = true;
     notifyListeners();
@@ -76,6 +84,7 @@ class NautuneAppState extends ChangeNotifier {
       _session = session;
       await _sessionStore.save(session);
       await _loadLibraries();
+      await _loadAlbumsForSelectedLibrary();
     } catch (error) {
       _lastError = error;
       rethrow;
@@ -91,6 +100,9 @@ class NautuneAppState extends ChangeNotifier {
     _libraries = null;
     _librariesError = null;
     _isLoadingLibraries = false;
+    _albums = null;
+    _albumsError = null;
+    _isLoadingAlbums = false;
     await _sessionStore.clear();
     notifyListeners();
   }
@@ -104,6 +116,7 @@ class NautuneAppState extends ChangeNotifier {
 
   Future<void> refreshLibraries() async {
     await _loadLibraries();
+    await _loadAlbumsForSelectedLibrary();
   }
 
   Future<void> _loadLibraries() async {
@@ -129,6 +142,9 @@ class NautuneAppState extends ChangeNotifier {
           );
           _session = updated;
           await _sessionStore.save(updated);
+          _albums = null;
+        } else if (stillExists && currentId != null) {
+          await _loadAlbumsForLibrary(currentId);
         }
       }
     } catch (error) {
@@ -151,6 +167,39 @@ class NautuneAppState extends ChangeNotifier {
     );
     _session = updated;
     await _sessionStore.save(updated);
+    await _loadAlbumsForLibrary(library.id);
     notifyListeners();
+  }
+
+  Future<void> refreshAlbums() async {
+    await _loadAlbumsForSelectedLibrary();
+  }
+
+  Future<void> _loadAlbumsForSelectedLibrary() async {
+    final libraryId = _session?.selectedLibraryId;
+    if (libraryId == null) {
+      _albums = null;
+      _albumsError = null;
+      _isLoadingAlbums = false;
+      notifyListeners();
+      return;
+    }
+    await _loadAlbumsForLibrary(libraryId);
+  }
+
+  Future<void> _loadAlbumsForLibrary(String libraryId) async {
+    _albumsError = null;
+    _isLoadingAlbums = true;
+    notifyListeners();
+
+    try {
+      _albums = await _jellyfinService.loadAlbums(libraryId: libraryId);
+    } catch (error) {
+      _albumsError = error;
+      _albums = null;
+    } finally {
+      _isLoadingAlbums = false;
+      notifyListeners();
+    }
   }
 }

@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import 'jellyfin_credentials.dart';
 import 'jellyfin_exceptions.dart';
+import 'jellyfin_album.dart';
 import 'jellyfin_library.dart';
 import 'jellyfin_user.dart';
 
@@ -93,6 +94,38 @@ class JellyfinClient {
     return items
         .whereType<Map<String, dynamic>>()
         .map(JellyfinLibrary.fromJson)
+        .toList();
+  }
+
+  Future<List<JellyfinAlbum>> fetchAlbums({
+    required JellyfinCredentials credentials,
+    required String libraryId,
+  }) async {
+    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+      'ParentId': libraryId,
+      'IncludeItemTypes': 'MusicAlbum',
+      'Recursive': 'true',
+      'SortBy': 'SortName',
+      'Fields': 'PrimaryImageAspectRatio,ProductionYear,Artists,AlbumArtists,ImageTags',
+    });
+
+    final response = await httpClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch albums: ${response.statusCode}',
+      );
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final items = data?['Items'] as List<dynamic>? ?? const [];
+
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(JellyfinAlbum.fromJson)
         .toList();
   }
 
