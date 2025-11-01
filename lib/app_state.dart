@@ -344,4 +344,28 @@ class NautuneAppState extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  Future<void> refreshRecent() async {
+    final libraryId = selectedLibraryId;
+    if (libraryId != null) {
+      await _loadRecentForLibrary(libraryId, forceRefresh: true);
+    }
+  }
+
+  void clearLibrarySelection() {
+    _session = _session?.copyWith(selectedLibraryId: null, selectedLibraryName: null);
+    _albums = null;
+    _playlists = null;
+    _recentTracks = null;
+    notifyListeners();
+    if (_session != null) {
+      _sessionStore.save(_session!);
+    }
+  }
+
+  Future<void> disconnect() async {
+    await logout();
+  }
+
+  AudioPlayerService get audioService => _audioPlayerService;
 }
