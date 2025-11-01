@@ -6,6 +6,8 @@ import 'jellyfin_credentials.dart';
 import 'jellyfin_exceptions.dart';
 import 'jellyfin_album.dart';
 import 'jellyfin_library.dart';
+import 'jellyfin_playlist.dart';
+import 'jellyfin_track.dart';
 import 'jellyfin_user.dart';
 
 /// Lightweight Jellyfin REST client to be expanded as features land.
@@ -126,6 +128,73 @@ class JellyfinClient {
     return items
         .whereType<Map<String, dynamic>>()
         .map(JellyfinAlbum.fromJson)
+        .toList();
+  }
+
+  Future<List<JellyfinPlaylist>> fetchPlaylists({
+    required JellyfinCredentials credentials,
+    required String libraryId,
+  }) async {
+    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+      'ParentId': libraryId,
+      'IncludeItemTypes': 'Playlist',
+      'Recursive': 'true',
+      'SortBy': 'SortName',
+      'Fields': 'ChildCount,ImageTags',
+    });
+
+    final response = await httpClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch playlists: ${response.statusCode}',
+      );
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final items = data?['Items'] as List<dynamic>? ?? const [];
+
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(JellyfinPlaylist.fromJson)
+        .toList();
+  }
+
+  Future<List<JellyfinTrack>> fetchRecentTracks({
+    required JellyfinCredentials credentials,
+    required String libraryId,
+    int limit = 20,
+  }) async {
+    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+      'ParentId': libraryId,
+      'IncludeItemTypes': 'Audio',
+      'Recursive': 'true',
+      'SortBy': 'DateCreated',
+      'SortOrder': 'Descending',
+      'Limit': '$limit',
+      'Fields': 'Album,Artists,RunTimeTicks,ImageTags',
+    });
+
+    final response = await httpClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch recent tracks: ${response.statusCode}',
+      );
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final items = data?['Items'] as List<dynamic>? ?? const [];
+
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(JellyfinTrack.fromJson)
         .toList();
   }
 

@@ -10,11 +10,13 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - Seamless Jellyfin login with persistent sessions managed by `lib/app_state.dart`.
 - Audio library discovery and selection powered by the custom Jellyfin client (`lib/jellyfin/`) and Deep Sea themed UI screens.
 - Album grid view with live Jellyfin artwork (trident placeholder when art is missing) to showcase each library’s collection.
+- Curated playlists and recently added feeds cached in-memory for snappy reloads across the session.
 
 ## Roadmap
 - [x] Integrate Jellyfin authentication and session persistence.
 - [x] Filter and select Jellyfin audio libraries.
 - [x] Surface albums from the selected Jellyfin library with artwork.
+- [x] Fetch playlists and recently added tracks with lightweight caching.
 - [ ] Build media catalog browsing (albums, artists, playlists).
 - [ ] Implement audio playback with background audio and media controls.
 - [ ] Wire the Swift CarPlay plugin into the Flutter engine.
