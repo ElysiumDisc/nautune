@@ -198,6 +198,38 @@ class JellyfinClient {
         .toList();
   }
 
+  Future<List<JellyfinTrack>> fetchAlbumTracks({
+    required JellyfinCredentials credentials,
+    required String albumId,
+  }) async {
+    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+      'ParentId': albumId,
+      'IncludeItemTypes': 'Audio',
+      'Recursive': 'true',
+      'SortBy': 'SortName',
+      'Fields': 'Album,Artists,RunTimeTicks,ImageTags,IndexNumber',
+    });
+
+    final response = await httpClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch album tracks: ${response.statusCode}',
+      );
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final items = data?['Items'] as List<dynamic>? ?? const [];
+
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(JellyfinTrack.fromJson)
+        .toList();
+  }
+
   Map<String, String> _defaultHeaders([JellyfinCredentials? credentials]) {
     final headers = <String, String>{
       'Content-Type': 'application/json',

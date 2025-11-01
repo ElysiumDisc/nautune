@@ -162,6 +162,21 @@ class JellyfinService {
     return recent;
   }
 
+  Future<List<JellyfinTrack>> loadAlbumTracks({
+    required String albumId,
+    bool forceRefresh = false,
+  }) async {
+    final client = _client;
+    final session = _session;
+    if (client == null || session == null) {
+      throw StateError('Authenticate before requesting album tracks.');
+    }
+    return client.fetchAlbumTracks(
+      credentials: session.credentials,
+      albumId: albumId,
+    );
+  }
+
   String buildImageUrl({
     required String itemId,
     String imageType = 'Primary',

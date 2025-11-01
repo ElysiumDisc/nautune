@@ -7,16 +7,27 @@ import 'jellyfin/jellyfin_service.dart';
 import 'jellyfin/jellyfin_session.dart';
 import 'jellyfin/jellyfin_session_store.dart';
 import 'jellyfin/jellyfin_track.dart';
+import 'services/audio_player_service.dart';
+import 'services/playback_state_store.dart';
 
 class NautuneAppState extends ChangeNotifier {
   NautuneAppState({
     required JellyfinService jellyfinService,
     required JellyfinSessionStore sessionStore,
+    required PlaybackStateStore playbackStateStore,
   })  : _jellyfinService = jellyfinService,
-        _sessionStore = sessionStore;
+        _sessionStore = sessionStore,
+        _playbackStateStore = playbackStateStore {
+    _audioPlayerService = AudioPlayerService(
+      playbackStateStore: playbackStateStore,
+      buildStreamUrl: _buildStreamUrl,
+    );
+  }
 
   final JellyfinService _jellyfinService;
   final JellyfinSessionStore _sessionStore;
+  final PlaybackStateStore _playbackStateStore;
+  late final AudioPlayerService _audioPlayerService;
 
   bool _initialized = false;
   JellyfinSession? _session;
@@ -67,6 +78,17 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   JellyfinService get jellyfinService => _jellyfinService;
+  AudioPlayerService get audioPlayerService => _audioPlayerService;
+
+  String _buildStreamUrl(String trackId) {
+    final session = _session;
+    if (session == null) {
+      throw StateError('Session not initialized');
+    }
+    return '${session.serverUrl}/Audio/$trackId/stream?'
+        'api_key=${session.credentials.accessToken}&'
+        'audioCodec=aac';
+  }
 
   Future<void> initialize() async {
     final storedSession = await _sessionStore.load();

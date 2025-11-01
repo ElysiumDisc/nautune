@@ -5,6 +5,8 @@ import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_library.dart';
 import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../widgets/now_playing_bar.dart';
+import 'album_detail_screen.dart';
 
 class LibraryScreen extends StatelessWidget {
   const LibraryScreen({super.key, required this.appState});
@@ -270,6 +272,12 @@ class LibraryScreen extends StatelessWidget {
           body: AnimatedSwitcher(
             duration: const Duration(milliseconds: 250),
             child: body,
+          ),
+          bottomNavigationBar: NowPlayingBar(
+            audioService: appState.audioPlayerService,
+            onTap: () {
+              // TODO: Navigate to full now playing screen
+            },
           ),
         );
       },
@@ -601,7 +609,14 @@ class _AlbumCard extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
         onTap: () {
-          // Album tap will navigate to detail view in a future iteration.
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => AlbumDetailScreen(
+                album: album,
+                appState: appState,
+              ),
+            ),
+          );
         },
         child: Ink(
           decoration: BoxDecoration(

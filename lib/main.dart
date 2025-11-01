@@ -5,6 +5,7 @@ import 'jellyfin/jellyfin_service.dart';
 import 'jellyfin/jellyfin_session_store.dart';
 import 'screens/library_screen.dart';
 import 'screens/login_screen.dart';
+import 'services/playback_state_store.dart';
 import 'theme/nautune_theme.dart';
 
 Future<void> main() async {
@@ -12,6 +13,7 @@ Future<void> main() async {
   final appState = NautuneAppState(
     jellyfinService: JellyfinService(),
     sessionStore: JellyfinSessionStore(),
+    playbackStateStore: PlaybackStateStore(),
   );
   await appState.initialize();
   runApp(NautuneApp(appState: appState));
