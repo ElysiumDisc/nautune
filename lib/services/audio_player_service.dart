@@ -1,172 +1,211 @@
-import 'package:just_audio/just_audio.dart';
+import 'dart:async';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:audio_session/audio_session.dart';
 
 import '../jellyfin/jellyfin_track.dart';
-import '../models/playback_state.dart';
 import 'playback_state_store.dart';
 
 class AudioPlayerService {
-  AudioPlayerService({
-    required this.playbackStateStore,
-    required String Function(String trackId) buildStreamUrl,
-  }) : _buildStreamUrl = buildStreamUrl {
-    _player = AudioPlayer();
-    _initAudioSession();
-    _setupListeners();
-  }
-
-  final PlaybackStateStore playbackStateStore;
-  final String Function(String trackId) _buildStreamUrl;
-
-  late final AudioPlayer _player;
+  final AudioPlayer _player = AudioPlayer();
+  final PlaybackStateStore _stateStore = PlaybackStateStore();
+  
+  JellyfinTrack? _currentTrack;
   List<JellyfinTrack> _queue = [];
   int _currentIndex = 0;
-  String? _currentAlbumId;
-  String? _currentAlbumName;
-
+  Timer? _positionSaveTimer;
+  
+  // Streams
+  final StreamController<JellyfinTrack?> _currentTrackController = StreamController<JellyfinTrack?>.broadcast();
+  final StreamController<bool> _playingController = StreamController<bool>.broadcast();
+  final StreamController<Duration> _positionController = StreamController<Duration>.broadcast();
+  final StreamController<Duration?> _durationController = StreamController<Duration?>.broadcast();
+  
+  Stream<JellyfinTrack?> get currentTrackStream => _currentTrackController.stream;
+  Stream<bool> get playingStream => _playingController.stream;
+  Stream<Duration> get positionStream => _positionController.stream;
+  Stream<Duration?> get durationStream => _durationController.stream;
+  
+  JellyfinTrack? get currentTrack => _currentTrack;
   AudioPlayer get player => _player;
-  List<JellyfinTrack> get queue => _queue;
-  int get currentIndex => _currentIndex;
-  JellyfinTrack? get currentTrack =>
-      _queue.isEmpty ? null : _queue[_currentIndex];
-  bool get hasQueue => _queue.isNotEmpty;
-
-  Future<void> _initAudioSession() async {
-    final session = await AudioSession.instance;
-    await session.configure(const AudioSessionConfiguration.music());
+  
+  AudioPlayerService() {
+    _initAudioSession();
+    _setupListeners();
+    _restorePlaybackState();
   }
-
+  
+  Future<void> _initAudioSession() async {
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+    } catch (e) {
+      print('Audio session setup failed: $e');
+    }
+  }
+  
   void _setupListeners() {
-    _player.positionStream.listen((position) {
-      _savePlaybackState();
+    // Position updates
+    _player.onPositionChanged.listen((position) {
+      _positionController.add(position);
     });
-
-    _player.playingStream.listen((isPlaying) {
-      _savePlaybackState();
+    
+    // Duration updates
+    _player.onDurationChanged.listen((duration) {
+      _durationController.add(duration);
     });
-
-    _player.playerStateStream.listen((state) {
-      if (state.processingState == ProcessingState.completed) {
-        playNext();
+    
+    // State changes
+    _player.onPlayerStateChanged.listen((state) {
+      final isPlaying = state == PlayerState.playing;
+      _playingController.add(isPlaying);
+      
+      if (isPlaying) {
+        _startPositionSaving();
+      } else {
+        _stopPositionSaving();
+        _saveCurrentPosition();
       }
     });
+    
+    // Track completion
+    _player.onPlayerComplete.listen((_) {
+      skipToNext();
+    });
   }
-
-  Future<void> playAlbum(List<JellyfinTrack> tracks,
-      {String? albumId, String? albumName, int startIndex = 0}) async {
-    if (tracks.isEmpty) return;
-
-    _queue = tracks;
-    _currentIndex = startIndex;
-    _currentAlbumId = albumId;
-    _currentAlbumName = albumName;
-
-    await _playCurrentTrack();
+  
+  Future<void> _restorePlaybackState() async {
+    final state = await _stateStore.loadPlaybackState();
+    if (state != null && state.currentTrackId != null) {
+      // For now, we can't fully restore the queue without fetching tracks again
+      // Just note that we would need the track data
+      // TODO: Store and restore full track data or fetch from server
+      print('Saved position: ${state.positionMs}ms for track ${state.currentTrackId}');
+    }
   }
-
-  Future<void> playTrack(JellyfinTrack track,
-      {List<JellyfinTrack>? queueContext,
-      String? albumId,
-      String? albumName}) async {
-    if (queueContext != null && queueContext.isNotEmpty) {
+  
+  Future<void> playTrack(
+    JellyfinTrack track, {
+    List<JellyfinTrack>? queueContext,
+    String? albumId,
+    String? albumName,
+  }) async {
+    _currentTrack = track;
+    _currentTrackController.add(track);
+    
+    if (queueContext != null) {
       _queue = queueContext;
-      _currentIndex = queueContext.indexWhere((t) => t.id == track.id);
-      if (_currentIndex == -1) _currentIndex = 0;
+      _currentIndex = _queue.indexWhere((t) => t.id == track.id);
+      if (_currentIndex == -1) {
+        _queue = [track];
+        _currentIndex = 0;
+      }
     } else {
       _queue = [track];
       _currentIndex = 0;
     }
-
-    _currentAlbumId = albumId;
-    _currentAlbumName = albumName;
-
-    await _playCurrentTrack();
-  }
-
-  Future<void> _playCurrentTrack() async {
-    if (_queue.isEmpty) return;
-
-    final track = _queue[_currentIndex];
-    final url = _buildStreamUrl(track.id);
-
-    try {
-      await _player.setUrl(url);
-      await _player.play();
-      await _savePlaybackState();
-    } catch (e) {
-      // Error handled by UI listening to player state
-    }
-  }
-
-  Future<void> playPause() async {
-    if (_player.playing) {
-      await _player.pause();
-    } else {
-      await _player.play();
-    }
+    
+    await _player.stop();
+    await _player.setSourceUrl(track.streamUrl);
+    await _player.resume();
+    
     await _savePlaybackState();
   }
-
-  Future<void> playNext() async {
-    if (_queue.isEmpty) return;
-    if (_currentIndex < _queue.length - 1) {
-      _currentIndex++;
-      await _playCurrentTrack();
-    } else {
-      await stop();
-    }
+  
+  Future<void> playAlbum(
+    List<JellyfinTrack> tracks, {
+    String? albumId,
+    String? albumName,
+  }) async {
+    if (tracks.isEmpty) return;
+    await playTrack(
+      tracks.first,
+      queueContext: tracks,
+      albumId: albumId,
+      albumName: albumName,
+    );
   }
-
-  Future<void> playPrevious() async {
-    if (_queue.isEmpty) return;
-    if (_player.position.inSeconds > 3) {
-      await _player.seek(Duration.zero);
-    } else if (_currentIndex > 0) {
-      _currentIndex--;
-      await _playCurrentTrack();
-    }
+  
+  Future<void> pause() async {
+    await _player.pause();
+    await _saveCurrentPosition();
   }
-
+  
+  Future<void> resume() async {
+    await _player.resume();
+  }
+  
   Future<void> seek(Duration position) async {
     await _player.seek(position);
-    await _savePlaybackState();
+    await _saveCurrentPosition();
+  }
+  
+  Future<void> skipToNext() async {
+    if (_currentIndex < _queue.length - 1) {
+      _currentIndex++;
+      await playTrack(_queue[_currentIndex], queueContext: _queue);
+    }
   }
 
-  Future<void> stop() async {
-    await _player.stop();
-    _queue = [];
-    _currentIndex = 0;
-    _currentAlbumId = null;
-    _currentAlbumName = null;
-    await playbackStateStore.clear();
+  Future<void> skipToPrevious() async {
+    if (_currentIndex > 0) {
+      _currentIndex--;
+      await playTrack(_queue[_currentIndex], queueContext: _queue);
+    }
   }
 
-  Future<void> restorePlaybackState() async {
-    final savedState = await playbackStateStore.load();
-    if (savedState == null || !savedState.hasTrack) return;
-
-    // Note: Queue restoration requires fetching tracks from Jellyfin
-    // This will be handled by AppState which has access to JellyfinService
+  // Alias methods for compatibility
+  Future<void> playPause() async {
+    final state = _player.state;
+    if (state == PlayerState.playing) {
+      await pause();
+    } else {
+      await resume();
+    }
   }
 
+  Future<void> playNext() => skipToNext();
+  Future<void> playPrevious() => skipToPrevious();
+  
+  void _startPositionSaving() {
+    _positionSaveTimer?.cancel();
+    _positionSaveTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _saveCurrentPosition();
+    });
+  }
+  
+  void _stopPositionSaving() {
+    _positionSaveTimer?.cancel();
+  }
+  
+  Future<void> _saveCurrentPosition() async {
+    if (_currentTrack == null) return;
+    
+    final position = await _player.getCurrentPosition();
+    if (position != null) {
+      await _stateStore.savePlaybackState(
+        trackId: _currentTrack!.id,
+        position: position,
+        queueContext: _queue,
+      );
+    }
+  }
+  
   Future<void> _savePlaybackState() async {
-    if (_queue.isEmpty || currentTrack == null) return;
-
-    final state = PlaybackState(
-      currentTrackId: currentTrack!.id,
-      currentTrackName: currentTrack!.name,
-      currentAlbumId: _currentAlbumId,
-      currentAlbumName: _currentAlbumName,
-      positionMs: _player.position.inMilliseconds,
-      isPlaying: _player.playing,
-      queueIds: _queue.map((t) => t.id).toList(),
-      currentQueueIndex: _currentIndex,
+    if (_currentTrack == null) return;
+    
+    await _stateStore.savePlaybackState(
+      trackId: _currentTrack!.id,
+      position: Duration.zero,
+      queueContext: _queue,
     );
-
-    await playbackStateStore.save(state);
   }
-
-  Future<void> dispose() async {
-    await _player.dispose();
+  
+  void dispose() {
+    _positionSaveTimer?.cancel();
+    _player.dispose();
+    _currentTrackController.close();
+    _playingController.close();
+    _positionController.close();
+    _durationController.close();
   }
 }

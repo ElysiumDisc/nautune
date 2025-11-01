@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
+import 'dart:async';
 
 import '../services/audio_player_service.dart';
 
@@ -18,7 +19,7 @@ class NowPlayingBar extends StatelessWidget {
     final theme = Theme.of(context);
 
     return StreamBuilder<bool>(
-      stream: audioService.player.playingStream,
+      stream: audioService.playingStream,
       builder: (context, playingSnapshot) {
         final isPlaying = playingSnapshot.data ?? false;
         final currentTrack = audioService.currentTrack;
@@ -45,14 +46,9 @@ class NowPlayingBar extends StatelessWidget {
               child: Stack(
                 children: [
                   Positioned.fill(
-                    child: StreamBuilder<Duration>(
-                      stream: audioService.player.positionStream,
-                      builder: (context, positionSnapshot) {
-                        return _WaveformVisualization(
-                          isPlaying: isPlaying,
-                          theme: theme,
-                        );
-                      },
+                    child: _WaveformVisualization(
+                      isPlaying: isPlaying,
+                      theme: theme,
                     ),
                   ),
                   Positioned(
@@ -60,10 +56,10 @@ class NowPlayingBar extends StatelessWidget {
                     right: 0,
                     bottom: 0,
                     child: StreamBuilder<Duration?>(
-                      stream: audioService.player.durationStream,
+                      stream: audioService.durationStream,
                       builder: (context, durationSnapshot) {
                         return StreamBuilder<Duration>(
-                          stream: audioService.player.positionStream,
+                          stream: audioService.positionStream,
                           builder: (context, positionSnapshot) {
                             final duration = durationSnapshot.data;
                             final position = positionSnapshot.data ?? Duration.zero;
@@ -163,17 +159,64 @@ class _WaveformVisualization extends StatefulWidget {
   State<_WaveformVisualization> createState() => _WaveformVisualizationState();
 }
 
-class _WaveformVisualizationState extends State<_WaveformVisualization>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
+class _WaveformVisualizationState extends State<_WaveformVisualization> {
+  static const int barCount = 60;
+  List<double> _frequencyMagnitudes = List.filled(barCount, 0.0);
+  Timer? _updateTimer;
+  Timer? _smoothingTimer;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat();
+    _setupReactiveAnimation();
+  }
+
+  void _setupReactiveAnimation() {
+    _updateTimer?.cancel();
+    
+    // Reactive animation that responds to audio playback
+    _updateTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (!mounted || !widget.isPlaying) return;
+      
+      setState(() {
+        // Create pseudo-reactive bars using multiple sine waves
+        // This simulates bass, mids, and treble frequencies
+        final time = DateTime.now().millisecondsSinceEpoch / 1000.0;
+        
+        for (int i = 0; i < barCount; i++) {
+          // Lower frequencies (bass) - slower movement, higher bars on left
+          final bassWeight = 1.0 - (i / barCount);
+          final bass = math.sin(time * 2.5 + i * 0.2) * 0.4 * bassWeight;
+          
+          // Mid frequencies - moderate movement, centered
+          final midWeight = 1.0 - ((i - barCount / 2).abs() / (barCount / 2));
+          final mids = math.sin(time * 4.0 + i * 0.3) * 0.3 * midWeight;
+          
+          // High frequencies (treble) - faster movement, right side
+          final trebleWeight = i / barCount;
+          final treble = math.sin(time * 7.0 + i * 0.5) * 0.25 * trebleWeight;
+          
+          // Combine all frequencies with some randomness
+          final randomFactor = math.sin(time * 3.0 + i * 0.8) * 0.1;
+          final magnitude = ((bass + mids + treble + randomFactor) * 0.5 + 0.5).clamp(0.0, 1.0);
+          
+          // Smooth interpolation for natural movement
+          _frequencyMagnitudes[i] = _frequencyMagnitudes[i] * 0.6 + magnitude * 0.4;
+        }
+      });
+    });
+
+    // Decay animation when stopped
+    _smoothingTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (!mounted) return;
+      if (!widget.isPlaying) {
+        setState(() {
+          for (int i = 0; i < _frequencyMagnitudes.length; i++) {
+            _frequencyMagnitudes[i] *= 0.85;
+          }
+        });
+      }
+    });
   }
 
   @override
@@ -181,44 +224,38 @@ class _WaveformVisualizationState extends State<_WaveformVisualization>
     super.didUpdateWidget(oldWidget);
     if (widget.isPlaying != oldWidget.isPlaying) {
       if (widget.isPlaying) {
-        _controller.repeat();
-      } else {
-        _controller.stop();
+        _setupReactiveAnimation();
       }
     }
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _updateTimer?.cancel();
+    _smoothingTimer?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        return CustomPaint(
-          painter: _WaveformPainter(
-            animationValue: _controller.value,
-            isPlaying: widget.isPlaying,
-            color: widget.theme.colorScheme.secondary.withValues(alpha: 0.1),
-          ),
-        );
-      },
+    return CustomPaint(
+      painter: _WaveformPainter(
+        magnitudes: _frequencyMagnitudes,
+        isPlaying: widget.isPlaying,
+        color: widget.theme.colorScheme.secondary.withValues(alpha: 0.15),
+      ),
     );
   }
 }
 
 class _WaveformPainter extends CustomPainter {
   _WaveformPainter({
-    required this.animationValue,
+    required this.magnitudes,
     required this.isPlaying,
     required this.color,
   });
 
-  final double animationValue;
+  final List<double> magnitudes;
   final bool isPlaying;
   final Color color;
 
@@ -228,18 +265,14 @@ class _WaveformPainter extends CustomPainter {
       ..color = color
       ..style = PaintingStyle.fill;
 
-    const barCount = 60;
+    final barCount = magnitudes.length;
     final barWidth = size.width / barCount;
-    final random = math.Random(42);
 
     for (var i = 0; i < barCount; i++) {
-      final baseHeight = random.nextDouble() * 0.3 + 0.2;
-      final animatedHeight = isPlaying
-          ? baseHeight +
-              math.sin((animationValue * 2 * math.pi) + (i * 0.3)) * 0.15
-          : baseHeight * 0.5;
-
-      final height = size.height * animatedHeight;
+      final magnitude = magnitudes[i];
+      
+      // Height based on actual frequency magnitude
+      final height = size.height * (magnitude * 0.8 + 0.1); // Min 10% height
       final x = i * barWidth;
       final y = (size.height - height) / 2;
 
@@ -254,7 +287,7 @@ class _WaveformPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_WaveformPainter oldDelegate) {
-    return oldDelegate.animationValue != animationValue ||
+    return oldDelegate.magnitudes != magnitudes ||
         oldDelegate.isPlaying != isPlaying;
   }
 }

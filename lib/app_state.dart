@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'jellyfin/jellyfin_album.dart';
+import 'jellyfin/jellyfin_artist.dart';
 import 'jellyfin/jellyfin_library.dart';
 import 'jellyfin/jellyfin_playlist.dart';
 import 'jellyfin/jellyfin_service.dart';
@@ -18,10 +19,7 @@ class NautuneAppState extends ChangeNotifier {
   })  : _jellyfinService = jellyfinService,
         _sessionStore = sessionStore,
         _playbackStateStore = playbackStateStore {
-    _audioPlayerService = AudioPlayerService(
-      playbackStateStore: playbackStateStore,
-      buildStreamUrl: _buildStreamUrl,
-    );
+    _audioPlayerService = AudioPlayerService();
   }
 
   final JellyfinService _jellyfinService;
@@ -39,6 +37,9 @@ class NautuneAppState extends ChangeNotifier {
   bool _isLoadingAlbums = false;
   Object? _albumsError;
   List<JellyfinAlbum>? _albums;
+  bool _isLoadingArtists = false;
+  Object? _artistsError;
+  List<JellyfinArtist>? _artists;
   bool _isLoadingPlaylists = false;
   Object? _playlistsError;
   List<JellyfinPlaylist>? _playlists;
@@ -56,6 +57,9 @@ class NautuneAppState extends ChangeNotifier {
   bool get isLoadingAlbums => _isLoadingAlbums;
   Object? get albumsError => _albumsError;
   List<JellyfinAlbum>? get albums => _albums;
+  bool get isLoadingArtists => _isLoadingArtists;
+  Object? get artistsError => _artistsError;
+  List<JellyfinArtist>? get artists => _artists;
   bool get isLoadingPlaylists => _isLoadingPlaylists;
   Object? get playlistsError => _playlistsError;
   List<JellyfinPlaylist>? get playlists => _playlists;
@@ -217,6 +221,20 @@ class NautuneAppState extends ChangeNotifier {
     await _loadAlbumsForSelectedLibrary(forceRefresh: true);
   }
 
+  Future<void> refreshArtists() async {
+    final libraryId = _session?.selectedLibraryId;
+    if (libraryId != null) {
+      await _loadArtistsForLibrary(libraryId, forceRefresh: true);
+    }
+  }
+
+  Future<void> refreshLibraryData() async {
+    final libraryId = _session?.selectedLibraryId;
+    if (libraryId != null) {
+      await _loadLibraryDependentContent(forceRefresh: true);
+    }
+  }
+
   Future<void> refreshPlaylists() async {
     await _loadPlaylistsForSelectedLibrary(forceRefresh: true);
   }
@@ -243,6 +261,7 @@ class NautuneAppState extends ChangeNotifier {
 
     await Future.wait([
       _loadAlbumsForLibrary(libraryId, forceRefresh: forceRefresh),
+      _loadArtistsForLibrary(libraryId, forceRefresh: forceRefresh),
       _loadPlaylistsForLibrary(libraryId, forceRefresh: forceRefresh),
       _loadRecentForLibrary(libraryId, forceRefresh: forceRefresh),
     ]);
@@ -301,6 +320,26 @@ class NautuneAppState extends ChangeNotifier {
       _albums = null;
     } finally {
       _isLoadingAlbums = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _loadArtistsForLibrary(String libraryId,
+      {bool forceRefresh = false}) async {
+    _artistsError = null;
+    _isLoadingArtists = true;
+    notifyListeners();
+
+    try {
+      _artists = await _jellyfinService.loadArtists(
+        libraryId: libraryId,
+        forceRefresh: forceRefresh,
+      );
+    } catch (error) {
+      _artistsError = error;
+      _artists = null;
+    } finally {
+      _isLoadingArtists = false;
       notifyListeners();
     }
   }

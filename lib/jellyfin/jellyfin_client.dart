@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'jellyfin_credentials.dart';
 import 'jellyfin_exceptions.dart';
 import 'jellyfin_album.dart';
+import 'jellyfin_artist.dart';
 import 'jellyfin_library.dart';
 import 'jellyfin_playlist.dart';
 import 'jellyfin_track.dart';
@@ -131,6 +132,38 @@ class JellyfinClient {
         .toList();
   }
 
+  Future<List<JellyfinArtist>> fetchArtists({
+    required JellyfinCredentials credentials,
+    required String libraryId,
+  }) async {
+    final uri = _buildUri('/Artists', {
+      'ParentId': libraryId,
+      'Recursive': 'true',
+      'SortBy': 'SortName',
+      'SortOrder': 'Ascending',
+      'Fields': 'PrimaryImageAspectRatio,ImageTags',
+    });
+
+    final response = await httpClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch artists: ${response.statusCode}',
+      );
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final items = data?['Items'] as List<dynamic>? ?? const [];
+
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(JellyfinArtist.fromJson)
+        .toList();
+  }
+
   Future<List<JellyfinPlaylist>> fetchPlaylists({
     required JellyfinCredentials credentials,
     required String libraryId,
@@ -194,7 +227,12 @@ class JellyfinClient {
 
     return items
         .whereType<Map<String, dynamic>>()
-        .map(JellyfinTrack.fromJson)
+        .map((json) => JellyfinTrack.fromJson(
+              json,
+              serverUrl: serverUrl,
+              token: credentials.accessToken,
+              userId: credentials.userId,
+            ))
         .toList();
   }
 
@@ -226,7 +264,12 @@ class JellyfinClient {
 
     return items
         .whereType<Map<String, dynamic>>()
-        .map(JellyfinTrack.fromJson)
+        .map((json) => JellyfinTrack.fromJson(
+              json,
+              serverUrl: serverUrl,
+              token: credentials.accessToken,
+              userId: credentials.userId,
+            ))
         .toList();
   }
 

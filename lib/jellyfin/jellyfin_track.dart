@@ -6,6 +6,9 @@ class JellyfinTrack {
     required this.artists,
     this.runTimeTicks,
     this.primaryImageTag,
+    this.serverUrl,
+    this.token,
+    this.userId,
   });
 
   final String id;
@@ -14,8 +17,11 @@ class JellyfinTrack {
   final List<String> artists;
   final int? runTimeTicks;
   final String? primaryImageTag;
+  final String? serverUrl;
+  final String? token;
+  final String? userId;
 
-  factory JellyfinTrack.fromJson(Map<String, dynamic> json) {
+  factory JellyfinTrack.fromJson(Map<String, dynamic> json, {String? serverUrl, String? token, String? userId}) {
     return JellyfinTrack(
       id: json['Id'] as String? ?? '',
       name: json['Name'] as String? ?? '',
@@ -27,6 +33,9 @@ class JellyfinTrack {
       runTimeTicks: json['RunTimeTicks'] as int?,
       primaryImageTag:
           (json['ImageTags'] as Map<String, dynamic>?)?['Primary'] as String?,
+      serverUrl: serverUrl,
+      token: token,
+      userId: userId,
     );
   }
 
@@ -46,5 +55,13 @@ class JellyfinTrack {
       return null;
     }
     return Duration(microseconds: ticks ~/ 10);
+  }
+
+  String get streamUrl {
+    if (serverUrl == null || token == null) {
+      throw Exception('JellyfinTrack missing serverUrl or token for streaming');
+    }
+    // Use direct streaming without transcoding for better compatibility
+    return '$serverUrl/Items/$id/Download?api_key=$token';
   }
 }

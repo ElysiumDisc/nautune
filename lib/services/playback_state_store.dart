@@ -27,6 +27,22 @@ class PlaybackStateStore {
     await prefs.setString(_key, json);
   }
 
+  // Alias methods for compatibility
+  Future<PlaybackState?> loadPlaybackState() => load();
+  
+  Future<void> savePlaybackState({
+    required String trackId,
+    required Duration position,
+    List? queueContext,
+  }) async {
+    final state = PlaybackState(
+      currentTrackId: trackId,
+      positionMs: position.inMilliseconds,
+      queueIds: queueContext?.map((t) => t.id as String).toList() ?? [],
+    );
+    await save(state);
+  }
+
   Future<void> clear() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_key);

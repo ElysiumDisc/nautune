@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../jellyfin/jellyfin_album.dart';
+import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_library.dart';
 import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../widgets/now_playing_bar.dart';
 import 'album_detail_screen.dart';
+import 'artist_detail_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key, required this.appState});
@@ -26,7 +28,7 @@ class _LibraryScreenState extends State<LibraryScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _albumsScrollController.addListener(_onAlbumsScroll);
     _playlistsScrollController.addListener(_onPlaylistsScroll);
   }
@@ -141,6 +143,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                         Tab(icon: Icon(Icons.person), text: 'Artists'),
                         Tab(icon: Icon(Icons.favorite), text: 'Favorites'),
                         Tab(icon: Icon(Icons.playlist_play), text: 'Playlists'),
+                        Tab(icon: Icon(Icons.download), text: 'Downloads'),
                       ],
                     ),
                   ],
@@ -160,10 +163,9 @@ class _LibraryScreenState extends State<LibraryScreen>
                       onAlbumTap: (album) => _navigateToAlbum(context, album),
                       appState: widget.appState,
                     ),
-                    // Artists Tab (placeholder)
-                    _PlaceholderTab(
-                      icon: Icons.person,
-                      message: 'Artists view\nComing soon!',
+                    // Artists Tab
+                    _ArtistsTab(
+                      appState: widget.appState,
                     ),
                     // Favorites Tab
                     _FavoritesTab(
@@ -181,6 +183,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                       scrollController: _playlistsScrollController,
                       onRefresh: () => widget.appState.refreshPlaylists(),
                     ),
+                    // Downloads Tab
+                    _DownloadsTab(),
                   ],
                 ),
               ),
@@ -651,6 +655,222 @@ class _FavoritesTab extends StatelessWidget {
   String _formatDuration(Duration duration) {
     String twoDigits(int n) => n.toString().padLeft(2, '0');
     return '${twoDigits(duration.inMinutes.remainder(60))}:${twoDigits(duration.inSeconds.remainder(60))}';
+  }
+}
+
+class _ArtistsTab extends StatelessWidget {
+  const _ArtistsTab({required this.appState});
+  
+  final NautuneAppState appState;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final artists = appState.artists;
+    final isLoading = appState.isLoadingArtists;
+    final error = appState.artistsError;
+    
+    if (isLoading && artists == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (error != null && artists == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.error_outline, size: 64, color: theme.colorScheme.error),
+              const SizedBox(height: 16),
+              Text(
+                'Failed to load artists',
+                style: theme.textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                error.toString(),
+                style: theme.textTheme.bodyMedium,
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (artists == null || artists.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.person, size: 64, color: theme.colorScheme.secondary),
+            const SizedBox(height: 16),
+            Text(
+              'No Artists Found',
+              style: theme.textTheme.titleLarge,
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: () => appState.refreshLibraryData(),
+      child: GridView.builder(
+        padding: const EdgeInsets.all(16),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          childAspectRatio: 0.75,
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+        ),
+        itemCount: artists.length,
+        itemBuilder: (context, index) {
+          final artist = artists[index];
+          return _ArtistCard(artist: artist, appState: appState);
+        },
+      ),
+    );
+  }
+}
+
+class _ArtistCard extends StatelessWidget {
+  const _ArtistCard({required this.artist, required this.appState});
+
+  final JellyfinArtist artist;
+  final NautuneAppState appState;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    Widget artwork;
+    final tag = artist.primaryImageTag;
+    if (tag != null && tag.isNotEmpty) {
+      final imageUrl = appState.jellyfinService.buildImageUrl(
+        itemId: artist.id,
+        tag: tag,
+        maxWidth: 400,
+      );
+      artwork = ClipOval(
+        child: Image.network(
+          imageUrl,
+          fit: BoxFit.cover,
+          headers: appState.jellyfinService.imageHeaders(),
+          errorBuilder: (_, __, ___) => Container(
+            color: theme.colorScheme.primaryContainer,
+            child: Icon(
+              Icons.person,
+              size: 48,
+              color: theme.colorScheme.onPrimaryContainer,
+            ),
+          ),
+        ),
+      );
+    } else {
+      artwork = Container(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: theme.colorScheme.primaryContainer,
+        ),
+        child: Icon(
+          Icons.person,
+          size: 48,
+          color: theme.colorScheme.onPrimaryContainer,
+        ),
+      );
+    }
+
+    return InkWell(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ArtistDetailScreen(
+              artist: artist,
+              appState: appState,
+            ),
+          ),
+        );
+      },
+      child: Column(
+        children: [
+          Expanded(
+            child: AspectRatio(
+              aspectRatio: 1,
+              child: artwork,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            artist.name,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w500,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DownloadsTab extends StatelessWidget {
+  const _DownloadsTab();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
+    return RefreshIndicator(
+      onRefresh: () async {
+        // TODO: Implement downloads refresh
+      },
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.download, size: 64, color: theme.colorScheme.secondary),
+            const SizedBox(height: 16),
+            Text(
+              'Offline Downloads',
+              style: theme.textTheme.titleLarge?.copyWith(
+                color: theme.colorScheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                'Download your favorite albums and tracks\nfor offline listening',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: () {
+                // TODO: Implement offline mode
+              },
+              icon: const Icon(Icons.download_for_offline),
+              label: const Text('Start Downloading'),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () {
+                // TODO: Show download settings
+              },
+              icon: const Icon(Icons.settings),
+              label: const Text('Download Settings'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

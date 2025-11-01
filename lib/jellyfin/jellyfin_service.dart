@@ -1,6 +1,7 @@
 import 'package:http/http.dart' as http;
 
 import 'jellyfin_album.dart';
+import 'jellyfin_artist.dart';
 import 'jellyfin_client.dart';
 import 'jellyfin_library.dart';
 import 'jellyfin_playlist.dart';
@@ -19,6 +20,7 @@ class JellyfinService {
   JellyfinClient? _client;
   JellyfinSession? _session;
   final Map<String, _CacheEntry<List<JellyfinAlbum>>> _albumCache = {};
+  final Map<String, _CacheEntry<List<JellyfinArtist>>> _artistCache = {};
   final Map<String, _CacheEntry<List<JellyfinPlaylist>>> _playlistCache = {};
   final Map<String, _CacheEntry<List<JellyfinTrack>>> _recentCache = {};
 
@@ -108,6 +110,31 @@ class JellyfinService {
     );
     _albumCache[cacheKey] = _CacheEntry(albums);
     return albums;
+  }
+
+  Future<List<JellyfinArtist>> loadArtists({
+    required String libraryId,
+    bool forceRefresh = false,
+  }) async {
+    final client = _client;
+    final session = _session;
+    if (client == null || session == null) {
+      throw StateError('Authenticate before requesting artists.');
+    }
+    final cacheKey = libraryId;
+    if (!forceRefresh) {
+      final cached = _artistCache[cacheKey];
+      if (cached != null && !cached.isExpired(_cacheTtl)) {
+        return cached.value;
+      }
+    }
+
+    final artists = await client.fetchArtists(
+      credentials: session.credentials,
+      libraryId: libraryId,
+    );
+    _artistCache[cacheKey] = _CacheEntry(artists);
+    return artists;
   }
 
   Future<List<JellyfinPlaylist>> loadPlaylists({
@@ -225,6 +252,7 @@ class JellyfinService {
 
   void _clearCaches() {
     _albumCache.clear();
+    _artistCache.clear();
     _playlistCache.clear();
     _recentCache.clear();
   }
