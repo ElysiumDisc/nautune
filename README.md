@@ -62,7 +62,8 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - Use descriptive commit messages and note any Codemagic considerations in PR descriptions.
 
 ## Next Steps
-1. Drill into album and artist detail views with track listings sourced from Jellyfin.
+1. Drill into album, artist, and playlist detail views with track listings sourced from Jellyfin.
 2. Integrate an audio engine (e.g., `just_audio` + `audio_service`) and design the now playing UI.
-3. Extend Jellyfin fetching for playlists and recently added content with lightweight caching.
-4. Draft Codemagic configuration files for automated iOS packaging and CarPlay builds.
+3. Wire playlist/album taps to detail pages and make recent tracks actionable for playback.
+4. Prototype background caching/persistence for Jellyfin collections so reloads survive app restarts.
+5. Draft Codemagic configuration files for automated iOS packaging and CarPlay builds.
