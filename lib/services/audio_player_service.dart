@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:flutter/services.dart';
 
 import '../jellyfin/jellyfin_track.dart';
 import 'playback_state_store.dart';
@@ -33,6 +35,8 @@ class AudioPlayerService {
     _setupListeners();
     _restorePlaybackState();
   }
+
+  String get _deviceId => 'nautune-${Platform.operatingSystem}';
   
   Future<void> _initAudioSession() async {
     try {
@@ -88,12 +92,26 @@ class AudioPlayerService {
     List<JellyfinTrack>? queueContext,
     String? albumId,
     String? albumName,
+    bool reorderQueue = false,
   }) async {
     _currentTrack = track;
     _currentTrackController.add(track);
     
     if (queueContext != null) {
-      _queue = queueContext;
+      if (reorderQueue) {
+        _queue = List<JellyfinTrack>.from(queueContext)
+          ..sort((a, b) {
+            final discA = a.discNumber ?? 0;
+            final discB = b.discNumber ?? 0;
+            if (discA != discB) return discA.compareTo(discB);
+            final trackA = a.indexNumber ?? 0;
+            final trackB = b.indexNumber ?? 0;
+            if (trackA != trackB) return trackA.compareTo(trackB);
+            return a.name.compareTo(b.name);
+          });
+      } else {
+        _queue = queueContext;
+      }
       _currentIndex = _queue.indexWhere((t) => t.id == track.id);
       if (_currentIndex == -1) {
         _queue = [track];
@@ -104,9 +122,54 @@ class AudioPlayerService {
       _currentIndex = 0;
     }
     
+    final downloadUrl = track.directDownloadUrl();
+    final universalUrl = track.universalStreamUrl(
+      deviceId: _deviceId,
+      maxBitrate: 320000,
+      audioCodec: 'mp3',
+      container: 'mp3',
+    );
+
     await _player.stop();
-    await _player.setSourceUrl(track.streamUrl);
-    await _player.resume();
+
+    Future<bool> trySetSource(String? url) async {
+      if (url == null) return false;
+      try {
+        await _player.setSource(UrlSource(url));
+        return true;
+      } on PlatformException {
+        return false;
+      }
+    }
+
+    String? activeUrl;
+    if (await trySetSource(downloadUrl)) {
+      activeUrl = downloadUrl;
+    } else if (await trySetSource(universalUrl)) {
+      activeUrl = universalUrl;
+    }
+
+    if (activeUrl == null) {
+      throw PlatformException(
+        code: 'no_source',
+        message: 'Unable to prepare media stream for ${track.name}',
+      );
+    }
+
+    try {
+      await _player.resume();
+    } on PlatformException {
+      if (activeUrl != universalUrl && universalUrl != null) {
+        if (await trySetSource(universalUrl)) {
+          await _player.resume();
+          activeUrl = universalUrl;
+        } else {
+          rethrow;
+        }
+      } else {
+        rethrow;
+      }
+    }
     
     await _savePlaybackState();
   }
@@ -117,11 +180,23 @@ class AudioPlayerService {
     String? albumName,
   }) async {
     if (tracks.isEmpty) return;
+    final ordered = List<JellyfinTrack>.from(tracks)
+      ..sort((a, b) {
+        final discA = a.discNumber ?? 0;
+        final discB = b.discNumber ?? 0;
+        if (discA != discB) return discA.compareTo(discB);
+        final trackA = a.indexNumber ?? 0;
+        final trackB = b.indexNumber ?? 0;
+        if (trackA != trackB) return trackA.compareTo(trackB);
+        return a.name.compareTo(b.name);
+      });
+    final first = ordered.first;
     await playTrack(
-      tracks.first,
-      queueContext: tracks,
+      first,
+      queueContext: ordered,
       albumId: albumId,
       albumName: albumName,
+      reorderQueue: false,
     );
   }
   
@@ -153,6 +228,15 @@ class AudioPlayerService {
     }
   }
 
+  Future<void> stop() async {
+    await _player.stop();
+    _currentTrack = null;
+    _currentTrackController.add(null);
+    _queue.clear();
+    _currentIndex = 0;
+    await _stateStore.clear();
+  }
+
   // Alias methods for compatibility
   Future<void> playPause() async {
     final state = _player.state;
@@ -165,6 +249,8 @@ class AudioPlayerService {
 
   Future<void> playNext() => skipToNext();
   Future<void> playPrevious() => skipToPrevious();
+  Future<void> next() => skipToNext();
+  Future<void> previous() => skipToPrevious();
   
   void _startPositionSaving() {
     _positionSaveTimer?.cancel();

@@ -198,10 +198,29 @@ class JellyfinService {
     if (client == null || session == null) {
       throw StateError('Authenticate before requesting album tracks.');
     }
-    return client.fetchAlbumTracks(
+    var tracks = await client.fetchAlbumTracks(
       credentials: session.credentials,
       albumId: albumId,
+      recursive: true,
     );
+
+    if (tracks.isEmpty) {
+      tracks = await client.fetchAlbumTracksByAlbumIds(
+        credentials: session.credentials,
+        albumId: albumId,
+      );
+    }
+
+    if (tracks.isEmpty) {
+      // Fallback: try non-recursive parent query to handle atypical library layouts.
+      tracks = await client.fetchAlbumTracks(
+        credentials: session.credentials,
+        albumId: albumId,
+        recursive: false,
+      );
+    }
+
+    return tracks;
   }
 
   String buildImageUrl({

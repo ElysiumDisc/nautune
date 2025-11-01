@@ -217,10 +217,7 @@ class _LibraryScreenState extends State<LibraryScreen>
           ),
           body: body,
           bottomNavigationBar: NowPlayingBar(
-            audioService: widget.appState.audioService,
-            onTap: () {
-              // TODO: Navigate to full player screen
-            },
+            audioService: widget.appState.audioPlayerService,
           ),
         );
       },
@@ -238,11 +235,21 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
   }
 
-  void _playTrack(JellyfinTrack track) {
-    widget.appState.audioPlayerService.playTrack(
-      track,
-      queueContext: widget.appState.recentTracks,
-    );
+  Future<void> _playTrack(JellyfinTrack track) async {
+    try {
+      await widget.appState.audioPlayerService.playTrack(
+        track,
+        queueContext: widget.appState.recentTracks,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not start playback: $error'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
   }
 }
 
@@ -635,6 +642,9 @@ class _FavoritesTab extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         itemCount: recentTracks!.length,
         itemBuilder: (context, index) {
+          if (index >= recentTracks!.length) {
+            return const SizedBox.shrink();
+          }
           final track = recentTracks![index];
           final theme = Theme.of(context);
           return Card(

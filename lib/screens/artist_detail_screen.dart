@@ -70,6 +70,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final artist = widget.artist;
+    final isDesktop = MediaQuery.of(context).size.width > 600;
 
     Widget artwork;
     final tag = artist.primaryImageTag;
@@ -95,8 +96,13 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
-            expandedHeight: 300,
+            expandedHeight: isDesktop ? 350 : 300,
             pinned: true,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.of(context).pop(),
+              tooltip: 'Back to Artists',
+            ),
             flexibleSpace: FlexibleSpaceBar(
               background: Stack(
                 fit: StackFit.expand,
@@ -221,9 +227,6 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
       ),
       bottomNavigationBar: NowPlayingBar(
         audioService: widget.appState.audioPlayerService,
-        onTap: () {
-          // TODO: Navigate to full now playing screen
-        },
       ),
     );
   }

@@ -208,7 +208,9 @@ class JellyfinClient {
       'SortBy': 'DateCreated',
       'SortOrder': 'Descending',
       'Limit': '$limit',
-      'Fields': 'Album,Artists,RunTimeTicks,ImageTags',
+      'Fields':
+          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber',
+      'EnableImageTypes': 'Primary,Thumb',
     });
 
     final response = await httpClient.get(
@@ -239,13 +241,17 @@ class JellyfinClient {
   Future<List<JellyfinTrack>> fetchAlbumTracks({
     required JellyfinCredentials credentials,
     required String albumId,
+    bool recursive = true,
   }) async {
     final uri = _buildUri('/Users/${credentials.userId}/Items', {
       'ParentId': albumId,
       'IncludeItemTypes': 'Audio',
-      'Recursive': 'true',
-      'SortBy': 'SortName',
-      'Fields': 'Album,Artists,RunTimeTicks,ImageTags,IndexNumber',
+      'Recursive': recursive ? 'true' : 'false',
+      'SortBy': 'ParentIndexNumber,IndexNumber,SortName',
+      'SortOrder': 'Ascending',
+      'Fields':
+          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber',
+      'EnableImageTypes': 'Primary,Thumb',
     });
 
     final response = await httpClient.get(
@@ -256,6 +262,46 @@ class JellyfinClient {
     if (response.statusCode != 200) {
       throw JellyfinRequestException(
         'Unable to fetch album tracks: ${response.statusCode}',
+      );
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final items = data?['Items'] as List<dynamic>? ?? const [];
+
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map((json) => JellyfinTrack.fromJson(
+              json,
+              serverUrl: serverUrl,
+              token: credentials.accessToken,
+              userId: credentials.userId,
+            ))
+        .toList();
+  }
+
+  Future<List<JellyfinTrack>> fetchAlbumTracksByAlbumIds({
+    required JellyfinCredentials credentials,
+    required String albumId,
+  }) async {
+    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+      'AlbumIds': albumId,
+      'IncludeItemTypes': 'Audio',
+      'Recursive': 'true',
+      'SortBy': 'ParentIndexNumber,IndexNumber,SortName',
+      'SortOrder': 'Ascending',
+      'Fields':
+          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber',
+      'EnableImageTypes': 'Primary,Thumb',
+    });
+
+    final response = await httpClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch album tracks via AlbumIds: ${response.statusCode}',
       );
     }
 

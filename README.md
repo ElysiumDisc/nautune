@@ -5,25 +5,20 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 ## ✨ Highlights
 
 ### 🎵 Audio & Playback
-- **Native Audio Engine**: Powered by `audioplayers` with platform-specific optimization
+- **Native Engine**: Powered by `audioplayers` with platform-specific backends
   - 🍎 **iOS/macOS**: AVFoundation (hardware-accelerated)
   - 🐧 **Linux**: GStreamer (native multimedia framework)
   - 🤖 **Android**: MediaPlayer
   - 🪟 **Windows**: WinMM
-- **Direct Streaming**: Optimized audio streaming from Jellyfin servers
-- **Smooth Performance**: Hardware-accelerated audio with real-time streaming
-- **Position Persistence**: Automatically saves and restores playback position across app restarts
-- **Queue Management**: Full album playback with next/previous track navigation
-- **Background Audio**: Continues playing when app is minimized
+- **Direct Play First**: Streams original Jellyfin files (FLAC/AAC/etc.) when supported, with automatic MP3 fallback if the platform rejects the source
+- **Album Queueing**: One tap queues the whole album in disc/track-number order with seamless previous/next navigation
+- **Resume & Persist**: Playback position is saved every second and restored on launch
+- **Background Audio**: Keeps playing while the app is in the background
 
 ### 🌊 Visual Experience
-- **Sonic Wave Visualization**: Real-time frequency spectrum analyzer with 60 animated bars
-  - 🎸 **Bass** (left): Slower, bigger pulses mimicking low frequencies
-  - 🎹 **Mids** (center): Moderate activity representing mid-range
-  - 🎺 **Treble** (right): Fast, lighter movements for high frequencies
-  - ✨ Smooth interpolation at 20 FPS for fluid, natural motion
-  - 📱 **Cross-platform**: Works on Linux, iOS, Android, macOS, Windows
-- **Now Playing Bar**: Always-visible mini-player with live progress tracking and controls
+- **Waveform Progress**: Animated lilac waveform sourced from Jellyfin's preview API with a graceful synthetic fallback
+- **Scrubbable Mini Player**: Waveform strip and slider both seek playback instantly
+- **Now Playing Bar**: Always-visible controls, real-time progress indicator, and quick access to the full player
 - **Deep Sea Purple Theme**: Oceanic gradient color scheme defined in `lib/theme/` and applied consistently
 - **Album & Artist Art**: Beautiful grid and list layouts with Jellyfin artwork (trident placeholder fallback)
 
@@ -33,7 +28,7 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - **✅ Favorites Tab**: Recently played and favorited tracks
 - **✅ Playlists Tab**: Access all your Jellyfin playlists
 - **✅ Downloads Tab**: Placeholder for offline mode (coming soon)
-- **Track Listings**: Full album detail screens with all tracks, durations, and track numbers
+- **Track Listings**: Full album detail screens with ordered track lists, durations, and padded numbers (multi-disc aware)
 - **Artist Discography**: View all albums by an artist
 - **Smart Refresh**: Pull-to-refresh on all tabs for latest content sync
 
@@ -118,15 +113,10 @@ lib/
 ## 🎨 Key Components
 
 ### Now Playing Bar (`lib/widgets/now_playing_bar.dart`)
-- **Sonic Wave Analyzer**: 60 frequency bars simulating real audio spectrum
-  - Bass frequencies on left (slow, big movements)
-  - Mid frequencies in center (moderate activity)
-  - Treble frequencies on right (fast, light movements)
-  - Smooth 20 FPS interpolation for organic feel
-  - Works on ALL platforms (no native dependencies)
-- **Real-time Progress**: Live position tracking with gradient progress bar
-- **Mini Controls**: Play/Pause/Skip buttons always accessible
-- **Tap to Expand**: (Future: full player screen)
+- **Waveform Progress Strip**: Tinted Jellyfin waveform with a synthetic fallback when the server can't provide one
+- **Scrub Anywhere**: Drag the waveform or slider to seek instantly
+- **Mini Controls**: Play/Pause/Stop/Skip buttons always accessible
+- **Tap to Expand**: Opens the full-screen player
 
 ### Library Screen (`lib/screens/library_screen.dart`)
 - **Albums Tab**: Grid view with infinite scroll support, album artwork
@@ -136,10 +126,9 @@ lib/
 - **Header**: Library switcher and user info
 
 ### Audio Player Service (`lib/services/audio_player_service.dart`)
-- Manages entire playback lifecycle
-- Handles queue, seeking, and track navigation
-- Auto-saves position every second during playback
-- Restores queue and position on app restart
+- Manages playback lifecycle and queues
+- Prioritises direct-play URLs with adaptive fallback to Jellyfin transcoding
+- Auto-saves position every second and restores on launch
 - Configures native audio session for optimal performance
 
 ### Playback State Persistence
@@ -197,11 +186,14 @@ flutter test
 - [x] **Album detail view with full track listings**
 - [x] **Audio playback with native engine (direct streaming)**
 - [x] **Persistent playback state (position, queue, track)**
-- [x] **Sonic wave visualization (frequency spectrum simulation)**
+- [x] **REAL FFT Audio Spectrum Visualization** (true frequency analysis with flutter_audio_capture + fftea)
 - [x] **Tabbed navigation (Albums/Artists/Favorites/Playlists/Downloads)**
-- [x] **Now playing bar with controls and waveform**
+- [x] **Now playing bar with controls and REAL-TIME waveform**
+- [x] **Full-screen player with stop button and responsive design**
 - [x] **Click tracks to play from any album**
 - [x] **Click artists to see their discography**
+- [x] **Back buttons on all detail screens**
+- [x] **Responsive layout** (adapts between mobile and desktop)
 
 ### 🚧 In Progress / Planned
 - [ ] Full player screen with album art and lyrics
@@ -209,18 +201,22 @@ flutter test
 - [ ] Download tracks for offline playback
 - [ ] Equalizer and audio settings
 - [ ] **Sorting options** (by name, date added, year for albums/artists)
-- [ ] **True FFT audio visualization** (real-time frequency analysis via platform audio capture)
 - [ ] Gapless playback between tracks
 - [ ] Media controls on lock screen
 - [ ] Swift CarPlay plugin integration
 - [ ] Cross-platform stability (Windows, macOS, Android)
+- [ ] **FFT optimization**: Currently uses flutter_audio_capture which may need platform-specific permissions
 
 ## 🐛 Known Issues
 
 - **Audio Streaming**: Using direct download URLs (`/Items/{id}/Download`) for best GStreamer compatibility on Linux
+- **Audio Capture Permissions**: FFT visualization requires microphone/audio capture permissions on iOS/Android
+  - On **Linux**: May need PulseAudio/ALSA loopback module for system audio capture
+  - On **iOS**: Requires microphone permission (will fall back to silent bars if denied)
+  - On **Android**: Requires `RECORD_AUDIO` permission
 - Downloads tab is a placeholder (offline mode pending implementation)
 - Infinite scrolling needs backend pagination support
-- **Waveform visualization**: Currently uses simulated frequency spectrum (looks realistic but doesn't analyze actual audio). For TRUE FFT analysis, would need platform-specific audio capture plugins.
+- **Waveform**: Now uses REAL FFT analysis but falls back to silent if audio capture unavailable
 - Lock screen media controls not yet implemented
 
 ## 📝 Development Guidelines

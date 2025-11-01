@@ -9,6 +9,11 @@ class JellyfinTrack {
     this.serverUrl,
     this.token,
     this.userId,
+    this.indexNumber,
+    this.parentIndexNumber,
+    this.albumId,
+    this.albumPrimaryImageTag,
+    this.parentThumbImageTag,
   });
 
   final String id;
@@ -20,6 +25,11 @@ class JellyfinTrack {
   final String? serverUrl;
   final String? token;
   final String? userId;
+  final int? indexNumber;
+  final int? parentIndexNumber;
+  final String? albumId;
+  final String? albumPrimaryImageTag;
+  final String? parentThumbImageTag;
 
   factory JellyfinTrack.fromJson(Map<String, dynamic> json, {String? serverUrl, String? token, String? userId}) {
     return JellyfinTrack(
@@ -27,8 +37,8 @@ class JellyfinTrack {
       name: json['Name'] as String? ?? '',
       album: json['Album'] as String?,
       artists: (json['Artists'] as List<dynamic>?)
-              ?.whereType<String>()
-              .toList() ??
+          ?.whereType<String>()
+          .toList() ??
           const <String>[],
       runTimeTicks: json['RunTimeTicks'] as int?,
       primaryImageTag:
@@ -36,6 +46,11 @@ class JellyfinTrack {
       serverUrl: serverUrl,
       token: token,
       userId: userId,
+      indexNumber: json['IndexNumber'] as int?,
+      parentIndexNumber: json['ParentIndexNumber'] as int?,
+      albumId: json['AlbumId'] as String?,
+      albumPrimaryImageTag: json['AlbumPrimaryImageTag'] as String?,
+      parentThumbImageTag: json['ParentThumbImageTag'] as String?,
     );
   }
 
@@ -57,11 +72,113 @@ class JellyfinTrack {
     return Duration(microseconds: ticks ~/ 10);
   }
 
-  String get streamUrl {
-    if (serverUrl == null || token == null) {
-      throw Exception('JellyfinTrack missing serverUrl or token for streaming');
+  /// Disc number reported by Jellyfin, if available.
+  int? get discNumber => parentIndexNumber;
+
+  /// Returns the best available track number for display.
+  int effectiveTrackNumber(int fallback) {
+    return indexNumber ?? fallback;
+  }
+
+  /// Returns the most suitable image tag for artwork.
+  String? get _effectiveImageTag =>
+      primaryImageTag ?? albumPrimaryImageTag ?? parentThumbImageTag;
+
+  /// Returns the item id to use for artwork lookups.
+  String? get _artworkItemId {
+    if (primaryImageTag != null) {
+      return id;
     }
-    // Use direct streaming without transcoding for better compatibility
-    return '$serverUrl/Items/$id/Download?api_key=$token';
+    if (albumPrimaryImageTag != null && albumId != null) {
+      return albumId;
+    }
+    return parentThumbImageTag != null ? albumId ?? id : null;
+  }
+
+  /// Builds an artwork URL suitable for Image.network.
+  String? artworkUrl({int maxWidth = 800}) {
+    final tag = _effectiveImageTag;
+    final itemId = _artworkItemId;
+    if (serverUrl == null || token == null || tag == null || itemId == null) {
+      return null;
+    }
+    final uri = Uri.parse(serverUrl!).resolve('/Items/$itemId/Images/Primary');
+    final query = <String, String>{
+      'quality': '90',
+      'maxWidth': '$maxWidth',
+      'api_key': token!,
+      'tag': tag,
+    };
+    return uri.replace(queryParameters: query).toString();
+  }
+
+  /// Builds a waveform preview URL provided by Jellyfin.
+  String? waveformImageUrl({int width = 900, int height = 120}) {
+    if (serverUrl == null || token == null) {
+      return null;
+    }
+    final uri = Uri.parse(serverUrl!).resolve('/Audio/$id/Waveform');
+    final query = <String, String>{
+      'width': '$width',
+      'height': '$height',
+      'api_key': token!,
+    };
+    return uri.replace(queryParameters: query).toString();
+  }
+
+  String? directDownloadUrl() {
+    if (serverUrl == null || token == null) {
+      return null;
+    }
+    final uri = Uri.parse(serverUrl!).resolve('/Items/$id/Download');
+    final query = <String, String>{
+      'api_key': token!,
+      'static': 'true',
+    };
+    return uri.replace(queryParameters: query).toString();
+  }
+
+  String? universalStreamUrl({
+    required String deviceId,
+    int maxBitrate = 192000,
+    String audioCodec = 'mp3',
+    String container = 'mp3',
+  }) {
+    if (serverUrl == null || token == null || userId == null) {
+      return null;
+    }
+    final uri = Uri.parse(serverUrl!).resolve('/Audio/$id/universal');
+    final query = <String, String>{
+      'UserId': userId!,
+      'DeviceId': deviceId,
+      'AudioCodec': audioCodec,
+      'Container': container,
+      'TranscodingProtocol': 'progressive',
+      'TranscodingContainer': container,
+      'MaxStreamingBitrate': '$maxBitrate',
+      'MaxAudioChannels': '2',
+      'StartTimeTicks': '0',
+      'EnableRedirection': 'true',
+      'api_key': token!,
+    };
+    return uri.replace(queryParameters: query).toString();
+  }
+
+  String streamUrl({
+    required String deviceId,
+    int maxBitrate = 192000,
+  }) {
+    final universal = universalStreamUrl(
+      deviceId: deviceId,
+      maxBitrate: maxBitrate,
+    );
+    if (universal != null) {
+      return universal;
+    }
+    final direct = directDownloadUrl();
+    if (direct != null) {
+      return direct;
+    }
+    throw Exception('JellyfinTrack missing data for streaming URL');
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:ui' show FontFeature;
+
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -40,9 +42,23 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       final tracks = await widget.appState.jellyfinService.loadAlbumTracks(
         albumId: widget.album.id,
       );
+      final sorted = List<JellyfinTrack>.from(tracks)
+        ..sort((a, b) {
+          final discA = a.discNumber ?? 0;
+          final discB = b.discNumber ?? 0;
+          if (discA != discB) {
+            return discA.compareTo(discB);
+          }
+          final trackA = a.indexNumber ?? 0;
+          final trackB = b.indexNumber ?? 0;
+          if (trackA != trackB) {
+            return trackA.compareTo(trackB);
+          }
+          return a.name.compareTo(b.name);
+        });
       if (mounted) {
         setState(() {
-          _tracks = tracks;
+          _tracks = sorted;
           _isLoading = false;
         });
       }
@@ -60,6 +76,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final album = widget.album;
+    final isDesktop = MediaQuery.of(context).size.width > 600;
 
     Widget artwork;
     final tag = album.primaryImageTag;
@@ -83,8 +100,13 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
-            expandedHeight: 300,
+            expandedHeight: isDesktop ? 350 : 300,
             pinned: true,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.of(context).pop(),
+              tooltip: 'Back',
+            ),
             flexibleSpace: FlexibleSpaceBar(
               background: Stack(
                 fit: StackFit.expand,
@@ -137,16 +159,26 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                   if (_tracks != null && _tracks!.isNotEmpty)
                     FilledButton.icon(
                       onPressed: () async {
-                        await widget.appState.audioPlayerService.playAlbum(
-                          _tracks!,
-                          albumId: album.id,
-                          albumName: album.name,
-                        );
-                        if (mounted) {
+                        try {
+                          await widget.appState.audioPlayerService.playAlbum(
+                            _tracks!,
+                            albumId: album.id,
+                            albumName: album.name,
+                          );
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Playing ${album.name}'),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                          }
+                        } catch (error) {
+                          if (!mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              content: Text('Playing ${album.name}'),
-                              duration: const Duration(seconds: 2),
+                              content: Text('Could not start playback: $error'),
+                              duration: const Duration(seconds: 3),
                             ),
                           );
                         }
@@ -186,26 +218,73 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
+                    if (index >= _tracks!.length) {
+                      return const SizedBox.shrink();
+                    }
                     final track = _tracks![index];
-                    return _TrackTile(
-                      track: track,
-                      trackNumber: index + 1,
-                      onTap: () async {
-                        await widget.appState.audioPlayerService.playTrack(
-                          track,
-                          queueContext: _tracks,
-                          albumId: widget.album.id,
-                          albumName: widget.album.name,
-                        );
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Playing ${track.name}'),
-                              duration: const Duration(seconds: 2),
+                    final fallbackNumber = index + 1;
+                    final trackNumber = track.effectiveTrackNumber(fallbackNumber);
+                    final displayNumber =
+                        trackNumber.toString().padLeft(2, '0');
+                    final previousDisc = index == 0
+                        ? null
+                        : _tracks![index - 1].discNumber;
+                    final showDiscHeader = track.discNumber != null &&
+                        track.discNumber != previousDisc;
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (showDiscHeader) ...[
+                          Padding(
+                            padding: const EdgeInsets.only(
+                              top: 16,
+                              bottom: 8,
+                              left: 8,
                             ),
-                          );
-                        }
-                      },
+                            child: Text(
+                              'Disc ${track.discNumber}',
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                color:
+                                    theme.colorScheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                        _TrackTile(
+                          track: track,
+                          displayTrackNumber: displayNumber,
+                          onTap: () async {
+                            try {
+                              await widget.appState.audioPlayerService
+                                  .playTrack(
+                                track,
+                                queueContext: _tracks,
+                                albumId: widget.album.id,
+                                albumName: widget.album.name,
+                              );
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Playing ${track.name}'),
+                                    duration: const Duration(seconds: 2),
+                                  ),
+                                );
+                              }
+                            } catch (error) {
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Could not start playback: $error'),
+                                  duration: const Duration(seconds: 3),
+                                ),
+                              );
+                            }
+                          },
+                        ),
+                        const Divider(height: 1),
+                      ],
                     );
                   },
                   childCount: _tracks!.length,
@@ -216,9 +295,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       ),
       bottomNavigationBar: NowPlayingBar(
         audioService: widget.appState.audioPlayerService,
-        onTap: () {
-          // TODO: Navigate to full now playing screen
-        },
       ),
     );
   }
@@ -227,19 +303,21 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 class _TrackTile extends StatelessWidget {
   const _TrackTile({
     required this.track,
-    required this.trackNumber,
+    required this.displayTrackNumber,
     required this.onTap,
   });
 
   final JellyfinTrack track;
-  final int trackNumber;
+  final String displayTrackNumber;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final duration = track.duration;
-    final durationText = duration != null ? _formatDuration(duration) : '—';
+    final durationText =
+        duration != null ? _formatDuration(duration) : '--:--';
+    final showArtist = track.artists.isNotEmpty;
 
     return Material(
       color: Colors.transparent,
@@ -251,11 +329,12 @@ class _TrackTile extends StatelessWidget {
           child: Row(
             children: [
               SizedBox(
-                width: 32,
+                width: 48,
                 child: Text(
-                  '$trackNumber',
+                  displayTrackNumber,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
+                    fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                   textAlign: TextAlign.center,
                 ),
@@ -271,7 +350,7 @@ class _TrackTile extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    if (track.displayArtist.isNotEmpty) ...[
+                    if (showArtist) ...[
                       const SizedBox(height: 2),
                       Text(
                         track.displayArtist,
@@ -365,7 +444,7 @@ class _EmptyWidget extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'This album appears to be empty.',
+            'This album appears to be empty.\nIf tracks exist in Jellyfin, make sure the album has a Music Album folder structure and rescan the library.',
             style: theme.textTheme.bodyMedium,
             textAlign: TextAlign.center,
           ),
