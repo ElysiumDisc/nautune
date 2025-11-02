@@ -319,6 +319,41 @@ class JellyfinClient {
         .toList();
   }
 
+  Future<List<JellyfinAlbum>> searchAlbums({
+    required JellyfinCredentials credentials,
+    required String libraryId,
+    required String query,
+  }) async {
+    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+      'ParentId': libraryId,
+      'IncludeItemTypes': 'MusicAlbum',
+      'Recursive': 'true',
+      'SearchTerm': query,
+      'SortBy': 'SortName',
+      'Fields':
+          'PrimaryImageAspectRatio,ProductionYear,Artists,AlbumArtists,ImageTags',
+    });
+
+    final response = await httpClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to search albums: ${response.statusCode}',
+      );
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final items = data?['Items'] as List<dynamic>? ?? const [];
+
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(JellyfinAlbum.fromJson)
+        .toList();
+  }
+
   Map<String, String> _defaultHeaders([JellyfinCredentials? credentials]) {
     final headers = <String, String>{
       'Content-Type': 'application/json',

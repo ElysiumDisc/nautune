@@ -24,17 +24,20 @@ class _LibraryScreenState extends State<LibraryScreen>
   late TabController _tabController;
   final ScrollController _albumsScrollController = ScrollController();
   final ScrollController _playlistsScrollController = ScrollController();
+  int _currentTabIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(length: 6, vsync: this);
+    _tabController.addListener(_handleTabChange);
     _albumsScrollController.addListener(_onAlbumsScroll);
     _playlistsScrollController.addListener(_onPlaylistsScroll);
   }
 
   @override
   void dispose() {
+    _tabController.removeListener(_handleTabChange);
     _tabController.dispose();
     _albumsScrollController.dispose();
     _playlistsScrollController.dispose();
@@ -55,6 +58,13 @@ class _LibraryScreenState extends State<LibraryScreen>
       // Load more playlists when near bottom
       // widget.appState.loadMorePlaylists();
     }
+  }
+
+  void _handleTabChange() {
+    if (_tabController.indexIsChanging) return;
+    setState(() {
+      _currentTabIndex = _tabController.index;
+    });
   }
 
   @override
@@ -99,12 +109,13 @@ class _LibraryScreenState extends State<LibraryScreen>
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                _Header(
-                  username: session?.username ?? 'Explorer',
-                  serverUrl: session?.serverUrl ?? '',
-                  selectedLibraryName: session?.selectedLibraryName,
+                Text(
+                  'Pick a library to explore',
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 ...libraries.map((library) => Padding(
                       padding: const EdgeInsets.only(bottom: 12),
                       child: _LibraryTile(
@@ -118,106 +129,110 @@ class _LibraryScreenState extends State<LibraryScreen>
           );
         } else {
           // Show tabbed interface
-          body = Column(
+          body = TabBarView(
+            controller: _tabController,
             children: [
-              Container(
-                color: theme.colorScheme.surface,
-                child: Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                      child: _Header(
-                        username: session?.username ?? 'Explorer',
-                        serverUrl: session?.serverUrl ?? '',
-                        selectedLibraryName: session?.selectedLibraryName,
-                      ),
-                    ),
-                    TabBar(
-                      controller: _tabController,
-                      indicatorColor: theme.colorScheme.secondary,
-                      labelColor: theme.colorScheme.onSurface,
-                      unselectedLabelColor:
-                          theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                      tabs: const [
-                        Tab(icon: Icon(Icons.album), text: 'Albums'),
-                        Tab(icon: Icon(Icons.person), text: 'Artists'),
-                        Tab(icon: Icon(Icons.favorite), text: 'Favorites'),
-                        Tab(icon: Icon(Icons.playlist_play), text: 'Playlists'),
-                        Tab(icon: Icon(Icons.download), text: 'Downloads'),
-                      ],
-                    ),
-                  ],
-                ),
+              _AlbumsTab(
+                albums: albums,
+                isLoading: isLoadingAlbums,
+                error: albumsError,
+                scrollController: _albumsScrollController,
+                onRefresh: () => widget.appState.refreshAlbums(),
+                onAlbumTap: (album) => _navigateToAlbum(context, album),
+                appState: widget.appState,
               ),
-              Expanded(
-                child: TabBarView(
-                  controller: _tabController,
-                  children: [
-                    // Albums Tab
-                    _AlbumsTab(
-                      albums: albums,
-                      isLoading: isLoadingAlbums,
-                      error: albumsError,
-                      scrollController: _albumsScrollController,
-                      onRefresh: () => widget.appState.refreshAlbums(),
-                      onAlbumTap: (album) => _navigateToAlbum(context, album),
-                      appState: widget.appState,
-                    ),
-                    // Artists Tab
-                    _ArtistsTab(
-                      appState: widget.appState,
-                    ),
-                    // Favorites Tab
-                    _FavoritesTab(
-                      recentTracks: recentTracks,
-                      isLoading: isLoadingRecent,
-                      error: recentError,
-                      onRefresh: () => widget.appState.refreshRecent(),
-                      onTrackTap: (track) => _playTrack(track),
-                    ),
-                    // Playlists Tab
-                    _PlaylistsTab(
-                      playlists: playlists,
-                      isLoading: isLoadingPlaylists,
-                      error: playlistsError,
-                      scrollController: _playlistsScrollController,
-                      onRefresh: () => widget.appState.refreshPlaylists(),
-                    ),
-                    // Downloads Tab
-                    _DownloadsTab(),
-                  ],
-                ),
+              _ArtistsTab(
+                appState: widget.appState,
               ),
+              _SearchTab(appState: widget.appState),
+              _FavoritesTab(
+                recentTracks: recentTracks,
+                isLoading: isLoadingRecent,
+                error: recentError,
+                onRefresh: () => widget.appState.refreshRecent(),
+                onTrackTap: (track) => _playTrack(track),
+              ),
+              _PlaylistsTab(
+                playlists: playlists,
+                isLoading: isLoadingPlaylists,
+                error: playlistsError,
+                scrollController: _playlistsScrollController,
+                onRefresh: () => widget.appState.refreshPlaylists(),
+              ),
+              _DownloadsTab(),
             ],
           );
         }
 
         return Scaffold(
           appBar: AppBar(
-            title: Text(
-              'Nautune',
-              style: theme.textTheme.headlineSmall?.copyWith(
-                color: theme.colorScheme.secondary,
-                fontWeight: FontWeight.bold,
-              ),
+            title: Row(
+              children: [
+                const Icon(Icons.waves),
+                const SizedBox(width: 8),
+                Text(
+                  'Nautune',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    color: theme.colorScheme.onPrimary,
+                  ),
+                ),
+              ],
             ),
             actions: [
               if (selectedId != null)
                 IconButton(
-                  icon: const Icon(Icons.library_music),
-                  onPressed: () => widget.appState.clearLibrarySelection(),
+                  icon: const Icon(Icons.library_books_outlined),
                   tooltip: 'Change Library',
+                  onPressed: () => widget.appState.clearLibrarySelection(),
                 ),
               IconButton(
                 icon: const Icon(Icons.logout),
+                tooltip: 'Logout',
                 onPressed: () => widget.appState.disconnect(),
-                tooltip: 'Disconnect',
               ),
             ],
           ),
           body: body,
-          bottomNavigationBar: NowPlayingBar(
-            audioService: widget.appState.audioPlayerService,
+          bottomNavigationBar: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              NavigationBar(
+                selectedIndex: _currentTabIndex,
+                onDestinationSelected: (index) {
+                  setState(() => _currentTabIndex = index);
+                  _tabController.animateTo(index);
+                },
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(Icons.album_outlined),
+                    label: 'Albums',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.person_outline),
+                    label: 'Artists',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.search),
+                    label: 'Search',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.favorite_outline),
+                    label: 'Favorites',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.queue_music),
+                    label: 'Playlists',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.download_outlined),
+                    label: 'Downloads',
+                  ),
+                ],
+              ),
+              NowPlayingBar(
+                audioService: widget.appState.audioPlayerService,
+              ),
+            ],
           ),
         );
       },
@@ -255,43 +270,6 @@ class _LibraryScreenState extends State<LibraryScreen>
 
 // Supporting Widgets
 
-class _Header extends StatelessWidget {
-  const _Header({
-    required this.username,
-    required this.serverUrl,
-    this.selectedLibraryName,
-  });
-
-  final String username;
-  final String serverUrl;
-  final String? selectedLibraryName;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Welcome, $username',
-          style: theme.textTheme.headlineMedium?.copyWith(
-            color: theme.colorScheme.secondary,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        if (selectedLibraryName != null) ...[
-          const SizedBox(height: 4),
-          Text(
-            selectedLibraryName!,
-            style: theme.textTheme.titleMedium?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-}
 
 class _EmptyState extends StatelessWidget {
   const _EmptyState({required this.onRefresh});
@@ -741,6 +719,177 @@ class _ArtistsTab extends StatelessWidget {
           return _ArtistCard(artist: artist, appState: appState);
         },
       ),
+    );
+  }
+}
+
+class _SearchTab extends StatefulWidget {
+  const _SearchTab({required this.appState});
+
+  final NautuneAppState appState;
+
+  @override
+  State<_SearchTab> createState() => _SearchTabState();
+}
+
+class _SearchTabState extends State<_SearchTab> {
+  final TextEditingController _controller = TextEditingController();
+  List<JellyfinAlbum> _results = const [];
+  bool _isLoading = false;
+  Object? _error;
+  String _lastQuery = '';
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _performSearch(String query) async {
+    final trimmed = query.trim();
+    setState(() {
+      _lastQuery = trimmed;
+      _error = null;
+    });
+
+    if (trimmed.isEmpty) {
+      setState(() {
+        _results = const [];
+        _isLoading = false;
+      });
+      return;
+    }
+
+    final libraryId = widget.appState.session?.selectedLibraryId;
+    if (libraryId == null) {
+      setState(() {
+        _error = 'Select a music library to search.';
+        _results = const [];
+        _isLoading = false;
+      });
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      final albums = await widget.appState.jellyfinService.searchAlbums(
+        libraryId: libraryId,
+        query: trimmed,
+      );
+      if (!mounted || _lastQuery != trimmed) return;
+      setState(() {
+        _results = albums;
+        _isLoading = false;
+      });
+    } catch (error) {
+      if (!mounted || _lastQuery != trimmed) return;
+      setState(() {
+        _error = error;
+        _isLoading = false;
+        _results = const [];
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final libraryId = widget.appState.session?.selectedLibraryId;
+
+    if (libraryId == null) {
+      return Center(
+        child: Text(
+          'Choose a library to enable search.',
+          style: theme.textTheme.titleMedium,
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: TextField(
+            controller: _controller,
+            onSubmitted: _performSearch,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              prefixIcon: const Icon(Icons.search),
+              hintText: 'Search albums',
+              filled: true,
+              fillColor: theme.colorScheme.surfaceContainerHighest,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+                borderSide: BorderSide.none,
+              ),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.arrow_forward),
+                onPressed: () => _performSearch(_controller.text),
+              ),
+            ),
+          ),
+        ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Icon(Icons.error_outline, color: theme.colorScheme.error),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _error.toString(),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : _results.isEmpty
+                  ? Center(
+                      child: Text(
+                        _lastQuery.isEmpty
+                            ? 'Search your library by album name.'
+                            : 'No albums found for "$_lastQuery"',
+                        style: theme.textTheme.titleMedium,
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                      itemCount: _results.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final album = _results[index];
+                        return Card(
+                          child: ListTile(
+                            leading: const Icon(Icons.album_outlined),
+                            title: Text(album.name),
+                            subtitle: Text(album.displayArtist),
+                            trailing: album.productionYear != null
+                                ? Text('${album.productionYear}')
+                                : null,
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => AlbumDetailScreen(
+                                    album: album,
+                                    appState: widget.appState,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        );
+                      },
+                    ),
+        ),
+      ],
     );
   }
 }
