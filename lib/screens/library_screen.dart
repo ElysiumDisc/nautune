@@ -7,10 +7,12 @@ import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_library.dart';
 import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/now_playing_bar.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
 import 'offline_library_screen.dart';
+import 'playlist_detail_screen.dart';
 import 'settings_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
@@ -508,6 +510,30 @@ class _AlbumCard extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
+        onLongPress: () {
+          showModalBottomSheet(
+            context: context,
+            builder: (context) => SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.playlist_add),
+                    title: const Text('Add to Playlist'),
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await showAddToPlaylistDialog(
+                        context: context,
+                        appState: appState,
+                        album: album,
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -633,6 +659,17 @@ class _PlaylistsTab extends StatelessWidget {
               leading: Icon(Icons.playlist_play, color: Theme.of(context).colorScheme.secondary),
               title: Text(playlist.name),
               subtitle: Text('${playlist.trackCount} tracks'),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => PlaylistDetailScreen(
+                      playlist: playlist,
+                      appState: appState,
+                    ),
+                  ),
+                );
+              },
               trailing: PopupMenuButton<String>(
                 icon: const Icon(Icons.more_vert),
                 onSelected: (value) {

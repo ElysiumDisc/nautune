@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/now_playing_bar.dart';
 
 class AlbumDetailScreen extends StatefulWidget {
@@ -107,6 +108,19 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               onPressed: () => Navigator.of(context).pop(),
               tooltip: 'Back',
             ),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.playlist_add),
+                onPressed: () async {
+                  await showAddToPlaylistDialog(
+                    context: context,
+                    appState: widget.appState,
+                    album: widget.album,
+                  );
+                },
+                tooltip: 'Add to Playlist',
+              ),
+            ],
             flexibleSpace: FlexibleSpaceBar(
               background: Stack(
                 fit: StackFit.expand,
@@ -345,6 +359,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                         _TrackTile(
                           track: track,
                           displayTrackNumber: displayNumber,
+                          appState: widget.appState,
                           onTap: () async {
                             try {
                               await widget.appState.audioPlayerService
@@ -395,11 +410,13 @@ class _TrackTile extends StatelessWidget {
     required this.track,
     required this.displayTrackNumber,
     required this.onTap,
+    required this.appState,
   });
 
   final JellyfinTrack track;
   final String displayTrackNumber;
   final VoidCallback onTap;
+  final NautuneAppState appState;
 
   @override
   Widget build(BuildContext context) {
@@ -454,12 +471,42 @@ class _TrackTile extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 8),
               Text(
                 durationText,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                icon: const Icon(Icons.more_vert, size: 20),
+                onPressed: () {
+                  showModalBottomSheet(
+                    context: context,
+                    builder: (context) => SafeArea(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          ListTile(
+                            leading: const Icon(Icons.playlist_add),
+                            title: const Text('Add to Playlist'),
+                            onTap: () async {
+                              Navigator.pop(context);
+                              await showAddToPlaylistDialog(
+                                context: context,
+                                appState: appState,
+                                tracks: [track],
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
               ),
             ],
           ),

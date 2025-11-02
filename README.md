@@ -36,11 +36,15 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - **✅ Artists Tab**: Browse all artists with circular profile artwork - click to see their albums
 - **✅ Recent Tab**: Toggle between recently played tracks (from Jellyfin history) and recently added albums with segmented control
 - **✅ Favorites Tab**: Simple favorite tracks list (ready for Jellyfin favorites integration)
-- **✅ Playlists Tab**: Access all your Jellyfin playlists with management features
-  - ✅ Create new playlists (UI ready)
-  - ✅ Edit/rename playlists (three-dot menu)
+- **✅ Playlists Tab**: Full playlist management with Jellyfin sync
+  - ✅ Create new playlists
+  - ✅ Edit/rename playlists (three-dot menu or detail screen)
   - ✅ Delete playlists with confirmation dialog
-  - ✅ Create playlist button when empty
+  - ✅ View all tracks in playlist detail screen
+  - ✅ Add albums/tracks to playlists (long-press on albums, menu on tracks)
+  - ✅ Remove tracks from playlists
+  - ✅ Play playlists with queue support
+  - ✅ All changes sync to Jellyfin server instantly
 - **✅ Downloads Tab**: Full offline download support with progress tracking, album batch downloads, and file management
 - **✅ Offline Library**: Click wave icon (🌊) to browse downloads by album or artist - **works in airplane mode!**
 - **✅ Settings**: Click "Nautune" title for transcoding options, download quality, and server info
@@ -50,11 +54,18 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - **Bottom Navigation**: Icon-only rail keeps the most-used sections a single tap away on every platform
 - **Library Search Tab**: Dedicated search experience for quickly finding albums by name, showing artist and year context
 - **Smart Refresh**: Pull-to-refresh on all tabs for latest content sync
+- **Add to Playlist**: Long-press albums, use menu button on tracks, or toolbar button in album detail to add content to any playlist
 
 ### 🎯 Jellyfin Integration
 - **Direct Streaming**: Streams music directly from your Jellyfin server with adaptive quality
 - **Album Browsing**: View all albums with high-quality artwork and metadata
-- **Playlist Support**: Access and manage your Jellyfin playlists (create, edit, delete)
+- **Playlist Support**: Full Jellyfin playlist integration with real-time sync
+  - ✅ Create playlists on server
+  - ✅ Rename/edit playlists
+  - ✅ Delete playlists
+  - ✅ Add albums and tracks to playlists
+  - ✅ Remove tracks from playlists
+  - ✅ All changes persist on Jellyfin server
 - **Recent Tracks**: Quick access to recently played and added music with Jellyfin sync
 - **Persistent Sessions**: Login once, stay connected across app launches
 - **Playback Reporting**: Full integration with Jellyfin's activity tracking
@@ -151,8 +162,15 @@ lib/
 - **Artists Tab**: Full artist browser with discography navigation
 - **Search Tab**: Search albums inside the selected library, displaying artist attribution and year
 - **Favorites Tab**: Recent and favorited tracks in a list
-- **Playlists Tab**: Your Jellyfin playlists with track counts
+- **Playlists Tab**: Your Jellyfin playlists with full management (create, edit, delete, add/remove tracks)
 - **Bottom Navigation**: Material `NavigationBar` mirrors the tab order for quick access on mobile and desktop
+
+### Playlist Detail Screen (`lib/screens/playlist_detail_screen.dart`)
+- **Track List**: View all tracks in a playlist with play functionality
+- **Remove Tracks**: Individual track removal with ❌ button
+- **Edit/Rename**: Toolbar button to rename playlist
+- **Delete**: Toolbar button to delete entire playlist
+- **Play Queue**: Play individual tracks or queue entire playlist
 
 ### Audio Player Service (`lib/services/audio_player_service.dart`)
 - Manages playback lifecycle and queues
@@ -237,14 +255,22 @@ See [`plugins/nautune_carplay/README.md`](plugins/nautune_carplay/README.md) for
 - [x] **Now playing bar with controls and real-time waveform**
 - [x] **Full-screen player** with auto-updating UI (play/pause state, progress bar synced)
 - [x] **Favorite button** in fullscreen player (heart icon, ready for API)
-- [x] **Playlist management** (create, edit/rename, delete with confirmation)
+- [x] **Full playlist management with Jellyfin integration**
+  - [x] Create playlists on Jellyfin server
+  - [x] Rename/edit playlists
+  - [x] Delete playlists with confirmation
+  - [x] Add albums to playlists (long-press on album cards)
+  - [x] Add tracks to playlists (menu button on tracks)
+  - [x] Playlist detail screen with track list
+  - [x] Remove tracks from playlists
+  - [x] All changes sync to server instantly
 - [x] **Click tracks to play from any album**
 - [x] **Click artists to see their discography**
 - [x] **Back buttons on all detail screens**
 - [x] **Responsive layout** (adapts between mobile and desktop)
 
 ### 🚧 In Progress / Planned
-- [ ] **Jellyfin API integration** for favorites, playlist creation/editing
+- [ ] **Jellyfin API integration** for favorites (playlist management ✅ complete!)
 - [ ] Full player screen with lyrics display
 - [ ] Enhanced search across all content types
 - [ ] Equalizer and audio settings
@@ -255,7 +281,6 @@ See [`plugins/nautune_carplay/README.md`](plugins/nautune_carplay/README.md) for
 ## 🐛 Known Issues
 
 - **Audio Streaming**: Using direct download URLs (`/Items/{id}/Download`) for best compatibility, with intelligent fallback to transcoded streams
-- **Playlist Management**: UI complete, awaiting Jellyfin API integration for create/edit/delete operations
 - **Favorites**: Heart button in fullscreen ready, awaiting Jellyfin favorites API integration
 - Infinite scrolling needs backend pagination support
 - CarPlay testing requires physical device or iOS Simulator with CarPlay window
