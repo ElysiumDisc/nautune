@@ -933,8 +933,11 @@ class _FavoritesTab extends StatelessWidget {
       onRefresh: () async => onRefresh(),
       child: ListView.builder(
         padding: const EdgeInsets.all(16),
-        itemCount: recentTracks!.length,
+        itemCount: recentTracks?.length ?? 0,
         itemBuilder: (context, index) {
+          if (recentTracks == null || index >= recentTracks!.length) {
+            return const SizedBox.shrink();
+          }
           final track = recentTracks![index];
           return Card(
             margin: const EdgeInsets.only(bottom: 8),

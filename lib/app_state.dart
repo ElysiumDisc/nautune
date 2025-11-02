@@ -9,6 +9,7 @@ import 'jellyfin/jellyfin_session.dart';
 import 'jellyfin/jellyfin_session_store.dart';
 import 'jellyfin/jellyfin_track.dart';
 import 'services/audio_player_service.dart';
+import 'services/carplay_service.dart';
 import 'services/download_service.dart';
 import 'services/playback_reporting_service.dart';
 import 'services/playback_state_store.dart';
@@ -25,6 +26,8 @@ class NautuneAppState extends ChangeNotifier {
     _downloadService = DownloadService(jellyfinService: jellyfinService);
     // Link download service to audio player for offline playback
     _audioPlayerService.setDownloadService(_downloadService);
+    // Initialize CarPlay service for iOS
+    _carPlayService = CarPlayService(appState: this);
   }
 
   final JellyfinService _jellyfinService;
@@ -32,6 +35,7 @@ class NautuneAppState extends ChangeNotifier {
   final PlaybackStateStore _playbackStateStore;
   late final AudioPlayerService _audioPlayerService;
   late final DownloadService _downloadService;
+  late final CarPlayService _carPlayService;
 
   bool _initialized = false;
   JellyfinSession? _session;

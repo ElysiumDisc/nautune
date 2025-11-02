@@ -29,7 +29,10 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
   - ✅ Lock screen media controls via audio_service plugin
   - ✅ Album artwork display on lock screen
   - ✅ Play/pause, skip controls work from lock screen
-  - ✅ CarPlay integration with simple car UI
+  - ✅ **Full CarPlay integration** - library browsing (albums, artists, playlists, favorites, downloads)
+  - ✅ CarPlay supports offline playback with downloads (airplane mode works!)
+  - ✅ Simple, focused car-friendly UI with tab navigation
+  - ✅ Seamless integration with iOS audio session
 
 ### 🌊 Visual Experience
 - **Waveform Progress**: Real waveform from Jellyfin API with intelligent caching per track
@@ -92,10 +95,13 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
   - ✅ Updates "Recently Played" in Jellyfin dashboard
   - ✅ Session-based reporting with proper start/stop events
 - **Offline Downloads**: Download albums and tracks for offline playback
-  - ✅ Desktop: Stored in project `downloads/` directory
-  - ✅ iOS/Android: Stored in app documents directory (persists across updates)
-  - ✅ Automatic offline playback when file exists (airplane mode compatible)
+  - ✅ **Linux/Desktop**: Stored in project `downloads/` directory
+  - ✅ **iOS/Android**: Stored in app documents directory (persists across updates, **airplane mode compatible**)
+  - ✅ Automatic offline playback when file exists (no internet required)
   - ✅ Always downloads original format (FLAC/lossless preferred)
+  - ✅ **iOS CarPlay supports offline downloads** - browse and play in car without internet
+  - ✅ Download progress tracking and cancellation
+  - ✅ Batch album downloads
 
 ## 🚀 Getting Started
 
@@ -233,24 +239,54 @@ flutter test
 
 ## 🌐 Building for Other Platforms
 
-- **iOS**: Builds produced by Codemagic CI. **CarPlay plugin implemented!** See `plugins/nautune_carplay/` for integration.
+- **iOS**: Builds produced by **Codemagic CI** with full feature support
+  - ✅ **Native audio playback** via AVFoundation (FLAC/AAC/lossless support)
+  - ✅ **Lock screen controls** with album artwork via audio_service
+  - ✅ **Full CarPlay integration** - browse library, playlists, favorites, downloads in car mode
+  - ✅ **Offline downloads** stored in app documents directory (airplane mode compatible)
+  - ✅ CarPlay works fully offline with downloaded content
+  - ✅ All Jellyfin features work on iOS (playback reporting, favorites sync, playlist management)
 - **Windows**: `flutter build windows` (requires Windows machine with VS 2022)
 - **macOS**: `flutter build macos` (requires macOS with Xcode)
 - **Web**: `flutter run -d chrome` for dev, `flutter build web` for production
 - **Android**: Not currently a focus; no Android SDK required for development
 
-> **Development Tip**: Keep your Linux environment Snap-free. Use official Flutter tarball or FVM. Codemagic handles iOS builds.
+> **Development Tip**: Keep your Linux environment Snap-free. Use official Flutter tarball or FVM. Codemagic handles iOS builds automatically.
 
-### 🚗 CarPlay Support
+### 🚗 CarPlay Support (iOS Only)
 
-Nautune includes a custom Swift CarPlay plugin under `plugins/nautune_carplay/`:
-- Simple, focused car-friendly UI
-- Now Playing screen with album art
-- Playback controls (play/pause, skip)
-- Library browsing support
-- iOS Media Player integration
+Nautune includes **full CarPlay integration** for iOS with complete library access:
 
-See [`plugins/nautune_carplay/README.md`](plugins/nautune_carplay/README.md) for setup instructions.
+#### ✅ Features
+- **Tab Navigation**: Library, Favorites, Downloads tabs with simple car-friendly UI
+- **Library Browsing**: Browse albums, artists, and playlists while driving
+- **Track Playback**: Play any track directly from CarPlay - integrates with iOS audio session
+- **Offline Support**: Browse and play downloaded music in airplane mode (no internet required)
+- **Native Integration**: Swift scene delegate with Flutter method channel bridge for seamless communication
+
+#### 🔧 Implementation Details
+- **Native CarPlay Scene**: `ios/Runner/CarPlaySceneDelegate.swift` - handles CarPlay UI and interactions
+- **Flutter Bridge**: `lib/services/carplay_service.dart` - connects CarPlay to app state
+- **Info.plist Configuration**: CarPlay scene manifest (`CPTemplateApplicationSceneSessionRoleApplication`) and audio background mode
+- **Method Channel**: Bidirectional communication between Swift CarPlay UI and Flutter app logic
+- **Offline Downloads**: iOS stores downloads in app documents directory - accessible even offline
+- **Lock Screen Controls**: Album artwork, play/pause, skip buttons via audio_service plugin
+
+#### 🧪 Testing CarPlay
+CarPlay requires one of the following:
+- **Physical Device**: iPhone with CarPlay-enabled car or CarPlay-compatible head unit
+- **iOS Simulator**: Xcode → I/O → External Display → CarPlay window
+
+The CarPlay interface automatically appears when connected to a CarPlay system. No additional setup needed!
+
+#### 📱 iOS-Specific Features
+All iOS features are built and deployed via **Codemagic CI**:
+- ✅ Native AVFoundation audio engine (FLAC, AAC, all formats supported)
+- ✅ Lock screen media controls with album artwork
+- ✅ Background audio playback
+- ✅ CarPlay full library browsing and offline playback
+- ✅ Downloads stored in app documents (airplane mode compatible)
+- ✅ All Jellyfin features (favorites, playlists, playback reporting)
 
 ## 🗺️ Roadmap
 
@@ -268,7 +304,7 @@ See [`plugins/nautune_carplay/README.md`](plugins/nautune_carplay/README.md) for
 - [x] **Jellyfin Playback Reporting integration** for activity tracking
 - [x] **Offline downloads** with progress tracking and album batch downloads
 - [x] **Recent tab with toggle** between recently played and recently added
-- [x] **iOS CarPlay plugin** with simple car UI
+- [x] **iOS CarPlay** with full library browsing (albums, artists, playlists, favorites, downloads) and **offline support**
 - [x] **Waveform visualization** using Jellyfin's waveform API with per-track caching
 - [x] **Tabbed navigation (Albums/Artists/Search/Favorites/Recent/Playlists/Downloads)** - 7 tabs total
 - [x] **Settings screen** with transcoding options accessible from app title
@@ -290,21 +326,17 @@ See [`plugins/nautune_carplay/README.md`](plugins/nautune_carplay/README.md) for
 - [x] **Responsive layout** (adapts between mobile and desktop)
 
 ### 🚧 In Progress / Planned
-- [ ] **Jellyfin API integration** for favorites (playlist management ✅ complete!)
 - [ ] Full player screen with lyrics display
 - [ ] Enhanced search across all content types
 - [ ] Equalizer and audio settings
 - [ ] **Sorting options** (by name, date added, year for albums/artists)
 - [ ] Cross-platform stability improvements (Windows, macOS, Android)
-- [ ] CarPlay library browsing and advanced features
 
 ## 🐛 Known Issues
 
 - **Native FLAC Playback**: Uses direct download URLs for original quality, platform decoders handle FLAC/AAC/etc. natively
-- **Favorites**: Heart button in fullscreen ready, awaiting Jellyfin favorites API integration
 - Infinite scrolling needs backend pagination support
 - CarPlay testing requires physical device or iOS Simulator with CarPlay window
-- Lock screen media controls implemented via iOS plugin
 
 ## 📝 Development Guidelines
 
