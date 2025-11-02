@@ -1,0 +1,40 @@
+workflows:
+  ios_release:
+    name: Nautune iOS → TestFlight
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+      vars:
+        IOS_SCHEME: "Runner"
+        IOS_WORKSPACE: "ios/Runner.xcworkspace"
+    scripts:
+      - name: Flutter setup
+        script: |
+          flutter clean
+          flutter pub get
+          flutter analyze
+          cd ios && pod repo update && pod install && cd ..
+      - name: Build iOS (release)
+        script: |
+          flutter build ios --release --no-codesign
+      - name: Archive and export .ipa
+        script: |
+          xcodebuild -workspace "$IOS_WORKSPACE" \
+            -scheme "$IOS_SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath build/ios/archive/Nautune.xcarchive \
+            clean archive
+          xcodebuild -exportArchive \
+            -archivePath build/ios/archive/Nautune.xcarchive \
+            -exportOptionsPlist ios/ExportOptions.plist \
+            -exportPath build/ios/ipa
+    artifacts:
+      - build/ios/ipa/*.ipa
+    publishing:
+      app_store_connect:
+        api_key: $APP_STORE_CONNECT_API_KEY
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+        submit_to_testflight: true
+        submit_to_app_store: false
