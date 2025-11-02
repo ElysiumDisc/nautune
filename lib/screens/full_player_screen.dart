@@ -160,7 +160,19 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                                     style: theme.textTheme.titleMedium,
                                   ),
                                   const Spacer(),
-                                  const SizedBox(width: 48),
+                                  IconButton(
+                                    icon: const Icon(Icons.favorite_border),
+                                    onPressed: () {
+                                      // TODO: Toggle favorite
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('Favorite feature coming soon!'),
+                                          duration: Duration(seconds: 1),
+                                        ),
+                                      );
+                                    },
+                                    tooltip: 'Add to favorites',
+                                  ),
                                 ],
                               ),
                             ),

@@ -583,6 +583,20 @@ class _PlaylistsTab extends StatelessWidget {
             Icon(Icons.playlist_play, size: 64, color: Colors.grey.shade600),
             const SizedBox(height: 16),
             const Text('No playlists found'),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: () {
+                // TODO: Implement create playlist
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Create playlist feature coming soon!'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('Create Playlist'),
+            ),
           ],
         ),
       );
@@ -592,21 +606,147 @@ class _PlaylistsTab extends StatelessWidget {
       child: ListView.builder(
         controller: scrollController,
         padding: const EdgeInsets.all(16),
-        itemCount: playlists!.length + (isLoading ? 1 : 0),
+        itemCount: playlists!.length + (isLoading ? 1 : 0) + 1, // +1 for header button
         itemBuilder: (context, index) {
-          if (index >= playlists!.length) {
+          // Add create button as first item
+          if (index == 0) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  // TODO: Implement create playlist
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Create playlist feature coming soon!'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('Create New Playlist'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.all(16),
+                ),
+              ),
+            );
+          }
+          
+          final listIndex = index - 1;
+          if (listIndex >= playlists!.length) {
             return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
           }
-          final playlist = playlists![index];
+          final playlist = playlists![listIndex];
           return Card(
             margin: const EdgeInsets.only(bottom: 12),
             child: ListTile(
               leading: Icon(Icons.playlist_play, color: Theme.of(context).colorScheme.secondary),
               title: Text(playlist.name),
               subtitle: Text('${playlist.trackCount} tracks'),
+              trailing: PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert),
+                onSelected: (value) {
+                  if (value == 'edit') {
+                    _showEditPlaylistDialog(context, playlist);
+                  } else if (value == 'delete') {
+                    _showDeletePlaylistDialog(context, playlist);
+                  }
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(
+                    value: 'edit',
+                    child: Row(
+                      children: [
+                        Icon(Icons.edit),
+                        SizedBox(width: 8),
+                        Text('Edit'),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'delete',
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete, color: Colors.red),
+                        SizedBox(width: 8),
+                        Text('Delete', style: TextStyle(color: Colors.red)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           );
         },
+      ),
+    );
+  }
+
+  void _showEditPlaylistDialog(BuildContext context, JellyfinPlaylist playlist) {
+    final nameController = TextEditingController(text: playlist.name);
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit Playlist'),
+        content: TextField(
+          controller: nameController,
+          decoration: const InputDecoration(
+            labelText: 'Playlist Name',
+            border: OutlineInputBorder(),
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              // TODO: Call Jellyfin API to rename playlist
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Renaming "${playlist.name}" to "${nameController.text}"'),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+              Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDeletePlaylistDialog(BuildContext context, JellyfinPlaylist playlist) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Playlist?'),
+        content: Text('Are you sure you want to delete "${playlist.name}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              // TODO: Call Jellyfin API to delete playlist
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Deleted "${playlist.name}"'),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+              Navigator.pop(context);
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.red,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
       ),
     );
   }
