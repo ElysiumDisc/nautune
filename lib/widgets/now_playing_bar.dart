@@ -19,7 +19,10 @@ class NowPlayingBar extends StatelessWidget {
   void _openFullPlayer(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => FullPlayerScreen(audioService: audioService),
+        builder: (_) => FullPlayerScreen(
+          key: UniqueKey(), // Force fresh build
+          audioService: audioService,
+        ),
       ),
     );
   }

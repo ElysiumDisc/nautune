@@ -87,23 +87,27 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
 
     return StreamBuilder<JellyfinTrack?>(
       stream: widget.audioService.currentTrackStream,
+      initialData: widget.audioService.currentTrack,
       builder: (context, trackSnapshot) {
         final track = trackSnapshot.data;
 
         return StreamBuilder<bool>(
           stream: widget.audioService.playingStream,
+          initialData: widget.audioService.isPlaying,
           builder: (context, playingSnapshot) {
             final isPlaying = playingSnapshot.data ?? false;
 
             return StreamBuilder<Duration>(
               stream: widget.audioService.positionStream,
+              initialData: widget.audioService.currentPosition,
               builder: (context, positionSnapshot) {
                 final position = positionSnapshot.data ?? Duration.zero;
 
                 return StreamBuilder<Duration?>(
                   stream: widget.audioService.durationStream,
+                  initialData: track?.duration,
                   builder: (context, durationSnapshot) {
-                    final duration = durationSnapshot.data ?? Duration.zero;
+                    final duration = durationSnapshot.data ?? track?.duration ?? Duration.zero;
 
                     if (track == null) {
                       return Scaffold(

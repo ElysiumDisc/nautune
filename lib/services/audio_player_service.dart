@@ -44,6 +44,8 @@ class AudioPlayerService {
   Stream<Duration?> get durationStream => _durationController.stream;
   
   JellyfinTrack? get currentTrack => _currentTrack;
+  bool get isPlaying => _player.state == PlayerState.playing;
+  Duration get currentPosition => _lastPosition;
   AudioPlayer get player => _player;
   
   AudioPlayerService() {
