@@ -481,12 +481,24 @@ class JellyfinService {
       credentials: session.credentials,
       queryParams: {
         'userId': session.credentials.userId,
-        'fields': 'AudioInfo,ParentId',
+        'fields':
+            'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,AudioInfo,ParentId',
+        'enableImageTypes': 'Primary,Thumb',
       },
     );
 
     final items = (response['Items'] as List?) ?? [];
-    return items.map((json) => JellyfinTrack.fromJson(json as Map<String, dynamic>)).toList();
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(
+          (json) => JellyfinTrack.fromJson(
+            json,
+            serverUrl: session.serverUrl,
+            token: session.credentials.accessToken,
+            userId: session.credentials.userId,
+          ),
+        )
+        .toList();
   }
 
   Future<List<JellyfinTrack>> getAlbumTracks(String albumId) async {
@@ -502,12 +514,24 @@ class JellyfinService {
       queryParams: {
         'parentId': albumId,
         'sortBy': 'SortName',
-        'fields': 'AudioInfo,ParentId',
+        'fields':
+            'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,AudioInfo,ParentId',
+        'enableImageTypes': 'Primary,Thumb',
       },
     );
 
     final items = (response['Items'] as List?) ?? [];
-    return items.map((json) => JellyfinTrack.fromJson(json as Map<String, dynamic>)).toList();
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(
+          (json) => JellyfinTrack.fromJson(
+            json,
+            serverUrl: session.serverUrl,
+            token: session.credentials.accessToken,
+            userId: session.credentials.userId,
+          ),
+        )
+        .toList();
   }
 
   Future<void> markFavorite(String itemId, bool isFavorite) async {
@@ -584,12 +608,24 @@ class JellyfinService {
         'recursive': 'true',
         'filters': 'IsFavorite',
         'sortBy': 'SortName',
-        'fields': 'AudioInfo,ParentId',
+        'fields':
+            'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,AudioInfo,ParentId',
+        'enableImageTypes': 'Primary,Thumb',
       },
     );
 
     final items = (response['Items'] as List?) ?? [];
-    return items.map((json) => JellyfinTrack.fromJson(json as Map<String, dynamic>)).toList();
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(
+          (json) => JellyfinTrack.fromJson(
+            json,
+            serverUrl: session.serverUrl,
+            token: session.credentials.accessToken,
+            userId: session.credentials.userId,
+          ),
+        )
+        .toList();
   }
 
   void _clearCaches() {

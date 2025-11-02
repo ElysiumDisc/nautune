@@ -307,7 +307,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     try {
       await widget.appState.audioPlayerService.playTrack(
         track,
-        queueContext: widget.appState.recentTracks,
+        queueContext: widget.appState.favoriteTracks,
       );
     } catch (error) {
       if (!mounted) return;

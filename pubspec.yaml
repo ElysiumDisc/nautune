@@ -23,14 +23,14 @@ dependencies:
   # - Android: MediaPlayer (audioplayers_android)
   # - Windows: WinMM (audioplayers_windows)
   audioplayers: ^6.1.0
-  audio_session: ^0.1.21
+  audio_session: ^0.2.2
   audio_service: ^0.18.15
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
 
-  flutter_lints: ^5.0.0
+  flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true
