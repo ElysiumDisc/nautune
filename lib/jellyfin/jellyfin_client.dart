@@ -313,11 +313,7 @@ class JellyfinClient {
 
     return items
         .whereType<Map<String, dynamic>>()
-        .map((json) => JellyfinAlbum.fromJson(
-              json,
-              serverUrl: serverUrl,
-              token: credentials.accessToken,
-            ))
+        .map((json) => JellyfinAlbum.fromJson(json))
         .toList();
   }
 

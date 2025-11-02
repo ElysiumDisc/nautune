@@ -22,6 +22,8 @@ class NautuneAppState extends ChangeNotifier {
         _playbackStateStore = playbackStateStore {
     _audioPlayerService = AudioPlayerService();
     _downloadService = DownloadService(jellyfinService: jellyfinService);
+    // Link download service to audio player for offline playback
+    _audioPlayerService.setDownloadService(_downloadService);
   }
 
   final JellyfinService _jellyfinService;

@@ -5,18 +5,24 @@ import 'package:audio_session/audio_session.dart';
 import 'package:flutter/services.dart';
 
 import '../jellyfin/jellyfin_track.dart';
+import 'download_service.dart';
 import 'playback_state_store.dart';
 
 class AudioPlayerService {
   final AudioPlayer _player = AudioPlayer();
   final AudioPlayer _nextPlayer = AudioPlayer();
   final PlaybackStateStore _stateStore = PlaybackStateStore();
+  DownloadService? _downloadService;
   
   JellyfinTrack? _currentTrack;
   List<JellyfinTrack> _queue = [];
   int _currentIndex = 0;
   Timer? _positionSaveTimer;
   bool _isTransitioning = false;
+
+  void setDownloadService(DownloadService service) {
+    _downloadService = service;
+  }
   
   // Streams
   final StreamController<JellyfinTrack?> _currentTrackController = StreamController<JellyfinTrack?>.broadcast();
@@ -177,10 +183,14 @@ class AudioPlayerService {
 
     await _player.stop();
 
-    Future<bool> trySetSource(String? url) async {
+    Future<bool> trySetSource(String? url, {bool isFile = false}) async {
       if (url == null) return false;
       try {
-        await _player.setSource(UrlSource(url));
+        if (isFile) {
+          await _player.setSource(DeviceFileSource(url));
+        } else {
+          await _player.setSource(UrlSource(url));
+        }
         return true;
       } on PlatformException {
         return false;
@@ -188,7 +198,15 @@ class AudioPlayerService {
     }
 
     String? activeUrl;
-    if (await trySetSource(downloadUrl)) {
+    bool isOffline = false;
+    
+    // Check for downloaded file first (works in airplane mode!)
+    final localPath = _downloadService?.getLocalPath(track.id);
+    if (localPath != null && await trySetSource(localPath, isFile: true)) {
+      activeUrl = localPath;
+      isOffline = true;
+      print('Playing from local file: $localPath');
+    } else if (await trySetSource(downloadUrl)) {
       activeUrl = downloadUrl;
     } else if (await trySetSource(universalUrl)) {
       activeUrl = universalUrl;

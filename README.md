@@ -32,7 +32,8 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - **✅ Favorites Tab**: Simple favorite tracks list (ready for Jellyfin favorites integration)
 - **✅ Playlists Tab**: Access all your Jellyfin playlists
 - **✅ Downloads Tab**: Full offline download support with progress tracking, album batch downloads, and file management
-- **✅ Settings**: Transcoding options, download quality, server info (click "Nautune" title)
+- **✅ Offline Library**: Click wave icon (🌊) to browse downloads by album or artist - **works in airplane mode!**
+- **✅ Settings**: Click "Nautune" title for transcoding options, download quality, and server info
 - **Track Listings**: Full album detail screens with ordered track lists, durations, and padded numbers (multi-disc aware)
 - **Artist Discography**: View all albums by an artist
 - **Bottom Navigation**: Icon-only rail keeps the most-used sections a single tap away on every platform

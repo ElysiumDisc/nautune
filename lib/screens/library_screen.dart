@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../app_state.dart';
 import '../jellyfin/jellyfin_album.dart';
@@ -9,6 +10,7 @@ import '../jellyfin/jellyfin_track.dart';
 import '../widgets/now_playing_bar.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
+import 'offline_library_screen.dart';
 import 'settings_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
@@ -168,29 +170,51 @@ class _LibraryScreenState extends State<LibraryScreen>
 
         return Scaffold(
           appBar: AppBar(
-            title: InkWell(
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => SettingsScreen(appState: widget.appState),
-                  ),
-                );
-              },
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.waves),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Nautune',
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      color: theme.colorScheme.onPrimary,
+            title: Row(
+              children: [
+                InkWell(
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            OfflineLibraryScreen(appState: widget.appState),
+                      ),
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(20),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Icon(
+                      Icons.waves,
+                      color: const Color(0xFFB39DDB), // Light purple wavy
+                      size: 28,
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  Icon(Icons.settings, size: 16, color: theme.colorScheme.onPrimary.withOpacity(0.7)),
-                ],
-              ),
+                ),
+                const SizedBox(width: 8),
+                InkWell(
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            SettingsScreen(appState: widget.appState),
+                      ),
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+                    child: Text(
+                      'Nautune',
+                      style: GoogleFonts.pacifico(
+                        fontSize: 24,
+                        color: const Color(0xFFB39DDB), // Light purple wavy
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
             actions: [
               if (selectedId != null)

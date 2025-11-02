@@ -4,7 +4,6 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../jellyfin/jellyfin_album.dart';
@@ -88,8 +87,8 @@ class DownloadService extends ChangeNotifier {
   }
 
   Future<String> _getDownloadPath(JellyfinTrack track) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final downloadsDir = Directory('${dir.path}/nautune/downloads');
+    // Store in project directory structure instead of system documents
+    final downloadsDir = Directory('downloads');
     if (!await downloadsDir.exists()) {
       await downloadsDir.create(recursive: true);
     }

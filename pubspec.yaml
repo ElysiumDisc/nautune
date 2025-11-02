@@ -15,6 +15,7 @@ dependencies:
   http: ^1.2.2
   shared_preferences: ^2.3.2
   path_provider: ^2.1.5
+  google_fonts: ^6.2.1
   
   # Cross-platform audio with native backends:
   # - iOS/macOS: AVFoundation (audioplayers_darwin)
