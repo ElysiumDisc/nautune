@@ -6,22 +6,30 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 
 ### 🎵 Audio & Playback
 - **Native Engine**: Powered by `audioplayers` with platform-specific backends
-  - 🍎 **iOS/macOS**: AVFoundation (hardware-accelerated)
-  - 🐧 **Linux**: GStreamer (native multimedia framework)
+  - 🍎 **iOS/macOS**: AVFoundation (hardware-accelerated, native FLAC support)
+  - 🐧 **Linux**: GStreamer (native multimedia framework with FLAC codec)
   - 🤖 **Android**: MediaPlayer
   - 🪟 **Windows**: WinMM
 - **Gapless Playback**: Seamless transitions between tracks with preloading
-- **Direct Play First**: Streams original Jellyfin files (FLAC/AAC/etc.) when supported, with automatic MP3 fallback if the platform rejects the source
+- **Direct Play Only**: Always streams original Jellyfin files in native format (FLAC/AAC/etc.)
+  - ✅ No transcoding - preserves audio quality
+  - ✅ Native platform decoders handle all formats
+  - ✅ Reduced server load
+- **Original Quality Downloads**: Downloads always use original lossless format (FLAC preferred)
 - **Album Queueing**: One tap queues the whole album in disc/track-number order with seamless previous/next navigation
 - **Resume & Persist**: Playback position is saved every second and restored on launch
 - **Background Audio**: Keeps playing while the app is in the background
 - **Playback Reporting**: Full Jellyfin server integration
-  - ✅ Reports playback start with play method (DirectPlay/DirectStream/Transcode)
+  - ✅ Reports playback start with play method (DirectPlay/DirectStream)
   - ✅ Real-time progress updates (position, pause state)
   - ✅ Automatic "Recently Played" tracking in Jellyfin
   - ✅ Session-based reporting with unique IDs
   - ✅ Proper stop reporting with final position
 - **iOS Media Integration**: Native lock screen controls and CarPlay support
+  - ✅ Lock screen media controls via audio_service plugin
+  - ✅ Album artwork display on lock screen
+  - ✅ Play/pause, skip controls work from lock screen
+  - ✅ CarPlay integration with simple car UI
 
 ### 🌊 Visual Experience
 - **Waveform Progress**: Real waveform from Jellyfin API with intelligent caching per track
@@ -35,7 +43,11 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - **✅ Albums Tab**: Grid view with album artwork, year, and artist info - click to see tracks
 - **✅ Artists Tab**: Browse all artists with circular profile artwork - click to see their albums
 - **✅ Recent Tab**: Toggle between recently played tracks (from Jellyfin history) and recently added albums with segmented control
-- **✅ Favorites Tab**: Simple favorite tracks list (ready for Jellyfin favorites integration)
+- **✅ Favorites Tab**: Jellyfin favorites integration with heart button in fullscreen player
+  - ✅ Mark tracks/albums as favorites
+  - ✅ View favorite tracks list
+  - ✅ Sync favorites with Jellyfin server
+  - ✅ Toggle favorite state with heart icon
 - **✅ Playlists Tab**: Full playlist management with Jellyfin sync
   - ✅ Create new playlists
   - ✅ Edit/rename playlists (three-dot menu or detail screen)
@@ -45,10 +57,11 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
   - ✅ Remove tracks from playlists
   - ✅ Play playlists with queue support
   - ✅ All changes sync to Jellyfin server instantly
-- **✅ Downloads Tab**: Full offline download support with progress tracking, album batch downloads, and file management
+- **✅ Downloads Tab**: Full offline download support with original quality (FLAC/lossless), progress tracking, album batch downloads, and file management
 - **✅ Offline Library**: Click wave icon (🌊) to browse downloads by album or artist - **works in airplane mode!**
-- **✅ Settings**: Click "Nautune" title for transcoding options, download quality, and server info
-- **✅ Favorite Button**: Heart icon in fullscreen player (ready for Jellyfin favorites API)
+- **✅ Settings**: Click "Nautune" title to view server info and about section (native quality playback always enabled)
+- **✅ Favorite Button**: Heart icon in fullscreen player synced with Jellyfin favorites API
+- **✅ Queue View**: Browse and reorder currently queued tracks via queue button in now playing bar
 - **Track Listings**: Full album detail screens with ordered track lists, durations, and padded numbers (multi-disc aware)
 - **Artist Discography**: View all albums by an artist
 - **Bottom Navigation**: Icon-only rail keeps the most-used sections a single tap away on every platform
@@ -59,6 +72,11 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 ### 🎯 Jellyfin Integration
 - **Direct Streaming**: Streams music directly from your Jellyfin server with adaptive quality
 - **Album Browsing**: View all albums with high-quality artwork and metadata
+- **Favorites API**: Full Jellyfin favorites integration
+  - ✅ Mark tracks/albums as favorites from fullscreen player
+  - ✅ View favorite tracks in Favorites tab
+  - ✅ Favorites sync with Jellyfin server instantly
+  - ✅ Heart icon toggles favorite state
 - **Playlist Support**: Full Jellyfin playlist integration with real-time sync
   - ✅ Create playlists on server
   - ✅ Rename/edit playlists
@@ -69,7 +87,7 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - **Recent Tracks**: Quick access to recently played and added music with Jellyfin sync
 - **Persistent Sessions**: Login once, stay connected across app launches
 - **Playback Reporting**: Full integration with Jellyfin's activity tracking
-  - ✅ Reports play method (DirectPlay/DirectStream/Transcode)
+  - ✅ Reports play method (DirectPlay/DirectStream)
   - ✅ Real-time progress updates to server
   - ✅ Updates "Recently Played" in Jellyfin dashboard
   - ✅ Session-based reporting with proper start/stop events
@@ -77,6 +95,7 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
   - ✅ Desktop: Stored in project `downloads/` directory
   - ✅ iOS/Android: Stored in app documents directory (persists across updates)
   - ✅ Automatic offline playback when file exists (airplane mode compatible)
+  - ✅ Always downloads original format (FLAC/lossless preferred)
 
 ## 🚀 Getting Started
 
@@ -116,6 +135,7 @@ flutter run -d linux
 # Core Audio - Platform-specific native backends
 audioplayers: ^6.1.0      # iOS:AVFoundation, Linux:GStreamer, Android:MediaPlayer
 audio_session: ^0.1.21    # Audio session configuration
+audio_service: ^0.18.15   # iOS lock screen controls and media notifications
 
 # Data & State
 shared_preferences: ^2.3.2 # Persistent storage for sessions and playback state
@@ -280,7 +300,7 @@ See [`plugins/nautune_carplay/README.md`](plugins/nautune_carplay/README.md) for
 
 ## 🐛 Known Issues
 
-- **Audio Streaming**: Using direct download URLs (`/Items/{id}/Download`) for best compatibility, with intelligent fallback to transcoded streams
+- **Native FLAC Playback**: Uses direct download URLs for original quality, platform decoders handle FLAC/AAC/etc. natively
 - **Favorites**: Heart button in fullscreen ready, awaiting Jellyfin favorites API integration
 - Infinite scrolling needs backend pagination support
 - CarPlay testing requires physical device or iOS Simulator with CarPlay window

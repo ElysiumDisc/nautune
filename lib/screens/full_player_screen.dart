@@ -304,6 +304,41 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                                   children: [
                                     IconButton(
                                       icon: Icon(
+                                        track.isFavorite ? Icons.favorite : Icons.favorite_border,
+                                        size: isDesktop ? 32 : 28,
+                                      ),
+                                      onPressed: () async {
+                                        final appState = context.findAncestorStateOfType<State>();
+                                        if (appState != null && appState.widget is StatefulWidget) {
+                                          final dynamic nautuneState = appState;
+                                          if (nautuneState is State && nautuneState.mounted) {
+                                            try {
+                                              await (nautuneState as dynamic).appState.jellyfinService.markFavorite(track.id, !track.isFavorite);
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(track.isFavorite ? 'Removed from favorites' : 'Added to favorites'),
+                                                  duration: const Duration(seconds: 2),
+                                                ),
+                                              );
+                                            } catch (e) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text('Failed to update favorite: $e'),
+                                                  backgroundColor: theme.colorScheme.error,
+                                                ),
+                                              );
+                                            }
+                                          }
+                                        }
+                                      },
+                                      tooltip: track.isFavorite ? 'Remove from favorites' : 'Add to favorites',
+                                      color: track.isFavorite ? Colors.red : null,
+                                    ),
+
+                                    SizedBox(width: isDesktop ? 16 : 8),
+                                    
+                                    IconButton(
+                                      icon: Icon(
                                         Icons.skip_previous,
                                         size: isDesktop ? 48 : 40,
                                       ),

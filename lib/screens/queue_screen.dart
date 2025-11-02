@@ -1,0 +1,228 @@
+import 'package:flutter/material.dart';
+import '../app_state.dart';
+import '../jellyfin/jellyfin_track.dart';
+
+class QueueScreen extends StatefulWidget {
+  const QueueScreen({super.key, required this.appState});
+
+  final NautuneAppState appState;
+
+  @override
+  State<QueueScreen> createState() => _QueueScreenState();
+}
+
+class _QueueScreenState extends State<QueueScreen> {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final audioService = widget.appState.audioService;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Play Queue'),
+        actions: [
+          StreamBuilder<List<JellyfinTrack>>(
+            stream: audioService.queueStream,
+            builder: (context, snapshot) {
+              final queue = snapshot.data ?? audioService.queue;
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    '${queue.length} ${queue.length == 1 ? 'track' : 'tracks'}',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+      body: StreamBuilder<List<JellyfinTrack>>(
+        stream: audioService.queueStream,
+        builder: (context, snapshot) {
+          final queue = snapshot.data ?? audioService.queue;
+          
+          if (queue.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.queue_music,
+                    size: 64,
+                    color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Queue is empty',
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Play a track to see it here',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          return StreamBuilder<JellyfinTrack?>(
+            stream: audioService.currentTrackStream,
+            builder: (context, trackSnapshot) {
+              final currentTrack = trackSnapshot.data ?? audioService.currentTrack;
+              final currentIndex = audioService.currentIndex;
+
+              return ReorderableListView.builder(
+                itemCount: queue.length,
+                onReorder: (oldIndex, newIndex) {
+                  // Adjust newIndex if moving down
+                  if (newIndex > oldIndex) {
+                    newIndex -= 1;
+                  }
+                  audioService.reorderQueue(oldIndex, newIndex);
+                },
+                itemBuilder: (context, index) {
+                  final track = queue[index];
+                  final isCurrentTrack = index == currentIndex;
+
+                  return Dismissible(
+                    key: Key('${track.id}-$index'),
+                    direction: queue.length > 1 ? DismissDirection.endToStart : DismissDirection.none,
+                    background: Container(
+                      color: theme.colorScheme.error,
+                      alignment: Alignment.centerRight,
+                      padding: const EdgeInsets.only(right: 16),
+                      child: const Icon(Icons.delete, color: Colors.white),
+                    ),
+                    confirmDismiss: (direction) async {
+                      if (isCurrentTrack && queue.length == 1) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Cannot remove the last track')),
+                        );
+                        return false;
+                      }
+                      return true;
+                    },
+                    onDismissed: (direction) {
+                      audioService.removeFromQueue(index);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('${track.name} removed from queue'),
+                          action: SnackBarAction(
+                            label: 'UNDO',
+                            onPressed: () {
+                              // TODO: Implement undo
+                            },
+                          ),
+                        ),
+                      );
+                    },
+                    child: Material(
+                      color: isCurrentTrack 
+                          ? theme.colorScheme.primaryContainer.withOpacity(0.3)
+                          : Colors.transparent,
+                      child: ListTile(
+                        leading: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            ReorderableDragStartListener(
+                              index: index,
+                              child: Icon(
+                                Icons.drag_handle,
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            if (isCurrentTrack)
+                              Icon(
+                                Icons.play_circle_filled,
+                                color: theme.colorScheme.primary,
+                                size: 32,
+                              )
+                            else
+                              Container(
+                                width: 32,
+                                height: 32,
+                                alignment: Alignment.center,
+                                child: Text(
+                                  '${index + 1}',
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        title: Text(
+                          track.name,
+                          style: TextStyle(
+                            color: isCurrentTrack 
+                                ? theme.colorScheme.primary
+                                : null,
+                            fontWeight: isCurrentTrack 
+                                ? FontWeight.bold 
+                                : FontWeight.normal,
+                          ),
+                        ),
+                        subtitle: Text(
+                          track.artists.join(', '),
+                          style: TextStyle(
+                            color: isCurrentTrack
+                                ? theme.colorScheme.primary.withOpacity(0.7)
+                                : theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (track.runTimeTicks != null)
+                              Text(
+                                _formatDuration(
+                                  Duration(microseconds: track.runTimeTicks! ~/ 10),
+                                ),
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            if (!isCurrentTrack) ...[
+                              const SizedBox(width: 8),
+                              IconButton(
+                                icon: const Icon(Icons.close),
+                                onPressed: () {
+                                  if (queue.length > 1) {
+                                    audioService.removeFromQueue(index);
+                                  }
+                                },
+                              ),
+                            ],
+                          ],
+                        ),
+                        onTap: isCurrentTrack ? null : () {
+                          audioService.jumpToQueueIndex(index);
+                        },
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  String _formatDuration(Duration duration) {
+    final minutes = duration.inMinutes;
+    final seconds = duration.inSeconds.remainder(60);
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+}

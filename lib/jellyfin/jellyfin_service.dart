@@ -510,6 +510,88 @@ class JellyfinService {
     return items.map((json) => JellyfinTrack.fromJson(json as Map<String, dynamic>)).toList();
   }
 
+  Future<void> markFavorite(String itemId, bool isFavorite) async {
+    final session = _session;
+    if (session == null) throw Exception('Not connected');
+    
+    final client = JellyfinClient(
+      serverUrl: session.serverUrl,
+      httpClient: _httpClient,
+    );
+
+    final path = isFavorite
+        ? '/Users/${session.credentials.userId}/FavoriteItems/$itemId'
+        : '/Users/${session.credentials.userId}/FavoriteItems/$itemId';
+
+    if (isFavorite) {
+      await client.request(
+        method: 'POST',
+        path: path,
+        credentials: session.credentials,
+      );
+    } else {
+      await client.request(
+        method: 'DELETE',
+        path: path,
+        credentials: session.credentials,
+      );
+    }
+    
+    _clearCaches();
+  }
+
+  Future<List<JellyfinAlbum>> getFavoriteAlbums() async {
+    final session = _session;
+    if (session == null) return [];
+
+    final client = JellyfinClient(
+      serverUrl: session.serverUrl,
+      httpClient: _httpClient,
+    );
+
+    final response = await client.request(
+      method: 'GET',
+      path: '/Users/${session.credentials.userId}/Items',
+      credentials: session.credentials,
+      queryParams: {
+        'includeItemTypes': 'MusicAlbum',
+        'recursive': 'true',
+        'filters': 'IsFavorite',
+        'sortBy': 'SortName',
+        'fields': 'DateCreated,Genres,ParentId',
+      },
+    );
+
+    final items = (response['Items'] as List?) ?? [];
+    return items.map((json) => JellyfinAlbum.fromJson(json as Map<String, dynamic>)).toList();
+  }
+
+  Future<List<JellyfinTrack>> getFavoriteTracks() async {
+    final session = _session;
+    if (session == null) return [];
+
+    final client = JellyfinClient(
+      serverUrl: session.serverUrl,
+      httpClient: _httpClient,
+    );
+
+    final response = await client.request(
+      method: 'GET',
+      path: '/Users/${session.credentials.userId}/Items',
+      credentials: session.credentials,
+      queryParams: {
+        'includeItemTypes': 'Audio',
+        'recursive': 'true',
+        'filters': 'IsFavorite',
+        'sortBy': 'SortName',
+        'fields': 'AudioInfo,ParentId',
+      },
+    );
+
+    final items = (response['Items'] as List?) ?? [];
+    return items.map((json) => JellyfinTrack.fromJson(json as Map<String, dynamic>)).toList();
+  }
+
   void _clearCaches() {
     _albumCache.clear();
     _artistCache.clear();

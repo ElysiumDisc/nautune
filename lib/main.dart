@@ -5,6 +5,7 @@ import 'jellyfin/jellyfin_service.dart';
 import 'jellyfin/jellyfin_session_store.dart';
 import 'screens/library_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/queue_screen.dart';
 import 'services/playback_state_store.dart';
 import 'theme/nautune_theme.dart';
 
@@ -27,9 +28,12 @@ class NautuneApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Nautune – Poseidon’s Music Player',
+      title: 'Nautune - Poseidon Music Player',
       theme: NautuneTheme.build(),
       debugShowCheckedModeBanner: false,
+      routes: {
+        '/queue': (context) => QueueScreen(appState: appState),
+      },
       home: AnimatedBuilder(
         animation: appState,
         builder: (context, _) {

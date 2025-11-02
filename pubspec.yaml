@@ -24,6 +24,7 @@ dependencies:
   # - Windows: WinMM (audioplayers_windows)
   audioplayers: ^6.1.0
   audio_session: ^0.1.21
+  audio_service: ^0.18.15
 
 dev_dependencies:
   flutter_test:

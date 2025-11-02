@@ -11,9 +11,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool _enableTranscoding = false;
-  int _transcodingBitrate = 320;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -24,78 +21,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       body: ListView(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'Playback',
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          SwitchListTile(
-            title: const Text('Enable Transcoding'),
-            subtitle: const Text(
-              'Convert audio format for compatibility (uses more server resources)',
-            ),
-            value: _enableTranscoding,
-            onChanged: (value) {
-              setState(() {
-                _enableTranscoding = value;
-              });
-              // TODO: Save preference
-            },
-          ),
-          if (_enableTranscoding)
-            ListTile(
-              title: const Text('Transcoding Bitrate'),
-              subtitle: Text('${_transcodingBitrate}kbps'),
-              trailing: SizedBox(
-                width: 200,
-                child: Slider(
-                  value: _transcodingBitrate.toDouble(),
-                  min: 128,
-                  max: 320,
-                  divisions: 3,
-                  label: '${_transcodingBitrate}kbps',
-                  onChanged: (value) {
-                    setState(() {
-                      _transcodingBitrate = value.toInt();
-                    });
-                    // TODO: Save preference
-                  },
-                ),
-              ),
-            ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'Downloads',
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          ListTile(
-            title: const Text('Download Quality'),
-            subtitle: const Text('Original (lossless when available)'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              // TODO: Show quality picker
-            },
-          ),
-          ListTile(
-            title: const Text('Storage Location'),
-            subtitle: const Text('App documents directory'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              // TODO: Show location picker
-            },
-          ),
-          const Divider(),
           Padding(
             padding: const EdgeInsets.all(16),
             child: Text(
@@ -118,6 +43,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: const Text('Username'),
             subtitle: Text(widget.appState.session?.username ?? 'Not logged in'),
           ),
+          ListTile(
+            title: const Text('Library'),
+            subtitle: Text(widget.appState.selectedLibrary?.name ?? 'None selected'),
+          ),
+          const Divider(),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'Playback & Downloads',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          ListTile(
+            leading: Icon(Icons.high_quality, color: theme.colorScheme.primary),
+            title: const Text('Native Audio Quality'),
+            subtitle: const Text(
+              'Direct Play enabled: Original FLAC/lossless format\nNo transcoding • Native platform decoders',
+            ),
+            isThreeLine: true,
+          ),
+          ListTile(
+            leading: Icon(Icons.download, color: theme.colorScheme.primary),
+            title: const Text('Download Quality'),
+            subtitle: const Text('Always original format (FLAC/lossless)'),
+          ),
           const Divider(),
           Padding(
             padding: const EdgeInsets.all(16),
@@ -130,8 +83,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           ListTile(
-            title: const Text('Version'),
-            subtitle: const Text('1.0.0+1'),
+            title: const Text('Nautune'),
+            subtitle: const Text('Version 1.0.0+1'),
           ),
           ListTile(
             title: const Text('Open Source Licenses'),
@@ -140,6 +93,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
               showLicensePage(context: context);
             },
           ),
+          const SizedBox(height: 16),
+          Center(
+            child: Text(
+              'Made with 💜 by ElysiumDisc',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
         ],
       ),
     );

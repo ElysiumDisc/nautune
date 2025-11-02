@@ -133,6 +133,13 @@ class NowPlayingBar extends StatelessWidget {
                               ),
                             ),
                           ),
+                          IconButton(
+                            tooltip: 'View queue',
+                            icon: const Icon(Icons.queue_music),
+                            onPressed: () {
+                              Navigator.of(context).pushNamed('/queue');
+                            },
+                          ),
                         ],
                       ),
                     ],

@@ -14,6 +14,7 @@ class JellyfinTrack {
     this.albumId,
     this.albumPrimaryImageTag,
     this.parentThumbImageTag,
+    this.isFavorite = false,
   });
 
   final String id;
@@ -30,6 +31,7 @@ class JellyfinTrack {
   final String? albumId;
   final String? albumPrimaryImageTag;
   final String? parentThumbImageTag;
+  final bool isFavorite;
 
   factory JellyfinTrack.fromJson(Map<String, dynamic> json, {String? serverUrl, String? token, String? userId}) {
     return JellyfinTrack(
@@ -51,6 +53,7 @@ class JellyfinTrack {
       albumId: json['AlbumId'] as String?,
       albumPrimaryImageTag: json['AlbumPrimaryImageTag'] as String?,
       parentThumbImageTag: json['ParentThumbImageTag'] as String?,
+      isFavorite: (json['UserData'] as Map<String, dynamic>?)?['IsFavorite'] as bool? ?? false,
     );
   }
 

@@ -37,16 +37,20 @@ class AudioPlayerService {
   final StreamController<bool> _playingController = StreamController<bool>.broadcast();
   final StreamController<Duration> _positionController = StreamController<Duration>.broadcast();
   final StreamController<Duration?> _durationController = StreamController<Duration?>.broadcast();
+  final StreamController<List<JellyfinTrack>> _queueController = StreamController<List<JellyfinTrack>>.broadcast();
   
   Stream<JellyfinTrack?> get currentTrackStream => _currentTrackController.stream;
   Stream<bool> get playingStream => _playingController.stream;
   Stream<Duration> get positionStream => _positionController.stream;
   Stream<Duration?> get durationStream => _durationController.stream;
+  Stream<List<JellyfinTrack>> get queueStream => _queueController.stream;
   
   JellyfinTrack? get currentTrack => _currentTrack;
   bool get isPlaying => _player.state == PlayerState.playing;
   Duration get currentPosition => _lastPosition;
   AudioPlayer get player => _player;
+  List<JellyfinTrack> get queue => List.unmodifiable(_queue);
+  int get currentIndex => _currentIndex;
   
   AudioPlayerService() {
     _initAudioSession();
@@ -195,6 +199,8 @@ class AudioPlayerService {
       _queue = [track];
       _currentIndex = 0;
     }
+    
+    _queueController.add(_queue);
     
     final downloadUrl = track.directDownloadUrl();
     final universalUrl = track.universalStreamUrl(
@@ -368,6 +374,56 @@ class AudioPlayerService {
   Future<void> next() => skipToNext();
   Future<void> previous() => skipToPrevious();
   
+  // Queue management
+  void reorderQueue(int oldIndex, int newIndex) {
+    if (oldIndex < 0 || oldIndex >= _queue.length) return;
+    if (newIndex < 0 || newIndex >= _queue.length) return;
+    
+    final track = _queue.removeAt(oldIndex);
+    _queue.insert(newIndex, track);
+    
+    // Update current index if affected
+    if (oldIndex == _currentIndex) {
+      _currentIndex = newIndex;
+    } else if (oldIndex < _currentIndex && newIndex >= _currentIndex) {
+      _currentIndex--;
+    } else if (oldIndex > _currentIndex && newIndex <= _currentIndex) {
+      _currentIndex++;
+    }
+    
+    _queueController.add(_queue);
+    _savePlaybackState();
+  }
+  
+  void removeFromQueue(int index) {
+    if (index < 0 || index >= _queue.length) return;
+    if (_queue.length == 1) return; // Don't remove last track
+    
+    _queue.removeAt(index);
+    
+    // Update current index if affected
+    if (index < _currentIndex) {
+      _currentIndex--;
+    } else if (index == _currentIndex) {
+      // Removing current track - play next if available
+      if (_currentIndex >= _queue.length) {
+        _currentIndex = _queue.length - 1;
+      }
+      if (_queue.isNotEmpty) {
+        playTrack(_queue[_currentIndex], queueContext: _queue);
+      }
+    }
+    
+    _queueController.add(_queue);
+    _savePlaybackState();
+  }
+  
+  Future<void> jumpToQueueIndex(int index) async {
+    if (index < 0 || index >= _queue.length) return;
+    _currentIndex = index;
+    await playTrack(_queue[_currentIndex], queueContext: _queue);
+  }
+  
   void _startPositionSaving() {
     _positionSaveTimer?.cancel();
     _positionSaveTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -409,5 +465,6 @@ class AudioPlayerService {
     _playingController.close();
     _positionController.close();
     _durationController.close();
+    _queueController.close();
   }
 }
