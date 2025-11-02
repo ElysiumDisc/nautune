@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../jellyfin/jellyfin_album.dart';
@@ -87,8 +88,17 @@ class DownloadService extends ChangeNotifier {
   }
 
   Future<String> _getDownloadPath(JellyfinTrack track) async {
-    // Store in project directory structure instead of system documents
-    final downloadsDir = Directory('downloads');
+    Directory downloadsDir;
+    
+    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+      // Desktop: use project directory for easy access
+      downloadsDir = Directory('downloads');
+    } else {
+      // iOS/Android: MUST use app documents directory (sandbox requirement)
+      final dir = await getApplicationDocumentsDirectory();
+      downloadsDir = Directory('${dir.path}/downloads');
+    }
+    
     if (!await downloadsDir.exists()) {
       await downloadsDir.create(recursive: true);
     }
