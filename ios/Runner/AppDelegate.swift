@@ -17,7 +17,8 @@ import CarPlay
     configurationForConnecting connectingSceneSession: UISceneSession,
     options: UIScene.ConnectionOptions
   ) -> UISceneConfiguration {
-    if connectingSceneSession.role == .carTemplateApplication {
+    if #available(iOS 14.0, *),
+       connectingSceneSession.role == .carTemplateApplication {
       let sceneConfig = UISceneConfiguration(
         name: "CarPlay",
         sessionRole: connectingSceneSession.role

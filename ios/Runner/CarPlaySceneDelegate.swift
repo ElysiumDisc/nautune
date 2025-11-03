@@ -1,6 +1,8 @@
 import CarPlay
 import Flutter
+import UIKit
 
+@available(iOS 14.0, *)
 @objc class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
     var interfaceController: CPInterfaceController?
     var methodChannel: FlutterMethodChannel?
@@ -21,7 +23,10 @@ import Flutter
     }
     
     private func setupMethodChannel() {
-        guard let controller = UIApplication.shared.delegate?.window??.rootViewController as? FlutterViewController else {
+        guard let appDelegate = UIApplication.shared.delegate as? AppDelegate,
+              let window = appDelegate.window,
+              let controller = window.rootViewController as? FlutterViewController else {
+            print("CarPlay: Failed to get FlutterViewController")
             return
         }
         
