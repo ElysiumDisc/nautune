@@ -36,14 +36,27 @@ class _GenreDetailScreenState extends State<GenreDetailScreen> {
     });
 
     try {
-      // Get all albums from the library
-      final allAlbums = widget.appState.albums ?? [];
-      
-      // Filter albums that have this genre
-      // Note: Jellyfin stores genres as a list in the album metadata
-      _albums = allAlbums.where((album) {
-        return album.genres?.contains(widget.genre.name) ?? false;
-      }).toList();
+      final libraryId = widget.appState.selectedLibraryId;
+      if (libraryId == null) {
+        throw Exception('No library selected');
+      }
+
+      final session = widget.appState.jellyfinService.session;
+      if (session == null) {
+        throw Exception('No session');
+      }
+
+      final client = widget.appState.jellyfinService.jellyfinClient;
+      if (client == null) {
+        throw Exception('No client available');
+      }
+
+      // Fetch albums directly from Jellyfin API filtered by this genre
+      _albums = await client.fetchAlbums(
+        credentials: session.credentials,
+        libraryId: libraryId,
+        genreIds: widget.genre.id,
+      );
     } catch (e) {
       _error = e;
     } finally {

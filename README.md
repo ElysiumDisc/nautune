@@ -45,6 +45,13 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 ### 📚 Library Browsing
 - **✅ Albums Tab**: Grid view with album artwork, year, and artist info - click to see tracks
 - **✅ Artists Tab**: Browse all artists with circular profile artwork - click to see their albums
+- **✅ Genres Tab**: Browse music by genre - click any genre to see all albums with that tag (server-filtered)
+- **✅ Most Played**: View server-tracked top played tracks, albums, and artists with toggle
+- **✅ Instant Mix**: Create dynamic playlists from any track, album, or artist
+- **✅ Offline Mode Toggle**: Wave icon (🌊) switches between online Jellyfin library and offline downloads
+  - **Tap**: Toggle online/offline mode (violet = offline, light purple = online)
+  - **Long Press (iOS)**: Open Downloads Management
+  - **Right Click (Linux)**: Open Downloads Management
 - **✅ Recent Tab**: Toggle between recently played tracks (from Jellyfin history) and recently added albums with segmented control
 - **✅ Favorites Tab**: Jellyfin favorites integration with heart button in fullscreen player
   - ✅ Mark tracks/albums as favorites

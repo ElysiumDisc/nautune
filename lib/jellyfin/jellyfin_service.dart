@@ -27,6 +27,7 @@ class JellyfinService {
   final Map<String, _CacheEntry<List<JellyfinGenre>>> _genreCache = {};
 
   JellyfinSession? get session => _session;
+  JellyfinClient? get jellyfinClient => _client;
 
   String? get baseUrl => _session?.serverUrl;
   String? get token => _session?.credentials.accessToken;

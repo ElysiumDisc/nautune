@@ -103,14 +103,21 @@ class JellyfinClient {
   Future<List<JellyfinAlbum>> fetchAlbums({
     required JellyfinCredentials credentials,
     required String libraryId,
+    String? genreIds,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final queryParams = {
       'ParentId': libraryId,
       'IncludeItemTypes': 'MusicAlbum',
       'Recursive': 'true',
       'SortBy': 'SortName',
-      'Fields': 'PrimaryImageAspectRatio,ProductionYear,Artists,AlbumArtists,ImageTags',
-    });
+      'Fields': 'PrimaryImageAspectRatio,ProductionYear,Artists,AlbumArtists,ImageTags,Genres,GenreItems',
+    };
+    
+    if (genreIds != null) {
+      queryParams['GenreIds'] = genreIds;
+    }
+    
+    final uri = _buildUri('/Users/${credentials.userId}/Items', queryParams);
 
     final response = await httpClient.get(
       uri,
