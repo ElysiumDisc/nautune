@@ -30,6 +30,7 @@ class AudioPlayerService {
 
   void setReportingService(PlaybackReportingService service) {
     _reportingService = service;
+    _reportingService!.attachPositionProvider(() => _lastPosition);
   }
   
   // Streams

@@ -196,9 +196,12 @@ class CarPlayService {
 
   void _showArtistAlbums(String artistId, String artistName) async {
     final albumsList = appState.albums ?? [];
-    final albums = albumsList.where((album) => 
-      album.artists.contains(artistId)
-    ).toList();
+    final albums = albumsList.where((album) {
+      if (album.artistIds.contains(artistId)) {
+        return true;
+      }
+      return album.artists.contains(artistName);
+    }).toList();
     
     final items = albums.map((album) => CPListItem(
       text: album.name,

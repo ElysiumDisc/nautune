@@ -16,6 +16,11 @@ class PlaybackReportingService {
 
   String? _currentSessionId;
   Timer? _progressTimer;
+  Duration Function()? _positionProvider;
+
+  void attachPositionProvider(Duration Function() provider) {
+    _positionProvider = provider;
+  }
 
   Future<void> reportPlaybackStart(
     JellyfinTrack track, {
@@ -65,7 +70,9 @@ class PlaybackReportingService {
   void _startProgressReporting(JellyfinTrack track) {
     _progressTimer?.cancel();
     _progressTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-      reportPlaybackProgress(track, Duration.zero, false);
+      final provider = _positionProvider;
+      final position = provider != null ? provider() : Duration.zero;
+      unawaited(reportPlaybackProgress(track, position, false));
     });
   }
 

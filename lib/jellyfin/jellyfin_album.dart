@@ -3,6 +3,7 @@ class JellyfinAlbum {
     required this.id,
     required this.name,
     required this.artists,
+    this.artistIds = const <String>[],
     this.productionYear,
     this.primaryImageTag,
     this.isFavorite = false,
@@ -12,12 +13,24 @@ class JellyfinAlbum {
   final String id;
   final String name;
   final List<String> artists;
+  final List<String> artistIds;
   final int? productionYear;
   final String? primaryImageTag;
   final bool isFavorite;
   final List<String>? genres;
 
   factory JellyfinAlbum.fromJson(Map<String, dynamic> json) {
+    List<Map<String, dynamic>> _extractArtistMaps(String key) {
+      final raw = json[key];
+      if (raw is List) {
+        return raw.whereType<Map<String, dynamic>>().toList();
+      }
+      return const <Map<String, dynamic>>[];
+    }
+
+    final albumArtistMaps = _extractArtistMaps('AlbumArtists');
+    final artistItemMaps = _extractArtistMaps('ArtistItems');
+
     return JellyfinAlbum(
       id: json['Id'] as String? ?? '',
       name: json['Name'] as String? ?? '',
@@ -30,6 +43,14 @@ class JellyfinAlbum {
               ?.whereType<String>()
               .toList() ??
           const <String>[],
+      artistIds: [
+        ...albumArtistMaps
+            .map((artist) => artist['Id'] as String?)
+            .whereType<String>(),
+        ...artistItemMaps
+            .map((artist) => artist['Id'] as String?)
+            .whereType<String>(),
+      ].toSet().toList(),
       productionYear: json['ProductionYear'] as int?,
       primaryImageTag:
           (json['ImageTags'] as Map<String, dynamic>?)?['Primary'] as String?,
