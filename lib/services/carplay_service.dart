@@ -1,176 +1,279 @@
 import 'dart:io';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter_carplay/flutter_carplay.dart';
 import '../app_state.dart';
 
 class CarPlayService {
-  static const MethodChannel _channel = MethodChannel('com.nautune/carplay');
   final NautuneAppState appState;
+  final FlutterCarplay _carplay = FlutterCarplay();
   
   CarPlayService({required this.appState}) {
     if (Platform.isIOS) {
-      _setupMethodCallHandler();
+      _setupCarPlay();
     }
   }
   
-  void _setupMethodCallHandler() {
-    _channel.setMethodCallHandler((call) async {
-      switch (call.method) {
-        case 'getAlbums':
-          return await _getAlbums();
-        case 'getArtists':
-          return await _getArtists();
-        case 'getPlaylists':
-          return await _getPlaylists();
-        case 'getFavorites':
-          return await _getFavorites();
-        case 'getDownloads':
-          return await _getDownloads();
-        case 'getAlbumTracks':
-          final albumId = call.arguments['albumId'] as String;
-          return await _getAlbumTracks(albumId);
-        case 'getArtistAlbums':
-          final artistId = call.arguments['artistId'] as String;
-          return await _getArtistAlbums(artistId);
-        case 'getPlaylistTracks':
-          final playlistId = call.arguments['playlistId'] as String;
-          return await _getPlaylistTracks(playlistId);
-        case 'playTrack':
-          final trackId = call.arguments['trackId'] as String;
-          await _playTrack(trackId);
-          return null;
-        default:
-          throw PlatformException(
-            code: 'Unimplemented',
-            details: 'Method ${call.method} not implemented',
-          );
-      }
-    });
+  void _setupCarPlay() async {
+    await _carplay.forceUpdateRootTemplate();
+    _setRootTemplate();
   }
   
-  Future<List<Map<String, dynamic>>> _getAlbums() async {
+  void _setRootTemplate() {
+    final libraryTab = CPListTemplate(
+      title: 'Library',
+      sections: [
+        CPListSection(
+          items: [
+            CPListItem(
+              text: 'Albums',
+              detailText: 'Browse all albums',
+              onPress: (complete, self) {
+                _showAlbums();
+                complete();
+              },
+            ),
+            CPListItem(
+              text: 'Artists',
+              detailText: 'Browse all artists',
+              onPress: (complete, self) {
+                _showArtists();
+                complete();
+              },
+            ),
+            CPListItem(
+              text: 'Playlists',
+              detailText: 'Your playlists',
+              onPress: (complete, self) {
+                _showPlaylists();
+                complete();
+              },
+            ),
+          ],
+        ),
+      ],
+      systemIcon: 'music.note.house',
+    );
+
+    final favoritesTab = CPListTemplate(
+      title: 'Favorites',
+      sections: [
+        CPListSection(
+          items: [
+            CPListItem(
+              text: 'Favorite Tracks',
+              detailText: 'Your hearted songs',
+              onPress: (complete, self) {
+                _showFavorites();
+                complete();
+              },
+            ),
+          ],
+        ),
+      ],
+      systemIcon: 'heart.fill',
+    );
+
+    final downloadsTab = CPListTemplate(
+      title: 'Downloads',
+      sections: [
+        CPListSection(
+          items: [
+            CPListItem(
+              text: 'Downloaded Music',
+              detailText: 'Available offline',
+              onPress: (complete, self) {
+                _showDownloads();
+                complete();
+              },
+            ),
+          ],
+        ),
+      ],
+      systemIcon: 'arrow.down.circle.fill',
+    );
+
+    FlutterCarplay.setRootTemplate(
+      rootTemplate: CPTabBarTemplate(
+        templates: [libraryTab, favoritesTab, downloadsTab],
+      ),
+      animated: true,
+    );
+  }
+
+  void _showAlbums() async {
     final albumsList = appState.albums ?? [];
-    return albumsList.map((album) => {
-      'id': album.id,
-      'name': album.name,
-      'artist': album.artists.join(', '),
-    }).toList();
+    final items = albumsList.map((album) => CPListItem(
+      text: album.name,
+      detailText: album.artists.join(', '),
+      onPress: (complete, self) {
+        _showAlbumTracks(album.id, album.name);
+        complete();
+      },
+    )).toList();
+
+    FlutterCarplay.push(
+      template: CPListTemplate(
+        title: 'Albums',
+        sections: [CPListSection(items: items)],
+        systemIcon: 'music.note.list',
+      ),
+    );
   }
-  
-  Future<List<Map<String, dynamic>>> _getArtists() async {
+
+  void _showArtists() async {
     final artistsList = appState.artists ?? [];
-    return artistsList.map((artist) => {
-      'id': artist.id,
-      'name': artist.name,
-    }).toList();
+    final items = artistsList.map((artist) => CPListItem(
+      text: artist.name,
+      onPress: (complete, self) {
+        _showArtistAlbums(artist.id, artist.name);
+        complete();
+      },
+    )).toList();
+
+    FlutterCarplay.push(
+      template: CPListTemplate(
+        title: 'Artists',
+        sections: [CPListSection(items: items)],
+        systemIcon: 'music.mic',
+      ),
+    );
   }
-  
-  Future<List<Map<String, dynamic>>> _getPlaylists() async {
+
+  void _showPlaylists() async {
     final playlistsList = appState.playlists ?? [];
-    return playlistsList.map((playlist) => {
-      'id': playlist.id,
-      'name': playlist.name,
-      'trackCount': playlist.trackCount,
-    }).toList();
+    final items = playlistsList.map((playlist) => CPListItem(
+      text: playlist.name,
+      detailText: '${playlist.trackCount} tracks',
+      onPress: (complete, self) {
+        _showPlaylistTracks(playlist.id, playlist.name);
+        complete();
+      },
+    )).toList();
+
+    FlutterCarplay.push(
+      template: CPListTemplate(
+        title: 'Playlists',
+        sections: [CPListSection(items: items)],
+        systemIcon: 'music.note.list',
+      ),
+    );
   }
-  
-  Future<List<Map<String, dynamic>>> _getFavorites() async {
-    final albumsList = appState.albums ?? [];
-    final favorites = albumsList
-        .where((album) => album.isFavorite)
-        .toList();
-    
-    // Get all tracks from favorite albums
-    final List<Map<String, dynamic>> favoriteTracks = [];
-    for (final album in favorites) {
-      final tracks = await appState.getAlbumTracks(album.id);
-      favoriteTracks.addAll(tracks.map((track) => {
-        'id': track.id,
-        'name': track.name,
-        'artist': track.artists.join(', '),
-        'album': track.album,
-      }));
-    }
-    
-    return favoriteTracks;
-  }
-  
-  Future<List<Map<String, dynamic>>> _getDownloads() async {
-    final downloads = appState.downloadService.completedDownloads;
-    
-    return downloads.map((download) => {
-      'id': download.track.id,
-      'name': download.track.name,
-      'artist': download.track.artists.join(', '),
-      'album': download.track.album,
-    }).toList();
-  }
-  
-  Future<List<Map<String, dynamic>>> _getAlbumTracks(String albumId) async {
+
+  void _showAlbumTracks(String albumId, String albumName) async {
     final tracks = await appState.getAlbumTracks(albumId);
-    
-    return tracks.map((track) => {
-      'id': track.id,
-      'name': track.name,
-      'artist': track.artists.join(', '),
-      'album': track.album,
-    }).toList();
+    final items = tracks.map((track) => CPListItem(
+      text: track.name,
+      detailText: track.artists.join(', '),
+      onPress: (complete, self) {
+        appState.audioPlayerService.playTrack(track);
+        complete();
+      },
+    )).toList();
+
+    FlutterCarplay.push(
+      template: CPListTemplate(
+        title: albumName,
+        sections: [CPListSection(items: items)],
+        systemIcon: 'music.note',
+      ),
+    );
   }
-  
-  Future<List<Map<String, dynamic>>> _getArtistAlbums(String artistId) async {
+
+  void _showArtistAlbums(String artistId, String artistName) async {
     final albumsList = appState.albums ?? [];
     final albums = albumsList.where((album) => 
       album.artists.contains(artistId)
     ).toList();
     
-    return albums.map((album) => {
-      'id': album.id,
-      'name': album.name,
-      'artist': album.artists.join(', '),
-    }).toList();
+    final items = albums.map((album) => CPListItem(
+      text: album.name,
+      detailText: album.artists.join(', '),
+      onPress: (complete, self) {
+        _showAlbumTracks(album.id, album.name);
+        complete();
+      },
+    )).toList();
+
+    FlutterCarplay.push(
+      template: CPListTemplate(
+        title: artistName,
+        sections: [CPListSection(items: items)],
+        systemIcon: 'music.note.list',
+      ),
+    );
   }
-  
-  Future<List<Map<String, dynamic>>> _getPlaylistTracks(String playlistId) async {
+
+  void _showPlaylistTracks(String playlistId, String playlistName) async {
     final tracks = await appState.getPlaylistTracks(playlistId);
-    
-    return tracks.map((track) => {
-      'id': track.id,
-      'name': track.name,
-      'artist': track.artists.join(', '),
-      'album': track.album,
-    }).toList();
+    final items = tracks.map((track) => CPListItem(
+      text: track.name,
+      detailText: track.artists.join(', '),
+      onPress: (complete, self) {
+        appState.audioPlayerService.playTrack(track);
+        complete();
+      },
+    )).toList();
+
+    FlutterCarplay.push(
+      template: CPListTemplate(
+        title: playlistName,
+        sections: [CPListSection(items: items)],
+        systemIcon: 'music.note',
+      ),
+    );
   }
-  
-  Future<void> _playTrack(String trackId) async {
-    // Find track across all albums
+
+  void _showFavorites() async {
     final albumsList = appState.albums ?? [];
-    for (final album in albumsList) {
+    final favorites = albumsList.where((album) => album.isFavorite).toList();
+    
+    final List<CPListItem> favoriteTracks = [];
+    for (final album in favorites) {
       final tracks = await appState.getAlbumTracks(album.id);
-      final track = tracks.where((t) => t.id == trackId).firstOrNull;
-      if (track != null) {
-        await appState.audioPlayerService.playTrack(track);
-        return;
-      }
+      favoriteTracks.addAll(tracks.map((track) => CPListItem(
+        text: track.name,
+        detailText: '${track.artists.join(', ')} • ${track.album}',
+        onPress: (complete, self) {
+          appState.audioPlayerService.playTrack(track);
+          complete();
+        },
+      )));
     }
+
+    FlutterCarplay.push(
+      template: CPListTemplate(
+        title: 'Favorites',
+        sections: [CPListSection(items: favoriteTracks)],
+        systemIcon: 'heart.fill',
+      ),
+    );
   }
-  
-  Future<void> updateNowPlaying({
+
+  void _showDownloads() async {
+    final downloads = appState.downloadService.completedDownloads;
+    final items = downloads.map((download) => CPListItem(
+      text: download.track.name,
+      detailText: '${download.track.artists.join(', ')} • ${download.track.album}',
+      onPress: (complete, self) {
+        appState.audioPlayerService.playTrack(download.track);
+        complete();
+      },
+    )).toList();
+
+    FlutterCarplay.push(
+      template: CPListTemplate(
+        title: 'Downloads',
+        sections: [CPListSection(items: items)],
+        systemIcon: 'arrow.down.circle',
+      ),
+    );
+  }
+
+  void updateNowPlaying({
     required String trackId,
     required String title,
     required String artist,
     String? album,
-  }) async {
-    if (!Platform.isIOS) return;
-    
-    try {
-      await _channel.invokeMethod('updateNowPlaying', {
-        'trackId': trackId,
-        'title': title,
-        'artist': artist,
-        'album': album,
-      });
-    } catch (e) {
-      debugPrint('Error updating CarPlay now playing: $e');
-    }
+  }) {
+    // Now Playing info is handled by audio_service plugin automatically
   }
 }
