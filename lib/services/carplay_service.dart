@@ -5,16 +5,21 @@ import '../app_state.dart';
 class CarPlayService {
   final NautuneAppState appState;
   final FlutterCarplay _carplay = FlutterCarplay();
+  bool _isInitialized = false;
   
-  CarPlayService({required this.appState}) {
-    if (Platform.isIOS) {
-      _setupCarPlay();
-    }
+  CarPlayService({required this.appState});
+  
+  /// Call this after the app is fully loaded
+  void initialize() {
+    if (_isInitialized || !Platform.isIOS) return;
+    _isInitialized = true;
+    _setupCarPlay();
   }
   
   void _setupCarPlay() async {
-    await _carplay.forceUpdateRootTemplate();
+    // Set root template first, then force update
     _setRootTemplate();
+    await _carplay.forceUpdateRootTemplate();
   }
   
   void _setRootTemplate() {

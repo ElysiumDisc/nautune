@@ -138,6 +138,9 @@ class NautuneAppState extends ChangeNotifier {
     }
     _initialized = true;
     notifyListeners();
+    
+    // Initialize CarPlay AFTER app is fully loaded
+    _carPlayService.initialize();
   }
 
   Future<void> login({
