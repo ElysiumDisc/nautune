@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io' show Platform;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -28,8 +31,16 @@ class NautuneAppState extends ChangeNotifier {
     _downloadService = DownloadService(jellyfinService: jellyfinService);
     // Link download service to audio player for offline playback
     _audioPlayerService.setDownloadService(_downloadService);
-    // Initialize CarPlay service for iOS
-    _carPlayService = CarPlayService(appState: this);
+    // CarPlay service is only available on iOS; defer creation until Flutter boots
+    if (Platform.isIOS) {
+      scheduleMicrotask(() {
+        try {
+          _carPlayService = CarPlayService(appState: this);
+        } catch (error) {
+          debugPrint('CarPlay service construction failed: $error');
+        }
+      });
+    }
   }
 
   final JellyfinService _jellyfinService;
@@ -37,7 +48,7 @@ class NautuneAppState extends ChangeNotifier {
   final PlaybackStateStore _playbackStateStore;
   late final AudioPlayerService _audioPlayerService;
   late final DownloadService _downloadService;
-  late final CarPlayService _carPlayService;
+  CarPlayService? _carPlayService;
 
   bool _initialized = false;
   JellyfinSession? _session;
@@ -122,6 +133,7 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> initialize() async {
+    debugPrint('Nautune initialization started');
     try {
       final storedSession = await _sessionStore.load();
       if (storedSession != null) {
@@ -152,9 +164,18 @@ class NautuneAppState extends ChangeNotifier {
     } finally {
       _initialized = true;
       notifyListeners();
+      debugPrint('Nautune initialization finished (session restored: ${_session != null})');
       
-      // Initialize CarPlay AFTER app is fully loaded
-      _carPlayService.initialize();
+      // Initialize CarPlay after the first frame so plugin setup cannot block UI
+      if (Platform.isIOS) {
+        scheduleMicrotask(() {
+          try {
+            _carPlayService?.initialize();
+          } catch (error) {
+            debugPrint('CarPlay initialization skipped: $error');
+          }
+        });
+      }
     }
   }
 
