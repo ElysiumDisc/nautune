@@ -29,10 +29,12 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
   - ✅ Lock screen media controls via audio_service plugin
   - ✅ Album artwork display on lock screen
   - ✅ Play/pause, skip controls work from lock screen
-  - ✅ **Full CarPlay integration** - library browsing (albums, artists, playlists, favorites, downloads)
+  - ✅ **Full CarPlay integration** powered by flutter_carplay plugin
+  - ✅ CarPlay library browsing (albums, artists, playlists, favorites, downloads)
   - ✅ CarPlay supports offline playback with downloads (airplane mode works!)
-  - ✅ Simple, focused car-friendly UI with tab navigation
+  - ✅ Tab-based navigation optimized for car displays
   - ✅ Seamless integration with iOS audio session
+  - ✅ Clean, focused car-friendly UI
 
 ### 🌊 Visual Experience
 - **Waveform Progress**: Real waveform from Jellyfin API with intelligent caching per track
@@ -154,6 +156,7 @@ flutter run -d linux
 audioplayers: ^6.1.0      # iOS:AVFoundation, Linux:GStreamer, Android:MediaPlayer
 audio_session: ^0.1.21    # Audio session configuration
 audio_service: ^0.18.15   # iOS lock screen controls and media notifications
+flutter_carplay: ^1.1.4   # iOS CarPlay integration with tab-based UI
 
 # Data & State
 shared_preferences: ^2.3.2 # Persistent storage for sessions and playback state
@@ -267,20 +270,25 @@ flutter test
 
 ### 🚗 CarPlay Support (iOS Only)
 
-Nautune includes **full CarPlay integration** for iOS with complete library access:
+Nautune includes **full CarPlay integration** for iOS powered by the `flutter_carplay` plugin:
 
 #### ✅ Features
-- **Tab Navigation**: Library, Favorites, Downloads tabs with simple car-friendly UI
+- **Tab Navigation**: Library, Favorites, Downloads tabs with car-friendly segmented controls
 - **Library Browsing**: Browse albums, artists, and playlists while driving
-- **Track Playback**: Play any track directly from CarPlay - integrates with iOS audio session
+- **Track Playback**: Play any track directly from CarPlay with full queue support
 - **Offline Support**: Browse and play downloaded music in airplane mode (no internet required)
-- **Native Integration**: Swift scene delegate with Flutter method channel bridge for seamless communication
+- **Native Integration**: Uses flutter_carplay plugin for seamless iOS integration
+- **Clean UI**: Optimized for minimal distraction while driving
 
 #### 🔧 Implementation Details
-- **Native CarPlay Scene**: `ios/Runner/CarPlaySceneDelegate.swift` - handles CarPlay UI and interactions
-- **Flutter Bridge**: `lib/services/carplay_service.dart` - connects CarPlay to app state
-- **Info.plist Configuration**: CarPlay scene manifest (`CPTemplateApplicationSceneSessionRoleApplication`) and audio background mode
-- **Method Channel**: Bidirectional communication between Swift CarPlay UI and Flutter app logic
+- **Flutter CarPlay Plugin**: `flutter_carplay: ^1.1.4` handles all CarPlay UI and interactions
+- **CarPlay Service**: `lib/services/carplay_service.dart` - connects CarPlay to app state
+- **Info.plist Configuration**: 
+  - UIBackgroundModes with `audio` for background playback
+  - CarPlay entitlements in `ios/Runner/Runner.entitlements`:
+    - `com.apple.developer.carplay-audio`
+    - `com.apple.developer.playable-content`
+- **Dart-Only Implementation**: All CarPlay logic is in Dart - no custom Swift code needed
 - **Offline Downloads**: iOS stores downloads in app documents directory - accessible even offline
 - **Lock Screen Controls**: Album artwork, play/pause, skip buttons via audio_service plugin
 
@@ -289,7 +297,7 @@ CarPlay requires one of the following:
 - **Physical Device**: iPhone with CarPlay-enabled car or CarPlay-compatible head unit
 - **iOS Simulator**: Xcode → I/O → External Display → CarPlay window
 
-The CarPlay interface automatically appears when connected to a CarPlay system. No additional setup needed!
+The CarPlay interface automatically appears when connected to a CarPlay system. Uses flutter_carplay's CPTabBarTemplate for tab navigation!
 
 #### 📱 iOS-Specific Features
 All iOS features are built and deployed via **Codemagic CI**:
@@ -316,7 +324,8 @@ All iOS features are built and deployed via **Codemagic CI**:
 - [x] **Jellyfin Playback Reporting integration** for activity tracking
 - [x] **Offline downloads** with progress tracking and album batch downloads
 - [x] **Recent tab with toggle** between recently played and recently added
-- [x] **iOS CarPlay** with full library browsing (albums, artists, playlists, favorites, downloads) and **offline support**
+- [x] **iOS CarPlay** powered by flutter_carplay plugin with full library browsing (albums, artists, playlists, favorites, downloads) and **offline support**
+- [x] **Most Tab with 4 view modes**: Most Played, Recently Played, Recently Added, and Longest Runtime tracks (all playable with tap-to-play)
 - [x] **Waveform visualization** using Jellyfin's waveform API with per-track caching
 - [x] **Tabbed navigation (Albums/Artists/Search/Favorites/Recent/Playlists/Downloads)** - 7 tabs total
 - [x] **Settings screen** with transcoding options accessible from app title
