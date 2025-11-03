@@ -2,6 +2,12 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback, animated waveform visualization, and seamless Jellyfin integration.
 
+## 🚀 Latest Updates
+- Reworked iOS bootstrap with a shared `FlutterEngine`, SceneDelegate, and Info.plist scene manifest so `flutter_carplay` can launch reliably on CarPlay-equipped head units (see `ios/Runner/AppDelegate.swift`, `SceneDelegate.swift`, and `Info.plist`).
+- Deferred `NautuneAppState.initialize()` work and CarPlay setup to run after the first Flutter frame, preventing black-screen hangs caused by plugin initialization failures.
+- Hardened startup logging (`Nautune initialization started/finished`) to make it easier to diagnose device issues from Xcode or `flutter logs`.
+- CarPlay integrations now match Jellyfin data more accurately by tracking album artist IDs and forwarding precise playback positions to the Jellyfin server.
+
 ## ✨ Highlights
 
 ### 🎵 Audio & Playback
@@ -355,6 +361,9 @@ All iOS features are built and deployed via **Codemagic CI**:
 
 ## 🐛 Known Issues
 
+- Long-press gesture on the offline wave toggle works on desktop (right-click) but not on iOS; downloads manager cannot be opened from the phone yet.
+- "Most Played / Most Recent" segmented control text wraps awkwardly on some layouts and needs design polish.
+- Offline mode album cards trigger immediate playback instead of drilling into the album detail; album artwork should be cached alongside downloads and offline search should query the on-device catalog only.
 - **Native FLAC Playback**: Uses direct download URLs for original quality, platform decoders handle FLAC/AAC/etc. natively
 - Infinite scrolling needs backend pagination support
 - CarPlay testing requires physical device or iOS Simulator with CarPlay window
