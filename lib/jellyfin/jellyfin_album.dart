@@ -6,6 +6,7 @@ class JellyfinAlbum {
     this.productionYear,
     this.primaryImageTag,
     this.isFavorite = false,
+    this.genres,
   });
 
   final String id;
@@ -14,6 +15,7 @@ class JellyfinAlbum {
   final int? productionYear;
   final String? primaryImageTag;
   final bool isFavorite;
+  final List<String>? genres;
 
   factory JellyfinAlbum.fromJson(Map<String, dynamic> json) {
     return JellyfinAlbum(
@@ -32,6 +34,13 @@ class JellyfinAlbum {
       primaryImageTag:
           (json['ImageTags'] as Map<String, dynamic>?)?['Primary'] as String?,
       isFavorite: (json['UserData'] as Map<String, dynamic>?)?['IsFavorite'] as bool? ?? false,
+      genres: (json['Genres'] as List<dynamic>?)
+              ?.whereType<String>()
+              .toList() ??
+          (json['GenreItems'] as List<dynamic>?)
+              ?.map((g) => (g as Map<String, dynamic>)['Name'] as String?)
+              .whereType<String>()
+              .toList(),
     );
   }
 

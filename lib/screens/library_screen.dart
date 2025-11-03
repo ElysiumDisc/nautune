@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../app_state.dart';
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_artist.dart';
+import '../jellyfin/jellyfin_genre.dart';
 import '../jellyfin/jellyfin_library.dart';
 import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_track.dart';
@@ -11,6 +12,7 @@ import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/now_playing_bar.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
+import 'genre_detail_screen.dart';
 import 'offline_library_screen.dart';
 import 'playlist_detail_screen.dart';
 import 'settings_screen.dart';
@@ -182,7 +184,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                     Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (context) =>
-                            OfflineLibraryScreen(appState: widget.appState, initialTab: 1),
+                            OfflineLibraryScreen(appState: widget.appState),
                       ),
                     );
                   },
@@ -191,19 +193,22 @@ class _LibraryScreenState extends State<LibraryScreen>
                     Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (context) =>
-                            OfflineLibraryScreen(appState: widget.appState, initialTab: 1),
+                            OfflineLibraryScreen(appState: widget.appState),
                       ),
                     );
                   },
                   borderRadius: BorderRadius.circular(20),
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Icon(
-                      Icons.waves,
-                      color: widget.appState.isOfflineMode 
-                          ? const Color(0xFF7A3DF1)  // Violet when offline
-                          : const Color(0xFFB39DDB),  // Light purple when online
-                      size: 28,
+                  child: Tooltip(
+                    message: 'Tap: Toggle Offline | Long Press/Right Click: Downloads',
+                    child: Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Icon(
+                        Icons.waves,
+                        color: widget.appState.isOfflineMode 
+                            ? const Color(0xFF7A3DF1)  // Violet when offline
+                            : const Color(0xFFB39DDB),  // Light purple when online
+                        size: 28,
+                      ),
                     ),
                   ),
                 ),
@@ -1994,7 +1999,7 @@ class _GenresTab extends StatelessWidget {
 class _GenreCard extends StatelessWidget {
   const _GenreCard({required this.genre, required this.appState});
 
-  final genre;
+  final JellyfinGenre genre;
   final NautuneAppState appState;
 
   @override
@@ -2005,9 +2010,13 @@ class _GenreCard extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () {
-          // TODO: Navigate to genre detail screen showing albums/tracks in this genre
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Genre: ${genre.name} (coming soon)')),
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => GenreDetailScreen(
+                genre: genre,
+                appState: appState,
+              ),
+            ),
           );
         },
         child: Container(

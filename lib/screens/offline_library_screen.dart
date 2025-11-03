@@ -7,38 +7,16 @@ class OfflineLibraryScreen extends StatefulWidget {
   const OfflineLibraryScreen({
     super.key, 
     required this.appState,
-    this.initialTab = 0,  // 0 = Offline Library, 1 = Downloads
   });
 
   final NautuneAppState appState;
-  final int initialTab;
 
   @override
   State<OfflineLibraryScreen> createState() => _OfflineLibraryScreenState();
 }
 
-class _OfflineLibraryScreenState extends State<OfflineLibraryScreen>
-    with SingleTickerProviderStateMixin {
+class _OfflineLibraryScreenState extends State<OfflineLibraryScreen> {
   bool _showByAlbum = true;
-  late TabController _tabController;
-  int _currentTab = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 2, vsync: this, initialIndex: widget.initialTab);
-    _tabController.addListener(() {
-      setState(() {
-        _currentTab = _tabController.index;
-      });
-    });
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -48,26 +26,13 @@ class _OfflineLibraryScreenState extends State<OfflineLibraryScreen>
       appBar: AppBar(
         title: Row(
           children: [
-            Icon(Icons.offline_bolt, color: theme.colorScheme.primary),
+            Icon(Icons.download, color: theme.colorScheme.primary),
             const SizedBox(width: 8),
-            const Text('Offline & Downloads'),
-          ],
-        ),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(text: 'Offline Library', icon: Icon(Icons.library_music)),
-            Tab(text: 'Downloads', icon: Icon(Icons.download)),
+            const Text('Downloads'),
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          _buildOfflineLibrary(context, theme),
-          _buildDownloadsTab(context, theme),
-        ],
-      ),
+      body: _buildDownloadsTab(context, theme),
     );
   }
 

@@ -535,13 +535,13 @@ class JellyfinClient {
   }) async {
     final queryParams = <String, String>{
       'UserId': credentials.userId,
-      'IncludeItemTypes': 'MusicGenre',
       if (parentId != null) 'ParentId': parentId,
       if (searchTerm != null) 'SearchTerm': searchTerm,
       if (limit != null) 'Limit': limit.toString(),
+      'Recursive': 'true',
     };
 
-    final uri = _buildUri('/MusicGenres', queryParams);
+    final uri = _buildUri('/Genres', queryParams);
     final response = await httpClient.get(
       uri,
       headers: _defaultHeaders(credentials),
