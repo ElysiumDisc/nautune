@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -1749,12 +1751,23 @@ class _OfflineAlbumsView extends StatelessWidget {
                       children: [
                         AspectRatio(
                           aspectRatio: 1,
-                          child: Container(
-                            color: theme.colorScheme.surfaceContainerHighest,
-                            child: Image.asset(
-                              'assets/no_album_art.png',
-                              fit: BoxFit.cover,
-                            ),
+                          child: FutureBuilder<File?>(
+                            future: appState.downloadService.getArtworkFile(firstTrack.id),
+                            builder: (context, snapshot) {
+                              if (snapshot.hasData && snapshot.data != null) {
+                                return Image.file(
+                                  snapshot.data!,
+                                  fit: BoxFit.cover,
+                                );
+                              }
+                              return Container(
+                                color: theme.colorScheme.surfaceContainerHighest,
+                                child: Image.asset(
+                                  'assets/no_album_art.png',
+                                  fit: BoxFit.cover,
+                                ),
+                              );
+                            },
                           ),
                         ),
                         Padding(
@@ -2093,6 +2106,84 @@ class _SearchTabState extends State<_SearchTab> {
       return;
     }
 
+    setState(() => _isLoading = true);
+    
+    // Offline mode: search downloaded content only
+    if (widget.appState.isOfflineMode) {
+      try {
+        if (_scope == _SearchScope.albums) {
+          final downloads = widget.appState.downloadService.completedDownloads;
+          final Map<String, List> albumGroups = {};
+          
+          for (final download in downloads) {
+            final albumName = download.track.album ?? 'Unknown Album';
+            if (!albumGroups.containsKey(albumName)) {
+              albumGroups[albumName] = [];
+            }
+            albumGroups[albumName]!.add(download);
+          }
+          
+          // Filter albums by query
+          final matchingAlbums = albumGroups.entries
+              .where((entry) => entry.key.toLowerCase().contains(trimmed.toLowerCase()))
+              .map((entry) {
+            final firstTrack = entry.value.first.track;
+            return JellyfinAlbum(
+              id: firstTrack.albumId,
+              name: entry.key,
+              artists: [firstTrack.displayArtist],
+              artistIds: firstTrack.albumArtistIds ?? [],
+            );
+          }).toList();
+          
+          if (!mounted || _lastQuery != trimmed) return;
+          setState(() {
+            _albumResults = matchingAlbums;
+            _artistResults = const [];
+            _isLoading = false;
+          });
+        } else {
+          // Search artists in offline mode
+          final downloads = widget.appState.downloadService.completedDownloads;
+          final Map<String, List> artistGroups = {};
+          
+          for (final download in downloads) {
+            final artistName = download.track.displayArtist;
+            if (!artistGroups.containsKey(artistName)) {
+              artistGroups[artistName] = [];
+            }
+            artistGroups[artistName]!.add(download);
+          }
+          
+          // Filter artists by query
+          final matchingArtists = artistGroups.keys
+              .where((name) => name.toLowerCase().contains(trimmed.toLowerCase()))
+              .map((name) => JellyfinArtist(
+                id: 'offline_$name',
+                name: name,
+              ))
+              .toList();
+          
+          if (!mounted || _lastQuery != trimmed) return;
+          setState(() {
+            _albumResults = const [];
+            _artistResults = matchingArtists;
+            _isLoading = false;
+          });
+        }
+      } catch (e) {
+        if (!mounted || _lastQuery != trimmed) return;
+        setState(() {
+          _error = e;
+          _albumResults = const [];
+          _artistResults = const [];
+          _isLoading = false;
+        });
+      }
+      return;
+    }
+
+    // Online mode: search Jellyfin server
     final libraryId = widget.appState.session?.selectedLibraryId;
     if (libraryId == null) {
       setState(() {
@@ -2104,7 +2195,6 @@ class _SearchTabState extends State<_SearchTab> {
       return;
     }
 
-    setState(() => _isLoading = true);
     try {
       if (_scope == _SearchScope.albums) {
         final albums = await widget.appState.jellyfinService.searchAlbums(

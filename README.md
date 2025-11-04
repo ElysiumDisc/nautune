@@ -329,6 +329,7 @@ All iOS features are built and deployed via **Codemagic CI**:
 - [x] **Audio playback with native engine (direct streaming)**
 - [x] **Persistent playback state (position, queue, track)**
 - [x] **Gapless playback** with track preloading
+- [x] **Native FLAC Playback**: Uses direct download URLs for original quality, platform decoders handle FLAC/AAC/etc. natively
 - [x] **Jellyfin Playback Reporting integration** for activity tracking
 - [x] **Offline downloads** with progress tracking and album batch downloads
 - [x] **Recent tab with toggle** between recently played and recently added
@@ -353,6 +354,11 @@ All iOS features are built and deployed via **Codemagic CI**:
 - [x] **Click artists to see their discography**
 - [x] **Back buttons on all detail screens**
 - [x] **Responsive layout** (adapts between mobile and desktop)
+- [x] **iOS lock screen controls** with album artwork and full playback control
+- [x] **Offline album artwork caching** - artwork downloaded and cached with tracks
+- [x] **Offline search** - search downloaded content without internet connection
+- [x] **Fixed offline mode toggle** - wave icon tap now works correctly
+- [x] **Offline album detail navigation** - tapping albums in offline mode opens detail instead of immediate playback
 
 ### 🚧 In Progress / Planned
 - [ ] Full player screen with lyrics display
@@ -363,11 +369,8 @@ All iOS features are built and deployed via **Codemagic CI**:
 
 ## 🐛 Known Issues
 
-- **Native FLAC Playback**: Uses direct download URLs for original quality, platform decoders handle FLAC/AAC/etc. natively
 - Infinite scrolling needs backend pagination support
 - CarPlay testing requires physical device or iOS Simulator with CarPlay window
-- Album artwork should be cached alongside downloads for offline mode
-- Offline search should query the on-device catalog only
 
 ## 📝 Development Guidelines
 

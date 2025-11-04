@@ -108,6 +108,69 @@ class DownloadService extends ChangeNotifier {
     return '${downloadsDir.path}/${track.id}_$sanitizedName.$extension';
   }
 
+  Future<String> _getArtworkPath(String trackId) async {
+    Directory downloadsDir;
+    
+    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+      downloadsDir = Directory('downloads/artwork');
+    } else {
+      final dir = await getApplicationDocumentsDirectory();
+      downloadsDir = Directory('${dir.path}/downloads/artwork');
+    }
+    
+    if (!await downloadsDir.exists()) {
+      await downloadsDir.create(recursive: true);
+    }
+    
+    return '${downloadsDir.path}/$trackId.jpg';
+  }
+
+  Future<void> _downloadArtwork(JellyfinTrack track) async {
+    try {
+      final artworkUrl = track.artworkUrl();
+      if (artworkUrl == null) return;
+
+      final artworkPath = await _getArtworkPath(track.id);
+      final file = File(artworkPath);
+      
+      if (await file.exists()) {
+        return; // Already cached
+      }
+
+      final response = await http.get(Uri.parse(artworkUrl));
+      if (response.statusCode == 200) {
+        await file.writeAsBytes(response.bodyBytes);
+        debugPrint('Artwork cached: ${track.name}');
+      }
+    } catch (e) {
+      debugPrint('Failed to cache artwork for ${track.name}: $e');
+    }
+  }
+
+  String? getArtworkPath(String trackId) {
+    // Return cached artwork path if it exists
+    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+      final path = 'downloads/artwork/$trackId.jpg';
+      if (File(path).existsSync()) {
+        return path;
+      }
+    } else {
+      // For mobile, we need async path, so this won't work perfectly
+      // Better to use a Future getter or callback
+      return null;
+    }
+    return null;
+  }
+
+  Future<File?> getArtworkFile(String trackId) async {
+    final path = await _getArtworkPath(trackId);
+    final file = File(path);
+    if (await file.exists()) {
+      return file;
+    }
+    return null;
+  }
+
   Future<void> downloadTrack(JellyfinTrack track) async {
     if (_downloads.containsKey(track.id)) {
       if (_downloads[track.id]!.isCompleted) {
@@ -209,6 +272,9 @@ class DownloadService extends ChangeNotifier {
         completedAt: DateTime.now(),
       );
       
+      // Download artwork after track completes
+      await _downloadArtwork(item.track);
+      
       notifyListeners();
       await _saveDownloads();
       
@@ -238,6 +304,13 @@ class DownloadService extends ChangeNotifier {
       final file = File(item.localPath);
       if (await file.exists()) {
         await file.delete();
+      }
+      
+      // Also delete cached artwork
+      final artworkPath = await _getArtworkPath(trackId);
+      final artworkFile = File(artworkPath);
+      if (await artworkFile.exists()) {
+        await artworkFile.delete();
       }
       
       _downloads.remove(trackId);
