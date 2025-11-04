@@ -3,6 +3,11 @@
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback, animated waveform visualization, and seamless Jellyfin integration.
 
 ## 🚀 Latest Updates
+- **🛫 Offline-First Boot**: App now boots directly into offline mode when no internet is available, giving instant access to downloaded music even in airplane mode or dead zones.
+  - ✅ Graceful network failure handling during initialization
+  - ✅ Cached credentials preserved for when connectivity returns
+  - ✅ Offline banner with retry button shows when network is unavailable
+  - ✅ Automatic sync when connectivity is restored
 - Reworked iOS bootstrap with a shared `FlutterEngine`, SceneDelegate, and Info.plist scene manifest so `flutter_carplay` can launch reliably on CarPlay-equipped head units (see `ios/Runner/AppDelegate.swift`, `SceneDelegate.swift`, and `Info.plist`).
 - Deferred `NautuneAppState.initialize()` work and CarPlay setup to run after the first Flutter frame, preventing black-screen hangs caused by plugin initialization failures.
 - Hardened startup logging (`Nautune initialization started/finished`) to make it easier to diagnose device issues from Xcode or `flutter logs`.
@@ -68,6 +73,9 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
   - **Tap**: Toggle online/offline mode (violet = offline, light purple = online)
   - **Most Tab**: Automatically becomes Downloads management when offline
   - **Search Tab**: Searches downloaded content only when offline
+  - **🛫 Offline-First Boot**: App automatically enters offline mode if network is unavailable during startup
+  - **Network Banner**: Visual indicator when offline with retry button to restore connection
+  - **Seamless Recovery**: Automatically syncs when internet returns
 - **✅ Recent Tab**: Toggle between recently played tracks (from Jellyfin history) and recently added albums with segmented control
 - **✅ Favorites Tab**: Jellyfin favorites integration with heart button in fullscreen player
   - ✅ Mark tracks/albums as favorites
@@ -120,6 +128,7 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - **Offline Downloads**: Download albums and tracks for offline playback
   - ✅ **Linux/Desktop**: Stored in project `downloads/` directory
   - ✅ **iOS/Android**: Stored in app documents directory (persists across updates, **airplane mode compatible**)
+  - ✅ **Offline-First Boot**: App starts in offline mode automatically when no network is available
   - ✅ Automatic offline playback when file exists (no internet required)
   - ✅ Always downloads original format (FLAC/lossless preferred)
   - ✅ **iOS CarPlay supports offline downloads** - browse and play in car without internet
@@ -166,6 +175,9 @@ audioplayers: ^6.1.0      # iOS:AVFoundation, Linux:GStreamer, Android:MediaPlay
 audio_session: ^0.1.21    # Audio session configuration
 audio_service: ^0.18.15   # iOS lock screen controls and media notifications
 flutter_carplay: ^1.1.4   # iOS CarPlay integration with tab-based UI
+
+# Network & Connectivity
+connectivity_plus: ^6.1.2  # Network connectivity detection for offline-first boot
 
 # Data & State
 shared_preferences: ^2.3.2 # Persistent storage for sessions and playback state
@@ -360,6 +372,7 @@ All iOS features are built and deployed via **Codemagic CI**:
 - [x] **Offline search** - search downloaded content without internet connection
 - [x] **Fixed offline mode toggle** - wave icon tap now works correctly
 - [x] **Offline album detail navigation** - tapping albums in offline mode opens detail instead of immediate playback
+- [x] **🛫 Offline-first boot** - app gracefully handles no network at startup and boots directly into offline mode with downloaded content
 
 ### 🚧 In Progress / Planned
 - [ ] Full player screen with lyrics display

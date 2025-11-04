@@ -50,6 +50,8 @@ class NautuneApp extends StatelessWidget {
             return LoginScreen(appState: appState);
           }
 
+          // If we have a session but are in offline mode, go directly to library
+          // which will show the offline downloads
           return LibraryScreen(appState: appState);
         },
       ),

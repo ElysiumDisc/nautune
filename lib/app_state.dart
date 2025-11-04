@@ -76,8 +76,10 @@ class NautuneAppState extends ChangeNotifier {
   Object? _genresError;
   List<JellyfinGenre>? _genres;
   bool _isOfflineMode = false;  // Toggle between online and offline library
+  bool _networkAvailable = true;  // Track network connectivity
 
   bool get isInitialized => _initialized;
+  bool get networkAvailable => _networkAvailable;
   bool get isAuthenticating => _isAuthenticating;
   JellyfinSession? get session => _session;
   Object? get lastError => _lastError;
@@ -147,8 +149,18 @@ class NautuneAppState extends ChangeNotifier {
         );
         _audioPlayerService.setReportingService(reportingService);
         
-        await _loadLibraries();
-        await _loadLibraryDependentContent();
+        // Attempt to load libraries from server
+        // If network is unavailable, gracefully fall back to offline mode
+        try {
+          await _loadLibraries();
+          await _loadLibraryDependentContent();
+          _networkAvailable = true;
+        } catch (error) {
+          debugPrint('Network unavailable during initialization, entering offline mode: $error');
+          _networkAvailable = false;
+          _isOfflineMode = true;
+          // Don't clear session - keep it for when network returns
+        }
       }
     } catch (error, stackTrace) {
       _lastError = error;
@@ -164,13 +176,13 @@ class NautuneAppState extends ChangeNotifier {
     } finally {
       _initialized = true;
       notifyListeners();
-      debugPrint('Nautune initialization finished (session restored: ${_session != null})');
+      debugPrint('Nautune initialization finished (session restored: ${_session != null}, offline: $_isOfflineMode)');
       
       // Initialize CarPlay after the first frame so plugin setup cannot block UI
       if (Platform.isIOS) {
-        scheduleMicrotask(() {
+        scheduleMicrotask(() async {
           try {
-            _carPlayService?.initialize();
+            await _carPlayService?.initialize();
           } catch (error) {
             debugPrint('CarPlay initialization skipped: $error');
           }
@@ -588,6 +600,16 @@ class NautuneAppState extends ChangeNotifier {
   void toggleOfflineMode() {
     _isOfflineMode = !_isOfflineMode;
     notifyListeners();
+    
+    // If switching to online mode and we have a session, try to refresh data
+    if (!_isOfflineMode && _session != null && _networkAvailable) {
+      refreshLibraries().catchError((error) {
+        debugPrint('Failed to refresh libraries when going online: $error');
+        _isOfflineMode = true;
+        _networkAvailable = false;
+        notifyListeners();
+      });
+    }
   }
 
   Future<void> disconnect() async {

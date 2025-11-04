@@ -107,7 +107,12 @@ class _LibraryScreenState extends State<LibraryScreen>
 
         Widget body;
 
-        if (isLoadingLibraries && (libraries == null || libraries.isEmpty)) {
+        // If we're in offline mode due to network issues, show offline library
+        if (widget.appState.isOfflineMode && 
+            !widget.appState.networkAvailable && 
+            (libraries == null || libraries.isEmpty)) {
+          body = OfflineLibraryScreen(appState: widget.appState);
+        } else if (isLoadingLibraries && (libraries == null || libraries.isEmpty)) {
           body = const Center(child: CircularProgressIndicator());
         } else if (libraryError != null) {
           body = _ErrorState(
@@ -272,7 +277,46 @@ class _LibraryScreenState extends State<LibraryScreen>
               ),
             ],
           ),
-          body: body,
+          body: Column(
+            children: [
+              // Offline mode banner
+              if (widget.appState.isOfflineMode && !widget.appState.networkAvailable)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  color: theme.colorScheme.tertiaryContainer,
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.cloud_off,
+                        size: 20,
+                        color: theme.colorScheme.onTertiaryContainer,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'No internet connection. Showing downloaded content only.',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onTertiaryContainer,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => widget.appState.refreshLibraries(),
+                        child: Text(
+                          'Retry',
+                          style: TextStyle(
+                            color: theme.colorScheme.onTertiaryContainer,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              Expanded(child: body),
+            ],
+          ),
           bottomNavigationBar: Column(
             mainAxisSize: MainAxisSize.min,
             children: [

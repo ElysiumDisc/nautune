@@ -10,30 +10,40 @@ class CarPlayService {
   CarPlayService({required this.appState});
   
   /// Call this after the app is fully loaded
-  void initialize() {
+  Future<void> initialize() async {
     if (_isInitialized || !Platform.isIOS) return;
     _isInitialized = true;
     
     // Safely setup CarPlay with error handling
     try {
-      _setupCarPlay();
+      await _setupCarPlay();
     } catch (e) {
       print('⚠️ CarPlay initialization failed (non-critical): $e');
       // Don't crash the app if CarPlay fails
     }
   }
   
-  void _setupCarPlay() async {
+  Future<void> _setupCarPlay() async {
     try {
-      // Set root template first, then force update
-      _setRootTemplate();
+      // Build the root template
+      final rootTemplate = _buildRootTemplate();
+      
+      // Set root template using the static method (CRITICAL!)
+      await FlutterCarplay.setRootTemplate(
+        rootTemplate: rootTemplate,
+        animated: true,
+      );
+      
+      // Force update to ensure CarPlay shows it
       await _carplay.forceUpdateRootTemplate();
+      
+      print('✅ CarPlay root template set successfully');
     } catch (e) {
       print('⚠️ CarPlay setup error: $e');
     }
   }
   
-  void _setRootTemplate() {
+  CPTabBarTemplate _buildRootTemplate() {
     final libraryTab = CPListTemplate(
       title: 'Library',
       sections: [
@@ -107,11 +117,8 @@ class CarPlayService {
       systemIcon: 'arrow.down.circle.fill',
     );
 
-    FlutterCarplay.setRootTemplate(
-      rootTemplate: CPTabBarTemplate(
-        templates: [libraryTab, favoritesTab, downloadsTab],
-      ),
-      animated: true,
+    return CPTabBarTemplate(
+      templates: [libraryTab, favoritesTab, downloadsTab],
     );
   }
 
