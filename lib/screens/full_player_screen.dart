@@ -150,9 +150,9 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                       body: SafeArea(
                         child: Column(
                           children: [
-                            // Header
+                            // Header - Compact
                             Padding(
-                              padding: const EdgeInsets.all(16),
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                               child: Row(
                                 children: [
                                   IconButton(
@@ -162,51 +162,48 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                                   const Spacer(),
                                   Text(
                                     'Now Playing',
-                                    style: theme.textTheme.titleMedium,
+                                    style: theme.textTheme.titleSmall,
                                   ),
                                   const Spacer(),
-                                  // Top-right heart icon removed - use bottom controls instead
-                                  const SizedBox(width: 48), // Maintain spacing
+                                  const SizedBox(width: 48),
                                 ],
                               ),
                             ),
 
                             Expanded(
-                              child: SingleChildScrollView(
+                              child: Padding(
                             padding: EdgeInsets.symmetric(
-                              horizontal: isDesktop ? size.width * 0.2 : 32,
-                              vertical: 16,
+                              horizontal: isDesktop ? size.width * 0.2 : 24,
                             ),
                             child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                               children: [
                                 // Artwork
                                 SizedBox(
-                                  width: isDesktop ? 400 : size.width - 64,
+                                  width: isDesktop ? 350 : size.width * 0.7,
                                   child: artwork,
                                 ),
                                 
-                                SizedBox(height: isDesktop ? 48 : 32),
-
-                                // Track Info
+                                
+                                // Track Info - Compact
                                 Text(
                                   track.name,
                                   style: (isDesktop
-                                          ? theme.textTheme.headlineMedium
-                                          : theme.textTheme.headlineSmall)
+                                          ? theme.textTheme.headlineSmall
+                                          : theme.textTheme.titleLarge)
                                       ?.copyWith(fontWeight: FontWeight.bold),
                                   textAlign: TextAlign.center,
                                   maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
                                 ),
                                 
-                                const SizedBox(height: 12),
+                                const SizedBox(height: 8),
                                 
                                 Text(
                                   track.displayArtist,
                                   style: (isDesktop
-                                          ? theme.textTheme.titleLarge
-                                          : theme.textTheme.titleMedium)
+                                          ? theme.textTheme.titleMedium
+                                          : theme.textTheme.bodyLarge)
                                       ?.copyWith(
                                     color: theme.colorScheme.onSurfaceVariant,
                                   ),
@@ -216,10 +213,10 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                                 ),
                                 
                                 if (track.album != null) ...[
-                                  const SizedBox(height: 8),
+                                  const SizedBox(height: 4),
                                   Text(
                                     track.album!,
-                                    style: theme.textTheme.bodyLarge?.copyWith(
+                                    style: theme.textTheme.bodyMedium?.copyWith(
                                       color: theme.colorScheme.onSurfaceVariant,
                                     ),
                                     textAlign: TextAlign.center,
@@ -227,8 +224,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ],
-
-                                SizedBox(height: isDesktop ? 48 : 32),
 
                                 // Progress
                                 LayoutBuilder(
@@ -290,9 +285,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                                   },
                                 ),
 
-                                SizedBox(height: isDesktop ? 48 : 32),
-
-                                // Volume
+                                // Volume - Compact
                                 StreamBuilder<double>(
                                   stream: widget.audioService.volumeStream,
                                   initialData: widget.audioService.volume,
@@ -335,9 +328,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                                   },
                                 ),
 
-                                SizedBox(height: isDesktop ? 36 : 24),
-
-                                // Controls
+                                // Controls - Compact spacing
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
@@ -483,8 +474,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                                     ),
                                   ],
                                 ),
-
-                                SizedBox(height: isDesktop ? 32 : 24),
                               ],
                               ),
                             ),
