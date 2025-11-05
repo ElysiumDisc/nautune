@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'dart:ui' show FontFeature;
+import 'dart:ui' as ui;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -26,11 +29,74 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   bool _isLoading = false;
   Object? _error;
   List<JellyfinTrack>? _tracks;
+  List<Color>? _paletteColors;
 
   @override
   void initState() {
     super.initState();
     _loadTracks();
+    _extractColors();
+  }
+
+  Future<void> _extractColors() async {
+    final tag = widget.album.primaryImageTag;
+    if (tag == null || tag.isEmpty) return;
+
+    try {
+      final imageUrl = widget.appState.jellyfinService.buildImageUrl(
+        itemId: widget.album.id,
+        tag: tag,
+        maxWidth: 100,
+      );
+      
+      final imageProvider = NetworkImage(
+        imageUrl,
+        headers: widget.appState.jellyfinService.imageHeaders(),
+      );
+      
+      final imageStream = imageProvider.resolve(const ImageConfiguration());
+      final completer = Completer<ui.Image>();
+      
+      late ImageStreamListener listener;
+      listener = ImageStreamListener((info, _) {
+        completer.complete(info.image);
+        imageStream.removeListener(listener);
+      });
+      
+      imageStream.addListener(listener);
+      final image = await completer.future;
+      
+      final ByteData? byteData = await image.toByteData();
+      if (byteData == null) return;
+      
+      final pixels = byteData.buffer.asUint8List();
+      final colors = <Color>[];
+      
+      // Sample colors from the image
+      for (int i = 0; i < pixels.length; i += 400) {
+        if (i + 2 < pixels.length) {
+          final r = pixels[i];
+          final g = pixels[i + 1];
+          final b = pixels[i + 2];
+          colors.add(Color.fromRGBO(r, g, b, 1.0));
+        }
+      }
+      
+      // Sort by luminance to get darker colors
+      colors.sort((a, b) {
+        final lumA = (0.299 * (a.r * 255.0).round() + 0.587 * (a.g * 255.0).round() + 0.114 * (a.b * 255.0).round());
+        final lumB = (0.299 * (b.r * 255.0).round() + 0.587 * (b.g * 255.0).round() + 0.114 * (b.b * 255.0).round());
+        return lumA.compareTo(lumB);
+      });
+      
+      if (mounted && colors.isNotEmpty) {
+        setState(() {
+          _paletteColors = colors;
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to extract colors: $e');
+    }
   }
 
   Future<void> _loadTracks() async {
@@ -123,7 +189,22 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     }
 
     return Scaffold(
-      body: CustomScrollView(
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: _paletteColors != null && _paletteColors!.length >= 3
+              ? LinearGradient(
+                  colors: [
+                    theme.scaffoldBackgroundColor,
+                    _paletteColors![_paletteColors!.length ~/ 2].withValues(alpha: 0.3),
+                    _paletteColors![0].withValues(alpha: 0.6),
+                  ],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  stops: const [0.0, 0.5, 1.0],
+                )
+              : null,
+        ),
+        child: CustomScrollView(
         slivers: [
           SliverAppBar(
             expandedHeight: isDesktop ? 350 : 300,
@@ -423,6 +504,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               ),
             ),
         ],
+        ),
       ),
       bottomNavigationBar: NowPlayingBar(
         audioService: widget.appState.audioPlayerService,
@@ -457,7 +539,6 @@ class _TrackTile extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
           child: Row(
