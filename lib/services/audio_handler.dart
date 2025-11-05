@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'package:audio_service/audio_service.dart';
+import 'package:audio_service/audio_service.dart' as audio_service;
 import 'package:audioplayers/audioplayers.dart';
 import '../jellyfin/jellyfin_track.dart';
 
-class NautuneAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
+class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_service.QueueHandler, audio_service.SeekHandler {
   final AudioPlayer _player;
   final void Function() onPlay;
   final void Function() onPause;
@@ -48,23 +48,23 @@ class NautuneAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandle
     _stateSubscription = _player.onPlayerStateChanged.listen((state) {
       final playing = state == PlayerState.playing;
       final processingState = state == PlayerState.completed
-          ? AudioProcessingState.completed
+          ? audio_service.AudioProcessingState.completed
           : state == PlayerState.playing || state == PlayerState.paused
-              ? AudioProcessingState.ready
-              : AudioProcessingState.idle;
+              ? audio_service.AudioProcessingState.ready
+              : audio_service.AudioProcessingState.idle;
 
       playbackState.add(playbackState.value.copyWith(
         playing: playing,
         controls: [
-          MediaControl.skipToPrevious,
-          playing ? MediaControl.pause : MediaControl.play,
-          MediaControl.stop,
-          MediaControl.skipToNext,
+          audio_service.MediaControl.skipToPrevious,
+          playing ? audio_service.MediaControl.pause : audio_service.MediaControl.play,
+          audio_service.MediaControl.stop,
+          audio_service.MediaControl.skipToNext,
         ],
         systemActions: const {
-          MediaAction.seek,
-          MediaAction.seekForward,
-          MediaAction.seekBackward,
+          audio_service.MediaAction.seek,
+          audio_service.MediaAction.seekForward,
+          audio_service.MediaAction.seekBackward,
         },
         processingState: processingState,
       ));
@@ -72,7 +72,7 @@ class NautuneAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandle
   }
 
   void updateNautuneMediaItem(JellyfinTrack track) {
-    final item = MediaItem(
+    final item = audio_service.MediaItem(
       id: track.id,
       album: track.album,
       title: track.name,
@@ -84,7 +84,7 @@ class NautuneAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandle
   }
 
   void updateNautuneQueue(List<JellyfinTrack> tracks) {
-    queue.add(tracks.map((track) => MediaItem(
+    queue.add(tracks.map((track) => audio_service.MediaItem(
       id: track.id,
       album: track.album,
       title: track.name,

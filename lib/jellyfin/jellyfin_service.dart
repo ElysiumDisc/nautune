@@ -218,6 +218,18 @@ class JellyfinService {
     return recent;
   }
 
+  Future<List<JellyfinTrack>> loadTracksByIds(List<String> ids) async {
+    final client = _client;
+    final session = _session;
+    if (client == null || session == null || ids.isEmpty) {
+      return const [];
+    }
+    return client.fetchTracksByIds(
+      credentials: session.credentials,
+      ids: ids,
+    );
+  }
+
   Future<List<JellyfinTrack>> loadRecentlyPlayedTracks({
     required String libraryId,
     bool forceRefresh = false,

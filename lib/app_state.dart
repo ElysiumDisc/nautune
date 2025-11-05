@@ -31,6 +31,7 @@ class NautuneAppState extends ChangeNotifier {
     _downloadService = DownloadService(jellyfinService: jellyfinService);
     // Link download service to audio player for offline playback
     _audioPlayerService.setDownloadService(_downloadService);
+    _audioPlayerService.setJellyfinService(_jellyfinService);
     // CarPlay service is only available on iOS; defer creation until Flutter boots
     if (Platform.isIOS) {
       scheduleMicrotask(() {
@@ -49,6 +50,9 @@ class NautuneAppState extends ChangeNotifier {
   late final AudioPlayerService _audioPlayerService;
   late final DownloadService _downloadService;
   CarPlayService? _carPlayService;
+  Map<String, double> _libraryScrollOffsets = {};
+  int _restoredLibraryTabIndex = 0;
+  bool _showVolumeBar = true;
 
   bool _initialized = false;
   JellyfinSession? _session;
@@ -118,6 +122,9 @@ class NautuneAppState extends ChangeNotifier {
   Object? get genresError => _genresError;
   List<JellyfinGenre>? get genres => _genres;
   bool get isOfflineMode => _isOfflineMode;
+  bool get showVolumeBar => _showVolumeBar;
+  int get initialLibraryTabIndex => _restoredLibraryTabIndex;
+  double? scrollOffsetFor(String key) => _libraryScrollOffsets[key];
   String? get selectedLibraryId => _session?.selectedLibraryId;
   JellyfinLibrary? get selectedLibrary {
     final libs = _libraries;
@@ -137,6 +144,32 @@ class NautuneAppState extends ChangeNotifier {
   AudioPlayerService get audioPlayerService => _audioPlayerService;
   DownloadService get downloadService => _downloadService;
 
+  void toggleVolumeBar() {
+    _showVolumeBar = !_showVolumeBar;
+    unawaited(_playbackStateStore.saveUiState(showVolumeBar: _showVolumeBar));
+    notifyListeners();
+  }
+
+  void setVolumeBarVisibility(bool visible) {
+    if (_showVolumeBar == visible) return;
+    _showVolumeBar = visible;
+    unawaited(_playbackStateStore.saveUiState(showVolumeBar: _showVolumeBar));
+    notifyListeners();
+  }
+
+  void updateLibraryTabIndex(int index) {
+    if (_restoredLibraryTabIndex == index) return;
+    _restoredLibraryTabIndex = index;
+    unawaited(_playbackStateStore.saveUiState(libraryTabIndex: index));
+  }
+
+  void updateScrollOffset(String key, double offset) {
+    _libraryScrollOffsets[key] = offset;
+    unawaited(
+      _playbackStateStore.saveUiState(scrollOffsets: {key: offset}),
+    );
+  }
+
   String _buildStreamUrl(String trackId) {
     final session = _session;
     if (session == null) {
@@ -149,11 +182,20 @@ class NautuneAppState extends ChangeNotifier {
 
   Future<void> initialize() async {
     debugPrint('Nautune initialization started');
+    final storedPlaybackState = await _playbackStateStore.load();
+    if (storedPlaybackState != null) {
+      _showVolumeBar = storedPlaybackState.showVolumeBar;
+      _restoredLibraryTabIndex = storedPlaybackState.libraryTabIndex;
+      _libraryScrollOffsets =
+          Map<String, double>.from(storedPlaybackState.scrollOffsets);
+      await _audioPlayerService.hydrateFromPersistence(storedPlaybackState);
+    }
     try {
       final storedSession = await _sessionStore.load();
       if (storedSession != null) {
         _session = storedSession;
         _jellyfinService.restoreSession(storedSession);
+        _audioPlayerService.setJellyfinService(_jellyfinService);
         
         // Initialize playback reporting for restored session
         final reportingService = PlaybackReportingService(
@@ -231,6 +273,7 @@ class NautuneAppState extends ChangeNotifier {
         password: password,
       );
       _session = session;
+      _audioPlayerService.setJellyfinService(_jellyfinService);
       await _sessionStore.save(session);
       
       // Initialize playback reporting

@@ -660,46 +660,6 @@ class _AlbumsTab extends StatelessWidget {
           return CustomScrollView(
             controller: scrollController,
             slivers: [
-              // Shuffle button header
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  child: TextButton(
-                    onPressed: () async {
-                      if (albums != null && albums!.isNotEmpty) {
-                        // Get all tracks from all albums
-                        List<JellyfinTrack> allTracks = [];
-                        for (var album in albums!) {
-                          try {
-                            final tracks = await appState.jellyfinService.loadAlbumTracks(albumId: album.id);
-                            allTracks.addAll(tracks);
-                          } catch (e) {
-                            debugPrint('Error loading album ${album.name}: $e');
-                          }
-                        }
-                        if (allTracks.isNotEmpty) {
-                          appState.audioService.playShuffled(allTracks);
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Shuffling ${allTracks.length} tracks from ${albums!.length} albums'),
-                                duration: const Duration(seconds: 2),
-                              ),
-                            );
-                          }
-                        }
-                      }
-                    },
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.all(16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: const Text('🌊🌊', style: TextStyle(fontSize: 18)),
-                  ),
-                ),
-              ),
               // Albums grid
               SliverPadding(
                 padding: const EdgeInsets.all(16),
@@ -907,43 +867,6 @@ class _PlaylistsTab extends StatelessWidget {
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.all(16),
                     ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: TextButton(
-                    onPressed: () async {
-                      // Shuffle all playlists
-                      if (playlists != null && playlists!.isNotEmpty) {
-                        List<JellyfinTrack> allTracks = [];
-                        for (var playlist in playlists!) {
-                          try {
-                            final tracks = await appState.getPlaylistTracks(playlist.id);
-                            allTracks.addAll(tracks);
-                          } catch (e) {
-                            debugPrint('Error loading playlist ${playlist.name}: $e');
-                          }
-                        }
-                        if (allTracks.isNotEmpty) {
-                          appState.audioService.playShuffled(allTracks);
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Shuffling ${allTracks.length} tracks from all playlists'),
-                                duration: const Duration(seconds: 2),
-                              ),
-                            );
-                          }
-                        }
-                      }
-                    },
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.all(16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: const Text('🌊🌊', style: TextStyle(fontSize: 18)),
                   ),
                 ),
               ],
@@ -1809,59 +1732,6 @@ class _ArtistsTab extends StatelessWidget {
           
           return CustomScrollView(
             slivers: [
-              // Shuffle button header
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  child: TextButton(
-                    onPressed: () async {
-                      if (artists != null && artists.isNotEmpty) {
-                        final libraryId = appState.session?.selectedLibraryId;
-                        if (libraryId == null) return;
-                        
-                        // Get all tracks from all artists
-                        List<JellyfinTrack> allTracks = [];
-                        
-                        // Load all albums once
-                        final allAlbums = await appState.jellyfinService.loadAlbums(libraryId: libraryId);
-                        
-                        for (var artist in artists) {
-                          try {
-                            // Filter albums by artist
-                            final artistAlbums = allAlbums.where((album) => album.artists.contains(artist.name)).toList();
-                            
-                            for (var album in artistAlbums) {
-                              final tracks = await appState.jellyfinService.loadAlbumTracks(albumId: album.id);
-                              allTracks.addAll(tracks);
-                            }
-                          } catch (e) {
-                            debugPrint('Error loading artist ${artist.name}: $e');
-                          }
-                        }
-                        
-                        if (allTracks.isNotEmpty) {
-                          appState.audioService.playShuffled(allTracks);
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Shuffling ${allTracks.length} tracks from ${artists.length} artists'),
-                                duration: const Duration(seconds: 2),
-                              ),
-                            );
-                          }
-                        }
-                      }
-                    },
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.all(16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: const Text('🌊🌊', style: TextStyle(fontSize: 18)),
-                  ),
-                ),
-              ),
               // Artists grid
               SliverPadding(
                 padding: const EdgeInsets.all(16),

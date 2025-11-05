@@ -38,6 +38,8 @@ class DownloadService extends ChangeNotifier {
 
   DownloadItem? getDownload(String trackId) => _downloads[trackId];
 
+  JellyfinTrack? trackFor(String trackId) => _downloads[trackId]?.track;
+
   int get totalDownloads => _downloads.length;
   int get completedCount => completedDownloads.length;
   int get activeCount => activeDownloads.length;

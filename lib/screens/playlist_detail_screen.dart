@@ -100,12 +100,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
             onPressed: () {
               if (_tracks != null && _tracks!.isNotEmpty) {
                 widget.appState.audioService.playShuffled(_tracks!);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Shuffling ${_tracks!.length} tracks from ${widget.playlist.name}'),
-                    duration: const Duration(seconds: 2),
-                  ),
-                );
               }
             },
           ),
@@ -202,14 +196,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                 albumId: track.albumId,
                                 albumName: widget.playlist.name,
                               );
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Playing ${track.name}'),
-                                    duration: const Duration(seconds: 2),
-                                  ),
-                                );
-                              }
                             } catch (error) {
                               if (!mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(

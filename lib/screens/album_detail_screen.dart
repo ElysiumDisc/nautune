@@ -142,12 +142,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                 onPressed: () {
                   if (_tracks != null && _tracks!.isNotEmpty) {
                     widget.appState.audioService.playShuffled(_tracks!);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Shuffling ${_tracks!.length} tracks'),
-                        duration: const Duration(seconds: 2),
-                      ),
-                    );
                   }
                 },
               ),
@@ -223,14 +217,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                                 albumId: album.id,
                                 albumName: album.name,
                               );
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Playing ${album.name}'),
-                                    duration: const Duration(seconds: 2),
-                                  ),
-                                );
-                              }
                             } catch (error) {
                               if (!mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
@@ -417,14 +403,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                                 albumId: widget.album.id,
                                 albumName: widget.album.name,
                               );
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Playing ${track.name}'),
-                                    duration: const Duration(seconds: 2),
-                                  ),
-                                );
-                              }
                             } catch (error) {
                               if (!mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(

@@ -1,17 +1,19 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' show Random;
+import 'dart:math' show Random, sin;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:audio_session/audio_session.dart';
-import 'package:audio_service/audio_service.dart';
+import 'package:audio_service/audio_service.dart' as audio_service;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../jellyfin/jellyfin_service.dart';
 import '../jellyfin/jellyfin_track.dart';
 import 'audio_handler.dart';
 import 'download_service.dart';
 import 'playback_reporting_service.dart';
 import 'playback_state_store.dart';
+import '../models/playback_state.dart';
 
 enum RepeatMode {
   off,      // No repeat
@@ -20,13 +22,18 @@ enum RepeatMode {
 }
 
 class AudioPlayerService {
+  static const int _visualizerBarCount = 24;
   final AudioPlayer _player = AudioPlayer();
   final AudioPlayer _nextPlayer = AudioPlayer();
   final PlaybackStateStore _stateStore = PlaybackStateStore();
   DownloadService? _downloadService;
   PlaybackReportingService? _reportingService;
   NautuneAudioHandler? _audioHandler;
+  JellyfinService? _jellyfinService;
   double _volume = 1.0;
+  bool _isShuffleEnabled = false;
+  bool _hasRestored = false;
+  PlaybackState? _pendingState;
   
   JellyfinTrack? _currentTrack;
   List<JellyfinTrack> _queue = [];
@@ -37,6 +44,8 @@ class AudioPlayerService {
   bool _lastPlayingState = false;
   RepeatMode _repeatMode = RepeatMode.off;
   final StreamController<double> _volumeController = StreamController<double>.broadcast();
+  final StreamController<bool> _shuffleController = StreamController<bool>.broadcast();
+  final StreamController<List<double>> _visualizerController = StreamController<List<double>>.broadcast();
   StreamSubscription<AudioInterruptionEvent>? _interruptionSubscription;
   StreamSubscription<void>? _becomingNoisySubscription;
 
@@ -47,6 +56,13 @@ class AudioPlayerService {
   void setReportingService(PlaybackReportingService service) {
     _reportingService = service;
     _reportingService!.attachPositionProvider(() => _lastPosition);
+  }
+
+  void setJellyfinService(JellyfinService service) {
+    _jellyfinService = service;
+    if (_pendingState != null && !_hasRestored) {
+      unawaited(applyStoredState(_pendingState!));
+    }
   }
   
   // Streams
@@ -64,6 +80,8 @@ class AudioPlayerService {
   Stream<List<JellyfinTrack>> get queueStream => _queueController.stream;
   Stream<RepeatMode> get repeatModeStream => _repeatModeController.stream;
   Stream<double> get volumeStream => _volumeController.stream;
+  Stream<bool> get shuffleStream => _shuffleController.stream;
+  Stream<List<double>> get visualizerStream => _visualizerController.stream;
   
   JellyfinTrack? get currentTrack => _currentTrack;
   bool get isPlaying => _player.state == PlayerState.playing;
@@ -73,6 +91,7 @@ class AudioPlayerService {
   int get currentIndex => _currentIndex;
   RepeatMode get repeatMode => _repeatMode;
   double get volume => _volume;
+  bool get shuffleEnabled => _isShuffleEnabled;
   
   /// Updates the current track (e.g., for favorite status changes)
   void updateCurrentTrack(JellyfinTrack track) {
@@ -87,6 +106,12 @@ class AudioPlayerService {
       _queueController.add(List.from(_queue));
       debugPrint('🔄 AudioService: Updated track in queue at index $_currentIndex');
     }
+
+    unawaited(_stateStore.savePlaybackSnapshot(
+      currentTrack: track,
+      queue: _queue,
+      currentQueueIndex: _currentIndex,
+    ));
   }
   
   Future<void> setVolume(double value) async {
@@ -97,6 +122,7 @@ class AudioPlayerService {
       _player.setVolume(_volume),
       _nextPlayer.setVolume(_volume),
     ]);
+    unawaited(_stateStore.savePlaybackSnapshot(volume: _volume));
   }
   
   AudioPlayerService() {
@@ -106,7 +132,7 @@ class AudioPlayerService {
     _player.setVolume(_volume);
     _nextPlayer.setVolume(_volume);
     _volumeController.add(_volume);
-    _restorePlaybackState();
+    _emitIdleVisualizer();
   }
 
   String get _deviceId => 'nautune-${Platform.operatingSystem}';
@@ -115,7 +141,7 @@ class AudioPlayerService {
     if (!Platform.isIOS && !Platform.isAndroid) return;
     
     try {
-      _audioHandler = await AudioService.init(
+      _audioHandler = await audio_service.AudioService.init(
         builder: () => NautuneAudioHandler(
           player: _player,
           onPlay: () => resume(),
@@ -125,7 +151,7 @@ class AudioPlayerService {
           onSkipToPrevious: () => skipToPrevious(),
           onSeek: (position) => seek(position),
         ),
-        config: const AudioServiceConfig(
+        config: const audio_service.AudioServiceConfig(
           androidNotificationChannelId: 'com.elysiumdisc.nautune.channel.audio',
           androidNotificationChannelName: 'Nautune Audio',
           androidNotificationOngoing: true,
@@ -174,8 +200,11 @@ class AudioPlayerService {
     _player.onPositionChanged.listen((position) {
       _positionController.add(position);
       _lastPosition = position;
+      if (_player.state == PlayerState.playing) {
+        _emitVisualizerFrame(position);
+      }
     });
-    
+
     // Duration updates
     _player.onDurationChanged.listen((duration) {
       _durationController.add(duration);
@@ -200,9 +229,12 @@ class AudioPlayerService {
       
       if (isPlaying) {
         _startPositionSaving();
+        unawaited(_stateStore.savePlaybackSnapshot(isPlaying: true));
       } else {
         _stopPositionSaving();
         _saveCurrentPosition();
+        _emitIdleVisualizer();
+        unawaited(_stateStore.savePlaybackSnapshot(isPlaying: false));
       }
     });
     
@@ -219,7 +251,11 @@ class AudioPlayerService {
     if (_repeatMode == RepeatMode.one && _currentTrack != null) {
       debugPrint('🔁 Repeating current track');
       // Replay the track from beginning
-      await playTrack(_currentTrack!, queueContext: _queue);
+      await playTrack(
+        _currentTrack!,
+        queueContext: _queue,
+        fromShuffle: _isShuffleEnabled,
+      );
       return;
     }
     
@@ -248,7 +284,11 @@ class AudioPlayerService {
       if (_repeatMode == RepeatMode.all && _queue.isNotEmpty) {
         debugPrint('🔁 Repeating queue from beginning');
         _currentIndex = 0;
-        await playTrack(_queue[0], queueContext: _queue);
+        await playTrack(
+          _queue[0],
+          queueContext: _queue,
+          fromShuffle: _isShuffleEnabled,
+        );
       } else {
         // Stop playback
         await stop();
@@ -272,13 +312,112 @@ class AudioPlayerService {
     }
   }
   
-  Future<void> _restorePlaybackState() async {
-    final state = await _stateStore.loadPlaybackState();
-    if (state != null && state.currentTrackId != null) {
-      // For now, we can't fully restore the queue without fetching tracks again
-      // Just note that we would need the track data
-      // TODO: Store and restore full track data or fetch from server
-      print('Saved position: ${state.positionMs}ms for track ${state.currentTrackId}');
+  Future<void> hydrateFromPersistence(PlaybackState? state) async {
+    if (state == null) {
+      return;
+    }
+    _pendingState = state;
+    await _attemptRestoreFromPending();
+  }
+
+  Future<void> applyStoredState(PlaybackState state) async {
+    _pendingState = state;
+    await _attemptRestoreFromPending(force: true);
+  }
+
+  Future<void> _attemptRestoreFromPending({bool force = false}) async {
+    if (_hasRestored && !force) return;
+    final state = _pendingState ?? await _stateStore.load();
+    if (state == null) return;
+    final queue = await _buildQueueFromState(state);
+
+    if (state.queueIds.isNotEmpty && queue.isEmpty) {
+      // Wait until we can resolve queue items (likely requires Jellyfin session).
+      _pendingState = state;
+      return;
+    }
+
+    await _applyStateFromStorage(state, queue);
+    _pendingState = null;
+    _hasRestored = true;
+  }
+
+  Future<List<JellyfinTrack>> _buildQueueFromState(PlaybackState state) async {
+    if (state.queueSnapshot.isNotEmpty) {
+      return state.toQueueTracks();
+    }
+    if (state.queueIds.isEmpty) {
+      return const [];
+    }
+
+    final jellyfin = _jellyfinService;
+    if (jellyfin != null) {
+      try {
+        final tracks = await jellyfin.loadTracksByIds(state.queueIds);
+        if (tracks.isNotEmpty) {
+          return tracks;
+        }
+      } catch (e) {
+        debugPrint('⚠️ Failed to restore queue from Jellyfin: $e');
+      }
+    }
+
+    final downloadService = _downloadService;
+    if (downloadService != null) {
+      final restored = <JellyfinTrack>[];
+      for (final id in state.queueIds) {
+        final track = downloadService.trackFor(id);
+        if (track != null) {
+          restored.add(track);
+        }
+      }
+      if (restored.isNotEmpty) {
+        return restored;
+      }
+    }
+
+    return const [];
+  }
+
+  Future<void> _applyStateFromStorage(
+    PlaybackState state,
+    List<JellyfinTrack> queue,
+  ) async {
+    _volume = state.volume.clamp(0.0, 1.0);
+    await _player.setVolume(_volume);
+    await _nextPlayer.setVolume(_volume);
+    _volumeController.add(_volume);
+
+    _repeatMode = RepeatMode.values.firstWhere(
+      (mode) => mode.name == state.repeatMode,
+      orElse: () => RepeatMode.off,
+    );
+    _repeatModeController.add(_repeatMode);
+
+    _isShuffleEnabled = state.shuffleEnabled;
+    _shuffleController.add(_isShuffleEnabled);
+
+    if (queue.isEmpty) {
+      return;
+    }
+
+    final clampedIndex = state.currentQueueIndex.clamp(0, queue.length - 1);
+    final track = queue[clampedIndex];
+
+    await playTrack(
+      track,
+      queueContext: queue,
+      reorderQueue: false,
+      fromShuffle: state.shuffleEnabled,
+    );
+
+    if (state.positionMs > 0) {
+      final position = Duration(milliseconds: state.positionMs);
+      await seek(position);
+    }
+
+    if (!state.isPlaying) {
+      await pause();
     }
   }
   
@@ -288,7 +427,11 @@ class AudioPlayerService {
     String? albumId,
     String? albumName,
     bool reorderQueue = false,
+    bool fromShuffle = false,
   }) async {
+    _isShuffleEnabled = fromShuffle;
+    _shuffleController.add(_isShuffleEnabled);
+
     _currentTrack = track;
     _currentTrackController.add(track);
     
@@ -407,7 +550,15 @@ class AudioPlayerService {
       }
     }
     
-    await _savePlaybackState();
+    await _stateStore.savePlaybackSnapshot(
+      currentTrack: _currentTrack,
+      position: Duration.zero,
+      queue: _queue,
+      currentQueueIndex: _currentIndex,
+      isPlaying: true,
+      repeatMode: _repeatMode.name,
+      shuffleEnabled: _isShuffleEnabled,
+    );
   }
   
   Future<void> playAlbum(
@@ -438,29 +589,48 @@ class AudioPlayerService {
   
   Future<void> pause() async {
     await _player.pause();
-    await _saveCurrentPosition();
+    final position = await _player.getCurrentPosition();
+    if (position != null) {
+      _lastPosition = position;
+    }
+    _emitIdleVisualizer();
+    await _stateStore.savePlaybackSnapshot(
+      currentTrack: _currentTrack,
+      position: _lastPosition,
+      isPlaying: false,
+    );
   }
   
   Future<void> resume() async {
     await _player.resume();
+    await _stateStore.savePlaybackSnapshot(isPlaying: true);
   }
   
   Future<void> seek(Duration position) async {
     await _player.seek(position);
-    await _saveCurrentPosition();
+    _lastPosition = position;
+    await _stateStore.savePlaybackSnapshot(position: position);
   }
   
   Future<void> skipToNext() async {
     if (_currentIndex < _queue.length - 1) {
       _currentIndex++;
-      await playTrack(_queue[_currentIndex], queueContext: _queue);
+      await playTrack(
+        _queue[_currentIndex],
+        queueContext: _queue,
+        fromShuffle: _isShuffleEnabled,
+      );
     }
   }
 
   Future<void> skipToPrevious() async {
     if (_currentIndex > 0) {
       _currentIndex--;
-      await playTrack(_queue[_currentIndex], queueContext: _queue);
+      await playTrack(
+        _queue[_currentIndex],
+        queueContext: _queue,
+        fromShuffle: _isShuffleEnabled,
+      );
     }
   }
 
@@ -478,7 +648,11 @@ class AudioPlayerService {
     _currentTrackController.add(null);
     _queue.clear();
     _currentIndex = 0;
-    await _stateStore.clear();
+    _lastPosition = Duration.zero;
+    _isShuffleEnabled = false;
+    _shuffleController.add(_isShuffleEnabled);
+    _emitIdleVisualizer();
+    await _stateStore.clearPlaybackData();
   }
 
   // Alias methods for compatibility
@@ -514,7 +688,11 @@ class AudioPlayerService {
     }
     
     _queueController.add(_queue);
-    _savePlaybackState();
+    unawaited(_stateStore.savePlaybackSnapshot(
+      queue: _queue,
+      currentQueueIndex: _currentIndex,
+      currentTrack: _currentTrack,
+    ));
   }
   
   void removeFromQueue(int index) {
@@ -532,18 +710,30 @@ class AudioPlayerService {
         _currentIndex = _queue.length - 1;
       }
       if (_queue.isNotEmpty) {
-        playTrack(_queue[_currentIndex], queueContext: _queue);
+        unawaited(playTrack(
+          _queue[_currentIndex],
+          queueContext: _queue,
+          fromShuffle: _isShuffleEnabled,
+        ));
       }
     }
     
     _queueController.add(_queue);
-    _savePlaybackState();
+    unawaited(_stateStore.savePlaybackSnapshot(
+      queue: _queue,
+      currentQueueIndex: _currentIndex,
+      currentTrack: _currentTrack,
+    ));
   }
-  
+
   Future<void> jumpToQueueIndex(int index) async {
     if (index < 0 || index >= _queue.length) return;
     _currentIndex = index;
-    await playTrack(_queue[_currentIndex], queueContext: _queue);
+    await playTrack(
+      _queue[_currentIndex],
+      queueContext: _queue,
+      fromShuffle: _isShuffleEnabled,
+    );
   }
   
   // Shuffle and Repeat functionality
@@ -561,6 +751,7 @@ class AudioPlayerService {
     }
     _repeatModeController.add(_repeatMode);
     debugPrint('🔁 Repeat mode: $_repeatMode');
+    unawaited(_stateStore.savePlaybackSnapshot(repeatMode: _repeatMode.name));
   }
   
   void shuffleQueue() {
@@ -585,18 +776,46 @@ class AudioPlayerService {
       _queue = remainingTracks;
     }
     
+    _isShuffleEnabled = true;
+    _shuffleController.add(true);
     _queueController.add(_queue);
     debugPrint('🌊 Queue shuffled: ${_queue.length} tracks');
+    unawaited(_stateStore.savePlaybackSnapshot(
+      queue: _queue,
+      currentQueueIndex: _currentIndex,
+      shuffleEnabled: _isShuffleEnabled,
+    ));
   }
   
   Future<void> playShuffled(List<JellyfinTrack> tracks) async {
     if (tracks.isEmpty) return;
     
     final shuffled = List<JellyfinTrack>.from(tracks)..shuffle(Random());
-    await playTrack(shuffled.first, queueContext: shuffled);
+    await playTrack(
+      shuffled.first,
+      queueContext: shuffled,
+      fromShuffle: true,
+    );
     debugPrint('🌊 Playing shuffled: ${shuffled.length} tracks');
   }
   
+  void _emitVisualizerFrame(Duration position) {
+    if (!_visualizerController.hasListener) return;
+    final t = position.inMilliseconds / 120.0;
+    final bars = List<double>.generate(_visualizerBarCount, (index) {
+      final wave = (sin(t + index * 0.45) + 1) * 0.5;
+      final ripple = (sin((t * 0.6) + index) + 1) * 0.25;
+      final value = ((wave * 0.7) + (ripple * 0.3)) * _volume;
+      return value.clamp(0.0, 1.0);
+    });
+    _visualizerController.add(bars);
+  }
+
+  void _emitIdleVisualizer() {
+    if (!_visualizerController.hasListener) return;
+    _visualizerController.add(List<double>.filled(_visualizerBarCount, 0));
+  }
+
   void _startPositionSaving() {
     _positionSaveTimer?.cancel();
     _positionSaveTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -613,22 +832,15 @@ class AudioPlayerService {
     
     final position = await _player.getCurrentPosition();
     if (position != null) {
-      await _stateStore.savePlaybackState(
-        trackId: _currentTrack!.id,
+      _lastPosition = position;
+      await _stateStore.savePlaybackSnapshot(
+        currentTrack: _currentTrack,
         position: position,
-        queueContext: _queue,
+        queue: null,
+        currentQueueIndex: _currentIndex,
+        isPlaying: isPlaying,
       );
     }
-  }
-  
-  Future<void> _savePlaybackState() async {
-    if (_currentTrack == null) return;
-    
-    await _stateStore.savePlaybackState(
-      trackId: _currentTrack!.id,
-      position: Duration.zero,
-      queueContext: _queue,
-    );
   }
   
   void dispose() {
@@ -645,5 +857,7 @@ class AudioPlayerService {
     _queueController.close();
     _repeatModeController.close();
     _volumeController.close();
+    _shuffleController.close();
+    _visualizerController.close();
   }
 }

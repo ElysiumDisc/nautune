@@ -212,6 +212,45 @@ class JellyfinClient {
         .toList();
   }
 
+  Future<List<JellyfinTrack>> fetchTracksByIds({
+    required JellyfinCredentials credentials,
+    required List<String> ids,
+  }) async {
+    if (ids.isEmpty) {
+      return const [];
+    }
+
+    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+      'Ids': ids.join(','),
+      'Fields': 'RunTimeTicks,Albums,Album,Artists,ImageTags,AlbumPrimaryImageTag,ParentThumbImageTag,IndexNumber,ParentIndexNumber,UserData',
+      'IncludeItemTypes': 'Audio',
+    });
+
+    final response = await httpClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch tracks: ${response.statusCode}',
+      );
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final items = data?['Items'] as List<dynamic>? ?? const [];
+
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map((json) => JellyfinTrack.fromJson(
+              json,
+              serverUrl: serverUrl,
+              token: credentials.accessToken,
+              userId: credentials.userId,
+            ))
+        .toList();
+  }
+
   Future<List<JellyfinTrack>> fetchRecentTracks({
     required JellyfinCredentials credentials,
     required String libraryId,

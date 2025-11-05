@@ -198,6 +198,49 @@ class JellyfinTrack {
     return uri.replace(queryParameters: query).toString();
   }
 
+  Map<String, dynamic> toStorageJson() {
+    return {
+      'id': id,
+      'name': name,
+      'album': album,
+      'artists': artists,
+      'runTimeTicks': runTimeTicks,
+      'primaryImageTag': primaryImageTag,
+      'serverUrl': serverUrl,
+      'token': token,
+      'userId': userId,
+      'indexNumber': indexNumber,
+      'parentIndexNumber': parentIndexNumber,
+      'albumId': albumId,
+      'albumPrimaryImageTag': albumPrimaryImageTag,
+      'parentThumbImageTag': parentThumbImageTag,
+      'isFavorite': isFavorite,
+    };
+  }
+
+  static JellyfinTrack fromStorageJson(Map<String, dynamic> json) {
+    return JellyfinTrack(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? '',
+      album: json['album'] as String?,
+      artists: (json['artists'] as List<dynamic>?)
+              ?.whereType<String>()
+              .toList() ??
+          const <String>[],
+      runTimeTicks: json['runTimeTicks'] as int?,
+      primaryImageTag: json['primaryImageTag'] as String?,
+      serverUrl: json['serverUrl'] as String?,
+      token: json['token'] as String?,
+      userId: json['userId'] as String?,
+      indexNumber: json['indexNumber'] as int?,
+      parentIndexNumber: json['parentIndexNumber'] as int?,
+      albumId: json['albumId'] as String?,
+      albumPrimaryImageTag: json['albumPrimaryImageTag'] as String?,
+      parentThumbImageTag: json['parentThumbImageTag'] as String?,
+      isFavorite: json['isFavorite'] as bool? ?? false,
+    );
+  }
+
   /// Creates a copy of this track with updated favorite status
   JellyfinTrack copyWith({bool? isFavorite}) {
     return JellyfinTrack(
