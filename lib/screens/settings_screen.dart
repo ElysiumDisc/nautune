@@ -51,7 +51,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Padding(
             padding: const EdgeInsets.all(16),
             child: Text(
-              'Playback & Downloads',
+              'Audio Options',
               style: theme.textTheme.titleMedium?.copyWith(
                 color: theme.colorScheme.primary,
                 fontWeight: FontWeight.bold,
@@ -59,17 +59,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           ListTile(
-            leading: Icon(Icons.high_quality, color: theme.colorScheme.primary),
-            title: const Text('Native Audio Quality'),
-            subtitle: const Text(
-              'Direct Play enabled: Original FLAC/lossless format\nNo transcoding • Native platform decoders',
+            leading: Icon(Icons.tune, color: theme.colorScheme.primary),
+            title: const Text('Crossfade'),
+            subtitle: const Text('Smooth transitions between tracks'),
+            trailing: Switch(
+              value: false, // TODO: Wire to actual state
+              onChanged: (value) {
+                // TODO: Implement crossfade
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Crossfade coming soon!'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              },
             ),
-            isThreeLine: true,
-          ),
-          ListTile(
-            leading: Icon(Icons.download, color: theme.colorScheme.primary),
-            title: const Text('Download Quality'),
-            subtitle: const Text('Always original format (FLAC/lossless)'),
           ),
           const Divider(),
           Padding(

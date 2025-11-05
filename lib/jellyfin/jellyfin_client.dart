@@ -182,15 +182,21 @@ class JellyfinClient {
 
   Future<List<JellyfinPlaylist>> fetchPlaylists({
     required JellyfinCredentials credentials,
-    required String libraryId,
+    String? libraryId,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
-      'ParentId': libraryId,
+    final queryParams = <String, String>{
       'IncludeItemTypes': 'Playlist',
       'Recursive': 'true',
       'SortBy': 'SortName',
       'Fields': 'ChildCount,ImageTags',
-    });
+    };
+    
+    // Only filter by library if specified (optional)
+    if (libraryId != null) {
+      queryParams['ParentId'] = libraryId;
+    }
+    
+    final uri = _buildUri('/Users/${credentials.userId}/Items', queryParams);
 
     final response = await httpClient.get(
       uri,

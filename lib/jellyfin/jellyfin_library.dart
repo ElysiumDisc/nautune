@@ -24,9 +24,6 @@ class JellyfinLibrary {
 
   bool get isAudioLibrary {
     final type = collectionType?.toLowerCase();
-    return type == 'music' ||
-        type == 'audiobooks' ||
-        type == 'musicvideos' ||
-        type == 'playlists';
+    return type == 'music';
   }
 }

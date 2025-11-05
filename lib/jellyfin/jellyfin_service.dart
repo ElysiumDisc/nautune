@@ -167,7 +167,7 @@ class JellyfinService {
   }
 
   Future<List<JellyfinPlaylist>> loadPlaylists({
-    required String libraryId,
+    String? libraryId,
     bool forceRefresh = false,
   }) async {
     final client = _client;
@@ -175,7 +175,7 @@ class JellyfinService {
     if (client == null || session == null) {
       throw StateError('Authenticate before requesting playlists.');
     }
-    final cacheKey = libraryId;
+    final cacheKey = libraryId ?? 'all';
     if (!forceRefresh) {
       final cached = _playlistCache[cacheKey];
       if (cached != null && !cached.isExpired(_cacheTtl)) {

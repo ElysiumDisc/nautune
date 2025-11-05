@@ -344,8 +344,8 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                                           
                                           debugPrint('🎯 Favorite button clicked: current=$currentFavoriteStatus, new=$newFavoriteStatus');
                                           
-                                          // Update Jellyfin server
-                                          await widget.appState.jellyfinService.markFavorite(track.id, newFavoriteStatus);
+                                          // Update Jellyfin server (with offline queue support)
+                                          await widget.appState.markFavorite(track.id, newFavoriteStatus);
                                           
                                           // Update track object with new favorite status
                                           final updatedTrack = track.copyWith(isFavorite: newFavoriteStatus);
@@ -363,16 +363,33 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                                               SnackBar(
                                                 content: Text(newFavoriteStatus ? 'Added to favorites' : 'Removed from favorites'),
                                                 duration: const Duration(seconds: 2),
+                                                backgroundColor: Colors.green,
                                               ),
                                             );
                                           }
                                         } catch (e) {
                                           debugPrint('❌ Error toggling favorite: $e');
                                           if (mounted) {
+                                            final isOfflineError = e.toString().contains('Offline') || 
+                                                                   e.toString().contains('queued');
+                                            
+                                            // Update track optimistically even when offline
+                                            if (isOfflineError) {
+                                              final currentFavoriteStatus = track.isFavorite;
+                                              final newFavoriteStatus = !currentFavoriteStatus;
+                                              final updatedTrack = track.copyWith(isFavorite: newFavoriteStatus);
+                                              widget.audioService.updateCurrentTrack(updatedTrack);
+                                              if (mounted) setState(() {});
+                                            }
+                                            
                                             ScaffoldMessenger.of(context).showSnackBar(
                                               SnackBar(
-                                                content: Text('Failed to update favorite: $e'),
-                                                backgroundColor: theme.colorScheme.error,
+                                                content: Text(
+                                                  isOfflineError 
+                                                    ? 'Offline: Favorite will sync when online'
+                                                    : 'Failed to update favorite: $e'
+                                                ),
+                                                backgroundColor: isOfflineError ? Colors.orange : theme.colorScheme.error,
                                               ),
                                             );
                                           }

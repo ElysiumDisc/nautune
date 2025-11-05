@@ -24,4 +24,13 @@ class JellyfinPlaylist {
           (json['ImageTags'] as Map<String, dynamic>?)?['Primary'] as String?,
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'Id': id,
+      'Name': name,
+      'ChildCount': trackCount,
+      'ImageTags': primaryImageTag != null ? {'Primary': primaryImageTag} : null,
+    };
+  }
 }

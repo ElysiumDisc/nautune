@@ -496,20 +496,37 @@ class AudioPlayerService {
     
     // Check for downloaded file first (works in airplane mode!)
     final localPath = _downloadService?.getLocalPath(track.id);
-    if (localPath != null && await trySetSource(localPath, isFile: true)) {
-      activeUrl = localPath;
-      isOffline = true;
-      print('Playing from local file: $localPath');
-    } else if (await trySetSource(downloadUrl)) {
-      activeUrl = downloadUrl;
-    } else if (await trySetSource(universalUrl)) {
-      activeUrl = universalUrl;
+    if (localPath != null) {
+      // Verify file exists before trying to play
+      final file = File(localPath);
+      if (await file.exists()) {
+        if (await trySetSource(localPath, isFile: true)) {
+          activeUrl = localPath;
+          isOffline = true;
+          print('✅ Playing from local file: $localPath');
+        } else {
+          print('⚠️ Local file exists but failed to load: $localPath');
+        }
+      } else {
+        print('⚠️ Local file not found (may be orphaned): $localPath');
+        // Clean up orphaned reference
+        await _downloadService?.verifyAndCleanupDownloads();
+      }
+    }
+    
+    // Try streaming if no local file or local file failed
+    if (activeUrl == null) {
+      if (await trySetSource(downloadUrl)) {
+        activeUrl = downloadUrl;
+      } else if (await trySetSource(universalUrl)) {
+        activeUrl = universalUrl;
+      }
     }
 
     if (activeUrl == null) {
       throw PlatformException(
         code: 'no_source',
-        message: 'Unable to prepare media stream for ${track.name}',
+        message: 'Unable to play ${track.name}. File may be unavailable.',
       );
     }
 

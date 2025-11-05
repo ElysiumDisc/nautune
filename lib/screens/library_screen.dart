@@ -1458,6 +1458,7 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
         padding: const EdgeInsets.symmetric(horizontal: 16),
         itemCount: _tracks!.length,
         itemBuilder: (context, index) {
+          if (index >= _tracks!.length) return const SizedBox.shrink();
           final track = _tracks![index];
           return Card(
             margin: const EdgeInsets.only(bottom: 8),

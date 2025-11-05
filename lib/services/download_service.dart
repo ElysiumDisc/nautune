@@ -21,7 +21,7 @@ class DownloadService extends ChangeNotifier {
   int _activeDownloads = 0;
 
   DownloadService({required this.jellyfinService}) {
-    _loadDownloads();
+    _loadDownloads().then((_) => verifyAndCleanupDownloads());
   }
 
   List<DownloadItem> get downloads => _downloads.values.toList()
@@ -89,7 +89,57 @@ class DownloadService extends ChangeNotifier {
     }
   }
 
-  Future<String> _getDownloadPath(JellyfinTrack track) async {
+  /// Verify all downloaded files exist and clean up orphaned references
+  Future<void> verifyAndCleanupDownloads() async {
+    debugPrint('Verifying download files...');
+    final toRemove = <String>[];
+    
+    for (final entry in _downloads.entries) {
+      final trackId = entry.key;
+      final item = entry.value;
+      
+      if (item.isCompleted) {
+        final file = File(item.localPath);
+        if (!await file.exists()) {
+          debugPrint('Missing file for track: ${item.track.name}');
+          toRemove.add(trackId);
+          
+          // Also clean up artwork
+          try {
+            final artworkPath = await _getArtworkPath(trackId);
+            final artworkFile = File(artworkPath);
+            if (await artworkFile.exists()) {
+              await artworkFile.delete();
+            }
+          } catch (e) {
+            debugPrint('Error cleaning artwork: $e');
+          }
+        }
+      }
+    }
+    
+    // Remove orphaned entries
+    for (final trackId in toRemove) {
+      _downloads.remove(trackId);
+    }
+    
+    if (toRemove.isNotEmpty) {
+      debugPrint('Cleaned up ${toRemove.length} orphaned download(s)');
+      notifyListeners();
+      await _saveDownloads();
+    }
+  }
+
+  /// Verify a specific download file exists
+  Future<bool> verifyDownload(String trackId) async {
+    final item = _downloads[trackId];
+    if (item == null || !item.isCompleted) return false;
+    
+    final file = File(item.localPath);
+    return await file.exists();
+  }
+
+  Future<String> _getDownloadPath(JellyfinTrack track, {String? extension}) async {
     Directory downloadsDir;
     
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
@@ -106,8 +156,9 @@ class DownloadService extends ChangeNotifier {
     }
     
     final sanitizedName = track.name.replaceAll(RegExp(r'[^\w\s-]'), '');
-    final extension = 'mp3';
-    return '${downloadsDir.path}/${track.id}_$sanitizedName.$extension';
+    // Use provided extension or default to flac (original quality)
+    final ext = extension ?? 'flac';
+    return '${downloadsDir.path}/${track.id}_$sanitizedName.$ext';
   }
 
   Future<String> _getArtworkPath(String trackId) async {
@@ -245,7 +296,34 @@ class DownloadService extends ChangeNotifier {
         throw Exception('Failed to download: HTTP ${response.statusCode}');
       }
 
-      final file = File(item.localPath);
+      // Detect file extension from Content-Type header
+      String extension = 'flac'; // Default to FLAC
+      final contentType = response.headers['content-type'];
+      if (contentType != null) {
+        if (contentType.contains('flac')) {
+          extension = 'flac';
+        } else if (contentType.contains('mp3') || contentType.contains('mpeg')) {
+          extension = 'mp3';
+        } else if (contentType.contains('m4a') || contentType.contains('mp4')) {
+          extension = 'm4a';
+        } else if (contentType.contains('ogg')) {
+          extension = 'ogg';
+        } else if (contentType.contains('opus')) {
+          extension = 'opus';
+        } else if (contentType.contains('wav')) {
+          extension = 'wav';
+        }
+      }
+
+      // Get correct path with detected extension
+      final correctPath = await _getDownloadPath(item.track, extension: extension);
+      
+      // Update item with correct path if it changed
+      if (correctPath != item.localPath) {
+        _downloads[trackId] = item.copyWith(localPath: correctPath);
+      }
+
+      final file = File(correctPath);
       final sink = file.openWrite();
       final totalBytes = response.contentLength ?? 0;
       int downloadedBytes = 0;
@@ -280,7 +358,7 @@ class DownloadService extends ChangeNotifier {
       notifyListeners();
       await _saveDownloads();
       
-      debugPrint('Download completed: ${item.track.name}');
+      debugPrint('Download completed: ${item.track.name} ($extension)');
     } catch (e) {
       debugPrint('Download failed for ${item.track.name}: $e');
       _downloads[trackId] = item.copyWith(

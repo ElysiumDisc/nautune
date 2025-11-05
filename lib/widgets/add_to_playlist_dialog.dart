@@ -139,10 +139,16 @@ Future<void> _createPlaylistWithItems(
       }
     } catch (e) {
       if (context.mounted) {
+        final isOfflineError = e.toString().contains('Offline') || 
+                               e.toString().contains('queued');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to create playlist: $e'),
-            backgroundColor: Colors.red,
+            content: Text(
+              isOfflineError 
+                ? 'Offline: Playlist will be created when online'
+                : 'Failed to create playlist: $e'
+            ),
+            backgroundColor: isOfflineError ? Colors.orange : Colors.red,
           ),
         );
       }
@@ -172,10 +178,16 @@ Future<void> _addToExistingPlaylist(
     }
   } catch (e) {
     if (context.mounted) {
+      final isOfflineError = e.toString().contains('Offline') || 
+                             e.toString().contains('queued');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Failed to add to playlist: $e'),
-          backgroundColor: Colors.red,
+          content: Text(
+            isOfflineError 
+              ? 'Offline: Tracks will be added when online'
+              : 'Failed to add to playlist: $e'
+          ),
+          backgroundColor: isOfflineError ? Colors.orange : Colors.red,
         ),
       );
     }

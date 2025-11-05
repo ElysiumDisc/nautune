@@ -9,6 +9,7 @@ import 'jellyfin/jellyfin_artist.dart';
 import 'jellyfin/jellyfin_genre.dart';
 import 'jellyfin/jellyfin_library.dart';
 import 'jellyfin/jellyfin_playlist.dart';
+import 'jellyfin/jellyfin_playlist_store.dart';
 import 'jellyfin/jellyfin_service.dart';
 import 'jellyfin/jellyfin_session.dart';
 import 'jellyfin/jellyfin_session_store.dart';
@@ -18,15 +19,20 @@ import 'services/carplay_service.dart';
 import 'services/download_service.dart';
 import 'services/playback_reporting_service.dart';
 import 'services/playback_state_store.dart';
+import 'services/playlist_sync_queue.dart';
 
 class NautuneAppState extends ChangeNotifier {
   NautuneAppState({
     required JellyfinService jellyfinService,
     required JellyfinSessionStore sessionStore,
     required PlaybackStateStore playbackStateStore,
+    JellyfinPlaylistStore? playlistStore,
+    PlaylistSyncQueue? syncQueue,
   })  : _jellyfinService = jellyfinService,
         _sessionStore = sessionStore,
-        _playbackStateStore = playbackStateStore {
+        _playbackStateStore = playbackStateStore,
+        _playlistStore = playlistStore ?? JellyfinPlaylistStore(),
+        _syncQueue = syncQueue ?? PlaylistSyncQueue() {
     _audioPlayerService = AudioPlayerService();
     _downloadService = DownloadService(jellyfinService: jellyfinService);
     // Link download service to audio player for offline playback
@@ -47,6 +53,8 @@ class NautuneAppState extends ChangeNotifier {
   final JellyfinService _jellyfinService;
   final JellyfinSessionStore _sessionStore;
   final PlaybackStateStore _playbackStateStore;
+  final JellyfinPlaylistStore _playlistStore;
+  final PlaylistSyncQueue _syncQueue;
   late final AudioPlayerService _audioPlayerService;
   late final DownloadService _downloadService;
   CarPlayService? _carPlayService;
@@ -221,11 +229,18 @@ class NautuneAppState extends ChangeNotifier {
             },
           );
           _networkAvailable = true;
+          // Sync any pending playlist actions
+          unawaited(_syncPendingPlaylistActions());
         } catch (error) {
           debugPrint('Network unavailable during initialization, entering offline mode: $error');
           _networkAvailable = false;
           _isOfflineMode = true;
           // Don't clear session - keep it for when network returns
+          // Load cached playlists for offline use
+          final cachedPlaylists = await _playlistStore.load();
+          if (cachedPlaylists != null) {
+            _playlists = cachedPlaylists;
+          }
         }
       }
     } catch (error, stackTrace) {
@@ -333,6 +348,18 @@ class NautuneAppState extends ChangeNotifier {
     required String name,
     List<String>? itemIds,
   }) async {
+    if (!_networkAvailable || _isOfflineMode) {
+      await _syncQueue.add(PendingPlaylistAction(
+        type: 'create',
+        payload: {
+          'name': name,
+          'itemIds': itemIds ?? [],
+        },
+        timestamp: DateTime.now(),
+      ));
+      throw Exception('Offline: Playlist creation queued for sync');
+    }
+    
     final playlist = await _jellyfinService.createPlaylist(
       name: name,
       itemIds: itemIds,
@@ -345,6 +372,18 @@ class NautuneAppState extends ChangeNotifier {
     required String playlistId,
     required String newName,
   }) async {
+    if (!_networkAvailable || _isOfflineMode) {
+      await _syncQueue.add(PendingPlaylistAction(
+        type: 'update',
+        payload: {
+          'playlistId': playlistId,
+          'newName': newName,
+        },
+        timestamp: DateTime.now(),
+      ));
+      throw Exception('Offline: Playlist update queued for sync');
+    }
+    
     await _jellyfinService.updatePlaylist(
       playlistId: playlistId,
       newName: newName,
@@ -353,6 +392,17 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> deletePlaylist(String playlistId) async {
+    if (!_networkAvailable || _isOfflineMode) {
+      await _syncQueue.add(PendingPlaylistAction(
+        type: 'delete',
+        payload: {
+          'playlistId': playlistId,
+        },
+        timestamp: DateTime.now(),
+      ));
+      throw Exception('Offline: Playlist deletion queued for sync');
+    }
+    
     await _jellyfinService.deletePlaylist(playlistId);
     await refreshPlaylists();
   }
@@ -361,10 +411,23 @@ class NautuneAppState extends ChangeNotifier {
     required String playlistId,
     required List<String> itemIds,
   }) async {
+    if (!_networkAvailable || _isOfflineMode) {
+      await _syncQueue.add(PendingPlaylistAction(
+        type: 'add',
+        payload: {
+          'playlistId': playlistId,
+          'itemIds': itemIds,
+        },
+        timestamp: DateTime.now(),
+      ));
+      throw Exception('Offline: Adding to playlist queued for sync');
+    }
+    
     await _jellyfinService.addItemsToPlaylist(
       playlistId: playlistId,
       itemIds: itemIds,
     );
+    await refreshPlaylists();
   }
 
   Future<List<JellyfinTrack>> getPlaylistTracks(String playlistId) async {
@@ -373,6 +436,22 @@ class NautuneAppState extends ChangeNotifier {
 
   Future<List<JellyfinTrack>> getAlbumTracks(String albumId) async {
     return await _jellyfinService.getAlbumTracks(albumId);
+  }
+
+  Future<void> markFavorite(String itemId, bool shouldBeFavorite) async {
+    if (!_networkAvailable || _isOfflineMode) {
+      await _syncQueue.add(PendingPlaylistAction(
+        type: 'favorite',
+        payload: {
+          'itemId': itemId,
+          'shouldBeFavorite': shouldBeFavorite,
+        },
+        timestamp: DateTime.now(),
+      ));
+      throw Exception('Offline: Favorite action queued for sync');
+    }
+    
+    await _jellyfinService.markFavorite(itemId, shouldBeFavorite);
   }
 
   Future<void> _loadLibraries() async {
@@ -648,13 +727,16 @@ class NautuneAppState extends ChangeNotifier {
     notifyListeners();
 
     try {
+      // Load ALL playlists (playlists are global, not library-specific)
       _playlists = await _jellyfinService.loadPlaylists(
-        libraryId: libraryId,
+        libraryId: null,
         forceRefresh: forceRefresh,
       );
+      await _playlistStore.save(_playlists!);
     } catch (error) {
       _playlistsError = error;
-      _playlists = null;
+      final cached = await _playlistStore.load();
+      _playlists = cached;
     } finally {
       _isLoadingPlaylists = false;
       notifyListeners();
@@ -758,7 +840,62 @@ class NautuneAppState extends ChangeNotifier {
         _networkAvailable = false;
         notifyListeners();
       });
+      
+      // Sync pending playlist actions
+      _syncPendingPlaylistActions();
     }
+  }
+
+  Future<void> _syncPendingPlaylistActions() async {
+    final pending = await _syncQueue.load();
+    if (pending.isEmpty) return;
+
+    debugPrint('Syncing ${pending.length} pending playlist actions...');
+    
+    for (final action in pending) {
+      try {
+        switch (action.type) {
+          case 'create':
+            final name = action.payload['name'] as String;
+            final itemIds = (action.payload['itemIds'] as List?)?.cast<String>();
+            await _jellyfinService.createPlaylist(name: name, itemIds: itemIds);
+            break;
+          case 'update':
+            final playlistId = action.payload['playlistId'] as String;
+            final newName = action.payload['newName'] as String;
+            await _jellyfinService.updatePlaylist(
+              playlistId: playlistId,
+              newName: newName,
+            );
+            break;
+          case 'delete':
+            final playlistId = action.payload['playlistId'] as String;
+            await _jellyfinService.deletePlaylist(playlistId);
+            break;
+          case 'add':
+            final playlistId = action.payload['playlistId'] as String;
+            final itemIds = (action.payload['itemIds'] as List).cast<String>();
+            await _jellyfinService.addItemsToPlaylist(
+              playlistId: playlistId,
+              itemIds: itemIds,
+            );
+            break;
+          case 'favorite':
+            final itemId = action.payload['itemId'] as String;
+            final shouldBeFavorite = action.payload['shouldBeFavorite'] as bool;
+            await _jellyfinService.markFavorite(itemId, shouldBeFavorite);
+            break;
+        }
+        await _syncQueue.remove(action);
+        debugPrint('✅ Synced ${action.type} action');
+      } catch (error) {
+        debugPrint('❌ Failed to sync ${action.type} action: $error');
+        // Keep the action for next sync attempt
+      }
+    }
+    
+    // Refresh playlists after sync
+    await refreshPlaylists();
   }
 
   Future<void> disconnect() async {
