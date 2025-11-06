@@ -257,11 +257,11 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
             SliverPadding(
               padding: const EdgeInsets.all(16),
               sliver: SliverGrid(
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  childAspectRatio: 0.75,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: isDesktop ? 4 : 2,
+                  childAspectRatio: 0.8,
+                  crossAxisSpacing: 16,
+                  mainAxisSpacing: 16,
                 ),
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
@@ -301,12 +301,13 @@ class _AlbumCard extends StatelessWidget {
       final imageUrl = appState.jellyfinService.buildImageUrl(
         itemId: album.id,
         tag: tag,
-        maxWidth: 400,
+        maxWidth: 300,
       );
       artwork = Image.network(
         imageUrl,
         fit: BoxFit.cover,
         headers: appState.jellyfinService.imageHeaders(),
+        cacheWidth: 300,
         errorBuilder: (_, __, ___) => Container(
           color: theme.colorScheme.primaryContainer,
           child: Icon(
