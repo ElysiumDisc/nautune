@@ -166,6 +166,21 @@ class JellyfinService {
     return artists;
   }
 
+  Future<List<JellyfinAlbum>> loadAlbumsByArtist({
+    required String artistId,
+  }) async {
+    final client = _client;
+    final session = _session;
+    if (client == null || session == null) {
+      throw StateError('Authenticate before requesting albums by artist.');
+    }
+
+    return client.fetchAlbumsByArtist(
+      credentials: session.credentials,
+      artistId: artistId,
+    );
+  }
+
   Future<List<JellyfinPlaylist>> loadPlaylists({
     String? libraryId,
     bool forceRefresh = false,

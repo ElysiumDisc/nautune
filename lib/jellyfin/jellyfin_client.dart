@@ -155,7 +155,7 @@ class JellyfinClient {
       'Recursive': 'true',
       'SortBy': 'SortName',
       'SortOrder': 'Ascending',
-      'Fields': 'PrimaryImageAspectRatio,ImageTags',
+      'Fields': 'PrimaryImageAspectRatio,ImageTags,Overview,Genres,ChildCount,SongCount',
       'StartIndex': startIndex.toString(),
       'Limit': limit.toString(),
     });
@@ -177,6 +177,39 @@ class JellyfinClient {
     return items
         .whereType<Map<String, dynamic>>()
         .map(JellyfinArtist.fromJson)
+        .toList();
+  }
+
+  Future<List<JellyfinAlbum>> fetchAlbumsByArtist({
+    required JellyfinCredentials credentials,
+    required String artistId,
+  }) async {
+    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+      'ArtistIds': artistId,
+      'IncludeItemTypes': 'MusicAlbum',
+      'Recursive': 'true',
+      'SortBy': 'ProductionYear,SortName',
+      'SortOrder': 'Descending',
+      'Fields': 'PrimaryImageAspectRatio,ProductionYear,Artists,AlbumArtists,ImageTags,Genres,GenreItems',
+    });
+
+    final response = await httpClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch albums by artist: ${response.statusCode}',
+      );
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final items = data?['Items'] as List<dynamic>? ?? const [];
+
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(JellyfinAlbum.fromJson)
         .toList();
   }
 
@@ -509,7 +542,7 @@ class JellyfinClient {
       'Recursive': 'true',
       'SearchTerm': query,
       'SortBy': 'SortName',
-      'Fields': 'ImageTags',
+      'Fields': 'ImageTags,Overview,Genres,ChildCount,SongCount',
     });
 
     final response = await httpClient.get(

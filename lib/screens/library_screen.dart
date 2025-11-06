@@ -2571,10 +2571,42 @@ class _SearchTabState extends State<_SearchTab> {
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
         final artist = _artistResults[index];
+        
+        // Build subtitle with genres and counts
+        final subtitleParts = <String>[];
+        if (artist.genres != null && artist.genres!.isNotEmpty) {
+          subtitleParts.add(artist.genres!.take(3).join(', '));
+        }
+        if (artist.albumCount != null && artist.albumCount! > 0) {
+          subtitleParts.add('${artist.albumCount} albums');
+        }
+        if (artist.songCount != null && artist.songCount! > 0) {
+          subtitleParts.add('${artist.songCount} songs');
+        }
+        
+        final subtitle = subtitleParts.isNotEmpty ? subtitleParts.join(' • ') : null;
+        
         return Card(
           child: ListTile(
-            leading: const Icon(Icons.person_outline),
+            leading: artist.primaryImageTag != null
+                ? CircleAvatar(
+                    backgroundImage: NetworkImage(
+                      widget.appState.jellyfinService.buildImageUrl(
+                        itemId: artist.id,
+                        tag: artist.primaryImageTag!,
+                        maxWidth: 100,
+                      ),
+                    ),
+                  )
+                : const CircleAvatar(
+                    child: Icon(Icons.person_outline),
+                  ),
             title: Text(artist.name),
+            subtitle: subtitle != null ? Text(
+              subtitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ) : null,
             trailing: const Icon(Icons.chevron_right),
             onTap: () {
               Navigator.of(context).push(

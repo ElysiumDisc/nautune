@@ -38,17 +38,10 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     });
 
     try {
-      final libraryId = widget.appState.session?.selectedLibraryId;
-      if (libraryId == null) return;
-      
-      // Get all albums and filter by artist
-      final allAlbums = await widget.appState.jellyfinService.loadAlbums(
-        libraryId: libraryId,
+      // Use efficient API to get albums directly by artist ID
+      final artistAlbums = await widget.appState.jellyfinService.loadAlbumsByArtist(
+        artistId: widget.artist.id,
       );
-      
-      final artistAlbums = allAlbums.where((album) {
-        return album.artists.contains(widget.artist.name);
-      }).toList();
       
       if (mounted) {
         setState(() {
@@ -146,14 +139,74 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  if (_albums != null && _albums!.isNotEmpty)
+                  // Show genres
+                  if (artist.genres != null && artist.genres!.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Wrap(
+                        spacing: 8,
+                        children: artist.genres!.take(5).map((genre) {
+                          return Chip(
+                            label: Text(
+                              genre,
+                              style: theme.textTheme.bodySmall,
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  // Show counts
+                  Row(
+                    children: [
+                      if (artist.albumCount != null && artist.albumCount! > 0) ...[
+                        Icon(Icons.album, size: 16, color: theme.colorScheme.onSurfaceVariant),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${artist.albumCount} albums',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                      ],
+                      if (artist.songCount != null && artist.songCount! > 0) ...[
+                        Icon(Icons.music_note, size: 16, color: theme.colorScheme.onSurfaceVariant),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${artist.songCount} songs',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  // Show overview/bio if available
+                  if (artist.overview != null && artist.overview!.isNotEmpty) ...[
+                    const SizedBox(height: 16),
                     Text(
-                      '${_albums!.length} ${_albums!.length == 1 ? 'Album' : 'Albums'}',
+                      'About',
                       style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      artist.overview!,
+                      style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
+                  ],
                   const SizedBox(height: 24),
+                  if (_albums != null && _albums!.isNotEmpty)
+                    Text(
+                      'Albums',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                 ],
               ),
             ),
