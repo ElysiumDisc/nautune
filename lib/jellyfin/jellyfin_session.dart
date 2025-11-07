@@ -7,6 +7,7 @@ class JellyfinSession {
     required this.credentials,
     this.selectedLibraryId,
     this.selectedLibraryName,
+    this.isDemo = false,
   });
 
   final String serverUrl;
@@ -14,6 +15,7 @@ class JellyfinSession {
   final JellyfinCredentials credentials;
   final String? selectedLibraryId;
   final String? selectedLibraryName;
+  final bool isDemo;
 
   static const _unset = Object();
 
@@ -24,6 +26,7 @@ class JellyfinSession {
       'credentials': credentials.toJson(),
       'selectedLibraryId': selectedLibraryId,
       'selectedLibraryName': selectedLibraryName,
+      'isDemo': isDemo,
     };
   }
 
@@ -37,6 +40,7 @@ class JellyfinSession {
       credentials: JellyfinCredentials.fromJson(rawCredentials),
       selectedLibraryId: json['selectedLibraryId'] as String?,
       selectedLibraryName: json['selectedLibraryName'] as String?,
+      isDemo: json['isDemo'] as bool? ?? false,
     );
   }
 
@@ -46,6 +50,7 @@ class JellyfinSession {
     JellyfinCredentials? credentials,
     Object? selectedLibraryId = _unset,
     Object? selectedLibraryName = _unset,
+    bool? isDemo,
   }) {
     return JellyfinSession(
       serverUrl: serverUrl ?? this.serverUrl,
@@ -57,6 +62,7 @@ class JellyfinSession {
       selectedLibraryName: selectedLibraryName == _unset
           ? this.selectedLibraryName
           : selectedLibraryName as String?,
+      isDemo: isDemo ?? this.isDemo,
     );
   }
 }

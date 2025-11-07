@@ -108,8 +108,13 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     try {
       List<JellyfinTrack> tracks;
       
-      // Check if offline mode - load from downloads
-      if (widget.appState.isOfflineMode || !widget.appState.networkAvailable) {
+      if (widget.appState.isDemoMode) {
+        tracks = await widget.appState.getAlbumTracks(widget.album.id);
+        if (tracks.isEmpty) {
+          throw Exception('Demo content unavailable for this album');
+        }
+      } else if (widget.appState.isOfflineMode ||
+          !widget.appState.networkAvailable) {
         // Get all downloaded tracks for this album
         final downloads = widget.appState.downloadService.completedDownloads;
         tracks = downloads

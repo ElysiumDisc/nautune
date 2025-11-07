@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+
 import '../app_state.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -11,6 +13,14 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  Future<String> _packageVersion() async {
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      return '${packageInfo.version}+${packageInfo.buildNumber}';
+    } catch (_) {
+      return 'unknown';
+    }
+  }
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -117,9 +127,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ),
-          ListTile(
-            title: const Text('Nautune'),
-            subtitle: const Text('Version 1.0.0+1'),
+          FutureBuilder<String>(
+            future: _packageVersion(),
+            builder: (context, snapshot) {
+              final version = snapshot.data ?? '…';
+              return ListTile(
+                title: const Text('Nautune'),
+                subtitle: Text('Version $version'),
+              );
+            },
           ),
           ListTile(
             title: const Text('Open Source Licenses'),

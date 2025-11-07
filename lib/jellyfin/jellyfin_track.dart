@@ -15,6 +15,8 @@ class JellyfinTrack {
     this.albumPrimaryImageTag,
     this.parentThumbImageTag,
     this.isFavorite = false,
+    this.streamUrlOverride,
+    this.assetPathOverride,
   });
 
   final String id;
@@ -32,6 +34,8 @@ class JellyfinTrack {
   final String? albumPrimaryImageTag;
   final String? parentThumbImageTag;
   final bool isFavorite;
+  final String? streamUrlOverride;
+  final String? assetPathOverride;
 
   factory JellyfinTrack.fromJson(Map<String, dynamic> json, {String? serverUrl, String? token, String? userId}) {
     return JellyfinTrack(
@@ -54,6 +58,48 @@ class JellyfinTrack {
       albumPrimaryImageTag: json['AlbumPrimaryImageTag'] as String?,
       parentThumbImageTag: json['ParentThumbImageTag'] as String?,
       isFavorite: (json['UserData'] as Map<String, dynamic>?)?['IsFavorite'] as bool? ?? false,
+      streamUrlOverride: null,
+      assetPathOverride: null,
+    );
+  }
+
+  JellyfinTrack copyWith({
+    String? id,
+    String? name,
+    String? album,
+    List<String>? artists,
+    int? runTimeTicks,
+    String? primaryImageTag,
+    String? serverUrl,
+    String? token,
+    String? userId,
+    int? indexNumber,
+    int? parentIndexNumber,
+    String? albumId,
+    String? albumPrimaryImageTag,
+    String? parentThumbImageTag,
+    bool? isFavorite,
+    String? streamUrlOverride,
+    String? assetPathOverride,
+  }) {
+    return JellyfinTrack(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      album: album ?? this.album,
+      artists: artists ?? this.artists,
+      runTimeTicks: runTimeTicks ?? this.runTimeTicks,
+      primaryImageTag: primaryImageTag ?? this.primaryImageTag,
+      serverUrl: serverUrl ?? this.serverUrl,
+      token: token ?? this.token,
+      userId: userId ?? this.userId,
+      indexNumber: indexNumber ?? this.indexNumber,
+      parentIndexNumber: parentIndexNumber ?? this.parentIndexNumber,
+      albumId: albumId ?? this.albumId,
+      albumPrimaryImageTag: albumPrimaryImageTag ?? this.albumPrimaryImageTag,
+      parentThumbImageTag: parentThumbImageTag ?? this.parentThumbImageTag,
+      isFavorite: isFavorite ?? this.isFavorite,
+      streamUrlOverride: streamUrlOverride ?? this.streamUrlOverride,
+      assetPathOverride: assetPathOverride ?? this.assetPathOverride,
     );
   }
 
@@ -130,6 +176,9 @@ class JellyfinTrack {
   }
 
   String? directDownloadUrl() {
+    if (streamUrlOverride != null) {
+      return streamUrlOverride;
+    }
     if (serverUrl == null || token == null) {
       return null;
     }
@@ -147,6 +196,9 @@ class JellyfinTrack {
     String audioCodec = 'mp3',
     String container = 'mp3',
   }) {
+    if (streamUrlOverride != null) {
+      return streamUrlOverride;
+    }
     if (serverUrl == null || token == null || userId == null) {
       return null;
     }
@@ -186,6 +238,9 @@ class JellyfinTrack {
   }
 
   String downloadUrl(String? baseUrl, String? authToken) {
+    if (streamUrlOverride != null) {
+      return streamUrlOverride!;
+    }
     final url = baseUrl ?? serverUrl;
     final token = authToken ?? this.token;
     if (url == null || token == null) {
@@ -215,6 +270,8 @@ class JellyfinTrack {
       'albumPrimaryImageTag': albumPrimaryImageTag,
       'parentThumbImageTag': parentThumbImageTag,
       'isFavorite': isFavorite,
+      'streamUrlOverride': streamUrlOverride,
+      'assetPathOverride': assetPathOverride,
     };
   }
 
@@ -238,27 +295,9 @@ class JellyfinTrack {
       albumPrimaryImageTag: json['albumPrimaryImageTag'] as String?,
       parentThumbImageTag: json['parentThumbImageTag'] as String?,
       isFavorite: json['isFavorite'] as bool? ?? false,
+      streamUrlOverride: json['streamUrlOverride'] as String?,
+      assetPathOverride: json['assetPathOverride'] as String?,
     );
   }
 
-  /// Creates a copy of this track with updated favorite status
-  JellyfinTrack copyWith({bool? isFavorite}) {
-    return JellyfinTrack(
-      id: id,
-      name: name,
-      album: album,
-      artists: artists,
-      runTimeTicks: runTimeTicks,
-      primaryImageTag: primaryImageTag,
-      serverUrl: serverUrl,
-      token: token,
-      userId: userId,
-      indexNumber: indexNumber,
-      parentIndexNumber: parentIndexNumber,
-      albumId: albumId,
-      albumPrimaryImageTag: albumPrimaryImageTag,
-      parentThumbImageTag: parentThumbImageTag,
-      isFavorite: isFavorite ?? this.isFavorite,
-    );
-  }
 }

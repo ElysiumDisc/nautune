@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -19,6 +20,9 @@ class DownloadService extends ChangeNotifier {
   bool _isDownloading = false;
   int _maxConcurrentDownloads = 3;
   int _activeDownloads = 0;
+  bool _demoModeEnabled = false;
+  Uint8List? _demoAudioBytes;
+  final Set<String> _demoDownloadIds = <String>{};
 
   DownloadService({required this.jellyfinService}) {
     _loadDownloads().then((_) => verifyAndCleanupDownloads());
@@ -43,6 +47,59 @@ class DownloadService extends ChangeNotifier {
   int get totalDownloads => _downloads.length;
   int get completedCount => completedDownloads.length;
   int get activeCount => activeDownloads.length;
+  bool get isDemoMode => _demoModeEnabled;
+
+  void enableDemoMode({required Uint8List demoAudioBytes}) {
+    _demoModeEnabled = true;
+    _demoAudioBytes = demoAudioBytes;
+  }
+
+  void disableDemoMode() {
+    _demoModeEnabled = false;
+    _demoAudioBytes = null;
+    _demoDownloadIds.clear();
+  }
+
+  Future<void> deleteDemoDownloads() async {
+    if (_demoDownloadIds.isEmpty) return;
+    final ids = List<String>.from(_demoDownloadIds);
+    for (final trackId in ids) {
+      await deleteDownload(trackId);
+    }
+    _demoDownloadIds.clear();
+  }
+
+  Future<void> seedDemoDownload({
+    required JellyfinTrack track,
+    required Uint8List bytes,
+    String extension = 'mp3',
+  }) async {
+    final existing = _downloads[track.id];
+    if (existing != null && existing.isCompleted) {
+      return;
+    }
+
+    final path = await _getDownloadPath(track, extension: extension);
+    final file = File(path);
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(bytes, flush: true);
+
+    _downloads[track.id] = DownloadItem(
+      track: track,
+      localPath: path,
+      status: DownloadStatus.completed,
+      progress: 1.0,
+      totalBytes: bytes.length,
+      downloadedBytes: bytes.length,
+      queuedAt: DateTime.now(),
+      completedAt: DateTime.now(),
+      isDemoAsset: true,
+    );
+
+    _demoDownloadIds.add(track.id);
+    notifyListeners();
+    await _saveDownloads();
+  }
 
   Future<void> _loadDownloads() async {
     try {
@@ -51,6 +108,7 @@ class DownloadService extends ChangeNotifier {
       if (downloadsJson != null) {
         final Map<String, dynamic> data = jsonDecode(downloadsJson);
         _downloads.clear();
+        bool removedDemoEntries = false;
         
         for (final entry in data.entries) {
           final itemData = entry.value as Map<String, dynamic>;
@@ -66,8 +124,15 @@ class DownloadService extends ChangeNotifier {
           
           final item = DownloadItem.fromJson(itemData, track);
           if (item != null) {
+            if (!_demoModeEnabled && item.isDemoAsset) {
+              removedDemoEntries = true;
+              continue;
+            }
             _downloads[entry.key] = item;
           }
+        }
+        if (removedDemoEntries) {
+          await _saveDownloads();
         }
         notifyListeners();
       }
@@ -143,8 +208,9 @@ class DownloadService extends ChangeNotifier {
     Directory downloadsDir;
     
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      // Desktop: use project directory for easy access
-      downloadsDir = Directory('downloads');
+      downloadsDir = Directory(
+        '${Directory.current.path}${Platform.pathSeparator}downloads',
+      );
     } else {
       // iOS/Android: MUST use app documents directory (sandbox requirement)
       final dir = await getApplicationDocumentsDirectory();
@@ -158,14 +224,18 @@ class DownloadService extends ChangeNotifier {
     final sanitizedName = track.name.replaceAll(RegExp(r'[^\w\s-]'), '');
     // Use provided extension or default to flac (original quality)
     final ext = extension ?? 'flac';
-    return '${downloadsDir.path}/${track.id}_$sanitizedName.$ext';
+    return File('${downloadsDir.path}/${track.id}_$sanitizedName.$ext')
+        .absolute
+        .path;
   }
 
   Future<String> _getArtworkPath(String trackId) async {
     Directory downloadsDir;
     
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      downloadsDir = Directory('downloads/artwork');
+      downloadsDir = Directory(
+        '${Directory.current.path}${Platform.pathSeparator}downloads/artwork',
+      );
     } else {
       final dir = await getApplicationDocumentsDirectory();
       downloadsDir = Directory('${dir.path}/downloads/artwork');
@@ -175,7 +245,7 @@ class DownloadService extends ChangeNotifier {
       await downloadsDir.create(recursive: true);
     }
     
-    return '${downloadsDir.path}/$trackId.jpg';
+    return File('${downloadsDir.path}/$trackId.jpg').absolute.path;
   }
 
   Future<void> _downloadArtwork(JellyfinTrack track) async {
@@ -224,6 +294,48 @@ class DownloadService extends ChangeNotifier {
     return null;
   }
 
+  Future<void> _simulateDemoDownload(JellyfinTrack track) async {
+    if (_downloads[track.id]?.isCompleted ?? false) {
+      return;
+    }
+    final bytes = _demoAudioBytes;
+    if (bytes == null) {
+      debugPrint('Demo audio bytes missing; cannot simulate download.');
+      return;
+    }
+
+    final localPath = await _getDownloadPath(track, extension: 'wav');
+    final startTime = DateTime.now();
+
+    _downloads[track.id] = DownloadItem(
+      track: track,
+      localPath: localPath,
+      status: DownloadStatus.downloading,
+      progress: 0.0,
+      queuedAt: startTime,
+      isDemoAsset: true,
+    );
+    notifyListeners();
+
+    await Future.delayed(const Duration(milliseconds: 800));
+
+    final file = File(localPath);
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(bytes, flush: true);
+
+    _downloads[track.id] = _downloads[track.id]!.copyWith(
+      status: DownloadStatus.completed,
+      progress: 1.0,
+      totalBytes: bytes.length,
+      downloadedBytes: bytes.length,
+      completedAt: DateTime.now(),
+      isDemoAsset: true,
+    );
+    _demoDownloadIds.add(track.id);
+    notifyListeners();
+    await _saveDownloads();
+  }
+
   Future<void> downloadTrack(JellyfinTrack track) async {
     if (_downloads.containsKey(track.id)) {
       if (_downloads[track.id]!.isCompleted) {
@@ -234,6 +346,11 @@ class DownloadService extends ChangeNotifier {
         debugPrint('Track already in queue: ${track.name}');
         return;
       }
+    }
+
+    if (_demoModeEnabled) {
+      await _simulateDemoDownload(track);
+      return;
     }
 
     final localPath = await _getDownloadPath(track);
@@ -381,6 +498,7 @@ class DownloadService extends ChangeNotifier {
     if (item == null) return;
 
     try {
+      _demoDownloadIds.remove(trackId);
       final file = File(item.localPath);
       if (await file.exists()) {
         await file.delete();
@@ -409,6 +527,7 @@ class DownloadService extends ChangeNotifier {
     for (final item in completedDownloads) {
       await deleteDownload(item.track.id);
     }
+    _demoDownloadIds.clear();
   }
 
   Future<void> retryDownload(String trackId) async {

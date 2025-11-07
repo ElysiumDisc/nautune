@@ -2283,6 +2283,37 @@ class _SearchTabState extends State<_SearchTab> {
     }
 
     setState(() => _isLoading = true);
+
+    // Demo mode: search bundled showcase data
+    if (widget.appState.isDemoMode) {
+      final lower = trimmed.toLowerCase();
+      if (_scope == _SearchScope.albums) {
+        final albums = widget.appState.demoAlbums;
+        final matches = albums
+            .where((album) =>
+                album.name.toLowerCase().contains(lower) ||
+                album.displayArtist.toLowerCase().contains(lower))
+            .toList();
+        if (!mounted || _lastQuery != trimmed) return;
+        setState(() {
+          _albumResults = matches;
+          _artistResults = const [];
+          _isLoading = false;
+        });
+      } else {
+        final artists = widget.appState.demoArtists;
+        final matches = artists
+            .where((artist) => artist.name.toLowerCase().contains(lower))
+            .toList();
+        if (!mounted || _lastQuery != trimmed) return;
+        setState(() {
+          _artistResults = matches;
+          _albumResults = const [];
+          _isLoading = false;
+        });
+      }
+      return;
+    }
     
     // Offline mode: search downloaded content only
     if (widget.appState.isOfflineMode) {

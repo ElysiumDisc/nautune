@@ -2,7 +2,7 @@ name: nautune
 description: "Nautune - Poseidon Music Player for Jellyfin"
 publish_to: 'none'
 
-version: 1.2.2+1
+version: 1.3.0+1
 
 environment:
   sdk: ^3.9.2
@@ -16,6 +16,7 @@ dependencies:
   shared_preferences: ^2.3.2
   path_provider: ^2.1.5
   google_fonts: ^6.2.1
+  package_info_plus: ^9.0.0
   
   # Cross-platform audio with native backends:
   # - iOS/macOS: AVFoundation (audioplayers_darwin)
@@ -39,6 +40,8 @@ flutter:
   uses-material-design: true
   assets:
     - assets/
+    - assets/demo/demo_offline_track.mp3
+    - assets/demo/demo_online_track.mp3
     - assets/icon.png
     - assets/no_album_art.png
     - assets/no_artist_art.png

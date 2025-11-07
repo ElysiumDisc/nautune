@@ -69,6 +69,21 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - Hardened startup logging (`Nautune initialization started/finished`) to make it easier to diagnose device issues from Xcode or `flutter logs`.
 - CarPlay integrations now match Jellyfin data more accurately by tracking album artist IDs and forwarding precise playback positions to the Jellyfin server.
 
+## 🧪 Review / Demo Mode
+
+Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-device demo that mirrors every feature—library browsing, downloads, playlists, CarPlay, and offline playback—without touching a real Jellyfin server.
+
+1. **Credentials**: leave the server field blank, use username `tester` and password `testing`.
+2. The login form detects that combo and seeds a showcase library with open-source media. Switching back to a real server instantly removes demo data (even cached downloads).
+3. Demo mode is documented in `assets/demo/README.md`, which also lists licensing notes for the bundled tracks and artwork.
+
+### Demo assets recap
+
+- Streaming samples (bundled MP3s for demo mode only):
+  - `assets/demo/demo_online_track.mp3` – “Ocean Vibes” from Pixabay (track: https://pixabay.com/music/beats-ocean-vibes-391210/ · Pixabay License).
+  - `assets/demo/demo_offline_track.mp3` – “Sirens and Silence” from Pixabay (track: https://pixabay.com/music/modern-classical-sirens-and-silence-10036/ · Pixabay License). This file also powers the offline/download view so reviewers see a real track in airplane mode.
+- Artwork: intentionally uses the shared fallbacks `assets/no_album_art.png` and `assets/no_artist_art.png`, making it easy to drop in a branded placeholder that demo + production both inherit.
+
 ## ✨ Highlights
 
 ### 🎵 Audio & Playback

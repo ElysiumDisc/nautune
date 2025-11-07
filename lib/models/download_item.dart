@@ -18,6 +18,7 @@ class DownloadItem {
   final DateTime queuedAt;
   final DateTime? completedAt;
   final String? errorMessage;
+  final bool isDemoAsset;
 
   DownloadItem({
     required this.track,
@@ -29,6 +30,7 @@ class DownloadItem {
     required this.queuedAt,
     this.completedAt,
     this.errorMessage,
+    this.isDemoAsset = false,
   });
 
   DownloadItem copyWith({
@@ -41,6 +43,7 @@ class DownloadItem {
     DateTime? queuedAt,
     DateTime? completedAt,
     String? errorMessage,
+    bool? isDemoAsset,
   }) {
     return DownloadItem(
       track: track ?? this.track,
@@ -52,6 +55,7 @@ class DownloadItem {
       queuedAt: queuedAt ?? this.queuedAt,
       completedAt: completedAt ?? this.completedAt,
       errorMessage: errorMessage ?? this.errorMessage,
+      isDemoAsset: isDemoAsset ?? this.isDemoAsset,
     );
   }
 
@@ -70,6 +74,7 @@ class DownloadItem {
       'queuedAt': queuedAt.toIso8601String(),
       'completedAt': completedAt?.toIso8601String(),
       'errorMessage': errorMessage,
+      'isDemoAsset': isDemoAsset,
     };
   }
 
@@ -90,6 +95,7 @@ class DownloadItem {
             ? DateTime.parse(json['completedAt'] as String)
             : null,
         errorMessage: json['errorMessage'] as String?,
+        isDemoAsset: json['isDemoAsset'] as bool? ?? false,
       );
     } catch (e) {
       return null;

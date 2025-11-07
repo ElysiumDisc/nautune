@@ -19,6 +19,21 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscurePassword = true;
   String? _errorMessage;
 
+  bool _looksLikeDemoRequest({String? serverValue}) {
+    final server = serverValue ?? _serverController.text;
+    return server.trim().isEmpty &&
+        _usernameController.text.trim().toLowerCase() == 'tester' &&
+        _passwordController.text == 'testing';
+  }
+
+  void _fillDemoCredentials() {
+    setState(() {
+      _serverController.clear();
+      _usernameController.text = 'tester';
+      _passwordController.text = 'testing';
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -49,11 +64,15 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      await widget.appState.login(
-        serverUrl: _serverController.text.trim(),
-        username: _usernameController.text.trim(),
-        password: _passwordController.text,
-      );
+      if (_looksLikeDemoRequest()) {
+        await widget.appState.startDemoExperience();
+      } else {
+        await widget.appState.login(
+          serverUrl: _serverController.text.trim(),
+          username: _usernameController.text.trim(),
+          password: _passwordController.text,
+        );
+      }
     } catch (error) {
       setState(() {
         _errorMessage = error.toString();
@@ -113,10 +132,14 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                             keyboardType: TextInputType.url,
                             validator: (value) {
-                              if (value == null || value.trim().isEmpty) {
+                              final trimmed = value?.trim() ?? '';
+                              if (trimmed.isEmpty) {
+                                if (_looksLikeDemoRequest(
+                                    serverValue: value ?? '')) {
+                                  return null;
+                                }
                                 return 'Enter your server URL';
                               }
-                              final trimmed = value.trim();
                               if (!trimmed.startsWith('http://') &&
                                   !trimmed.startsWith('https://')) {
                                 return 'URL must start with http:// or https://';
@@ -189,6 +212,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   : const Text('Sign In'),
                             ),
                           ),
+                          _buildDemoHint(theme),
                         ],
                       ),
                     ),
@@ -199,6 +223,50 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         );
       },
+    );
+  }
+
+  Widget _buildDemoHint(ThemeData theme) {
+    return Container(
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceVariant.withOpacity(0.4),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.explore,
+            color: theme.colorScheme.primary,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Need a guided demo?',
+                  style: theme.textTheme.titleSmall,
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Leave the server blank and sign in with username tester '
+                  'and password testing to explore the full review build.',
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: _fillDemoCredentials,
+                    child: const Text('Fill credentials'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

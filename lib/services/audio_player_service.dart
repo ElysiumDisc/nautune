@@ -520,6 +520,19 @@ class AudioPlayerService {
         return false;
       }
     }
+    Future<bool> trySetAssetSource(String? assetPath) async {
+      if (assetPath == null) return false;
+      final normalized = assetPath.startsWith('assets/')
+          ? assetPath.substring('assets/'.length)
+          : assetPath;
+      try {
+        await _player.setSource(AssetSource(normalized));
+        await _player.setVolume(_volume);
+        return true;
+      } on PlatformException {
+        return false;
+      }
+    }
 
     String? activeUrl;
     bool isOffline = false;
@@ -550,6 +563,8 @@ class AudioPlayerService {
         activeUrl = downloadUrl;
       } else if (await trySetSource(universalUrl)) {
         activeUrl = universalUrl;
+      } else if (await trySetAssetSource(track.assetPathOverride)) {
+        activeUrl = track.assetPathOverride;
       }
     }
 
