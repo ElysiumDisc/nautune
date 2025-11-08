@@ -3,6 +3,11 @@
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback, animated waveform visualization, and seamless Jellyfin integration.
 
 ## 🚀 Latest Updates (v1.0.4.1+)
+- **🔍 Track Search Toggle**: Search tab now lets you flip between albums, artists, and tracks.
+  - ✅ Tracks scope hits your Jellyfin library when online for fully playable results
+  - ✅ Offline mode searches downloaded tracks so airplane-mode listening still works
+  - ✅ Results drop you straight into playback with one tap
+  - ✅ Remembers your last few searches per scope for one-tap re-run or clearing
 - **🎵 Smart Crossfade (Level 2)**: Intelligent audio transitions
   - ✅ **Album-aware crossfade**: Automatically skips crossfade within same album (respects artist intent)
   - ✅ **Smooth exponential curves**: Natural-sounding quadratic fade in/out

@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_state.dart';
 import '../jellyfin/jellyfin_album.dart';
@@ -2261,11 +2263,71 @@ class _SearchTabState extends State<_SearchTab> {
   Object? _error;
   String _lastQuery = '';
   _SearchScope _scope = _SearchScope.albums;
+  static const int _historyLimit = 5;
+  final Map<_SearchScope, List<String>> _recentQueries = {
+    for (final scope in _SearchScope.values) scope: <String>[],
+  };
+  late final VoidCallback _queryListener;
+
+  @override
+  void initState() {
+    super.initState();
+    _queryListener = () => setState(() {});
+    _controller.addListener(_queryListener);
+    _loadRecentQueries();
+  }
 
   @override
   void dispose() {
+    _controller.removeListener(_queryListener);
     _controller.dispose();
     super.dispose();
+  }
+  
+  String _prefKeyForScope(_SearchScope scope) =>
+      'search_history_${scope.name}';
+  
+  Future<void> _loadRecentQueries() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      for (final scope in _SearchScope.values) {
+        _recentQueries[scope] =
+            List<String>.from(prefs.getStringList(_prefKeyForScope(scope)) ?? const []);
+      }
+    });
+  }
+  
+  Future<void> _persistRecentQueries(_SearchScope scope) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _prefKeyForScope(scope),
+      _recentQueries[scope]!,
+    );
+  }
+  
+  Future<void> _clearRecentQueries(_SearchScope scope) async {
+    if (_recentQueries[scope]!.isEmpty) return;
+    setState(() {
+      _recentQueries[scope] = <String>[];
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefKeyForScope(scope));
+  }
+  
+  Future<void> _rememberQuery(_SearchScope scope, String query) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return;
+    final list = _recentQueries[scope]!;
+    list.removeWhere((item) => item.toLowerCase() == trimmed.toLowerCase());
+    list.insert(0, trimmed);
+    while (list.length > _historyLimit) {
+      list.removeLast();
+    }
+    setState(() {
+      _recentQueries[scope] = List<String>.from(list);
+    });
+    await _persistRecentQueries(scope);
   }
 
   Future<void> _performSearch(String query) async {
@@ -2287,6 +2349,7 @@ class _SearchTabState extends State<_SearchTab> {
     }
 
     setState(() => _isLoading = true);
+    unawaited(_rememberQuery(_scope, trimmed));
 
     // Demo mode: search bundled showcase data
     if (widget.appState.isDemoMode) {
@@ -2570,6 +2633,9 @@ class _SearchTabState extends State<_SearchTab> {
             ),
           ),
         ),
+        if (_controller.text.trim().isEmpty &&
+            (_recentQueries[_scope]?.isNotEmpty ?? false))
+          _buildRecentQueriesSection(theme),
         if (_error != null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -2594,6 +2660,52 @@ class _SearchTabState extends State<_SearchTab> {
               : _buildResults(theme),
         ),
       ],
+    );
+  }
+  
+  Widget _buildRecentQueriesSection(ThemeData theme) {
+    final history = _recentQueries[_scope] ?? const <String>[];
+    if (history.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                'Recent searches',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              IconButton(
+                tooltip: 'Clear recent searches',
+                icon: const Icon(Icons.close),
+                onPressed: () => unawaited(_clearRecentQueries(_scope)),
+              ),
+            ],
+          ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final query in history)
+                ActionChip(
+                  label: Text(query),
+                  onPressed: () {
+                    _controller.text = query;
+                    _performSearch(query);
+                  },
+                ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
