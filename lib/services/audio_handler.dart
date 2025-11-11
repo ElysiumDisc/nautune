@@ -112,12 +112,20 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
 
   @override
   Future<void> skipToNext() async {
-    onSkipToNext();
+    try {
+      onSkipToNext();
+    } catch (e) {
+      print('⚠️ Skip to next failed: $e');
+    }
   }
 
   @override
   Future<void> skipToPrevious() async {
-    onSkipToPrevious();
+    try {
+      onSkipToPrevious();
+    } catch (e) {
+      print('⚠️ Skip to previous failed: $e');
+    }
   }
 
   @override

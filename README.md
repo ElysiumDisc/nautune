@@ -2,12 +2,27 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback, animated waveform visualization, and seamless Jellyfin integration.
 
-## 🚀 Latest Updates (v1.0.4.1+)
+## 🚀 Latest Updates (v1.4.0+)
 - **🔍 Track Search Toggle**: Search tab now lets you flip between albums, artists, and tracks.
   - ✅ Tracks scope hits your Jellyfin library when online for fully playable results
   - ✅ Offline mode searches downloaded tracks so airplane-mode listening still works
   - ✅ Results drop you straight into playback with one tap
   - ✅ Remembers your last few searches per scope for one-tap re-run or clearing
+- **🎛️ External Media Control Stability**: Rock-solid USB-C & Bluetooth controls
+  - ✅ **Crash-free skip controls**: Fixed app crashes when using car USB-C or Bluetooth headphones
+  - ✅ **Error handling**: Try-catch protection for all external media control inputs
+  - ✅ **Repeat mode support**: Skip controls now respect repeat all/one modes
+  - ✅ **Boundary safety**: Safe queue navigation at start/end of playlist
+- **🎨 Album Card Text Fix**: Perfect text rendering on all platforms
+  - ✅ **iOS text overflow fixed**: Album names with long artists no longer cut off
+  - ✅ **Optimized line height**: 1.2 line height ensures proper 2-line fitting
+  - ✅ **Consistent across platforms**: Works on iOS, Android, Linux, all devices
+- **🚀 Smart Stream Caching**: Smooth playback with intelligent preloading
+  - ✅ **Caches 5 upcoming tracks**: Preloads next tracks in queue for seamless streaming
+  - ✅ **Streaming only**: Smart detection - only caches when online (not for downloads)
+  - ✅ **Auto cleanup**: Periodic cache cleanup every 5 minutes
+  - ✅ **Memory efficient**: Caches URLs only, not audio data
+  - ✅ **Queue-aware**: Updates cache as you skip through tracks
 - **🎵 Smart Crossfade (Level 2)**: Intelligent audio transitions
   - ✅ **Album-aware crossfade**: Automatically skips crossfade within same album (respects artist intent)
   - ✅ **Smooth exponential curves**: Natural-sounding quadratic fade in/out
@@ -95,6 +110,17 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
   - 🤖 **Android**: MediaPlayer
   - 🪟 **Windows**: WinMM
 - **Gapless Playback**: Seamless transitions between tracks with preloading
+- **Smart Stream Caching**: Intelligent preloading for smooth streaming
+  - ✅ Automatically caches up to 5 upcoming tracks in queue
+  - ✅ Only when streaming online (skips for offline/downloaded content)
+  - ✅ Periodic cleanup prevents memory bloat
+  - ✅ Reduces buffering and improves responsiveness
+- **External Control Support**: Rock-solid media controls from any source
+  - ✅ USB-C audio devices (car head units, dongles)
+  - ✅ Bluetooth headphones and speakers
+  - ✅ Lock screen controls on iOS/Android
+  - ✅ Crash-proof error handling
+  - ✅ Repeat mode aware navigation
 - **Direct Play Only**: Always streams original Jellyfin files in native format (FLAC/AAC/etc.)
   - ✅ No transcoding - preserves audio quality
   - ✅ Native platform decoders handle all formats
@@ -148,6 +174,9 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
   - ✅ Visual indicators for active repeat/shuffle modes
 - **Deep Sea Purple Theme**: Oceanic gradient color scheme with light purple "Nautune" title (Pacifico font)
 - **Album & Artist Art**: Beautiful grid and list layouts with Jellyfin artwork (trident placeholder fallback)
+  - ✅ **Perfect text rendering**: Fixed iOS text overflow on album cards
+  - ✅ Optimized line height prevents cutoff with long artist names
+  - ✅ Consistent 2-line display across all platforms
 - **Smart Crossfade**: Smooth audio transitions between tracks
   - ✅ Album-aware: No crossfade within same album (preserves artist's vision)
   - ✅ Simple toggle in settings
@@ -490,6 +519,9 @@ All iOS features are built and deployed via **Codemagic CI**:
 - [x] **Shuffle mode** with queue randomization
 - [x] **Repeat modes** (off/all/one) with persistence
 - [x] **Gapless playback** with track preloading
+- [x] **Smart stream caching** - preloads 5 upcoming tracks for smooth playback
+- [x] **External media control stability** - crash-free USB-C/Bluetooth controls
+- [x] **Album card text fixes** - perfect rendering on iOS and all platforms
 - [x] **Native FLAC Playback**: Uses direct download URLs for original quality, platform decoders handle FLAC/AAC/etc. natively
 - [x] **Jellyfin Playback Reporting integration** for activity tracking
 - [x] **Individual track downloads** with progress tracking

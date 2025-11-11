@@ -859,6 +859,7 @@ class _AlbumCard extends StatelessWidget {
                     album.name,
                     style: theme.textTheme.titleSmall?.copyWith(
                       color: theme.colorScheme.tertiary,  // Ocean blue
+                      height: 1.2,
                     ),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,

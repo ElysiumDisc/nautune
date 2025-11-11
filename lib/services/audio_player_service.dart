@@ -23,6 +23,8 @@ enum RepeatMode {
 
 class AudioPlayerService {
   static const int _visualizerBarCount = 24;
+  static const int _maxCachedTracks = 5; // Cache up to 5 upcoming tracks for streaming
+  
   final AudioPlayer _player = AudioPlayer();
   final AudioPlayer _nextPlayer = AudioPlayer();
   final PlaybackStateStore _stateStore = PlaybackStateStore();
@@ -34,6 +36,10 @@ class AudioPlayerService {
   bool _isShuffleEnabled = false;
   bool _hasRestored = false;
   PlaybackState? _pendingState;
+  
+  // Stream caching for better performance
+  final Map<String, String> _cachedStreamUrls = {};
+  Timer? _cacheCleanupTimer;
   
   // Crossfade support
   AudioPlayer? _crossfadePlayer;
@@ -161,6 +167,7 @@ class AudioPlayerService {
     _nextPlayer.setVolume(_volume);
     _volumeController.add(_volume);
     _emitIdleVisualizer();
+    _startCacheCleanup();
   }
 
   String get _deviceId => 'nautune-${Platform.operatingSystem}';
@@ -612,6 +619,11 @@ class AudioPlayerService {
       }
     }
     
+    // Cache upcoming tracks for smooth streaming (only when streaming, not offline)
+    if (!isOffline) {
+      _cacheUpcomingTracks();
+    }
+    
     await _stateStore.savePlaybackSnapshot(
       currentTrack: _currentTrack,
       position: Duration.zero,
@@ -675,24 +687,48 @@ class AudioPlayerService {
   }
   
   Future<void> skipToNext() async {
-    if (_currentIndex < _queue.length - 1) {
-      _currentIndex++;
-      await playTrack(
-        _queue[_currentIndex],
-        queueContext: _queue,
-        fromShuffle: _isShuffleEnabled,
-      );
+    try {
+      if (_currentIndex < _queue.length - 1) {
+        _currentIndex++;
+        await playTrack(
+          _queue[_currentIndex],
+          queueContext: _queue,
+          fromShuffle: _isShuffleEnabled,
+        );
+      } else if (_repeatMode == RepeatMode.all && _queue.isNotEmpty) {
+        _currentIndex = 0;
+        await playTrack(
+          _queue[0],
+          queueContext: _queue,
+          fromShuffle: _isShuffleEnabled,
+        );
+      }
+    } catch (e) {
+      debugPrint('❌ Skip to next failed: $e');
+      rethrow;
     }
   }
 
   Future<void> skipToPrevious() async {
-    if (_currentIndex > 0) {
-      _currentIndex--;
-      await playTrack(
-        _queue[_currentIndex],
-        queueContext: _queue,
-        fromShuffle: _isShuffleEnabled,
-      );
+    try {
+      if (_currentIndex > 0) {
+        _currentIndex--;
+        await playTrack(
+          _queue[_currentIndex],
+          queueContext: _queue,
+          fromShuffle: _isShuffleEnabled,
+        );
+      } else if (_repeatMode == RepeatMode.all && _queue.isNotEmpty) {
+        _currentIndex = _queue.length - 1;
+        await playTrack(
+          _queue[_currentIndex],
+          queueContext: _queue,
+          fromShuffle: _isShuffleEnabled,
+        );
+      }
+    } catch (e) {
+      debugPrint('❌ Skip to previous failed: $e');
+      rethrow;
     }
   }
 
@@ -1066,15 +1102,99 @@ class AudioPlayerService {
     debugPrint('✅ Crossfade complete → ${nextTrack.name}');
   }
 
+  // ========== STREAM CACHING METHODS ==========
+  
+  /// Cache upcoming tracks for smooth streaming (only when online)
+  void _cacheUpcomingTracks() {
+    if (_queue.isEmpty || _currentIndex >= _queue.length) return;
+    
+    // Determine how many tracks to cache (max 5)
+    final tracksToCache = (_queue.length - _currentIndex - 1).clamp(0, _maxCachedTracks);
+    
+    if (tracksToCache == 0) return;
+    
+    debugPrint('🔄 Caching next $tracksToCache tracks for smooth streaming');
+    
+    // Cache in background
+    for (int i = 1; i <= tracksToCache; i++) {
+      final index = _currentIndex + i;
+      if (index >= _queue.length) break;
+      
+      final track = _queue[index];
+      
+      // Skip if already downloaded locally
+      final localPath = _downloadService?.getLocalPath(track.id);
+      if (localPath != null) continue;
+      
+      // Skip if already cached
+      if (_cachedStreamUrls.containsKey(track.id)) continue;
+      
+      // Cache the stream URL
+      _cacheTrackUrl(track);
+    }
+  }
+  
+  /// Cache a single track's stream URL
+  Future<void> _cacheTrackUrl(JellyfinTrack track) async {
+    try {
+      final url = track.directDownloadUrl();
+      if (url != null) {
+        _cachedStreamUrls[track.id] = url;
+        debugPrint('✅ Cached stream URL for: ${track.name}');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Failed to cache track ${track.name}: $e');
+    }
+  }
+  
+  /// Start periodic cache cleanup (remove old cached URLs)
+  void _startCacheCleanup() {
+    _cacheCleanupTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+      _cleanupCache();
+    });
+  }
+  
+  /// Clean up cached URLs that are no longer in the queue or are too far behind
+  void _cleanupCache() {
+    if (_cachedStreamUrls.isEmpty) return;
+    
+    final trackIds = _queue.map((t) => t.id).toSet();
+    final toRemove = <String>[];
+    
+    for (final cachedId in _cachedStreamUrls.keys) {
+      // Remove if not in current queue
+      if (!trackIds.contains(cachedId)) {
+        toRemove.add(cachedId);
+        continue;
+      }
+      
+      // Remove if too far behind current position (more than 10 tracks back)
+      final index = _queue.indexWhere((t) => t.id == cachedId);
+      if (index != -1 && index < _currentIndex - 10) {
+        toRemove.add(cachedId);
+      }
+    }
+    
+    for (final id in toRemove) {
+      _cachedStreamUrls.remove(id);
+    }
+    
+    if (toRemove.isNotEmpty) {
+      debugPrint('🧹 Cleaned up ${toRemove.length} cached stream URLs');
+    }
+  }
+
   void dispose() {
     _positionSaveTimer?.cancel();
     _crossfadeTimer?.cancel();
+    _cacheCleanupTimer?.cancel();
     _interruptionSubscription?.cancel();
     _becomingNoisySubscription?.cancel();
     _audioHandler?.dispose();
     _player.dispose();
     _nextPlayer.dispose();
     _crossfadePlayer?.dispose();
+    _cachedStreamUrls.clear();
     _currentTrackController.close();
     _playingController.close();
     _positionController.close();
