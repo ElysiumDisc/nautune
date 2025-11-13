@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class NautuneCarplay {
@@ -9,7 +10,7 @@ class NautuneCarplay {
     try {
       await _channel.invokeMethod('initialize');
     } on PlatformException catch (e) {
-      print('Failed to initialize CarPlay: ${e.message}');
+      debugPrint('Failed to initialize CarPlay: ${e.message}');
     }
   }
 
@@ -34,7 +35,7 @@ class NautuneCarplay {
         'artworkUrl': artworkUrl,
       });
     } on PlatformException catch (e) {
-      print('Failed to update now playing: ${e.message}');
+      debugPrint('Failed to update now playing: ${e.message}');
     }
   }
 
@@ -45,7 +46,7 @@ class NautuneCarplay {
         'isPlaying': isPlaying,
       });
     } on PlatformException catch (e) {
-      print('Failed to set playback state: ${e.message}');
+      debugPrint('Failed to set playback state: ${e.message}');
     }
   }
 
@@ -56,7 +57,7 @@ class NautuneCarplay {
         'items': items,
       });
     } on PlatformException catch (e) {
-      print('Failed to update library: ${e.message}');
+      debugPrint('Failed to update library: ${e.message}');
     }
   }
 

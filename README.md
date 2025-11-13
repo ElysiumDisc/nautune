@@ -3,6 +3,11 @@
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback, animated waveform visualization, and seamless Jellyfin integration.
 
 ## 🚀 Latest Updates (v1.4.0+)
+- **⚡ Instant Startup + Offline Cache**: Nautune now boots instantly using a local Hive cache for your libraries, playlists, “Continue Listening,” and Recently Added.
+  - ✅ New bootstrap service hydrates the UI from disk immediately, then refreshes Jellyfin data in the background with smart timeout + retry logic
+  - ✅ Startup never blocks on album/artist fetches—slow servers simply update the cache silently once they respond
+  - ✅ Library home adds cached hero shelves (“Continue Listening” + “Recently Added”) so the main menu always has content, even offline
+  - ✅ Online refreshes merge back into the cache so subsequent launches stay instant
 - **🔍 Track Search Toggle**: Search tab now lets you flip between albums, artists, and tracks.
   - ✅ Tracks scope hits your Jellyfin library when online for fully playable results
   - ✅ Offline mode searches downloaded tracks so airplane-mode listening still works

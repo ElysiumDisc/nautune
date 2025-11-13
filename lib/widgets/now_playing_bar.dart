@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import '../jellyfin/jellyfin_track.dart';
@@ -186,7 +184,7 @@ class _PlayPauseButton extends StatelessWidget {
           BoxShadow(
             blurRadius: 14,
             spreadRadius: 1,
-            color: theme.colorScheme.primary.withOpacity(0.3),
+            color: theme.colorScheme.primary.withValues(alpha: 0.3),
           ),
         ],
       ),
@@ -304,7 +302,7 @@ class _WaveformDisplayState extends State<_WaveformDisplay> {
                           begin: Alignment.centerLeft,
                           end: Alignment.centerRight,
                           colors: [
-                            secondaryTint.withOpacity(0.35),
+                            secondaryTint.withValues(alpha: 0.35),
                             Colors.transparent,
                           ],
                         ),
@@ -319,8 +317,8 @@ class _WaveformDisplayState extends State<_WaveformDisplay> {
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
                             colors: [
-                              secondaryTint.withOpacity(0.8),
-                              primaryTint.withOpacity(0.3),
+                              secondaryTint.withValues(alpha: 0.8),
+                              primaryTint.withValues(alpha: 0.3),
                             ],
                           ),
                         ),
@@ -336,7 +334,7 @@ class _WaveformDisplayState extends State<_WaveformDisplay> {
                       duration: const Duration(milliseconds: 200),
                       child: Container(
                         width: 2,
-                        color: Colors.white.withOpacity(0.7),
+                        color: Colors.white.withValues(alpha: 0.7),
                       ),
                     ),
                   ),
@@ -398,7 +396,7 @@ class _PositionSliderState extends State<_PositionSlider> {
                 overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
                 activeTrackColor: theme.colorScheme.secondary,
                 inactiveTrackColor:
-                    theme.colorScheme.secondary.withOpacity(0.3),
+                    theme.colorScheme.secondary.withValues(alpha: 0.3),
                 thumbColor: theme.colorScheme.secondary,
               ),
               child: Slider(

@@ -23,7 +23,19 @@ class JellyfinLibrary {
   }
 
   bool get isAudioLibrary {
-    final type = collectionType?.toLowerCase();
-    return type == 'music';
+    final type = collectionType?.toLowerCase().trim();
+    if (type == null) {
+      return false;
+    }
+    return type == 'music' || type == 'audio';
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'Id': id,
+      'Name': name,
+      'CollectionType': collectionType,
+      if (imageTag != null) 'ImageTags': {'Primary': imageTag},
+    };
   }
 }

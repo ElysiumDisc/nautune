@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_carplay/flutter_carplay.dart';
 import '../app_state.dart';
 
@@ -18,7 +19,7 @@ class CarPlayService {
     try {
       await _setupCarPlay();
     } catch (e) {
-      print('⚠️ CarPlay initialization failed (non-critical): $e');
+      debugPrint('⚠️ CarPlay initialization failed (non-critical): $e');
       // Don't crash the app if CarPlay fails
     }
   }
@@ -37,9 +38,9 @@ class CarPlayService {
       // Force update to ensure CarPlay shows it
       await _carplay.forceUpdateRootTemplate();
       
-      print('✅ CarPlay root template set successfully');
+      debugPrint('✅ CarPlay root template set successfully');
     } catch (e) {
-      print('⚠️ CarPlay setup error: $e');
+      debugPrint('⚠️ CarPlay setup error: $e');
     }
   }
   

@@ -104,7 +104,7 @@ class _JellyfinWaveformState extends State<JellyfinWaveform> {
       // Fallback: simple synthetic waveform
       return CustomPaint(
         painter: _SimpleWaveformPainter(
-          color: theme.colorScheme.secondary.withOpacity(0.3),
+          color: theme.colorScheme.secondary.withValues(alpha: 0.3),
           progress: widget.progress,
         ),
       );
@@ -115,7 +115,7 @@ class _JellyfinWaveformState extends State<JellyfinWaveform> {
         image: _waveformImage!,
         progress: widget.progress,
         playedColor: theme.colorScheme.primary,
-        unplayedColor: theme.colorScheme.secondary.withOpacity(0.3),
+        unplayedColor: theme.colorScheme.secondary.withValues(alpha: 0.3),
       ),
     );
   }

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../app_state.dart';
-import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_track.dart';
 
 class OfflineLibraryScreen extends StatefulWidget {
@@ -68,7 +67,7 @@ class _OfflineLibraryScreenState extends State<OfflineLibraryScreen> {
                 Icon(
                   Icons.cloud_off,
                   size: 64,
-                  color: theme.colorScheme.secondary.withOpacity(0.5),
+                  color: theme.colorScheme.secondary.withValues(alpha: 0.5),
                 ),
                 const SizedBox(height: 16),
                 Text(

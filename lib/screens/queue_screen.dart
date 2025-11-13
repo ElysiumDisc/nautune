@@ -53,7 +53,7 @@ class _QueueScreenState extends State<QueueScreen> {
                   Icon(
                     Icons.queue_music,
                     size: 64,
-                    color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+                    color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
                   ),
                   const SizedBox(height: 16),
                   Text(
@@ -66,7 +66,7 @@ class _QueueScreenState extends State<QueueScreen> {
                   Text(
                     'Play a track to see it here',
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
+                      color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
                     ),
                   ),
                 ],
@@ -77,7 +77,6 @@ class _QueueScreenState extends State<QueueScreen> {
           return StreamBuilder<JellyfinTrack?>(
             stream: audioService.currentTrackStream,
             builder: (context, trackSnapshot) {
-              final currentTrack = trackSnapshot.data ?? audioService.currentTrack;
               final currentIndex = audioService.currentIndex;
 
               return ReorderableListView.builder(
@@ -127,7 +126,7 @@ class _QueueScreenState extends State<QueueScreen> {
                     },
                     child: Material(
                       color: isCurrentTrack 
-                          ? theme.colorScheme.primaryContainer.withOpacity(0.3)
+                          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.3)
                           : Colors.transparent,
                       child: ListTile(
                         leading: Row(
@@ -176,7 +175,7 @@ class _QueueScreenState extends State<QueueScreen> {
                           track.artists.join(', '),
                           style: TextStyle(
                             color: isCurrentTrack
-                                ? theme.colorScheme.primary.withOpacity(0.7)
+                                ? theme.colorScheme.primary.withValues(alpha: 0.7)
                                 : theme.colorScheme.tertiary.withValues(alpha: 0.7),  // Ocean blue for non-current
                           ),
                         ),

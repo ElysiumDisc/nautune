@@ -1,15 +1,13 @@
 import 'dart:async';
 import 'dart:io' show Platform;
-import 'dart:typed_data';
-
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
 import 'demo/demo_content.dart';
 import 'jellyfin/jellyfin_album.dart';
 import 'jellyfin/jellyfin_artist.dart';
 import 'jellyfin/jellyfin_genre.dart';
+import 'jellyfin/jellyfin_exceptions.dart';
 import 'jellyfin/jellyfin_library.dart';
 import 'jellyfin/jellyfin_credentials.dart';
 import 'jellyfin/jellyfin_playlist.dart';
@@ -19,8 +17,10 @@ import 'jellyfin/jellyfin_session.dart';
 import 'jellyfin/jellyfin_session_store.dart';
 import 'jellyfin/jellyfin_track.dart';
 import 'services/audio_player_service.dart';
+import 'services/bootstrap_service.dart';
 import 'services/carplay_service.dart';
 import 'services/download_service.dart';
+import 'services/local_cache_service.dart';
 import 'services/playback_reporting_service.dart';
 import 'services/playback_state_store.dart';
 import 'services/playlist_sync_queue.dart';
@@ -30,11 +30,15 @@ class NautuneAppState extends ChangeNotifier {
     required JellyfinService jellyfinService,
     required JellyfinSessionStore sessionStore,
     required PlaybackStateStore playbackStateStore,
+    required LocalCacheService cacheService,
+    required BootstrapService bootstrapService,
     JellyfinPlaylistStore? playlistStore,
     PlaylistSyncQueue? syncQueue,
   })  : _jellyfinService = jellyfinService,
         _sessionStore = sessionStore,
         _playbackStateStore = playbackStateStore,
+        _cacheService = cacheService,
+        _bootstrapService = bootstrapService,
         _playlistStore = playlistStore ?? JellyfinPlaylistStore(),
         _syncQueue = syncQueue ?? PlaylistSyncQueue() {
     _audioPlayerService = AudioPlayerService();
@@ -57,6 +61,8 @@ class NautuneAppState extends ChangeNotifier {
   final JellyfinService _jellyfinService;
   final JellyfinSessionStore _sessionStore;
   final PlaybackStateStore _playbackStateStore;
+  final LocalCacheService _cacheService;
+  final BootstrapService _bootstrapService;
   final JellyfinPlaylistStore _playlistStore;
   final PlaylistSyncQueue _syncQueue;
   late final AudioPlayerService _audioPlayerService;
@@ -104,6 +110,9 @@ class NautuneAppState extends ChangeNotifier {
   bool _isLoadingRecent = false;
   Object? _recentError;
   List<JellyfinTrack>? _recentTracks;
+  bool _isLoadingRecentlyAdded = false;
+  Object? _recentlyAddedError;
+  List<JellyfinAlbum>? _recentlyAddedAlbums;
   bool _isLoadingFavorites = false;
   Object? _favoritesError;
   List<JellyfinTrack>? _favoriteTracks;
@@ -112,6 +121,7 @@ class NautuneAppState extends ChangeNotifier {
   List<JellyfinGenre>? _genres;
   bool _isOfflineMode = false;  // Toggle between online and offline library
   bool _networkAvailable = true;  // Track network connectivity
+  bool _handlingUnauthorizedSession = false;
 
   bool get isInitialized => _initialized;
   bool get networkAvailable => _networkAvailable;
@@ -138,6 +148,9 @@ class NautuneAppState extends ChangeNotifier {
   bool get isLoadingRecent => _isLoadingRecent;
   Object? get recentError => _recentError;
   List<JellyfinTrack>? get recentTracks => _recentTracks;
+  bool get isLoadingRecentlyAdded => _isLoadingRecentlyAdded;
+  Object? get recentlyAddedError => _recentlyAddedError;
+  List<JellyfinAlbum>? get recentlyAddedAlbums => _recentlyAddedAlbums;
   bool get isLoadingFavorites => _isLoadingFavorites;
   Object? get favoritesError => _favoritesError;
   List<JellyfinTrack>? get favoriteTracks => _favoriteTracks;
@@ -163,6 +176,14 @@ class NautuneAppState extends ChangeNotifier {
       }
     }
     return null;
+  }
+
+  String? get _sessionCacheKey {
+    final session = _session;
+    if (session == null) {
+      return null;
+    }
+    return _cacheService.cacheKeyForSession(session);
   }
 
   JellyfinService get jellyfinService => _jellyfinService;
@@ -377,16 +398,6 @@ class NautuneAppState extends ChangeNotifier {
     );
   }
 
-  String _buildStreamUrl(String trackId) {
-    final session = _session;
-    if (session == null) {
-      throw StateError('Session not initialized');
-    }
-    return '${session.serverUrl}/Audio/$trackId/stream?'
-        'api_key=${session.credentials.accessToken}&'
-        'audioCodec=aac';
-  }
-
   Future<void> initialize() async {
     debugPrint('Nautune initialization started');
     final storedPlaybackState = await _playbackStateStore.load();
@@ -401,6 +412,7 @@ class NautuneAppState extends ChangeNotifier {
       _audioPlayerService.setCrossfadeEnabled(_crossfadeEnabled);
       _audioPlayerService.setCrossfadeDuration(_crossfadeDurationSeconds);
     }
+
     try {
       final storedSession = await _sessionStore.load();
       if (storedSession != null) {
@@ -412,47 +424,22 @@ class NautuneAppState extends ChangeNotifier {
           notifyListeners();
           return;
         }
+
         _session = storedSession;
         _jellyfinService.restoreSession(storedSession);
         _audioPlayerService.setJellyfinService(_jellyfinService);
-        
-        // Initialize playback reporting for restored session
+
         final reportingService = PlaybackReportingService(
           serverUrl: storedSession.serverUrl,
           accessToken: storedSession.credentials.accessToken,
         );
         _audioPlayerService.setReportingService(reportingService);
-        
-        // Attempt to load libraries from server
-        // If network is unavailable, gracefully fall back to offline mode
-        try {
-          // Add timeout to prevent infinite spinning on airplane mode
-          await _loadLibraries().timeout(
-            const Duration(seconds: 10),
-            onTimeout: () {
-              throw TimeoutException('Server unreachable');
-            },
-          );
-          await _loadLibraryDependentContent().timeout(
-            const Duration(seconds: 10),
-            onTimeout: () {
-              throw TimeoutException('Server unreachable');
-            },
-          );
-          _networkAvailable = true;
-          // Sync any pending playlist actions
-          unawaited(_syncPendingPlaylistActions());
-        } catch (error) {
-          debugPrint('Network unavailable during initialization, entering offline mode: $error');
-          _networkAvailable = false;
-          _isOfflineMode = true;
-          // Don't clear session - keep it for when network returns
-          // Load cached playlists for offline use
-          final cachedPlaylists = await _playlistStore.load();
-          if (cachedPlaylists != null) {
-            _playlists = cachedPlaylists;
-          }
-        }
+
+        final snapshot = await _bootstrapService.loadCachedSnapshot(
+          session: storedSession,
+        );
+        await _applyBootstrapSnapshot(snapshot);
+        _startBootstrapSync(storedSession);
       }
     } catch (error, stackTrace) {
       _lastError = error;
@@ -470,7 +457,6 @@ class NautuneAppState extends ChangeNotifier {
       notifyListeners();
       debugPrint('Nautune initialization finished (session restored: ${_session != null}, offline: $_isOfflineMode)');
       
-      // Initialize CarPlay after the first frame so plugin setup cannot block UI
       if (Platform.isIOS) {
         scheduleMicrotask(() async {
           try {
@@ -499,6 +485,167 @@ class NautuneAppState extends ChangeNotifier {
     } finally {
       _isAuthenticating = false;
       notifyListeners();
+    }
+  }
+
+  void _startBootstrapSync(
+    JellyfinSession session, {
+    String? libraryIdOverride,
+  }) {
+    _bootstrapService.scheduleSync(
+      session: session,
+      libraryIdOverride: libraryIdOverride,
+      onLibraries: (data) => unawaited(_handleLibrariesBootstrapUpdate(data)),
+      onPlaylists: _handlePlaylistsBootstrapUpdate,
+      onAlbums: _handleAlbumsBootstrapUpdate,
+      onArtists: _handleArtistsBootstrapUpdate,
+      onRecent: _handleRecentBootstrapUpdate,
+      onRecentlyAdded: _handleRecentlyAddedBootstrapUpdate,
+      onNetworkReachable: _handleNetworkRecovered,
+      onNetworkLost: _handleNetworkDrop,
+      onUnauthorized: _handleBootstrapUnauthorized,
+    );
+    unawaited(_syncPendingPlaylistActions());
+  }
+
+  Future<void> _applyBootstrapSnapshot(BootstrapSnapshot snapshot) async {
+    final hasSession = _session != null;
+    final selectedLibraryId = _session?.selectedLibraryId;
+
+    if (snapshot.libraries != null) {
+      _libraries = snapshot.libraries;
+      _librariesError = null;
+      _isLoadingLibraries = false;
+      await _ensureSelectedLibraryStillValid();
+    } else if (hasSession) {
+      _isLoadingLibraries = true;
+    }
+
+    if (snapshot.playlists != null) {
+      _playlists = snapshot.playlists;
+      _playlistsError = null;
+      _isLoadingPlaylists = false;
+    } else if (hasSession) {
+      _isLoadingPlaylists = true;
+    }
+
+    if (snapshot.albums != null) {
+      _albums = snapshot.albums;
+      _albumsError = null;
+      _isLoadingAlbums = false;
+    } else if (selectedLibraryId != null) {
+      _isLoadingAlbums = true;
+    }
+
+    if (snapshot.artists != null) {
+      _artists = snapshot.artists;
+      _artistsError = null;
+      _isLoadingArtists = false;
+    } else if (selectedLibraryId != null) {
+      _isLoadingArtists = true;
+    }
+
+    if (snapshot.recentTracks != null) {
+      _recentTracks = snapshot.recentTracks;
+      _recentError = null;
+      _isLoadingRecent = false;
+    } else if (selectedLibraryId != null) {
+      _isLoadingRecent = true;
+    }
+
+    if (snapshot.recentlyAddedAlbums != null) {
+      _recentlyAddedAlbums = snapshot.recentlyAddedAlbums;
+      _recentlyAddedError = null;
+      _isLoadingRecentlyAdded = false;
+    } else if (selectedLibraryId != null) {
+      _isLoadingRecentlyAdded = true;
+    }
+
+    notifyListeners();
+  }
+
+  Future<void> _handleLibrariesBootstrapUpdate(
+    List<JellyfinLibrary> data,
+  ) async {
+    _libraries = data;
+    _librariesError = null;
+    _isLoadingLibraries = false;
+    await _ensureSelectedLibraryStillValid();
+    notifyListeners();
+  }
+
+  void _handlePlaylistsBootstrapUpdate(List<JellyfinPlaylist> data) {
+    _playlists = data;
+    _playlistsError = null;
+    _isLoadingPlaylists = false;
+    unawaited(_playlistStore.save(data));
+    notifyListeners();
+  }
+
+  void _handleAlbumsBootstrapUpdate(List<JellyfinAlbum> data) {
+    _albums = data;
+    _albumsError = null;
+    _isLoadingAlbums = false;
+    _hasMoreAlbums = data.length == _albumsPageSize;
+    notifyListeners();
+  }
+
+  void _handleArtistsBootstrapUpdate(List<JellyfinArtist> data) {
+    _artists = data;
+    _artistsError = null;
+    _isLoadingArtists = false;
+    _hasMoreArtists = data.length == _artistsPageSize;
+    notifyListeners();
+  }
+
+  void _handleRecentBootstrapUpdate(List<JellyfinTrack> data) {
+    _recentTracks = data;
+    _recentError = null;
+    _isLoadingRecent = false;
+    notifyListeners();
+  }
+
+  void _handleRecentlyAddedBootstrapUpdate(List<JellyfinAlbum> data) {
+    _recentlyAddedAlbums = data;
+    _recentlyAddedError = null;
+    _isLoadingRecentlyAdded = false;
+    notifyListeners();
+  }
+
+  void _handleNetworkRecovered() {
+    if (!_networkAvailable) {
+      _networkAvailable = true;
+      notifyListeners();
+    }
+  }
+
+  void _handleNetworkDrop(Object error) {
+    if (_networkAvailable) {
+      _networkAvailable = false;
+      if (!_isOfflineMode && (_libraries == null || _libraries!.isEmpty)) {
+        _isOfflineMode = true;
+      }
+      debugPrint('Network lost while syncing: $error');
+      notifyListeners();
+    }
+  }
+
+  void _handleBootstrapUnauthorized() {
+    if (_handlingUnauthorizedSession || _session == null) {
+      return;
+    }
+    _handlingUnauthorizedSession = true;
+    debugPrint('Bootstrap detected unauthorized session; forcing logout');
+    _lastError = JellyfinAuthException('Session expired. Please log in again.');
+    notifyListeners();
+    unawaited(_logoutAfterUnauthorized());
+  }
+
+  Future<void> _logoutAfterUnauthorized() async {
+    try {
+      await logout();
+    } finally {
+      _handlingUnauthorizedSession = false;
     }
   }
 
@@ -541,6 +688,7 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    final cacheKey = _sessionCacheKey;
     _jellyfinService.clearSession();
     _session = null;
     _libraries = null;
@@ -555,9 +703,15 @@ class NautuneAppState extends ChangeNotifier {
     _recentTracks = null;
     _recentError = null;
     _isLoadingRecent = false;
+    _recentlyAddedAlbums = null;
+    _recentlyAddedError = null;
+    _isLoadingRecentlyAdded = false;
     _favoriteTracks = null;
     _favoritesError = null;
     _isLoadingFavorites = false;
+    if (cacheKey != null) {
+      await _cacheService.clearForSession(cacheKey);
+    }
     await _sessionStore.clear();
     await _teardownDemoMode();
     notifyListeners();
@@ -780,29 +934,52 @@ class NautuneAppState extends ChangeNotifier {
           results.where((lib) => lib.isAudioLibrary).toList();
       _libraries = audioLibraries;
 
-      final session = _session;
-      if (session != null) {
-        final currentId = session.selectedLibraryId;
-        final stillExists = currentId != null &&
-            audioLibraries.any((lib) => lib.id == currentId);
-        if (!stillExists && currentId != null) {
-          final updated = session.copyWith(
-            selectedLibraryId: null,
-            selectedLibraryName: null,
-          );
-          _session = updated;
-          await _sessionStore.save(updated);
-          _albums = null;
-          _playlists = null;
-          _recentTracks = null;
-        }
+      final cacheKey = _sessionCacheKey;
+      if (cacheKey != null) {
+        await _cacheService.saveLibraries(cacheKey, audioLibraries);
       }
+      await _ensureSelectedLibraryStillValid();
     } catch (error) {
       _librariesError = error;
-      _libraries = null;
+      final cacheKey = _sessionCacheKey;
+      if (cacheKey != null) {
+        final cached = await _cacheService.readLibraries(cacheKey);
+        if (cached != null && cached.isNotEmpty) {
+          _libraries = cached;
+        } else {
+          _libraries = null;
+        }
+      } else {
+        _libraries = null;
+      }
     } finally {
       _isLoadingLibraries = false;
       notifyListeners();
+    }
+  }
+
+  Future<void> _ensureSelectedLibraryStillValid() async {
+    final libs = _libraries;
+    final session = _session;
+    if (libs == null || session == null) {
+      return;
+    }
+    final currentId = session.selectedLibraryId;
+    if (currentId == null) {
+      return;
+    }
+    final stillExists = libs.any((lib) => lib.id == currentId);
+    if (!stillExists) {
+      final updated = session.copyWith(
+        selectedLibraryId: null,
+        selectedLibraryName: null,
+      );
+      _session = updated;
+      await _sessionStore.save(updated);
+      _albums = null;
+      _artists = null;
+      _recentTracks = null;
+      _recentlyAddedAlbums = null;
     }
   }
 
@@ -819,8 +996,14 @@ class NautuneAppState extends ChangeNotifier {
     if (!_isDemoMode) {
       await _sessionStore.save(updated);
     }
-    await _loadLibraryDependentContent(forceRefresh: true);
-    notifyListeners();
+    final snapshot = await _bootstrapService.loadCachedSnapshot(
+      session: updated,
+      libraryIdOverride: library.id,
+    );
+    await _applyBootstrapSnapshot(snapshot);
+    _startBootstrapSync(updated, libraryIdOverride: library.id);
+    unawaited(_loadFavorites(forceRefresh: true));
+    unawaited(_loadGenres(library.id, forceRefresh: true));
   }
 
   Future<void> refreshAlbums() async {
@@ -885,6 +1068,7 @@ class NautuneAppState extends ChangeNotifier {
       _loadArtistsForLibrary(libraryId, forceRefresh: forceRefresh),
       _loadPlaylistsForLibrary(libraryId, forceRefresh: forceRefresh),
       _loadRecentForLibrary(libraryId, forceRefresh: forceRefresh),
+      _loadRecentlyAddedForLibrary(libraryId, forceRefresh: forceRefresh),
       _loadFavorites(forceRefresh: forceRefresh),
       _loadGenres(libraryId, forceRefresh: forceRefresh),
     ]);
@@ -952,9 +1136,28 @@ class NautuneAppState extends ChangeNotifier {
       );
       _albums = albums;
       _hasMoreAlbums = albums.length == _albumsPageSize;
+      final cacheKey = _sessionCacheKey;
+      if (cacheKey != null) {
+        await _cacheService.saveAlbums(
+          cacheKey,
+          libraryId: libraryId,
+          data: albums,
+        );
+      }
     } catch (error) {
       _albumsError = error;
-      _albums = null;
+      final cacheKey = _sessionCacheKey;
+      if (cacheKey != null) {
+        final cached =
+            await _cacheService.readAlbums(cacheKey, libraryId: libraryId);
+        if (cached != null && cached.isNotEmpty) {
+          _albums = cached;
+        } else {
+          _albums = null;
+        }
+      } else {
+        _albums = null;
+      }
     } finally {
       _isLoadingAlbums = false;
       notifyListeners();
@@ -1024,9 +1227,28 @@ class NautuneAppState extends ChangeNotifier {
       );
       _artists = artists;
       _hasMoreArtists = artists.length == _artistsPageSize;
+      final cacheKey = _sessionCacheKey;
+      if (cacheKey != null) {
+        await _cacheService.saveArtists(
+          cacheKey,
+          libraryId: libraryId,
+          data: artists,
+        );
+      }
     } catch (error) {
       _artistsError = error;
-      _artists = null;
+      final cacheKey = _sessionCacheKey;
+      if (cacheKey != null) {
+        final cached =
+            await _cacheService.readArtists(cacheKey, libraryId: libraryId);
+        if (cached != null && cached.isNotEmpty) {
+          _artists = cached;
+        } else {
+          _artists = null;
+        }
+      } else {
+        _artists = null;
+      }
     } finally {
       _isLoadingArtists = false;
       notifyListeners();
@@ -1092,10 +1314,23 @@ class NautuneAppState extends ChangeNotifier {
         forceRefresh: forceRefresh,
       );
       await _playlistStore.save(_playlists!);
+      final cacheKey = _sessionCacheKey;
+      if (cacheKey != null) {
+        await _cacheService.savePlaylists(cacheKey, _playlists!);
+      }
     } catch (error) {
       _playlistsError = error;
-      final cached = await _playlistStore.load();
-      _playlists = cached;
+      final cacheKey = _sessionCacheKey;
+      if (cacheKey != null) {
+        final cached = await _cacheService.readPlaylists(cacheKey);
+        if (cached != null && cached.isNotEmpty) {
+          _playlists = cached;
+        } else {
+          _playlists = await _playlistStore.load();
+        }
+      } else {
+        _playlists = await _playlistStore.load();
+      }
     } finally {
       _isLoadingPlaylists = false;
       notifyListeners();
@@ -1120,11 +1355,81 @@ class NautuneAppState extends ChangeNotifier {
         libraryId: libraryId,
         forceRefresh: forceRefresh,
       );
+      final cacheKey = _sessionCacheKey;
+      if (cacheKey != null) {
+        final tracks = _recentTracks ?? const <JellyfinTrack>[];
+        await _cacheService.saveRecentTracks(
+          cacheKey,
+          libraryId: libraryId,
+          data: tracks,
+        );
+      }
     } catch (error) {
       _recentError = error;
-      _recentTracks = null;
+      final cacheKey = _sessionCacheKey;
+      if (cacheKey != null) {
+        final cached =
+            await _cacheService.readRecentTracks(cacheKey, libraryId: libraryId);
+        if (cached != null && cached.isNotEmpty) {
+          _recentTracks = cached;
+        } else {
+          _recentTracks = null;
+        }
+      } else {
+        _recentTracks = null;
+      }
     } finally {
       _isLoadingRecent = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _loadRecentlyAddedForLibrary(String libraryId,
+      {bool forceRefresh = false}) async {
+    _recentlyAddedError = null;
+    _isLoadingRecentlyAdded = true;
+    notifyListeners();
+
+    if (_isDemoMode) {
+      _recentlyAddedAlbums = _demoContent?.albums ?? const <JellyfinAlbum>[];
+      _isLoadingRecentlyAdded = false;
+      notifyListeners();
+      return;
+    }
+
+    try {
+      final albums = await _jellyfinService.loadRecentlyAddedAlbums(
+        libraryId: libraryId,
+        forceRefresh: forceRefresh,
+        limit: 20,
+      );
+      _recentlyAddedAlbums = albums;
+      final cacheKey = _sessionCacheKey;
+      if (cacheKey != null) {
+        await _cacheService.saveRecentlyAddedAlbums(
+          cacheKey,
+          libraryId: libraryId,
+          data: albums,
+        );
+      }
+    } catch (error) {
+      _recentlyAddedError = error;
+      final cacheKey = _sessionCacheKey;
+      if (cacheKey != null) {
+        final cached = await _cacheService.readRecentlyAddedAlbums(
+          cacheKey,
+          libraryId: libraryId,
+        );
+        if (cached != null && cached.isNotEmpty) {
+          _recentlyAddedAlbums = cached;
+        } else {
+          _recentlyAddedAlbums = null;
+        }
+      } else {
+        _recentlyAddedAlbums = null;
+      }
+    } finally {
+      _isLoadingRecentlyAdded = false;
       notifyListeners();
     }
   }
@@ -1133,6 +1438,13 @@ class NautuneAppState extends ChangeNotifier {
     final libraryId = selectedLibraryId;
     if (libraryId != null) {
       await _loadRecentForLibrary(libraryId, forceRefresh: true);
+    }
+  }
+
+  Future<void> refreshRecentlyAdded() async {
+    final libraryId = selectedLibraryId;
+    if (libraryId != null) {
+      await _loadRecentlyAddedForLibrary(libraryId, forceRefresh: true);
     }
   }
 

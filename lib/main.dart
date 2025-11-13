@@ -7,15 +7,25 @@ import 'jellyfin/jellyfin_session_store.dart';
 import 'screens/library_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/queue_screen.dart';
+import 'services/bootstrap_service.dart';
+import 'services/local_cache_service.dart';
 import 'services/playback_state_store.dart';
 import 'theme/nautune_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  final jellyfinService = JellyfinService();
+  final cacheService = await LocalCacheService.create();
+  final bootstrapService = BootstrapService(
+    cacheService: cacheService,
+    jellyfinService: jellyfinService,
+  );
   final appState = NautuneAppState(
-    jellyfinService: JellyfinService(),
+    jellyfinService: jellyfinService,
     sessionStore: JellyfinSessionStore(),
     playbackStateStore: PlaybackStateStore(),
+    cacheService: cacheService,
+    bootstrapService: bootstrapService,
   );
   unawaited(appState.initialize());
   runApp(NautuneApp(appState: appState));

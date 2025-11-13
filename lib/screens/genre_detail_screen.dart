@@ -176,7 +176,7 @@ class _AlbumCard extends StatelessWidget {
                         maxWidth: 400,
                       ),
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Image.asset(
+                      errorBuilder: (context, error, stackTrace) => Image.asset(
                         'assets/no_album_art.png',
                         fit: BoxFit.cover,
                       ),

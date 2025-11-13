@@ -33,15 +33,20 @@ class LibraryScreen extends StatefulWidget {
 
 class _LibraryScreenState extends State<LibraryScreen>
     with SingleTickerProviderStateMixin {
+  static const int _homeTabIndex = 2;
   late TabController _tabController;
   final ScrollController _albumsScrollController = ScrollController();
   final ScrollController _playlistsScrollController = ScrollController();
-  int _currentTabIndex = 0;
+  int _currentTabIndex = _homeTabIndex;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);  // Library, Favorites, Most Played, Playlists, Search
+    _tabController = TabController(
+      length: 5,
+      vsync: this,
+      initialIndex: _homeTabIndex,
+    );  // Library, Favorites, Home (Most), Playlists, Search
     _tabController.addListener(_handleTabChange);
     _albumsScrollController.addListener(_onAlbumsScroll);
     _playlistsScrollController.addListener(_onPlaylistsScroll);
@@ -90,20 +95,13 @@ class _LibraryScreenState extends State<LibraryScreen>
     return AnimatedBuilder(
       animation: widget.appState,
       builder: (context, _) {
-        final session = widget.appState.session;
         final libraries = widget.appState.libraries;
         final isLoadingLibraries = widget.appState.isLoadingLibraries;
         final libraryError = widget.appState.librariesError;
         final selectedId = widget.appState.selectedLibraryId;
-        final albums = widget.appState.albums;
-        final isLoadingAlbums = widget.appState.isLoadingAlbums;
-        final albumsError = widget.appState.albumsError;
         final playlists = widget.appState.playlists;
         final isLoadingPlaylists = widget.appState.isLoadingPlaylists;
         final playlistsError = widget.appState.playlistsError;
-        final recentTracks = widget.appState.recentTracks;
-        final isLoadingRecent = widget.appState.isLoadingRecent;
-        final recentError = widget.appState.recentError;
         final favoriteTracks = widget.appState.favoriteTracks;
         final isLoadingFavorites = widget.appState.isLoadingFavorites;
         final favoritesError = widget.appState.favoritesError;
@@ -424,8 +422,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                     label: 'Favorites',
                   ),
                   NavigationDestination(
-                    icon: Icon(widget.appState.isOfflineMode ? Icons.download : Icons.trending_up),
-                    label: widget.appState.isOfflineMode ? 'Downloads' : 'Most',
+                    icon: Icon(widget.appState.isOfflineMode ? Icons.download : Icons.home_outlined),
+                    label: widget.appState.isOfflineMode ? 'Downloads' : 'Home',
                   ),
                   const NavigationDestination(
                     icon: Icon(Icons.queue_music),
@@ -623,45 +621,43 @@ class _LibraryTabState extends State<_LibraryTab> {
   Widget build(BuildContext context) {
     final isOffline = widget.appState.isOfflineMode;
     
-    return Column(
-      children: [
-        // Toggle buttons for Albums/Artists/Genres (hide genres in offline mode)
-        Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: SegmentedButton<String>(
-            segments: [
-              const ButtonSegment(
-                value: 'albums',
-                label: Text('Albums'),
-                icon: Icon(Icons.album),
+    return NestedScrollView(
+      headerSliverBuilder: (context, innerBoxIsScrolled) {
+        return [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: SegmentedButton<String>(
+                segments: [
+                  const ButtonSegment(
+                    value: 'albums',
+                    label: Text('Albums'),
+                    icon: Icon(Icons.album),
+                  ),
+                  const ButtonSegment(
+                    value: 'artists',
+                    label: Text('Artists'),
+                    icon: Icon(Icons.person),
+                  ),
+                  if (!isOffline)
+                    const ButtonSegment(
+                      value: 'genres',
+                      label: Text('Genres'),
+                      icon: Icon(Icons.category),
+                    ),
+                ],
+                selected: {_selectedView},
+                onSelectionChanged: (Set<String> newSelection) {
+                  setState(() {
+                    _selectedView = newSelection.first;
+                  });
+                },
               ),
-              const ButtonSegment(
-                value: 'artists',
-                label: Text('Artists'),
-                icon: Icon(Icons.person),
-              ),
-              if (!isOffline)
-                const ButtonSegment(
-                  value: 'genres',
-                  label: Text('Genres'),
-                  icon: Icon(Icons.category),
-                ),
-            ],
-            selected: {_selectedView},
-            onSelectionChanged: (Set<String> newSelection) {
-              setState(() {
-                _selectedView = newSelection.first;
-              });
-            },
+            ),
           ),
-        ),
-        // Content based on selection
-        Expanded(
-          child: isOffline
-              ? _buildOfflineContent()
-              : _buildOnlineContent(),
-        ),
-      ],
+        ];
+      },
+      body: isOffline ? _buildOfflineContent() : _buildOnlineContent(),
     );
   }
 
@@ -787,6 +783,318 @@ class _AlbumsTab extends StatelessWidget {
   }
 }
 
+class _ShelfHeader extends StatelessWidget {
+  const _ShelfHeader({
+    required this.title,
+    required this.onRefresh,
+    required this.isLoading,
+  });
+
+  final String title;
+  final VoidCallback onRefresh;
+  final bool isLoading;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const Spacer(),
+          if (isLoading)
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          if (isLoading) const SizedBox(width: 8),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            iconSize: 18,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            onPressed: onRefresh,
+            tooltip: 'Refresh',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ContinueListeningShelf extends StatelessWidget {
+  const _ContinueListeningShelf({
+    required this.tracks,
+    required this.isLoading,
+    required this.onPlay,
+    required this.onRefresh,
+  });
+
+  final List<JellyfinTrack>? tracks;
+  final bool isLoading;
+  final void Function(JellyfinTrack) onPlay;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final hasData = tracks != null && tracks!.isNotEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _ShelfHeader(
+          title: 'Continue Listening',
+          onRefresh: onRefresh,
+          isLoading: isLoading,
+        ),
+        SizedBox(
+          height: 140,
+          child: !hasData && isLoading
+              ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+              : hasData
+                  ? ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: tracks!.length,
+                      separatorBuilder: (context, _) => const SizedBox(width: 12),
+                      itemBuilder: (context, index) {
+                        final track = tracks![index];
+                        return _TrackChip(
+                          track: track,
+                          onTap: () => onPlay(track),
+                        );
+                      },
+                    )
+                  : Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Text(
+                        'Nothing waiting for you yet.',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TrackChip extends StatelessWidget {
+  const _TrackChip({required this.track, required this.onTap});
+
+  final JellyfinTrack track;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final artUrl = track.artworkUrl(maxWidth: 300);
+
+    return SizedBox(
+      width: 240,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Row(
+            children: [
+              AspectRatio(
+                aspectRatio: 1,
+                child: artUrl != null
+                    ? Image.network(
+                        artUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) => Image.asset(
+                          'assets/no_album_art.png',
+                          fit: BoxFit.cover,
+                        ),
+                      )
+                    : Image.asset(
+                        'assets/no_album_art.png',
+                        fit: BoxFit.cover,
+                      ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        track.name,
+                        style: theme.textTheme.titleSmall,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        track.displayArtist,
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RecentlyAddedShelf extends StatelessWidget {
+  const _RecentlyAddedShelf({
+    required this.albums,
+    required this.isLoading,
+    required this.appState,
+    required this.onAlbumTap,
+    required this.onRefresh,
+  });
+
+  final List<JellyfinAlbum>? albums;
+  final bool isLoading;
+  final NautuneAppState appState;
+  final void Function(JellyfinAlbum) onAlbumTap;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final hasData = albums != null && albums!.isNotEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _ShelfHeader(
+          title: 'Recently Added',
+          onRefresh: onRefresh,
+          isLoading: isLoading,
+        ),
+        SizedBox(
+          height: 240,
+          child: !hasData && isLoading
+              ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+              : hasData
+                  ? ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: albums!.length,
+                      separatorBuilder: (context, _) => const SizedBox(width: 12),
+                      itemBuilder: (context, index) {
+                        final album = albums![index];
+                        return _MiniAlbumCard(
+                          album: album,
+                          appState: appState,
+                          onTap: () => onAlbumTap(album),
+                        );
+                      },
+                    )
+                  : Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Text(
+                        'No new albums yet.',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MiniAlbumCard extends StatelessWidget {
+  const _MiniAlbumCard({
+    required this.album,
+    required this.appState,
+    required this.onTap,
+  });
+
+  final JellyfinAlbum album;
+  final NautuneAppState appState;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final imageUrl = album.primaryImageTag != null
+        ? appState.buildImageUrl(
+            itemId: album.id,
+            tag: album.primaryImageTag,
+            maxWidth: 400,
+          )
+        : null;
+
+    return SizedBox(
+      width: 150,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AspectRatio(
+                aspectRatio: 1,
+                child: Container(
+                  color: theme.colorScheme.surfaceContainerHighest,
+                  child: imageUrl != null
+                      ? Image.network(
+                          imageUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) => Image.asset(
+                            'assets/no_album_art.png',
+                            fit: BoxFit.cover,
+                          ),
+                        )
+                      : Image.asset(
+                          'assets/no_album_art.png',
+                          fit: BoxFit.cover,
+                        ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      album.name,
+                      style: theme.textTheme.titleSmall,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      album.displayArtist,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _AlbumCard extends StatelessWidget {
   const _AlbumCard({required this.album, required this.onTap, required this.appState});
   final JellyfinAlbum album;
@@ -839,7 +1147,7 @@ class _AlbumCard extends StatelessWidget {
                     ? Image.network(
                         imageUrl,
                         fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Image.asset(
+                        errorBuilder: (context, error, stackTrace) => Image.asset(
                           'assets/no_album_art.png',
                           fit: BoxFit.cover,
                         ),
@@ -1230,7 +1538,7 @@ class _FavoritesTab extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.favorite_outline, size: 64, color: theme.colorScheme.secondary.withOpacity(0.5)),
+            Icon(Icons.favorite_outline, size: 64, color: theme.colorScheme.secondary.withValues(alpha: 0.5)),
             const SizedBox(height: 16),
             Text(
               'No favorite tracks',
@@ -1359,56 +1667,28 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final heroShelves = _buildHomeHeroShelves();
 
-    return Column(
-      children: [
-        // Toggle for different track lists
-        Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(
-                value: 'mostPlayed',
-                icon: Icon(Icons.trending_up),
-              ),
-              ButtonSegment(
-                value: 'recentlyPlayed',
-                icon: Icon(Icons.history),
-              ),
-              ButtonSegment(
-                value: 'recentlyAdded',
-                icon: Icon(Icons.fiber_new),
-              ),
-              ButtonSegment(
-                value: 'longest',
-                icon: Icon(Icons.timer),
-              ),
-            ],
-            selected: {_selectedType},
-            onSelectionChanged: (Set<String> newSelection) {
-              setState(() {
-                _selectedType = newSelection.first;
-              });
-              _loadTracks();
-            },
-          ),
-        ),
-        // Content
-        Expanded(
-          child: _buildContent(theme),
-        ),
-      ],
-    );
+    return _buildContent(theme, heroShelves);
   }
 
-  Widget _buildContent(ThemeData theme) {
+  Widget _buildContent(ThemeData theme, Widget? heroShelves) {
+    final header = <Widget>[
+      if (heroShelves != null) heroShelves,
+      _buildTrackFilters(),
+    ];
+
     if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return _buildScrollableState(
+        header,
+        const Center(child: CircularProgressIndicator()),
+      );
     }
 
     if (_error != null) {
-      return Center(
-        child: Column(
+      return _buildScrollableState(
+        header,
+        Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(Icons.error_outline, size: 64, color: theme.colorScheme.error),
@@ -1443,12 +1723,17 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
         default:
           emptyMessage = 'No data';
       }
-      
-      return Center(
-        child: Column(
+
+      return _buildScrollableState(
+        header,
+        Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.music_note, size: 64, color: theme.colorScheme.secondary.withValues(alpha: 0.5)),
+            Icon(
+              Icons.music_note,
+              size: 64,
+              color: theme.colorScheme.secondary.withValues(alpha: 0.5),
+            ),
             const SizedBox(height: 16),
             Text(emptyMessage, style: theme.textTheme.titleLarge),
           ],
@@ -1456,15 +1741,14 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
       );
     }
 
-    return RefreshIndicator(
-      onRefresh: _loadTracks,
-      child: ListView.builder(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: _tracks!.length,
-        itemBuilder: (context, index) {
-          if (index >= _tracks!.length) return const SizedBox.shrink();
-          final track = _tracks![index];
-          return Card(
+    final trackCards = <Widget>[
+      const SizedBox(height: 8),
+      ..._tracks!.asMap().entries.map((entry) {
+        final index = entry.key;
+        final track = entry.value;
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Card(
             margin: const EdgeInsets.only(bottom: 8),
             child: ListTile(
               leading: CircleAvatar(
@@ -1472,12 +1756,17 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
                 child: Text('${index + 1}', style: const TextStyle(color: Colors.white)),
               ),
               title: Text(track.name, style: TextStyle(color: theme.colorScheme.tertiary)),
-              subtitle: Text(track.displayArtist,
-                  style: TextStyle(color: theme.colorScheme.tertiary.withValues(alpha: 0.7))),
+              subtitle: Text(
+                track.displayArtist,
+                style: TextStyle(color: theme.colorScheme.tertiary.withValues(alpha: 0.7)),
+              ),
               trailing: track.duration != null
-                  ? Text(_formatDuration(track.duration!),
+                  ? Text(
+                      _formatDuration(track.duration!),
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.tertiary.withValues(alpha: 0.7)))
+                        color: theme.colorScheme.tertiary.withValues(alpha: 0.7),
+                      ),
+                    )
                   : null,
               onTap: () {
                 widget.appState.audioPlayerService.playTrack(
@@ -1486,9 +1775,119 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
                 );
               },
             ),
-          );
+          ),
+        );
+      }),
+    ];
+
+    return _buildScrollableState(
+      header,
+      Column(children: trackCards),
+      applyBodyPadding: false,
+    );
+  }
+
+  Widget _buildTrackFilters() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: SegmentedButton<String>(
+        segments: const [
+          ButtonSegment(
+            value: 'mostPlayed',
+            icon: Icon(Icons.trending_up),
+          ),
+          ButtonSegment(
+            value: 'recentlyPlayed',
+            icon: Icon(Icons.history),
+          ),
+          ButtonSegment(
+            value: 'recentlyAdded',
+            icon: Icon(Icons.fiber_new),
+          ),
+          ButtonSegment(
+            value: 'longest',
+            icon: Icon(Icons.timer),
+          ),
+        ],
+        selected: {_selectedType},
+        onSelectionChanged: (Set<String> newSelection) {
+          setState(() {
+            _selectedType = newSelection.first;
+          });
+          _loadTracks();
         },
       ),
+    );
+  }
+
+  Widget _buildScrollableState(
+    List<Widget> header,
+    Widget body, {
+    bool applyBodyPadding = true,
+  }) {
+    return RefreshIndicator(
+      onRefresh: _loadTracks,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.zero,
+        children: [
+          ...header,
+          if (applyBodyPadding)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: body,
+            )
+          else
+            body,
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget? _buildHomeHeroShelves() {
+    if (widget.appState.isOfflineMode) {
+      return null;
+    }
+    final continueTracks = widget.appState.recentTracks;
+    final continueLoading = widget.appState.isLoadingRecent;
+    final recentlyAdded = widget.appState.recentlyAddedAlbums;
+    final recentlyAddedLoading = widget.appState.isLoadingRecentlyAdded;
+
+    final showContinue =
+        continueLoading || (continueTracks != null && continueTracks.isNotEmpty);
+    final showRecentlyAdded = recentlyAddedLoading ||
+        (recentlyAdded != null && recentlyAdded.isNotEmpty);
+
+    if (!showContinue && !showRecentlyAdded) {
+      return null;
+    }
+
+    return Column(
+      children: [
+        if (showContinue)
+          _ContinueListeningShelf(
+            tracks: continueTracks,
+            isLoading: continueLoading,
+            onPlay: (track) {
+              final queue = continueTracks ?? const <JellyfinTrack>[];
+              widget.appState.audioPlayerService.playTrack(
+                track,
+                queueContext: queue,
+              );
+            },
+            onRefresh: () => widget.appState.refreshRecent(),
+          ),
+        if (showRecentlyAdded)
+          _RecentlyAddedShelf(
+            albums: recentlyAdded,
+            isLoading: recentlyAddedLoading,
+            appState: widget.appState,
+            onAlbumTap: widget.onAlbumTap,
+            onRefresh: () => widget.appState.refreshRecentlyAdded(),
+          ),
+        const SizedBox(height: 8),
+      ],
     );
   }
 
@@ -1641,7 +2040,7 @@ class _RecentTabState extends State<_RecentTab> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.history, size: 64, color: theme.colorScheme.secondary.withOpacity(0.5)),
+            Icon(Icons.history, size: 64, color: theme.colorScheme.secondary.withValues(alpha: 0.5)),
             const SizedBox(height: 16),
             Text(
               'No recently played tracks',
@@ -1712,7 +2111,7 @@ class _RecentTabState extends State<_RecentTab> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.album, size: 64, color: theme.colorScheme.secondary.withOpacity(0.5)),
+            Icon(Icons.album, size: 64, color: theme.colorScheme.secondary.withValues(alpha: 0.5)),
             const SizedBox(height: 16),
             Text(
               'No recently added albums',
@@ -2741,7 +3140,7 @@ class _SearchTabState extends State<_SearchTab> {
       return ListView.separated(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         itemCount: _albumResults.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        separatorBuilder: (context, _) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
           final album = _albumResults[index];
           return Card(
@@ -2782,7 +3181,7 @@ class _SearchTabState extends State<_SearchTab> {
       return ListView.separated(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         itemCount: _artistResults.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        separatorBuilder: (context, _) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
           final artist = _artistResults[index];
           
@@ -2864,7 +3263,7 @@ class _SearchTabState extends State<_SearchTab> {
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
       itemCount: _trackResults.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      separatorBuilder: (context, _) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
         final track = _trackResults[index];
         final subtitleParts = <String>[
@@ -2947,7 +3346,7 @@ class _ArtistCard extends StatelessWidget {
           imageUrl,
           fit: BoxFit.cover,
           headers: appState.jellyfinService.imageHeaders(),
-          errorBuilder: (_, __, ___) => ClipOval(
+          errorBuilder: (context, error, stackTrace) => ClipOval(
             child: Image.asset(
               'assets/no_artist_art.png',
               fit: BoxFit.cover,
@@ -3000,6 +3399,7 @@ class _ArtistCard extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _DownloadsTab extends StatelessWidget {
   const _DownloadsTab({required this.appState});
 
@@ -3277,6 +3677,7 @@ class _DownloadsTab extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _PlaceholderTab extends StatelessWidget {
   const _PlaceholderTab({required this.icon, required this.message});
   final IconData icon;

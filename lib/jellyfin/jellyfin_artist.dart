@@ -31,4 +31,16 @@ class JellyfinArtist {
       songCount: json['SongCount'] as int?,
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'Id': id,
+      'Name': name,
+      if (primaryImageTag != null) 'ImageTags': {'Primary': primaryImageTag},
+      'Overview': overview,
+      if (genres != null) 'Genres': genres,
+      'ChildCount': albumCount,
+      'SongCount': songCount,
+    };
+  }
 }

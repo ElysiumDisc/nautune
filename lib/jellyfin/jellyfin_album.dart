@@ -20,16 +20,23 @@ class JellyfinAlbum {
   final List<String>? genres;
 
   factory JellyfinAlbum.fromJson(Map<String, dynamic> json) {
-    List<Map<String, dynamic>> _extractArtistMaps(String key) {
+    List<Map<String, dynamic>> extractArtistMaps(String key) {
       final raw = json[key];
       if (raw is List) {
         return raw.whereType<Map<String, dynamic>>().toList();
       }
-      return const <Map<String, dynamic>>[];
+      return const [];
     }
 
-    final albumArtistMaps = _extractArtistMaps('AlbumArtists');
-    final artistItemMaps = _extractArtistMaps('ArtistItems');
+    final albumArtistMaps = extractArtistMaps('AlbumArtists');
+    final artistItemMaps = extractArtistMaps('ArtistItems');
+
+    final combinedArtistIds = <String>{
+      for (final artist in albumArtistMaps)
+        if (artist['Id'] is String) artist['Id'] as String,
+      for (final artist in artistItemMaps)
+        if (artist['Id'] is String) artist['Id'] as String,
+    };
 
     return JellyfinAlbum(
       id: json['Id'] as String? ?? '',
@@ -39,18 +46,9 @@ class JellyfinAlbum {
                   (artist as Map<String, dynamic>)['Name'] as String? ?? '')
               .where((name) => name.isNotEmpty)
               .toList() ??
-          (json['Artists'] as List<dynamic>?)
-              ?.whereType<String>()
-              .toList() ??
-          const <String>[],
-      artistIds: [
-        ...albumArtistMaps
-            .map((artist) => artist['Id'] as String?)
-            .whereType<String>(),
-        ...artistItemMaps
-            .map((artist) => artist['Id'] as String?)
-            .whereType<String>(),
-      ].toSet().toList(),
+          (json['Artists'] as List<dynamic>?)?.whereType<String>().toList() ??
+          const [],
+      artistIds: combinedArtistIds.toList(),
       productionYear: json['ProductionYear'] as int?,
       primaryImageTag:
           (json['ImageTags'] as Map<String, dynamic>?)?['Primary'] as String?,
@@ -73,5 +71,22 @@ class JellyfinAlbum {
       return artists.first;
     }
     return '${artists.first} & ${artists.length - 1} more';
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'Id': id,
+      'Name': name,
+      'AlbumArtists': [
+        for (final artist in artists) {'Name': artist},
+      ],
+      'ArtistItems': [
+        for (final artistId in artistIds) {'Id': artistId},
+      ],
+      'ProductionYear': productionYear,
+      if (primaryImageTag != null) 'ImageTags': {'Primary': primaryImageTag},
+      'UserData': {'IsFavorite': isFavorite},
+      if (genres != null) 'Genres': genres,
+    };
   }
 }

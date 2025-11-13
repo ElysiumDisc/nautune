@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:audio_service/audio_service.dart' as audio_service;
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart';
 import '../jellyfin/jellyfin_track.dart';
 
 class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_service.QueueHandler, audio_service.SeekHandler {
@@ -115,7 +116,7 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
     try {
       onSkipToNext();
     } catch (e) {
-      print('⚠️ Skip to next failed: $e');
+      debugPrint('⚠️ Skip to next failed: $e');
     }
   }
 
@@ -124,7 +125,7 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
     try {
       onSkipToPrevious();
     } catch (e) {
-      print('⚠️ Skip to previous failed: $e');
+      debugPrint('⚠️ Skip to previous failed: $e');
     }
   }
 

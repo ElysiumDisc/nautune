@@ -78,7 +78,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
           imageUrl,
           fit: BoxFit.cover,
           headers: widget.appState.jellyfinService.imageHeaders(),
-          errorBuilder: (_, __, ___) => _DefaultArtistArtwork(),
+          errorBuilder: (context, error, stackTrace) => _DefaultArtistArtwork(),
         ),
       );
     } else {
@@ -308,7 +308,7 @@ class _AlbumCard extends StatelessWidget {
         fit: BoxFit.cover,
         headers: appState.jellyfinService.imageHeaders(),
         cacheWidth: 300,
-        errorBuilder: (_, __, ___) => Container(
+        errorBuilder: (context, error, stackTrace) => Container(
           color: theme.colorScheme.primaryContainer,
           child: Icon(
             Icons.album,

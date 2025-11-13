@@ -358,41 +358,39 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                                           // Refresh favorites list in app state
                                           await widget.appState.refreshFavorites();
                                           
-                                          if (mounted) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(
-                                                content: Text(newFavoriteStatus ? 'Added to favorites' : 'Removed from favorites'),
-                                                duration: const Duration(seconds: 2),
-                                                backgroundColor: Colors.green,
-                                              ),
-                                            );
-                                          }
+                                          if (!context.mounted) return;
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text(newFavoriteStatus ? 'Added to favorites' : 'Removed from favorites'),
+                                              duration: const Duration(seconds: 2),
+                                              backgroundColor: Colors.green,
+                                            ),
+                                          );
                                         } catch (e) {
                                           debugPrint('❌ Error toggling favorite: $e');
-                                          if (mounted) {
-                                            final isOfflineError = e.toString().contains('Offline') || 
-                                                                   e.toString().contains('queued');
-                                            
-                                            // Update track optimistically even when offline
-                                            if (isOfflineError) {
-                                              final currentFavoriteStatus = track.isFavorite;
-                                              final newFavoriteStatus = !currentFavoriteStatus;
-                                              final updatedTrack = track.copyWith(isFavorite: newFavoriteStatus);
-                                              widget.audioService.updateCurrentTrack(updatedTrack);
-                                              if (mounted) setState(() {});
-                                            }
-                                            
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(
-                                                content: Text(
-                                                  isOfflineError 
-                                                    ? 'Offline: Favorite will sync when online'
-                                                    : 'Failed to update favorite: $e'
-                                                ),
-                                                backgroundColor: isOfflineError ? Colors.orange : theme.colorScheme.error,
-                                              ),
-                                            );
+                                          if (!context.mounted) return;
+                                          final isOfflineError = e.toString().contains('Offline') || 
+                                                                 e.toString().contains('queued');
+                                          
+                                          // Update track optimistically even when offline
+                                          if (isOfflineError) {
+                                            final currentFavoriteStatus = track.isFavorite;
+                                            final newFavoriteStatus = !currentFavoriteStatus;
+                                            final updatedTrack = track.copyWith(isFavorite: newFavoriteStatus);
+                                            widget.audioService.updateCurrentTrack(updatedTrack);
+                                            if (mounted) setState(() {});
                                           }
+                                          
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                isOfflineError 
+                                                  ? 'Offline: Favorite will sync when online'
+                                                  : 'Failed to update favorite: $e'
+                                              ),
+                                              backgroundColor: isOfflineError ? Colors.orange : theme.colorScheme.error,
+                                            ),
+                                          );
                                         }
                                   },
                                   color: track.isFavorite ? Colors.red : null,
@@ -427,7 +425,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                                         color: theme.colorScheme.primary,
                                         boxShadow: [
                                           BoxShadow(
-                                            color: theme.colorScheme.primary.withOpacity(0.4),
+                                            color: theme.colorScheme.primary.withValues(alpha: 0.4),
                                             blurRadius: 16,
                                             spreadRadius: 2,
                                           ),
@@ -529,7 +527,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
         color: theme.colorScheme.primaryContainer,
         boxShadow: [
           BoxShadow(
-            color: theme.colorScheme.primary.withOpacity(0.3),
+            color: theme.colorScheme.primary.withValues(alpha: 0.3),
             blurRadius: 24,
             spreadRadius: 2,
           ),
@@ -543,7 +541,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
               ? Image.network(
                   imageUrl,
                   fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => placeholder,
+                  errorBuilder: (context, error, stackTrace) => placeholder,
                 )
               : placeholder,
         ),

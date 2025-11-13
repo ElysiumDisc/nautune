@@ -1,7 +1,6 @@
 import 'dart:async';
-import 'dart:ui' show FontFeature;
-import 'dart:ui' as ui;
 import 'dart:typed_data';
+import 'dart:ui' as ui show FontFeature, Image;
 
 import 'package:flutter/material.dart';
 
@@ -187,7 +186,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         imageUrl,
         fit: BoxFit.cover,
         headers: widget.appState.jellyfinService.imageHeaders(),
-        errorBuilder: (_, __, ___) => const _TritonArtwork(),
+        errorBuilder: (context, error, stackTrace) => const _TritonArtwork(),
       );
     } else {
       artwork = const _TritonArtwork();
@@ -304,7 +303,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                                 albumName: album.name,
                               );
                             } catch (error) {
-                              if (!mounted) return;
+                              if (!context.mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
                                   content: Text('Could not start playback: $error'),
@@ -356,19 +355,19 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                                       ],
                                     ),
                                   );
-                                  if (confirm == true && mounted) {
+                                  if (!context.mounted) return;
+                                  if (confirm == true) {
                                     for (final track in _tracks!) {
                                       await widget.appState.downloadService
                                           .deleteDownload(track.id);
                                     }
-                                    if (mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(
-                                          content: Text('Album downloads deleted'),
-                                          duration: Duration(seconds: 2),
-                                        ),
-                                      );
-                                    }
+                                    if (!context.mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Album downloads deleted'),
+                                        duration: Duration(seconds: 2),
+                                      ),
+                                    );
                                   }
                                 },
                                 icon: const Icon(Icons.download_done),
@@ -382,15 +381,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                                   : () async {
                                       await widget.appState.downloadService
                                           .downloadAlbum(album);
-                                      if (mounted) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(
-                                            content: Text(
-                                                'Downloading ${_tracks!.length} tracks from ${album.name}'),
-                                            duration: const Duration(seconds: 2),
-                                          ),
-                                        );
-                                      }
+                                      if (!context.mounted) return;
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                              'Downloading ${_tracks!.length} tracks from ${album.name}'),
+                                          duration: const Duration(seconds: 2),
+                                        ),
+                                      );
                                     },
                               icon: Icon(anyDownloading
                                   ? Icons.downloading
@@ -490,7 +488,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                                 albumName: widget.album.name,
                               );
                             } catch (error) {
-                              if (!mounted) return;
+                              if (!context.mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
                                   content: Text('Could not start playback: $error'),
@@ -554,7 +552,7 @@ class _TrackTile extends StatelessWidget {
                   displayTrackNumber,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.tertiary.withValues(alpha: 0.7),  // Ocean blue
-                    fontFeatures: const [FontFeature.tabularFigures()],
+                    fontFeatures: const [ui.FontFeature.tabularFigures()],
                   ),
                   textAlign: TextAlign.center,
                 ),

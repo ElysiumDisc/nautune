@@ -1,6 +1,9 @@
 import 'dart:async';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+
 import '../jellyfin/jellyfin_track.dart';
 
 class PlaybackReportingService {
@@ -28,9 +31,9 @@ class PlaybackReportingService {
   }) async {
     _currentSessionId = DateTime.now().millisecondsSinceEpoch.toString();
     
-    print('📡 Reporting to Jellyfin: $serverUrl/Sessions/Playing');
-    print('   Track: ${track.name} (${track.id})');
-    print('   Method: $playMethod');
+    debugPrint('📡 Reporting to Jellyfin: $serverUrl/Sessions/Playing');
+    debugPrint('   Track: ${track.name} (${track.id})');
+    debugPrint('   Method: $playMethod');
     
     final url = Uri.parse('$serverUrl/Sessions/Playing');
     final body = {
@@ -55,15 +58,15 @@ class PlaybackReportingService {
       );
 
       if (response.statusCode == 200 || response.statusCode == 204) {
-        print('✅ Playback start reported successfully!');
+        debugPrint('✅ Playback start reported successfully!');
       } else {
-        print('⚠️ Playback start failed: ${response.statusCode} - ${response.body}');
+        debugPrint('⚠️ Playback start failed: ${response.statusCode} - ${response.body}');
       }
 
       // Start periodic progress reporting
       _startProgressReporting(track);
     } catch (e) {
-      print('❌ Failed to report playback start: $e');
+      debugPrint('❌ Failed to report playback start: $e');
     }
   }
 
@@ -107,12 +110,12 @@ class PlaybackReportingService {
       );
       
       if (response.statusCode == 200 || response.statusCode == 204) {
-        print('✅ Progress reported: ${position.inSeconds}s, paused: $isPaused');
+        debugPrint('✅ Progress reported: ${position.inSeconds}s, paused: $isPaused');
       } else {
-        print('⚠️ Progress report failed: ${response.statusCode}');
+        debugPrint('⚠️ Progress report failed: ${response.statusCode}');
       }
     } catch (e) {
-      print('❌ Failed to report playback progress: $e');
+      debugPrint('❌ Failed to report playback progress: $e');
     }
   }
 
@@ -144,7 +147,7 @@ class PlaybackReportingService {
         body: jsonEncode(body),
       );
     } catch (e) {
-      print('Failed to report playback stopped: $e');
+      debugPrint('Failed to report playback stopped: $e');
     } finally {
       _currentSessionId = null;
     }

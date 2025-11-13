@@ -47,8 +47,6 @@ class AudioPlayerService {
   int _crossfadeDurationSeconds = 3;
   Timer? _crossfadeTimer;
   bool _isCrossfading = false;
-  String? _currentAlbumId;
-  String? _nextTrackAlbumId;
   
   JellyfinTrack? _currentTrack;
   List<JellyfinTrack> _queue = [];
@@ -149,8 +147,8 @@ class AudioPlayerService {
   }
   
   Future<void> setVolume(double value) async {
-    final clamped = value.clamp(0.0, 1.0) as double;
-    _volume = clamped;
+    final clamped = value.clamp(0.0, 1.0);
+    _volume = clamped.toDouble();
     _volumeController.add(_volume);
     await Future.wait([
       _player.setVolume(_volume),
@@ -193,9 +191,9 @@ class AudioPlayerService {
           androidStopForegroundOnPause: true,
         ),
       );
-      print('✅ Audio service initialized for lock screen controls');
+      debugPrint('✅ Audio service initialized for lock screen controls');
     } catch (e) {
-      print('⚠️ Audio service initialization failed: $e');
+      debugPrint('⚠️ Audio service initialization failed: $e');
     }
   }
   
@@ -226,7 +224,7 @@ class AudioPlayerService {
         unawaited(pause());
       });
     } catch (e) {
-      print('Audio session setup failed: $e');
+      debugPrint('Audio session setup failed: $e');
     }
   }
   
@@ -299,11 +297,6 @@ class AudioPlayerService {
     // Move to next track
     if (_currentIndex + 1 < _queue.length) {
       _isTransitioning = true;
-      
-      // Swap players for gapless playback
-      final temp = _player;
-      // Note: This is a simplified approach. For true gapless,
-      // we'd need platform-specific implementations or just_audio package
       
       _currentIndex++;
       _currentTrack = _queue[_currentIndex];
@@ -550,18 +543,18 @@ class AudioPlayerService {
       // Verify file exists before trying to play
       final file = File(localPath);
       if (await file.exists()) {
-        if (await trySetSource(localPath, isFile: true)) {
-          activeUrl = localPath;
-          isOffline = true;
-          print('✅ Playing from local file: $localPath');
+          if (await trySetSource(localPath, isFile: true)) {
+            activeUrl = localPath;
+            isOffline = true;
+            debugPrint('✅ Playing from local file: $localPath');
+          } else {
+            debugPrint('⚠️ Local file exists but failed to load: $localPath');
+          }
         } else {
-          print('⚠️ Local file exists but failed to load: $localPath');
+          debugPrint('⚠️ Local file not found (may be orphaned): $localPath');
+          // Clean up orphaned reference
+          await _downloadService?.verifyAndCleanupDownloads();
         }
-      } else {
-        print('⚠️ Local file not found (may be orphaned): $localPath');
-        // Clean up orphaned reference
-        await _downloadService?.verifyAndCleanupDownloads();
-      }
     }
     
     // Try streaming if no local file or local file failed
@@ -587,13 +580,13 @@ class AudioPlayerService {
       
       // Report playback start to Jellyfin
       if (_reportingService != null) {
-        print('🎵 Reporting playback start to Jellyfin: ${track.name}');
+        debugPrint('🎵 Reporting playback start to Jellyfin: ${track.name}');
         await _reportingService!.reportPlaybackStart(
           track,
           playMethod: isOffline ? 'DirectPlay' : (activeUrl == downloadUrl ? 'DirectStream' : 'Transcode'),
         );
       } else {
-        print('⚠️ Reporting service not initialized!');
+        debugPrint('⚠️ Reporting service not initialized!');
       }
       
       _lastPlayingState = true;
@@ -1086,7 +1079,6 @@ class AudioPlayerService {
     // Update track info
     _currentIndex = nextIndex;
     _currentTrack = nextTrack;
-    _currentAlbumId = nextTrack.albumId;
     _currentTrackController.add(_currentTrack);
     
     // Report to Jellyfin
