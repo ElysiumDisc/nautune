@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 class JellyfinTrack {
   JellyfinTrack({
     required this.id,
@@ -17,6 +19,7 @@ class JellyfinTrack {
     this.isFavorite = false,
     this.streamUrlOverride,
     this.assetPathOverride,
+    this.normalizationGain,
   });
 
   final String id;
@@ -36,6 +39,7 @@ class JellyfinTrack {
   final bool isFavorite;
   final String? streamUrlOverride;
   final String? assetPathOverride;
+  final double? normalizationGain; // dB adjustment for ReplayGain
 
   factory JellyfinTrack.fromJson(Map<String, dynamic> json, {String? serverUrl, String? token, String? userId}) {
     return JellyfinTrack(
@@ -60,6 +64,7 @@ class JellyfinTrack {
       isFavorite: (json['UserData'] as Map<String, dynamic>?)?['IsFavorite'] as bool? ?? false,
       streamUrlOverride: null,
       assetPathOverride: null,
+      normalizationGain: json['NormalizationGain'] as double?,
     );
   }
 
@@ -81,6 +86,7 @@ class JellyfinTrack {
     bool? isFavorite,
     String? streamUrlOverride,
     String? assetPathOverride,
+    double? normalizationGain,
   }) {
     return JellyfinTrack(
       id: id ?? this.id,
@@ -100,6 +106,7 @@ class JellyfinTrack {
       isFavorite: isFavorite ?? this.isFavorite,
       streamUrlOverride: streamUrlOverride ?? this.streamUrlOverride,
       assetPathOverride: assetPathOverride ?? this.assetPathOverride,
+      normalizationGain: normalizationGain ?? this.normalizationGain,
     );
   }
 
@@ -127,6 +134,17 @@ class JellyfinTrack {
   /// Returns the best available track number for display.
   int effectiveTrackNumber(int fallback) {
     return indexNumber ?? fallback;
+  }
+
+  /// Returns the volume multiplier to apply for ReplayGain normalization.
+  /// Returns 1.0 if no normalization gain is available.
+  /// Formula: 10^(gain_dB / 20)
+  double get replayGainMultiplier {
+    if (normalizationGain == null) return 1.0;
+    // Convert dB to linear volume multiplier
+    // Clamp to reasonable range (0.1 to 2.0) to prevent extreme adjustments
+    final multiplier = math.pow(10, normalizationGain! / 20).toDouble();
+    return multiplier.clamp(0.1, 2.0);
   }
 
   /// Returns the most suitable image tag for artwork.
@@ -272,6 +290,7 @@ class JellyfinTrack {
       'isFavorite': isFavorite,
       'streamUrlOverride': streamUrlOverride,
       'assetPathOverride': assetPathOverride,
+      'normalizationGain': normalizationGain,
     };
   }
 
@@ -297,6 +316,7 @@ class JellyfinTrack {
       isFavorite: json['isFavorite'] as bool? ?? false,
       streamUrlOverride: json['streamUrlOverride'] as String?,
       assetPathOverride: json['assetPathOverride'] as String?,
+      normalizationGain: json['normalizationGain'] as double?,
     );
   }
 

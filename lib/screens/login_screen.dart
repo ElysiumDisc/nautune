@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
-import '../app_state.dart';
+import '../providers/demo_mode_provider.dart';
+import '../providers/session_provider.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key, required this.appState});
-
-  final NautuneAppState appState;
+  const LoginScreen({super.key});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -18,6 +18,9 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
   String? _errorMessage;
+
+  late SessionProvider _sessionProvider;
+  late DemoModeProvider _demoModeProvider;
 
   bool _looksLikeDemoRequest({String? serverValue}) {
     final server = serverValue ?? _serverController.text;
@@ -37,7 +40,10 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
-    final session = widget.appState.session;
+    _sessionProvider = Provider.of<SessionProvider>(context, listen: false);
+    _demoModeProvider = Provider.of<DemoModeProvider>(context, listen: false);
+
+    final session = _sessionProvider.session;
     if (session != null) {
       _serverController.text = session.serverUrl;
       _usernameController.text = session.username;
@@ -65,9 +71,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       if (_looksLikeDemoRequest()) {
-        await widget.appState.startDemoExperience();
+        await _demoModeProvider.startDemoMode();
       } else {
-        await widget.appState.login(
+        await _sessionProvider.login(
           serverUrl: _serverController.text.trim(),
           username: _usernameController.text.trim(),
           password: _passwordController.text,
@@ -84,10 +90,9 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return AnimatedBuilder(
-      animation: widget.appState,
-      builder: (context, _) {
-        final isLoading = widget.appState.isAuthenticating;
+    return Consumer2<SessionProvider, DemoModeProvider>(
+      builder: (context, session, demoMode, child) {
+        final isLoading = session.isAuthenticating;
 
         return Scaffold(
           body: Container(

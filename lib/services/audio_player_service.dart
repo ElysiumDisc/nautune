@@ -86,8 +86,8 @@ class AudioPlayerService {
     _crossfadeTimer?.cancel();
     _crossfadeTimer = null;
     _isCrossfading = false;
-    _crossfadePlayer?.dispose();
-    _crossfadePlayer = null;
+    // Don't dispose - reuse the player instance
+    _crossfadePlayer?.stop();
   }
 
   void setJellyfinService(JellyfinService service) {
@@ -150,8 +150,13 @@ class AudioPlayerService {
     final clamped = value.clamp(0.0, 1.0);
     _volume = clamped.toDouble();
     _volumeController.add(_volume);
+
+    // Apply ReplayGain normalization if available
+    final currentMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
+    final adjustedVolume = (_volume * currentMultiplier).clamp(0.0, 1.0);
+
     await Future.wait([
-      _player.setVolume(_volume),
+      _player.setVolume(adjustedVolume),
       _nextPlayer.setVolume(_volume),
     ]);
     unawaited(_stateStore.savePlaybackSnapshot(volume: _volume));
@@ -166,13 +171,16 @@ class AudioPlayerService {
     _volumeController.add(_volume);
     _emitIdleVisualizer();
     _startCacheCleanup();
+
+    // Initialize reusable crossfade player
+    _crossfadePlayer = AudioPlayer();
   }
 
   String get _deviceId => 'nautune-${Platform.operatingSystem}';
-  
+
   Future<void> _initAudioHandler() async {
-    if (!Platform.isIOS && !Platform.isAndroid) return;
-    
+    // Initialize AudioService for all platforms (Mobile + Desktop)
+    // On Linux, this provides MPRIS support via DBus.
     try {
       _audioHandler = await audio_service.AudioService.init(
         builder: () => NautuneAudioHandler(
@@ -189,9 +197,10 @@ class AudioPlayerService {
           androidNotificationChannelName: 'Nautune Audio',
           androidNotificationOngoing: true,
           androidStopForegroundOnPause: true,
+          // Desktop specific configs (if any) are handled automatically by the platform implementation
         ),
       );
-      debugPrint('✅ Audio service initialized for lock screen controls');
+      debugPrint('✅ Audio service initialized for media controls');
     } catch (e) {
       debugPrint('⚠️ Audio service initialization failed: $e');
     }
@@ -514,7 +523,12 @@ class AudioPlayerService {
         } else {
           await _player.setSource(UrlSource(url));
         }
-        await _player.setVolume(_volume);
+        // Apply ReplayGain normalization
+        final adjustedVolume = _volume * track.replayGainMultiplier;
+        await _player.setVolume(adjustedVolume.clamp(0.0, 1.0));
+        if (track.normalizationGain != null) {
+          debugPrint('🔊 Applied ReplayGain: ${track.normalizationGain} dB (multiplier: ${track.replayGainMultiplier.toStringAsFixed(2)})');
+        }
         return true;
       } on PlatformException {
         return false;
@@ -527,7 +541,9 @@ class AudioPlayerService {
           : assetPath;
       try {
         await _player.setSource(AssetSource(normalized));
-        await _player.setVolume(_volume);
+        // Apply ReplayGain normalization
+        final adjustedVolume = _volume * track.replayGainMultiplier;
+        await _player.setVolume(adjustedVolume.clamp(0.0, 1.0));
         return true;
       } on PlatformException {
         return false;
@@ -988,22 +1004,22 @@ class AudioPlayerService {
 
   /// Start crossfade to next track
   Future<void> _startCrossfade(JellyfinTrack nextTrack, int nextIndex) async {
-    if (_isCrossfading) return;
+    if (_isCrossfading || _crossfadePlayer == null) return;
     _isCrossfading = true;
 
     try {
-      // Create crossfade player
-      _crossfadePlayer = AudioPlayer();
-      
+      // Stop any existing playback in crossfade player
+      await _crossfadePlayer!.stop();
+
       // Prepare next track
       final prepared = await _prepareTrackForCrossfade(nextTrack);
       if (!prepared) {
         throw Exception('Failed to prepare next track');
       }
-      
+
       // Execute the crossfade
       await _executeCrossfade(nextTrack, nextIndex);
-      
+
     } catch (e) {
       debugPrint('❌ Crossfade failed: $e');
       _cancelCrossfade();
@@ -1072,25 +1088,31 @@ class AudioPlayerService {
 
   /// Complete crossfade and switch to next track
   Future<void> _completeCrossfadeTransition(JellyfinTrack nextTrack, int nextIndex) async {
+    if (_crossfadePlayer == null) return;
+
     // Stop current player
     await _player.stop();
     await _player.setVolume(_volume); // Reset volume
-    
+
+    // Swap players: move crossfade player's source to main player
+    // This is done by stopping the crossfade player and letting the normal
+    // playback flow handle the next track
+    await _crossfadePlayer!.stop();
+
     // Update track info
     _currentIndex = nextIndex;
     _currentTrack = nextTrack;
     _currentTrackController.add(_currentTrack);
-    
-    // Report to Jellyfin
-    if (_reportingService != null) {
-      await _reportingService!.reportPlaybackStart(nextTrack, playMethod: 'DirectPlay');
-    }
-    
-    // Clean up
-    _crossfadePlayer?.dispose();
-    _crossfadePlayer = null;
+
+    // Play the next track normally (already loaded in crossfade player)
+    await playTrack(
+      nextTrack,
+      queueContext: _queue,
+      fromShuffle: _isShuffleEnabled,
+    );
+
     _isCrossfading = false;
-    
+
     debugPrint('✅ Crossfade complete → ${nextTrack.name}');
   }
 

@@ -16,6 +16,7 @@ import 'jellyfin/jellyfin_service.dart';
 import 'jellyfin/jellyfin_session.dart';
 import 'jellyfin/jellyfin_session_store.dart';
 import 'jellyfin/jellyfin_track.dart';
+import 'providers/demo_mode_provider.dart';
 import 'services/audio_player_service.dart';
 import 'services/bootstrap_service.dart';
 import 'services/carplay_service.dart';
@@ -34,8 +35,10 @@ class NautuneAppState extends ChangeNotifier {
     required LocalCacheService cacheService,
     required BootstrapService bootstrapService,
     required ConnectivityService connectivityService,
+    required DownloadService downloadService,
     JellyfinPlaylistStore? playlistStore,
     PlaylistSyncQueue? syncQueue,
+    DemoModeProvider? demoModeProvider,
   })  : _jellyfinService = jellyfinService,
         _sessionStore = sessionStore,
         _playbackStateStore = playbackStateStore,
@@ -43,9 +46,10 @@ class NautuneAppState extends ChangeNotifier {
         _bootstrapService = bootstrapService,
         _connectivityService = connectivityService,
         _playlistStore = playlistStore ?? JellyfinPlaylistStore(),
-        _syncQueue = syncQueue ?? PlaylistSyncQueue() {
+        _syncQueue = syncQueue ?? PlaylistSyncQueue(),
+        _demoModeProvider = demoModeProvider,
+        _downloadService = downloadService {
     _audioPlayerService = AudioPlayerService();
-    _downloadService = DownloadService(jellyfinService: jellyfinService);
     // Link download service to audio player for offline playback
     _audioPlayerService.setDownloadService(_downloadService);
     _audioPlayerService.setJellyfinService(_jellyfinService);
@@ -59,6 +63,9 @@ class NautuneAppState extends ChangeNotifier {
         }
       });
     }
+
+    // Listen to demo mode provider changes
+    _demoModeProvider?.addListener(_onDemoModeChanged);
   }
 
   final JellyfinService _jellyfinService;
@@ -69,6 +76,7 @@ class NautuneAppState extends ChangeNotifier {
   final ConnectivityService _connectivityService;
   final JellyfinPlaylistStore _playlistStore;
   final PlaylistSyncQueue _syncQueue;
+  final DemoModeProvider? _demoModeProvider;
   late final AudioPlayerService _audioPlayerService;
   late final DownloadService _downloadService;
   CarPlayService? _carPlayService;
@@ -122,44 +130,6 @@ class NautuneAppState extends ChangeNotifier {
   bool _isLoadingFavorites = false;
   Object? _favoritesError;
   List<JellyfinTrack>? _favoriteTracks;
-  bool _isLoadingGenres = false;
-  Object? _genresError;
-  List<JellyfinGenre>? _genres;
-  bool _isOfflineMode = false;  // Toggle between online and offline library
-  bool _networkAvailable = true;  // Track network connectivity
-  bool _handlingUnauthorizedSession = false;
-
-  bool get isInitialized => _initialized;
-  bool get networkAvailable => _networkAvailable;
-  bool get isDemoMode => _isDemoMode;
-  bool get isAuthenticating => _isAuthenticating;
-  JellyfinSession? get session => _session;
-  Object? get lastError => _lastError;
-  bool get isLoadingLibraries => _isLoadingLibraries;
-  Object? get librariesError => _librariesError;
-  List<JellyfinLibrary>? get libraries => _libraries;
-  bool get isLoadingAlbums => _isLoadingAlbums;
-  Object? get albumsError => _albumsError;
-  List<JellyfinAlbum>? get albums => _albums;
-  bool get isLoadingMoreAlbums => _isLoadingMoreAlbums;
-  bool get hasMoreAlbums => _hasMoreAlbums;
-  bool get isLoadingArtists => _isLoadingArtists;
-  Object? get artistsError => _artistsError;
-  List<JellyfinArtist>? get artists => _artists;
-  bool get isLoadingMoreArtists => _isLoadingMoreArtists;
-  bool get hasMoreArtists => _hasMoreArtists;
-  bool get isLoadingPlaylists => _isLoadingPlaylists;
-  Object? get playlistsError => _playlistsError;
-  List<JellyfinPlaylist>? get playlists => _playlists;
-  bool get isLoadingRecent => _isLoadingRecent;
-  Object? get recentError => _recentError;
-  List<JellyfinTrack>? get recentTracks => _recentTracks;
-  bool get isLoadingRecentlyAdded => _isLoadingRecentlyAdded;
-  Object? get recentlyAddedError => _recentlyAddedError;
-  List<JellyfinAlbum>? get recentlyAddedAlbums => _recentlyAddedAlbums;
-  bool get isLoadingFavorites => _isLoadingFavorites;
-  Object? get favoritesError => _favoritesError;
-  List<JellyfinTrack>? get favoriteTracks => _favoriteTracks;
   bool get isLoadingGenres => _isLoadingGenres;
   Object? get genresError => _genresError;
   List<JellyfinGenre>? get genres => _genres;
@@ -199,8 +169,12 @@ class NautuneAppState extends ChangeNotifier {
       _demoContent?.albums ?? const <JellyfinAlbum>[];
   List<JellyfinArtist> get demoArtists =>
       _demoContent?.artists ?? const <JellyfinArtist>[];
-  List<JellyfinTrack> get demoTracks =>
-      _demoTracks.values.toList(growable: false);
+  List<JellyfinTrack> get demoTracks {
+    if (_demoModeProvider != null) {
+      return _demoModeProvider!.allTracks;
+    }
+    return _demoTracks.values.toList(growable: false);
+  }
 
   List<JellyfinTrack> _demoTracksFromIds(List<String> ids) {
     if (!_isDemoMode) {
@@ -210,29 +184,6 @@ class NautuneAppState extends ChangeNotifier {
         .map((id) => _demoTracks[id])
         .whereType<JellyfinTrack>()
         .toList();
-  }
-
-  void _applyDemoCollections() {
-    final content = _demoContent;
-    if (!_isDemoMode || content == null) {
-      return;
-    }
-    _libraries = [content.library];
-    _albums = content.albums;
-    _artists = content.artists;
-    _genres = content.genres;
-    _playlists = List<JellyfinPlaylist>.from(_playlists ?? content.playlists);
-    _recentTracks = _demoTracksFromIds(_demoRecentTrackIds);
-    _favoriteTracks =
-        _demoTracksFromIds(_demoFavoriteTrackIds.toList());
-    _hasMoreAlbums = false;
-    _hasMoreArtists = false;
-    _albumsError = null;
-    _artistsError = null;
-    _playlistsError = null;
-    _recentError = null;
-    _favoritesError = null;
-    _genresError = null;
   }
 
   void _clearLibraryCaches() {
@@ -258,7 +209,36 @@ class NautuneAppState extends ChangeNotifier {
     _isLoadingGenres = false;
   }
 
+  void _applyDemoCollections() {
+    final content = _demoContent;
+    if (!_isDemoMode || content == null) {
+      return;
+    }
+    _libraries = [content.library];
+    _albums = content.albums;
+    _artists = content.artists;
+    _genres = content.genres;
+    _playlists = List<JellyfinPlaylist>.from(_playlists ?? content.playlists);
+    _recentTracks = _demoTracksFromIds(_demoRecentTrackIds);
+    _favoriteTracks =
+        _demoTracksFromIds(_demoFavoriteTrackIds.toList());
+    _hasMoreAlbums = false;
+    _hasMoreArtists = false;
+    _albumsError = null;
+    _artistsError = null;
+    _playlistsError = null;
+    _recentError = null;
+    _favoritesError = null;
+    _genresError = null;
+  }
+
   Future<void> _teardownDemoMode() async {
+    if (_demoModeProvider != null) {
+      await _demoModeProvider!.stopDemoMode();
+      // The provider listener will handle state updates
+      return;
+    }
+
     if (!_isDemoMode) {
       return;
     }
@@ -286,6 +266,7 @@ class NautuneAppState extends ChangeNotifier {
     DemoContent content,
     Uint8List offlineAudioBytes,
   ) async {
+    // Legacy setup method - only used if DemoModeProvider is not available
     await _downloadService.deleteDemoDownloads();
     _downloadService.enableDemoMode(demoAudioBytes: offlineAudioBytes);
 
@@ -472,9 +453,13 @@ class NautuneAppState extends ChangeNotifier {
       final storedSession = await _sessionStore.load();
       if (storedSession != null) {
         if (storedSession.isDemo) {
-          final data =
-              await rootBundle.load('assets/demo/demo_offline_track.mp3');
-          await _setupDemoMode(DemoContent(), data.buffer.asUint8List());
+          if (_demoModeProvider != null) {
+            await _demoModeProvider!.startDemoMode();
+          } else {
+            // Fallback for legacy demo
+            final data = await rootBundle.load('assets/demo/demo_offline_track.mp3');
+            await _setupDemoMode(DemoContent(), data.buffer.asUint8List());
+          }
           _initialized = true;
           notifyListeners();
           return;
@@ -525,25 +510,6 @@ class NautuneAppState extends ChangeNotifier {
           }
         });
       }
-    }
-  }
-
-  Future<void> startDemoExperience() async {
-    _lastError = null;
-    _isAuthenticating = true;
-    notifyListeners();
-
-    try {
-      await _teardownDemoMode();
-      final data = await rootBundle.load('assets/demo/demo_offline_track.mp3');
-      final content = DemoContent();
-      await _setupDemoMode(content, data.buffer.asUint8List());
-    } catch (error) {
-      _lastError = error;
-      rethrow;
-    } finally {
-      _isAuthenticating = false;
-      notifyListeners();
     }
   }
 
@@ -794,6 +760,9 @@ class NautuneAppState extends ChangeNotifier {
     List<String>? itemIds,
   }) async {
     if (_isDemoMode) {
+      if (_demoModeProvider != null) {
+        return _demoModeProvider!.createPlaylist(name: name, itemIds: itemIds);
+      }
       _demoPlaylistCounter++;
       final playlistId = 'demo-playlist-$_demoPlaylistCounter';
       final tracks = List<String>.from(itemIds ?? const <String>[]);
@@ -833,6 +802,10 @@ class NautuneAppState extends ChangeNotifier {
     required String newName,
   }) async {
     if (_isDemoMode) {
+      if (_demoModeProvider != null) {
+        _demoModeProvider!.updatePlaylist(playlistId: playlistId, newName: newName);
+        return;
+      }
       final existing = _findPlaylist(playlistId);
       if (existing != null) {
         _replaceDemoPlaylist(JellyfinPlaylist(
@@ -866,6 +839,10 @@ class NautuneAppState extends ChangeNotifier {
 
   Future<void> deletePlaylist(String playlistId) async {
     if (_isDemoMode) {
+      if (_demoModeProvider != null) {
+        _demoModeProvider!.deletePlaylist(playlistId);
+        return;
+      }
       _demoPlaylistTrackMap.remove(playlistId);
       _removeDemoPlaylist(playlistId);
       notifyListeners();
@@ -892,6 +869,10 @@ class NautuneAppState extends ChangeNotifier {
     required List<String> itemIds,
   }) async {
     if (_isDemoMode) {
+      if (_demoModeProvider != null) {
+        _demoModeProvider!.addToPlaylist(playlistId: playlistId, itemIds: itemIds);
+        return;
+      }
       final existing = _demoPlaylistTrackMap[playlistId] ?? <String>[];
       final updated = List<String>.from(existing)..addAll(itemIds);
       _demoPlaylistTrackMap[playlistId] = updated;
@@ -928,6 +909,9 @@ class NautuneAppState extends ChangeNotifier {
 
   Future<List<JellyfinTrack>> getPlaylistTracks(String playlistId) async {
     if (_isDemoMode) {
+      if (_demoModeProvider != null) {
+        return _demoModeProvider!.getPlaylistTracks(playlistId);
+      }
       final ids = _demoPlaylistTrackMap[playlistId] ?? const <String>[];
       return _demoTracksFromIds(ids);
     }
@@ -936,6 +920,9 @@ class NautuneAppState extends ChangeNotifier {
 
   Future<List<JellyfinTrack>> getAlbumTracks(String albumId) async {
     if (_isDemoMode) {
+      if (_demoModeProvider != null) {
+        return _demoModeProvider!.getAlbumTracks(albumId);
+      }
       final ids = _demoAlbumTrackMap[albumId] ?? const <String>[];
       return _demoTracksFromIds(ids);
     }
@@ -944,6 +931,10 @@ class NautuneAppState extends ChangeNotifier {
 
   Future<void> markFavorite(String itemId, bool shouldBeFavorite) async {
     if (_isDemoMode) {
+      if (_demoModeProvider != null) {
+        _demoModeProvider!.markFavorite(itemId, shouldBeFavorite);
+        return;
+      }
       final existing = _demoTracks[itemId];
       if (existing != null) {
         _demoTracks[itemId] = existing.copyWith(isFavorite: shouldBeFavorite);

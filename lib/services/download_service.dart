@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -23,8 +24,27 @@ class DownloadService extends ChangeNotifier {
   Uint8List? _demoAudioBytes;
   final Set<String> _demoDownloadIds = <String>{};
 
+  static const _boxName = 'nautune_downloads';
+  static const _downloadsKey = 'downloads';
+  static bool _hiveInitialized = false;
+  Box<dynamic>? _box;
+
   DownloadService({required this.jellyfinService}) {
-    _loadDownloads().then((_) => verifyAndCleanupDownloads());
+    _initializeAndLoad();
+  }
+
+  Future<void> _initializeAndLoad() async {
+    await _initHive();
+    await _loadDownloads();
+    await verifyAndCleanupDownloads();
+  }
+
+  Future<void> _initHive() async {
+    if (!_hiveInitialized) {
+      await Hive.initFlutter();
+      _hiveInitialized = true;
+    }
+    _box = await Hive.openBox<dynamic>(_boxName);
   }
 
   List<DownloadItem> get downloads => _downloads.values.toList()
@@ -102,17 +122,35 @@ class DownloadService extends ChangeNotifier {
 
   Future<void> _loadDownloads() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final downloadsJson = prefs.getString('downloads');
-      if (downloadsJson != null) {
-        final Map<String, dynamic> data = jsonDecode(downloadsJson);
+      // First, check for migration from SharedPreferences
+      await _migrateFromSharedPreferences();
+
+      // Load from Hive
+      final box = _box;
+      if (box == null) {
+        debugPrint('Hive box not initialized');
+        return;
+      }
+
+      final raw = box.get(_downloadsKey);
+      if (raw != null && raw is Map) {
         _downloads.clear();
         bool removedDemoEntries = false;
-        
-        for (final entry in data.entries) {
-          final itemData = entry.value as Map<String, dynamic>;
+
+        for (final entry in raw.entries) {
+          final trackId = entry.key as String;
+          final dynamic value = entry.value;
+          final Map<String, dynamic> itemData;
+          
+          if (value is Map) {
+             itemData = Map<String, dynamic>.from(value);
+          } else {
+             debugPrint('Skipping invalid download entry for $trackId');
+             continue;
+          }
+
           final track = JellyfinTrack(
-            id: entry.key,
+            id: trackId,
             name: itemData['trackName'] as String,
             artists: [itemData['trackArtist'] as String],
             album: itemData['trackAlbum'] as String?,
@@ -120,16 +158,17 @@ class DownloadService extends ChangeNotifier {
                 ? (itemData['trackDuration'] as int) * 10
                 : null,
           );
-          
+
           final item = DownloadItem.fromJson(itemData, track);
           if (item != null) {
             if (!_demoModeEnabled && item.isDemoAsset) {
               removedDemoEntries = true;
               continue;
             }
-            _downloads[entry.key] = item;
+            _downloads[trackId] = item;
           }
         }
+
         if (removedDemoEntries) {
           await _saveDownloads();
         }
@@ -140,14 +179,57 @@ class DownloadService extends ChangeNotifier {
     }
   }
 
+  /// Migrates download data from SharedPreferences to Hive (one-time operation)
+  Future<void> _migrateFromSharedPreferences() async {
+    try {
+      final box = _box;
+      if (box == null) return;
+
+      // Check if we've already migrated
+      final migrated = box.get('_migrated_from_prefs', defaultValue: false);
+      if (migrated == true) return;
+
+      debugPrint('Checking for SharedPreferences migration...');
+      final prefs = await SharedPreferences.getInstance();
+      final downloadsJson = prefs.getString('downloads');
+
+      if (downloadsJson != null && downloadsJson.isNotEmpty) {
+        debugPrint('Migrating downloads from SharedPreferences to Hive...');
+        final Map<String, dynamic> data = jsonDecode(downloadsJson);
+
+        // Store in Hive
+        await box.put(_downloadsKey, data);
+
+        // Mark migration as complete
+        await box.put('_migrated_from_prefs', true);
+
+        // Clean up old SharedPreferences data
+        await prefs.remove('downloads');
+
+        debugPrint('Migration complete: ${data.length} downloads migrated');
+      } else {
+        // No data to migrate, just mark as migrated
+        await box.put('_migrated_from_prefs', true);
+      }
+    } catch (e) {
+      debugPrint('Error during migration: $e');
+    }
+  }
+
   Future<void> _saveDownloads() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
+      final box = _box;
+      if (box == null) {
+        debugPrint('Hive box not initialized, cannot save');
+        return;
+      }
+
       final data = <String, dynamic>{};
       for (final entry in _downloads.entries) {
         data[entry.key] = entry.value.toJson();
       }
-      await prefs.setString('downloads', jsonEncode(data));
+
+      await box.put(_downloadsKey, data);
     } catch (e) {
       debugPrint('Error saving downloads: $e');
     }
@@ -156,18 +238,18 @@ class DownloadService extends ChangeNotifier {
   /// Verify all downloaded files exist and clean up orphaned references
   Future<void> verifyAndCleanupDownloads() async {
     debugPrint('Verifying download files...');
-    final toRemove = <String>[];
-    
+    final toRemove = <String>{};  // Use Set to prevent duplicates
+
     for (final entry in _downloads.entries) {
       final trackId = entry.key;
       final item = entry.value;
-      
+
       if (item.isCompleted) {
         final file = File(item.localPath);
         if (!await file.exists()) {
-          debugPrint('Missing file for track: ${item.track.name}');
+          debugPrint('Missing file for track: ${item.track.name} (${item.localPath})');
           toRemove.add(trackId);
-          
+
           // Also clean up artwork
           try {
             final artworkPath = await _getArtworkPath(trackId);
@@ -181,16 +263,19 @@ class DownloadService extends ChangeNotifier {
         }
       }
     }
-    
-    // Remove orphaned entries
-    for (final trackId in toRemove) {
-      _downloads.remove(trackId);
-    }
-    
+
+    // Remove orphaned entries (batch operation)
     if (toRemove.isNotEmpty) {
-      debugPrint('Cleaned up ${toRemove.length} orphaned download(s)');
+      debugPrint('Cleaning up ${toRemove.length} orphaned download(s)');
+      for (final trackId in toRemove) {
+        _downloads.remove(trackId);
+        _demoDownloadIds.remove(trackId);  // Also remove from demo set
+      }
       notifyListeners();
       await _saveDownloads();
+      debugPrint('Cleanup complete');
+    } else {
+      debugPrint('All download files verified OK');
     }
   }
 

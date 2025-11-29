@@ -922,6 +922,20 @@ class JellyfinService {
     );
   }
 
+  /// Fetch lyrics for a track
+  /// Returns structured lyrics data if available, null otherwise
+  Future<Map<String, dynamic>?> getLyrics(String itemId) async {
+    final client = _client;
+    if (client == null) throw StateError('Not connected');
+    final session = _session;
+    if (session == null) throw StateError('No session');
+
+    return await client.fetchLyrics(
+      credentials: session.credentials,
+      itemId: itemId,
+    );
+  }
+
   void _clearCaches() {
     _albumCache.clear();
     _artistCache.clear();

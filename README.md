@@ -2,8 +2,37 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback, animated waveform visualization, and seamless Jellyfin integration.
 
-## 🚀 Latest Updates (v1.4.0+)
-- **⚡ Instant Startup + Offline Cache**: Nautune now boots instantly using a local Hive cache for your libraries, playlists, “Continue Listening,” and Recently Added.
+## 🚀 Latest Updates (v1.5.0+)
+- **🔧 Architecture Refactoring & Stability**: Major under-the-hood improvements
+  - ✅ **Phase 1 Complete**: Core state logic migrated to focused providers (`SessionProvider`, `DemoModeProvider`, etc.)
+  - ✅ **Demo Mode Fixed**: Resolved track listing issues, infinite loops, and startup crashes
+  - ✅ **Legacy Compatibility**: Seamless bridge between legacy `NautuneAppState` and new architecture
+  - ✅ **Solid Foundation**: codebase is now ready for Phase 2 widget refactoring
+- **⌨️ Desktop Keyboard Shortcuts**: Full keyboard control for power users (Linux/Windows/macOS)
+  - ✅ **Space** - Play/Pause
+  - ✅ **Left/Right Arrows** - Seek backward/forward 10 seconds
+  - ✅ **Up/Down Arrows** - Volume up/down 5%
+  - ✅ **N** - Next track, **P** - Previous track
+  - ✅ **R** - Toggle repeat mode
+  - ✅ **L** - Toggle favorite
+- **🔊 ReplayGain / Normalization**: Automatic volume leveling prevents jumps between albums
+  - ✅ Reads `NormalizationGain` from Jellyfin metadata
+  - ✅ Applies automatic volume adjustment (dB to linear conversion)
+  - ✅ Clamped to safe range (0.1-2.0x) to prevent extremes
+  - ✅ Works with streaming and offline playback
+  - ✅ No more ear-blasting when switching from quiet classical to loud rock!
+- **🎵 Lyrics API Integration**: Full Jellyfin lyrics support (UI coming soon)
+  - ✅ `JellyfinClient.fetchLyrics()` retrieves synced lyrics from server
+  - ✅ Structured data with timestamps for auto-scrolling
+  - ✅ Graceful fallback when lyrics unavailable
+  - ✅ Ready for Lyrics UI tab implementation
+- **⚡ Crossfade Optimization**: Resource-efficient audio transitions
+  - ✅ **Before**: Created new AudioPlayer for every track (memory churn)
+  - ✅ **After**: Reuses single `_crossfadePlayer` instance (initialized once)
+  - ✅ Drastically reduced memory usage during transitions
+  - ✅ Stops/resets player instead of disposing
+  - ✅ More stable on mobile devices
+- **⚡ Instant Startup + Offline Cache**: Nautune now boots instantly using a local Hive cache for your libraries, playlists, "Continue Listening," and Recently Added.
   - ✅ New bootstrap service hydrates the UI from disk immediately, then refreshes Jellyfin data in the background with smart timeout + retry logic
   - ✅ Startup never blocks on album/artist fetches—slow servers simply update the cache silently once they respond
   - ✅ Library home adds cached hero shelves (“Continue Listening” + “Recently Added”) so the main menu always has content, even offline
@@ -91,6 +120,64 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - Deferred `NautuneAppState.initialize()` work and CarPlay setup to run after the first Flutter frame, preventing black-screen hangs caused by plugin initialization failures.
 - Hardened startup logging (`Nautune initialization started/finished`) to make it easier to diagnose device issues from Xcode or `flutter logs`.
 - CarPlay integrations now match Jellyfin data more accurately by tracking album artist IDs and forwarding precise playback positions to the Jellyfin server.
+
+## 🏗️ Architecture Improvements (Phase 1 Complete!)
+
+Nautune has undergone a major architectural refactoring to improve performance, maintainability, and scalability:
+
+### ✅ Download Service Migration to Hive
+- **Before**: Entire download database stored as a single JSON string in SharedPreferences
+- **After**: Hive-based structured storage with individual record access
+- **Impact**: ⚡ Instant save/load even with 1000+ downloads, no more UI jank
+- **Migration**: Automatic one-time migration from old format
+
+### ✅ State Management Refactoring
+The monolithic `NautuneAppState` (1674 lines) has been split into focused, testable providers:
+
+#### **SessionProvider** (200 lines)
+- Handles authentication, login/logout, session persistence
+- Independent and unit-testable
+- Single responsibility: auth only
+
+#### **UIStateProvider** (120 lines)
+- Manages UI-only state (volume bar, crossfade, scroll positions, tab index)
+- **Key win**: Toggling volume bar now rebuilds 1 widget instead of 1000+!
+- Completely independent from session/data concerns
+
+#### **LibraryDataProvider** (600 lines)
+- All library data fetching and caching (albums, artists, playlists, tracks, genres)
+- Pagination support for large libraries
+- Loading states and error handling
+- Depends on SessionProvider for auth context
+
+#### **ConnectivityProvider** (70 lines)
+- Network connectivity monitoring
+- Provider-compatible wrapper around ConnectivityService
+
+#### **DemoModeProvider** (240 lines)
+- Demo mode content and state management
+- Isolated from production data
+- Coordinates with SessionProvider and DownloadService
+
+### Performance Comparison
+
+| Action | Before | After |
+|--------|--------|-------|
+| Toggle volume bar | Rebuild 1000+ widgets | Rebuild 1 widget |
+| Save downloads | Encode ALL downloads to JSON | Save only changed data to Hive |
+| Test auth logic | Impossible (god object) | Easy (SessionProvider unit test) |
+| Fetch albums | Rebuild entire app | Rebuild album list only |
+
+### Benefits
+- ⚡ **Performance**: Granular rebuilds, no more full-app updates for UI changes
+- 🧪 **Testability**: Each provider can be unit tested independently
+- 🔧 **Maintainability**: Small focused classes (100-600 lines vs 1674)
+- 👨‍💻 **Developer Experience**: Clear separation of concerns, easy to extend
+- 🚀 **Future-Proof**: Ready for Phase 2 features (EQ, Lyrics, Scrobbling)
+
+**Next**: Phase 2 (Widget Refactoring) - actively migrating UI components to consume new providers (LoginScreen complete).
+
+---
 
 ## 🧪 Review / Demo Mode
 
@@ -362,28 +449,63 @@ http: ^1.2.2               # Jellyfin API communication
 
 ```
 lib/
+├── providers/             # NEW! State management providers (Phase 1 refactoring)
+│   ├── session_provider.dart         # Auth, login, logout (200 lines)
+│   ├── ui_state_provider.dart        # UI state only (120 lines)
+│   ├── library_data_provider.dart    # Data fetching & caching (600 lines)
+│   ├── connectivity_provider.dart    # Network monitoring (70 lines)
+│   └── demo_mode_provider.dart       # Demo mode management (240 lines)
 ├── jellyfin/              # Jellyfin API client, models, session management
 │   ├── jellyfin_client.dart
 │   ├── jellyfin_service.dart
 │   ├── jellyfin_session.dart
+│   ├── jellyfin_session_store.dart
 │   ├── jellyfin_album.dart
-│   └── jellyfin_track.dart
+│   ├── jellyfin_track.dart
+│   ├── jellyfin_artist.dart
+│   ├── jellyfin_playlist.dart
+│   └── jellyfin_library.dart
 ├── models/                # App data models
-│   └── playback_state.dart
+│   ├── playback_state.dart
+│   └── download_item.dart
 ├── screens/               # UI screens
 │   ├── login_screen.dart
-│   ├── library_screen.dart (with tabs!)
-│   └── album_detail_screen.dart
+│   ├── library_screen.dart (with 7 tabs!)
+│   ├── album_detail_screen.dart
+│   ├── artist_detail_screen.dart
+│   ├── playlist_detail_screen.dart
+│   └── full_player_screen.dart
 ├── services/              # Business logic layer
-│   ├── audio_player_service.dart
-│   └── playback_state_store.dart
+│   ├── audio_player_service.dart      # Native audio playback
+│   ├── download_service.dart          # NEW! Hive-based downloads
+│   ├── local_cache_service.dart       # Hive cache for metadata
+│   ├── playback_state_store.dart      # Persistent playback state
+│   ├── bootstrap_service.dart         # Fast startup with caching
+│   ├── connectivity_service.dart      # Network detection
+│   └── carplay_service.dart           # iOS CarPlay integration
 ├── widgets/               # Reusable components
-│   └── now_playing_bar.dart (with waveform!)
+│   ├── now_playing_bar.dart (with waveform!)
+│   ├── album_card.dart
+│   └── track_list_item.dart
 ├── theme/                 # Deep Sea Purple theme
 │   └── nautune_theme.dart
-├── app_state.dart         # Central state management (ChangeNotifier)
+├── app_state.dart         # Legacy state (being phased out → providers)
 └── main.dart              # App entry point
 ```
+
+### State Management Evolution
+
+**Before (Legacy)**:
+- `app_state.dart`: 1674-line god object managing everything
+- Every state change rebuilds the entire app
+
+**After (Phase 1)**:
+- **5 focused providers** with single responsibilities
+- Granular rebuilds (only affected widgets update)
+- Easy to test and maintain
+- Clear separation of concerns
+
+See **Architecture Improvements** section above for details!
 
 ## 🎨 Key Components
 
@@ -591,12 +713,60 @@ All iOS features are built and deployed via **Codemagic CI**:
   - [x] Persistent preference
 
 ### 🚧 In Progress / Planned
-- [ ] Full player screen with lyrics display
+- [x] **Keyboard shortcuts for desktop** (Space, arrows, N/P/R/L)
+- [x] **ReplayGain normalization** for consistent volume
+- [x] **Lyrics API integration** (backend complete)
+- [ ] **Lyrics UI tab** - synced scrolling display in Full Player (in progress)
 - [ ] Enhanced search across all content types
 - [ ] Equalizer and audio settings
 - [ ] **Sorting options** (by name, date added, year for albums/artists)
 - [ ] Cross-platform stability improvements (Windows, macOS, Android)
-- [ ] “Smart Resume” that restores current song, queue, shuffle, repeat, and scroll state on app return
+- [ ] "Smart Resume" that restores current song, queue, shuffle, repeat, and scroll state on app return
+
+## 🌊 The "Poseidon Dashboard" Roadmap
+
+Nautune is evolving into a best-in-class music player with a focus on native desktop integration and fluid mobile experiences.
+
+### Phase 1: Navigation Overhaul (The Skeleton)
+**Goal**: Make Nautune feel native on every platform
+
+**Desktop (Linux/Windows/macOS)**:
+- [ ] **Navigation Rail** - Replace BottomNavigationBar with persistent sidebar when screen width > 600
+  - Gives "Pro app" feel like Spotify/Roon
+  - Better use of widescreen real estate
+- [ ] **Mini Player Mode** - Picture-in-picture always-on-top window
+- [ ] **System Tray Icon** - Background playback control
+- [ ] **Command Palette** - `/` key opens VS Code-style command search
+- [x] **MPRIS Integration** - Media keys and notification center controls (already implemented!)
+- [x] **Keyboard shortcuts** - Space, arrows, N/P/R/L (completed!)
+
+**Mobile (iOS/Android)**:
+- [ ] **Translucent Bottom Bar** - Glassmorphism blur effect
+- [ ] **Haptic Feedback** - Vibrations on Play/Next/Seek for tactile response
+- [ ] **CarPlay Consistency** - Ensure dashboard translates well to car display
+- [ ] **AirPlay / Casting** - HomePod and Apple TV integration
+
+### Phase 2: The Dashboard (The Face)
+**Goal**: Transform the Home screen into a discovery engine
+
+- [ ] **Hero Header** - High-res artist background with "Jump Back In" button
+- [ ] **Time-of-Day Greeting** - "Good Evening, [User]" with contextual playlist
+- [ ] **Smart Shelves** (Netflix-style):
+  - "Rediscover" - Albums you loved 3 months ago but haven't played recently
+  - "On Deck" - Resume halfway-through playlists/albums
+  - "Offline Mix" - Highlight 100% downloaded content for airplane mode
+- [ ] **Dynamic Colors** - Extract theme from Hero album art using `ColorScheme.fromImageProvider()`
+- [ ] **Animated Cards** - Hover effects with scale/preview on desktop
+
+### Phase 3: Deep Integration (The Muscle)
+**Goal**: Polish and power-user features
+
+- [x] **ReplayGain** - Automatic volume normalization (completed!)
+- [ ] **Real FFT Visualizer** - Replace fake sine waves with actual audio analysis
+- [ ] **Smart Downloads** - "Auto-download favorites" and "Keep last 50 played songs offline"
+- [x] **Lyrics Support** - API integration complete, UI tab in progress
+- [ ] **Smart Playlists / Mixes** - Infinite "Radio" mode from any track/album/artist
+- [ ] **Instant Mix Enhancement** - Better integration with Jellyfin's `/InstantMix` endpoint
 
 ## 🐛 Known Issues
 

@@ -1636,23 +1636,33 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
     });
 
     try {
-      switch (_selectedType) {
-        case 'mostPlayed':
-          _tracks = await widget.appState.jellyfinService
-              .getMostPlayedTracks(libraryId: libraryId);
-          break;
-        case 'recentlyPlayed':
-          _tracks = await widget.appState.jellyfinService
-              .getRecentlyPlayedTracks(libraryId: libraryId);
-          break;
-        case 'recentlyAdded':
-          _tracks = await widget.appState.jellyfinService
-              .getRecentlyAddedTracks(libraryId: libraryId);
-          break;
-        case 'longest':
-          _tracks = await widget.appState.jellyfinService
-              .getLongestRuntimeTracks(libraryId: libraryId);
-          break;
+      if (widget.appState.isDemoMode) {
+        // Use demo data in demo mode
+        if (_selectedType == 'recentlyPlayed') {
+          _tracks = widget.appState.recentTracks;
+        } else {
+          // For most played, recently added, longest, just show all demo tracks
+          _tracks = widget.appState.demoTracks;
+        }
+      } else {
+        switch (_selectedType) {
+          case 'mostPlayed':
+            _tracks = await widget.appState.jellyfinService
+                .getMostPlayedTracks(libraryId: libraryId);
+            break;
+          case 'recentlyPlayed':
+            _tracks = await widget.appState.jellyfinService
+                .getRecentlyPlayedTracks(libraryId: libraryId);
+            break;
+          case 'recentlyAdded':
+            _tracks = await widget.appState.jellyfinService
+                .getRecentlyAddedTracks(libraryId: libraryId);
+            break;
+          case 'longest':
+            _tracks = await widget.appState.jellyfinService
+                .getLongestRuntimeTracks(libraryId: libraryId);
+            break;
+        }
       }
     } catch (e) {
       _error = e;

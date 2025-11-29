@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import '../jellyfin/jellyfin_track.dart';
@@ -20,16 +21,26 @@ class FullPlayerScreen extends StatefulWidget {
   State<FullPlayerScreen> createState() => _FullPlayerScreenState();
 }
 
-class _FullPlayerScreenState extends State<FullPlayerScreen> {
+class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerProviderStateMixin {
   StreamSubscription? _trackSub;
   StreamSubscription? _positionSub;
   StreamSubscription? _playingSub;
+  late TabController _tabController;
+  Map<String, dynamic>? _lyricsData;
+  bool _loadingLyrics = false;
 
   @override
   void initState() {
     super.initState();
-    _trackSub = widget.audioService.currentTrackStream.listen((_) {
-      if (mounted) setState(() {});
+    _tabController = TabController(length: 2, vsync: this);
+
+    _trackSub = widget.audioService.currentTrackStream.listen((track) {
+      if (mounted) {
+        setState(() {});
+        if (track != null) {
+          _fetchLyrics(track);
+        }
+      }
     });
     _positionSub = widget.audioService.positionStream.listen((_) {
       if (mounted) setState(() {});
@@ -37,10 +48,42 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
     _playingSub = widget.audioService.playingStream.listen((_) {
       if (mounted) setState(() {});
     });
+
+    // Fetch lyrics for initial track
+    final currentTrack = widget.audioService.currentTrack;
+    if (currentTrack != null) {
+      _fetchLyrics(currentTrack);
+    }
+  }
+
+  Future<void> _fetchLyrics(JellyfinTrack track) async {
+    setState(() {
+      _loadingLyrics = true;
+      _lyricsData = null;
+    });
+
+    try {
+      final jellyfinService = widget.appState.jellyfinService;
+      final lyrics = await jellyfinService.getLyrics(track.id);
+      if (mounted) {
+        setState(() {
+          _lyricsData = lyrics;
+          _loadingLyrics = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('⚠️ Failed to fetch lyrics: $e');
+      if (mounted) {
+        setState(() {
+          _loadingLyrics = false;
+        });
+      }
+    }
   }
 
   @override
   void dispose() {
+    _tabController.dispose();
     _trackSub?.cancel();
     _positionSub?.cancel();
     _playingSub?.cancel();
@@ -82,6 +125,89 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
         milliseconds: (duration.inMilliseconds * ratio).toInt(),
       );
       widget.audioService.seek(newPosition);
+    }
+  }
+
+  void _handleKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return;
+
+    final track = widget.audioService.currentTrack;
+    final position = widget.audioService.currentPosition;
+    final duration = track?.duration ?? Duration.zero;
+
+    switch (event.logicalKey) {
+      case LogicalKeyboardKey.space:
+        widget.audioService.playPause();
+        break;
+      case LogicalKeyboardKey.arrowLeft:
+        // Seek backward 10 seconds
+        final newPos = position - const Duration(seconds: 10);
+        widget.audioService.seek(newPos < Duration.zero ? Duration.zero : newPos);
+        break;
+      case LogicalKeyboardKey.arrowRight:
+        // Seek forward 10 seconds
+        final newPos = position + const Duration(seconds: 10);
+        widget.audioService.seek(newPos > duration ? duration : newPos);
+        break;
+      case LogicalKeyboardKey.arrowUp:
+        // Volume up 5%
+        final newVolume = (widget.audioService.volume + 0.05).clamp(0.0, 1.0);
+        widget.audioService.setVolume(newVolume);
+        break;
+      case LogicalKeyboardKey.arrowDown:
+        // Volume down 5%
+        final newVolume = (widget.audioService.volume - 0.05).clamp(0.0, 1.0);
+        widget.audioService.setVolume(newVolume);
+        break;
+      case LogicalKeyboardKey.keyN:
+        // Next track
+        widget.audioService.next();
+        break;
+      case LogicalKeyboardKey.keyP:
+        // Previous track
+        widget.audioService.previous();
+        break;
+      case LogicalKeyboardKey.keyR:
+        // Toggle repeat mode
+        widget.audioService.toggleRepeatMode();
+        break;
+      case LogicalKeyboardKey.keyL:
+        // Toggle favorite
+        if (track != null) {
+          _toggleFavorite(track);
+        }
+        break;
+    }
+  }
+
+  Future<void> _toggleFavorite(JellyfinTrack track) async {
+    try {
+      final currentFavoriteStatus = track.isFavorite;
+      final newFavoriteStatus = !currentFavoriteStatus;
+
+      await widget.appState.markFavorite(track.id, newFavoriteStatus);
+      final updatedTrack = track.copyWith(isFavorite: newFavoriteStatus);
+      widget.audioService.updateCurrentTrack(updatedTrack);
+
+      if (mounted) setState(() {});
+      await widget.appState.refreshFavorites();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(newFavoriteStatus ? 'Added to favorites' : 'Removed from favorites'),
+          duration: const Duration(seconds: 2),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to update favorite: $e'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+        ),
+      );
     }
   }
 
@@ -146,11 +272,17 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                       theme: theme,
                     );
 
-                    return Scaffold(
+                    return Focus(
+                      autofocus: true,
+                      onKeyEvent: (node, event) {
+                        _handleKeyEvent(event);
+                        return KeyEventResult.handled;
+                      },
+                      child: Scaffold(
                       body: SafeArea(
                         child: Column(
                           children: [
-                            // Header - Compact
+                            // Header with TabBar
                             Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                               child: Row(
@@ -160,9 +292,15 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                                     onPressed: () => Navigator.of(context).pop(),
                                   ),
                                   const Spacer(),
-                                  Text(
-                                    'Now Playing',
-                                    style: theme.textTheme.titleSmall,
+                                  TabBar(
+                                    controller: _tabController,
+                                    isScrollable: true,
+                                    tabAlignment: TabAlignment.center,
+                                    labelStyle: theme.textTheme.titleSmall,
+                                    tabs: const [
+                                      Tab(text: 'Now Playing'),
+                                      Tab(text: 'Lyrics'),
+                                    ],
                                   ),
                                   const Spacer(),
                                   const SizedBox(width: 48),
@@ -171,6 +309,57 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                             ),
 
                             Expanded(
+                              child: TabBarView(
+                                controller: _tabController,
+                                children: [
+                                  // Tab 1: Now Playing (existing content)
+                                  _buildNowPlayingTab(
+                                    track: track,
+                                    isPlaying: isPlaying,
+                                    position: position,
+                                    duration: duration,
+                                    isDesktop: isDesktop,
+                                    theme: theme,
+                                    artwork: artwork,
+                                  ),
+
+                                  // Tab 2: Lyrics
+                                  _buildLyricsTab(
+                                    track: track,
+                                    position: position,
+                                    theme: theme,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          );
+        },
+      );
+    },
+  );
+}
+
+  Widget _buildNowPlayingTab({
+    required JellyfinTrack track,
+    required bool isPlaying,
+    required Duration position,
+    required Duration duration,
+    required bool isDesktop,
+    required ThemeData theme,
+    required Widget artwork,
+  }) {
+    return Builder(
+      builder: (context) {
+        final size = MediaQuery.of(context).size;
+        return SingleChildScrollView(
                               child: Padding(
                             padding: EdgeInsets.symmetric(
                               horizontal: isDesktop ? size.width * 0.2 : 24,
@@ -492,20 +681,111 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                               ],
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              );
-            },
-          );
-        },
+                        );
+      },
+    );
+  }
+
+  Widget _buildLyricsTab({
+    required JellyfinTrack track,
+    required Duration position,
+    required ThemeData theme,
+  }) {
+    if (_loadingLyrics) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            Text('Loading lyrics...', style: theme.textTheme.bodyMedium),
+          ],
+        ),
       );
-    },
-  );
-}
+    }
+
+    if (_lyricsData == null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.music_note,
+              size: 64,
+              color: theme.colorScheme.secondary.withValues(alpha: 0.5),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No lyrics available',
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Lyrics not found for this track',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Parse lyrics data
+    final lyrics = _lyricsData!['Lyrics'] as List<dynamic>?;
+    if (lyrics == null || lyrics.isEmpty) {
+      return Center(
+        child: Text(
+          'Lyrics format not supported',
+          style: theme.textTheme.bodyMedium,
+        ),
+      );
+    }
+
+    // Convert lyrics to structured format
+    final lyricLines = lyrics.map((line) {
+      final start = line['Start'] as int?; // ticks
+      final text = line['Text'] as String? ?? '';
+      return _LyricLine(
+        text: text,
+        startTicks: start,
+      );
+    }).toList();
+
+    // Find current lyric based on position
+    final currentTicks = position.inMicroseconds * 10; // convert to ticks
+    int currentIndex = 0;
+    for (int i = 0; i < lyricLines.length; i++) {
+      final lineTicks = lyricLines[i].startTicks;
+      if (lineTicks != null && lineTicks <= currentTicks) {
+        currentIndex = i;
+      }
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      itemCount: lyricLines.length,
+      itemBuilder: (context, index) {
+        final line = lyricLines[index];
+        final isCurrent = index == currentIndex;
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Text(
+            line.text,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: isCurrent
+                  ? theme.colorScheme.primary
+                  : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+              fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+              fontSize: isCurrent ? 20 : 16,
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   Widget _buildArtwork({
     required JellyfinTrack track,
@@ -548,4 +828,14 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
       ),
     );
   }
+}
+
+class _LyricLine {
+  _LyricLine({
+    required this.text,
+    this.startTicks,
+  });
+
+  final String text;
+  final int? startTicks; // Jellyfin uses ticks (100 nanoseconds)
 }

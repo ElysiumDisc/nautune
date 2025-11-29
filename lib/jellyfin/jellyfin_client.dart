@@ -882,4 +882,36 @@ class JellyfinClient {
             ))
         .toList();
   }
+
+  /// Fetch lyrics for a track
+  /// Returns a map with 'Lyrics' (List<Map>) containing lyric lines
+  /// Each line has 'Start' (timestamp in ticks) and 'Text'
+  Future<Map<String, dynamic>?> fetchLyrics({
+    required JellyfinCredentials credentials,
+    required String itemId,
+  }) async {
+    final uri = _buildUri('/Audio/$itemId/Lyrics');
+    final response = await httpClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode == 404) {
+      // No lyrics available for this track
+      return null;
+    }
+
+    if (response.statusCode != 200) {
+      debugPrint('⚠️ Failed to fetch lyrics: ${response.statusCode}');
+      return null;
+    }
+
+    try {
+      final data = jsonDecode(response.body) as Map<String, dynamic>?;
+      return data;
+    } catch (e) {
+      debugPrint('⚠️ Failed to parse lyrics: $e');
+      return null;
+    }
+  }
 }
