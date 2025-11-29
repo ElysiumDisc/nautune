@@ -130,6 +130,90 @@ class NautuneAppState extends ChangeNotifier {
   bool _isLoadingFavorites = false;
   Object? _favoritesError;
   List<JellyfinTrack>? _favoriteTracks;
+  bool _isLoadingGenres = false;
+  Object? _genresError;
+  List<JellyfinGenre>? _genres;
+  bool _isOfflineMode = false;  // Toggle between online and offline library
+  bool _networkAvailable = true;  // Track network connectivity
+  bool _handlingUnauthorizedSession = false;
+
+  bool get isInitialized => _initialized;
+  bool get networkAvailable => _networkAvailable;
+  bool get isDemoMode => _demoModeProvider?.isDemoMode ?? _isDemoMode;
+
+  void _onDemoModeChanged() {
+    // When demo mode changes, update our internal state and notify listeners
+    final provider = _demoModeProvider;
+    if (provider != null) {
+      _isDemoMode = provider.isDemoMode;
+
+      // If demo mode just started, sync data
+      if (_isDemoMode) {
+        _libraries = provider.library != null ? [provider.library!] : null;
+        if (provider.library != null) {
+          _session = JellyfinSession(
+            serverUrl: 'demo://nautune',
+            username: 'tester',
+            credentials: const JellyfinCredentials(
+              accessToken: 'demo-token',
+              userId: 'demo-user',
+            ),
+            selectedLibraryId: provider.library!.id,
+            selectedLibraryName: provider.library!.name,
+            isDemo: true,
+          );
+          
+          // Initialize reporting service for demo mode to prevent warnings
+          final reportingService = PlaybackReportingService(
+            serverUrl: _session!.serverUrl,
+            accessToken: _session!.credentials.accessToken,
+          );
+          _audioPlayerService.setReportingService(reportingService);
+        }
+        _albums = provider.albums;
+        _artists = provider.artists;
+        _genres = provider.genres;
+        _playlists = provider.playlists;
+        _recentTracks = provider.recentTracks;
+        _favoriteTracks = provider.favoriteTracks;
+      } else {
+        if (_session != null && _session!.isDemo) {
+          _session = null;
+        }
+      }
+
+      notifyListeners();
+    }
+  }
+
+  bool get isAuthenticating => _isAuthenticating;
+  JellyfinSession? get session => _session;
+  Object? get lastError => _lastError;
+  bool get isLoadingLibraries => _isLoadingLibraries;
+  Object? get librariesError => _librariesError;
+  List<JellyfinLibrary>? get libraries => _libraries;
+  bool get isLoadingAlbums => _isLoadingAlbums;
+  Object? get albumsError => _albumsError;
+  List<JellyfinAlbum>? get albums => _albums;
+  bool get isLoadingMoreAlbums => _isLoadingMoreAlbums;
+  bool get hasMoreAlbums => _hasMoreAlbums;
+  bool get isLoadingArtists => _isLoadingArtists;
+  Object? get artistsError => _artistsError;
+  List<JellyfinArtist>? get artists => _artists;
+  bool get isLoadingMoreArtists => _isLoadingMoreArtists;
+  bool get hasMoreArtists => _hasMoreArtists;
+  bool get isLoadingPlaylists => _isLoadingPlaylists;
+  Object? get playlistsError => _playlistsError;
+  List<JellyfinPlaylist>? get playlists => _playlists;
+  bool get isLoadingRecent => _isLoadingRecent;
+  Object? get recentError => _recentError;
+  List<JellyfinTrack>? get recentTracks => _recentTracks;
+  bool get isLoadingRecentlyAdded => _isLoadingRecentlyAdded;
+  Object? get recentlyAddedError => _recentlyAddedError;
+  List<JellyfinAlbum>? get recentlyAddedAlbums => _recentlyAddedAlbums;
+  bool get isLoadingFavorites => _isLoadingFavorites;
+  Object? get favoritesError => _favoritesError;
+  List<JellyfinTrack>? get favoriteTracks => _favoriteTracks;
   bool get isLoadingGenres => _isLoadingGenres;
   Object? get genresError => _genresError;
   List<JellyfinGenre>? get genres => _genres;
@@ -186,29 +270,6 @@ class NautuneAppState extends ChangeNotifier {
         .toList();
   }
 
-  void _clearLibraryCaches() {
-    _libraries = null;
-    _albums = null;
-    _artists = null;
-    _playlists = null;
-    _recentTracks = null;
-    _favoriteTracks = null;
-    _genres = null;
-    _librariesError = null;
-    _albumsError = null;
-    _artistsError = null;
-    _playlistsError = null;
-    _recentError = null;
-    _favoritesError = null;
-    _genresError = null;
-    _isLoadingAlbums = false;
-    _isLoadingArtists = false;
-    _isLoadingPlaylists = false;
-    _isLoadingRecent = false;
-    _isLoadingFavorites = false;
-    _isLoadingGenres = false;
-  }
-
   void _applyDemoCollections() {
     final content = _demoContent;
     if (!_isDemoMode || content == null) {
@@ -230,6 +291,29 @@ class NautuneAppState extends ChangeNotifier {
     _recentError = null;
     _favoritesError = null;
     _genresError = null;
+  }
+
+  void _clearLibraryCaches() {
+    _libraries = null;
+    _albums = null;
+    _artists = null;
+    _playlists = null;
+    _recentTracks = null;
+    _favoriteTracks = null;
+    _genres = null;
+    _librariesError = null;
+    _albumsError = null;
+    _artistsError = null;
+    _playlistsError = null;
+    _recentError = null;
+    _favoritesError = null;
+    _genresError = null;
+    _isLoadingAlbums = false;
+    _isLoadingArtists = false;
+    _isLoadingPlaylists = false;
+    _isLoadingRecent = false;
+    _isLoadingFavorites = false;
+    _isLoadingGenres = false;
   }
 
   Future<void> _teardownDemoMode() async {
@@ -671,44 +755,6 @@ class NautuneAppState extends ChangeNotifier {
       await logout();
     } finally {
       _handlingUnauthorizedSession = false;
-    }
-  }
-
-  Future<void> login({
-    required String serverUrl,
-    required String username,
-    required String password,
-  }) async {
-    _lastError = null;
-    _isAuthenticating = true;
-    notifyListeners();
-
-    try {
-      await _teardownDemoMode();
-      final session = await _jellyfinService.connect(
-        serverUrl: serverUrl,
-        username: username,
-        password: password,
-      );
-      _session = session;
-      _audioPlayerService.setJellyfinService(_jellyfinService);
-      await _sessionStore.save(session);
-      
-      // Initialize playback reporting
-      final reportingService = PlaybackReportingService(
-        serverUrl: session.serverUrl,
-        accessToken: session.credentials.accessToken,
-      );
-      _audioPlayerService.setReportingService(reportingService);
-      
-      await _loadLibraries();
-      await _loadLibraryDependentContent(forceRefresh: true);
-    } catch (error) {
-      _lastError = error;
-      rethrow;
-    } finally {
-      _isAuthenticating = false;
-      notifyListeners();
     }
   }
 
