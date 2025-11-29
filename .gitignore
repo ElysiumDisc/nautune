@@ -46,3 +46,5 @@ app.*.map.json
 
 # Downloaded music files
 downloads/
+
+/dist/
