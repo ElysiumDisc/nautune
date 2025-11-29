@@ -199,20 +199,61 @@ class NautuneAppState extends ChangeNotifier {
   // Sync session from SessionProvider
   void _onSessionChanged() {
     if (_sessionProvider == null) return;
-    
+
     final newSession = _sessionProvider!.session;
     debugPrint('[NautuneAppState] _onSessionChanged called. Provider session: ${newSession?.selectedLibraryId}');
-    
+
     if (_session != newSession) {
       debugPrint('[NautuneAppState] Updating local session. New Lib ID: ${newSession?.selectedLibraryId}');
       _session = newSession;
       notifyListeners();
-      
-      // If we have a new session and it's not demo mode, load libraries
-      if (_session != null && !_isDemoMode) {
+
+      // If the new session is a demo session, prefer demo provider data and avoid
+      // triggering network loads which may overwrite demo collections before the
+      // DemoModeProvider listener fires.
+      if (_session != null && (_session?.isDemo ?? false)) {
+        final provider = _demoModeProvider;
+        if (provider != null && provider.isDemoMode) {
+          _isDemoMode = true;
+          _demoContent = null; // demoContent is managed by provider
+          _libraries = provider.library != null ? [provider.library!] : null;
+          if (provider.library != null) {
+            _session = JellyfinSession(
+              serverUrl: 'demo://nautune',
+              username: 'tester',
+              credentials: const JellyfinCredentials(
+                accessToken: 'demo-token',
+                userId: 'demo-user',
+              ),
+              selectedLibraryId: provider.library!.id,
+              selectedLibraryName: provider.library!.name,
+              isDemo: true,
+            );
+
+            final reportingService = PlaybackReportingService(
+              serverUrl: _session!.serverUrl,
+              accessToken: _session!.credentials.accessToken,
+            );
+            _audioPlayerService.setReportingService(reportingService);
+          }
+
+          _albums = provider.albums;
+          _artists = provider.artists;
+          _genres = provider.genres;
+          _playlists = provider.playlists;
+          _recentTracks = provider.recentTracks;
+          _favoriteTracks = provider.favoriteTracks;
+
+          notifyListeners();
+          return;
+        }
+      }
+
+      // Normal (non-demo) session handling
+      if (_session != null && !(_session?.isDemo ?? false)) {
         // Ensure AudioPlayerService has the correct JellyfinService instance
         _audioPlayerService.setJellyfinService(_jellyfinService);
-        
+
         // Initialize playback reporting if not already done
         final reportingService = PlaybackReportingService(
           serverUrl: _session!.serverUrl,
@@ -831,6 +872,14 @@ class NautuneAppState extends ChangeNotifier {
       await _cacheService.clearForSession(cacheKey);
     }
     await _sessionStore.clear();
+    // Also clear the SessionProvider so UI reacts and shows the login screen
+    if (_sessionProvider != null) {
+      try {
+        await _sessionProvider!.logout();
+      } catch (error) {
+        debugPrint('SessionProvider.logout failed: $error');
+      }
+    }
     await _teardownDemoMode();
     notifyListeners();
   }
