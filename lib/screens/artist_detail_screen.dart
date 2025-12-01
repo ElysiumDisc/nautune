@@ -141,10 +141,13 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                     );
 
                     if (!context.mounted) return;
+                    
+                    // Simple notification without persistent action button
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text('Playing instant mix (${mixTracks.length} tracks)'),
                         duration: const Duration(seconds: 2),
+                        behavior: SnackBarBehavior.floating,
                       ),
                     );
                   } catch (e) {

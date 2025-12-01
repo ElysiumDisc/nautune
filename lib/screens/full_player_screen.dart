@@ -72,7 +72,17 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
 
   Future<void> _extractColors(JellyfinTrack track) async {
     final tag = track.primaryImageTag;
-    if (tag == null || tag.isEmpty) return;
+    if (tag == null || tag.isEmpty) {
+      setState(() {
+        _paletteColors = null;
+      });
+      return;
+    }
+
+    // Clear old colors immediately to prevent showing stale gradient
+    setState(() {
+      _paletteColors = null;
+    });
 
     try {
       final imageUrl = _appState.jellyfinService.buildImageUrl(
@@ -485,10 +495,13 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                                                       mixTracks.first,
                                                       queueContext: mixTracks,
                                                     );
+                                                    
+                                                    // Simple notification without persistent action button
                                                     ScaffoldMessenger.of(parentContext).showSnackBar(
                                                       SnackBar(
                                                         content: Text('Playing instant mix (${mixTracks.length} tracks)'),
                                                         duration: const Duration(seconds: 2),
+                                                        behavior: SnackBarBehavior.floating,
                                                       ),
                                                     );
                                                   } catch (e) {
@@ -1129,6 +1142,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
           aspectRatio: 1,
           child: track.primaryImageTag != null
               ? JellyfinImage(
+                  key: ValueKey('${track.id}-${track.primaryImageTag}'),
                   itemId: track.id,
                   imageTag: track.primaryImageTag,
                   maxWidth: maxWidth,

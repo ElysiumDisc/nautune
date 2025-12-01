@@ -26,16 +26,85 @@ class _QueueScreenState extends State<QueueScreen> {
             stream: audioService.queueStream,
             builder: (context, snapshot) {
               final queue = snapshot.data ?? audioService.queue;
-              return Center(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Text(
-                    '${queue.length} ${queue.length == 1 ? 'track' : 'tracks'}',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+              return Row(
+                children: [
+                  // Save queue as playlist button
+                  if (queue.isNotEmpty)
+                    IconButton(
+                      icon: const Icon(Icons.playlist_add),
+                      tooltip: 'Save Queue as Playlist',
+                      onPressed: () async {
+                        final nameController = TextEditingController(
+                          text: 'Queue Playlist',
+                        );
+                        
+                        final result = await showDialog<bool>(
+                          context: context,
+                          builder: (dialogContext) => AlertDialog(
+                            title: const Text('Save Queue as Playlist'),
+                            content: TextField(
+                              controller: nameController,
+                              decoration: const InputDecoration(
+                                labelText: 'Playlist Name',
+                                border: OutlineInputBorder(),
+                              ),
+                              autofocus: true,
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(dialogContext, false),
+                                child: const Text('Cancel'),
+                              ),
+                              FilledButton(
+                                onPressed: () => Navigator.pop(dialogContext, true),
+                                child: const Text('Save'),
+                              ),
+                            ],
+                          ),
+                        );
+
+                        if (result == true && nameController.text.isNotEmpty && context.mounted) {
+                          try {
+                            await appState.createPlaylist(
+                              name: nameController.text,
+                              itemIds: queue.map((t) => t.id).toList(),
+                            );
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Saved as "${nameController.text}"'),
+                                  backgroundColor: Colors.green,
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Failed to save playlist: $e'),
+                                  backgroundColor: theme.colorScheme.error,
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            }
+                          }
+                        }
+                      },
+                    ),
+                  // Track count
+                  Center(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Text(
+                        '${queue.length} ${queue.length == 1 ? 'track' : 'tracks'}',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
                     ),
                   ),
-                ),
+                ],
               );
             },
           ),

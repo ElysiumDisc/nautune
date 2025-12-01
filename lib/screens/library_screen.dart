@@ -906,10 +906,10 @@ class _TrackChip extends StatelessWidget {
             children: [
               AspectRatio(
                 aspectRatio: 1,
-                child: track.primaryImageTag != null
+                child: (track.albumId != null && track.albumPrimaryImageTag != null)
                     ? JellyfinImage(
-                        itemId: track.id,
-                        imageTag: track.primaryImageTag,
+                        itemId: track.albumId!,
+                        imageTag: track.albumPrimaryImageTag,
                         maxWidth: 300,
                         boxFit: BoxFit.cover,
                         errorBuilder: (context, url, error) => Image.asset(

@@ -2,11 +2,18 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback, animated waveform visualization, and seamless Jellyfin integration.
 
-## 🚀 Latest Updates (v1.9.0+)
+## 🚀 Latest Updates (v1.9.1+)
+- **💾 Save Instant Mix as Playlist**: Save your favorite mixes for future listening
+  - ✅ **One-tap save**: "Save as Playlist" button appears in snackbar after creating mix
+  - ✅ **Smart naming**: Auto-suggests names like "Artist Mix", "Album Mix", "Track Mix"
+  - ✅ **Custom names**: Edit the suggested name before saving
+  - ✅ **Available everywhere**: Works from artist, album, and track instant mix buttons
+  - ✅ **Jellyfin sync**: Saved playlists sync to server immediately
 - **🎨 Immersive Fullscreen Player**: Dynamic gradient backgrounds from album art
   - ✅ **Color extraction**: Automatically extracts dominant colors from album artwork
   - ✅ **Gradient background**: Beautiful multi-color gradient with subtle opacity
-  - ✅ **Real-time updates**: Background adapts as tracks change
+  - ✅ **Real-time updates**: Background adapts as tracks change with smooth transitions
+  - ✅ **Fixed refresh issues**: Album art and gradient now update immediately when track changes
   - ✅ **Removed visualizer**: Cleaner, more focused fullscreen experience
 - **🛡️ Download Dependency Tracking**: Intelligent file management
   - ✅ **Reference counting**: Tracks ownership of downloaded files (albums vs playlists)
@@ -41,6 +48,8 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
   - ✅ **User feedback**: Toast notifications confirm queue operations
 - **✨ Instant Mix Integration**: Server-powered music discovery via Jellyfin
   - ✅ **One-tap mixes**: Create 50-track playlists from any track, album, or artist
+  - ✅ **Save as playlist**: One-tap save button in snackbar after creating mix
+  - ✅ **Smart naming**: Auto-suggests contextual names (Artist/Album/Track Mix)
   - ✅ **Server-side matching**: Jellyfin analyzes music similarity (genre, era, style, audio features)
   - ✅ **Multiple entry points**: Sparkle icon (✨) in album/artist detail screens
   - ✅ **Track context menus**: Instant Mix option in all three-dot menus
@@ -370,6 +379,8 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
   - ✅ **Smart handling**: Manages queue indices and pre-loading automatically
 - **Instant Mix**: AI-powered music discovery via Jellyfin
   - ✅ **One-tap radio**: Create 50-track mixes from any track, album, or artist
+  - ✅ **Save as playlist**: One-tap save from snackbar after creation
+  - ✅ **Smart naming**: Auto-suggests contextual playlist names
   - ✅ **Server intelligence**: Jellyfin analyzes musical similarity
   - ✅ **Multiple triggers**: Sparkle icon (✨) in detail screens + track menus
   - ✅ **Auto-play**: Starts playing immediately
@@ -377,7 +388,9 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
   - ✅ Saves current track, position, queue, repeat mode, shuffle state
   - ✅ Preserves volume level and UI preferences (library tab, scroll positions)
   - ✅ Smart restoration: automatically resumes from last position on launch
-  - ✅ Stop button clears persistence for clean restart
+  - ✅ **Pause preserves queue**: Pausing saves queue for next session
+  - ✅ **Stop clears queue**: Stop button intentionally clears queue (fresh start)
+  - ✅ **App resume**: Background/foreground restores playback exactly where you left off
   - ✅ Position saved every second for accurate resume
 - **Shuffle & Repeat**: Full playback control
   - ✅ Shuffle mode: Randomizes queue while keeping current track
@@ -442,6 +455,7 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
   - **Smart Tab Switching**: Automatically becomes "Downloads" tab when in offline mode
 - **✅ Instant Mix**: Server-powered music discovery creates 50-track playlists
   - ✅ **From any source**: Generate mixes from tracks, albums, or artists
+  - ✅ **Save as playlist**: One-tap save button after mix creation with smart naming
   - ✅ **Sparkle icon (✨)**: Quick access in album/artist detail screens
   - ✅ **Track menus**: Instant Mix option in all three-dot menus
   - ✅ **Auto-play**: Mix starts playing immediately after generation
@@ -706,7 +720,10 @@ See **Architecture Improvements** section above for details!
   - ✅ Volume level and UI preferences (library tab, scroll positions)
   - ✅ Show/hide volume bar preference
 - **Smart Restoration**: Automatically resumes from last position on app launch
-- **Stop Clears State**: Pressing stop resets persistence to default (clean slate on next launch)
+- **Intelligent Queue Handling**:
+  - ✅ **Pause saves queue**: Pausing preserves queue for next session
+  - ✅ **Stop clears queue**: Stop button intentionally clears everything (fresh start)
+  - ✅ **App resume**: Background/foreground restores playback state perfectly
 - **Real-time Saving**: Position saved every second for accurate resume
 - **Stored in Hive**: Persists across app restarts and force-closes via fast, local storage
 
@@ -811,7 +828,7 @@ All iOS features are built and deployed via **Codemagic CI**:
 - [x] **Multi-disc album support with disc separators**
 - [x] **Audio playback with native engine (direct streaming)**
 - [x] **Advanced playback state persistence** (track, position, queue, repeat, shuffle, volume, UI state)
-- [x] **Stop clears persistence** for clean restart
+- [x] **Intelligent queue persistence** (pause saves queue, stop clears, app resume restores perfectly)
 - [x] **Shuffle mode** with queue randomization
 - [x] **Repeat modes** (off/all/one) with persistence
 - [x] **Gapless playback** with track preloading
@@ -928,7 +945,7 @@ Nautune is evolving into a best-in-class music player with a focus on native des
 - [x] **Dynamic Album Art Gradients** - Fullscreen player extracts colors from album art for immersive gradient backgrounds (completed!)
 - [ ] **Smart Downloads** - "Auto-download favorites" and "Keep last 50 played songs offline"
 - [x] **Lyrics Support** - API integration complete, UI tab in progress
-- [x] **Smart Playlists / Instant Mix** - 50-track mixes from any track/album/artist (completed!)
+- [x] **Smart Playlists / Instant Mix** - 50-track mixes from any track/album/artist with one-tap save as playlist (completed!)
 - [ ] **Infinite Radio Mode** - Endless playback that auto-generates next track when queue is low (future feature)
 - [ ] **Instant Mix Enhancement** - Better integration with Jellyfin's `/InstantMix` endpoint
 

@@ -291,10 +291,13 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                     );
 
                     if (!context.mounted) return;
+                    
+                    // Simple notification without persistent action button
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text('Playing instant mix (${mixTracks.length} tracks)'),
                         duration: const Duration(seconds: 2),
+                        behavior: SnackBarBehavior.floating,
                       ),
                     );
                   } catch (e) {
@@ -766,10 +769,12 @@ class _TrackTile extends StatelessWidget {
                                   queueContext: mixTracks,
                                 );
 
+                                // Simple notification without persistent action button
                                 ScaffoldMessenger.of(parentContext).showSnackBar(
                                   SnackBar(
                                     content: Text('Playing instant mix (${mixTracks.length} tracks)'),
                                     duration: const Duration(seconds: 2),
+                                    behavior: SnackBarBehavior.floating,
                                   ),
                                 );
                               } catch (e) {
