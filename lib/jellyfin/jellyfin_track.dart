@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 
 class JellyfinTrack {
   JellyfinTrack({
@@ -87,6 +88,14 @@ class JellyfinTrack {
     int? bitDepth;
     int? channels;
 
+    // small helper to parse ints from num or numeric strings
+    int? _parseInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return null;
+    }
+
     // Container/format from top level
     final containerField = json['Container'];
     if (containerField is String) {
@@ -106,20 +115,14 @@ class JellyfinTrack {
         codec = audioStream['Codec'] is String
             ? (audioStream['Codec'] as String).toUpperCase()
             : null;
-        bitrate = audioStream['BitRate'] is num
-            ? (audioStream['BitRate'] as num).toInt()
-            : null;
-        sampleRate = audioStream['SampleRate'] is num
-            ? (audioStream['SampleRate'] as num).toInt()
-            : null;
-        bitDepth = audioStream['BitDepth'] is num
-            ? (audioStream['BitDepth'] as num).toInt()
-            : null;
-        channels = audioStream['Channels'] is num
-            ? (audioStream['Channels'] as num).toInt()
-            : null;
+        bitrate = _parseInt(audioStream['BitRate']);
+        sampleRate = _parseInt(audioStream['SampleRate']);
+        bitDepth = _parseInt(audioStream['BitDepth']);
+        channels = _parseInt(audioStream['Channels']);
       }
     }
+    // If MediaStreams is missing, these tracks may need re-scanning in Jellyfin
+    // or the API doesn't support MediaStreams for certain item types
 
     return JellyfinTrack(
       id: json['Id'] is String ? json['Id'] as String : '',

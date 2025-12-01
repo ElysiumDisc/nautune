@@ -3,6 +3,11 @@
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback, animated waveform visualization, and seamless Jellyfin integration.
 
 ## 🚀 Latest Updates (v1.9.0+)
+- **🎨 Immersive Fullscreen Player**: Dynamic gradient backgrounds from album art
+  - ✅ **Color extraction**: Automatically extracts dominant colors from album artwork
+  - ✅ **Gradient background**: Beautiful multi-color gradient with subtle opacity
+  - ✅ **Real-time updates**: Background adapts as tracks change
+  - ✅ **Removed visualizer**: Cleaner, more focused fullscreen experience
 - **🛡️ Download Dependency Tracking**: Intelligent file management
   - ✅ **Reference counting**: Tracks ownership of downloaded files (albums vs playlists)
   - ✅ **Prevents data loss**: Deleting an album won't delete tracks that are also in your playlists
@@ -34,13 +39,14 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
   - ✅ **Available everywhere**: Album tracks, favorites, search results, fullscreen player
   - ✅ **Smart queue handling**: Automatically manages queue indices and pre-loading
   - ✅ **User feedback**: Toast notifications confirm queue operations
-- **✨ Instant Mix Integration**: AI-powered music discovery via Jellyfin
-  - ✅ **One-tap mixes**: Create 50-track radio-style playlists from any track, album, or artist
-  - ✅ **Server-side intelligence**: Jellyfin analyzes music similarity (genre, era, style)
+- **✨ Instant Mix Integration**: Server-powered music discovery via Jellyfin
+  - ✅ **One-tap mixes**: Create 50-track playlists from any track, album, or artist
+  - ✅ **Server-side matching**: Jellyfin analyzes music similarity (genre, era, style, audio features)
   - ✅ **Multiple entry points**: Sparkle icon (✨) in album/artist detail screens
   - ✅ **Track context menus**: Instant Mix option in all three-dot menus
   - ✅ **Auto-play**: Mix starts playing immediately after generation
   - ✅ **Smart feedback**: Loading states and error handling for empty results
+  - ℹ️ **Note**: Limited to 50 tracks per mix (Jellyfin API default)
 - **🔀 UI Polish**: Better iconography across the app
   - ✅ **Shuffle icon**: Replaced emoji (🌊🌊) with proper Material Icons.shuffle
   - ✅ **Consistent design**: Professional icons in album and playlist screens
@@ -407,6 +413,8 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
   - ✅ Compact, centered button layout optimized for mobile devices
   - ✅ All playback controls in one row (favorite, skip, stop, play/pause, next, repeat)
   - ✅ Visual indicators for active repeat/shuffle modes
+  - ✅ **Dynamic Gradient Background**: Automatically extracts colors from album art and creates a beautiful blurred gradient backdrop
+  - ✅ **Immersive Experience**: Gradient colors update in real-time when tracks change, matching the album artwork
 - **Deep Sea Purple Theme**: Oceanic gradient color scheme with light purple "Nautune" title (Pacifico font)
 - **Album & Artist Art**: Beautiful grid and list layouts with Jellyfin artwork (trident placeholder fallback)
   - ✅ **Perfect text rendering**: Fixed iOS text overflow on album cards
@@ -432,12 +440,12 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
   - All content is playable with tap-to-play functionality
   - Horizontal-only layout for clean, consistent experience
   - **Smart Tab Switching**: Automatically becomes "Downloads" tab when in offline mode
-- **✅ Instant Mix**: Server-powered music discovery creates 50-track radio-style playlists
+- **✅ Instant Mix**: Server-powered music discovery creates 50-track playlists
   - ✅ **From any source**: Generate mixes from tracks, albums, or artists
   - ✅ **Sparkle icon (✨)**: Quick access in album/artist detail screens
   - ✅ **Track menus**: Instant Mix option in all three-dot menus
   - ✅ **Auto-play**: Mix starts playing immediately after generation
-  - ✅ **Jellyfin intelligence**: Server analyzes music similarity (genre, era, style)
+  - ✅ **Jellyfin matching**: Server analyzes music similarity (genre, era, style, audio features)
 - **✅ Play Next & Add to Queue**: Full queue control from any track menu
   - ✅ **Play Next**: Insert track(s) immediately after current song
   - ✅ **Add to Queue**: Append track(s) to end of queue
@@ -917,10 +925,11 @@ Nautune is evolving into a best-in-class music player with a focus on native des
 **Goal**: Polish and power-user features
 
 - [x] **ReplayGain** - Automatic volume normalization (completed!)
-- [ ] **Real FFT Visualizer** - Replace fake sine waves with actual audio analysis
+- [x] **Dynamic Album Art Gradients** - Fullscreen player extracts colors from album art for immersive gradient backgrounds (completed!)
 - [ ] **Smart Downloads** - "Auto-download favorites" and "Keep last 50 played songs offline"
 - [x] **Lyrics Support** - API integration complete, UI tab in progress
-- [ ] **Smart Playlists / Mixes** - Infinite "Radio" mode from any track/album/artist
+- [x] **Smart Playlists / Instant Mix** - 50-track mixes from any track/album/artist (completed!)
+- [ ] **Infinite Radio Mode** - Endless playback that auto-generates next track when queue is low (future feature)
 - [ ] **Instant Mix Enhancement** - Better integration with Jellyfin's `/InstantMix` endpoint
 
 ## 🐛 Known Issues

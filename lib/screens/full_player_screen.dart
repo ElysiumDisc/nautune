@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui show Image, ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,7 +10,6 @@ import '../jellyfin/jellyfin_track.dart';
 import '../services/audio_player_service.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/jellyfin_image.dart';
-import 'fullscreen_visualizer_screen.dart';
 
 class FullPlayerScreen extends StatefulWidget {
   const FullPlayerScreen({super.key});
@@ -27,6 +27,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
   bool _loadingLyrics = false;
   late AudioPlayerService _audioService;
   late NautuneAppState _appState;
+  List<Color>? _paletteColors;
 
   @override
   void initState() {
@@ -49,6 +50,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
           setState(() {});
           if (track != null) {
             _fetchLyrics(track);
+            _extractColors(track);
           }
         }
       });
@@ -63,7 +65,67 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
       final currentTrack = _audioService.currentTrack;
       if (currentTrack != null) {
         _fetchLyrics(currentTrack);
+        _extractColors(currentTrack);
       }
+    }
+  }
+
+  Future<void> _extractColors(JellyfinTrack track) async {
+    final tag = track.primaryImageTag;
+    if (tag == null || tag.isEmpty) return;
+
+    try {
+      final imageUrl = _appState.jellyfinService.buildImageUrl(
+        itemId: track.id,
+        tag: tag,
+        maxWidth: 100,
+      );
+
+      final imageProvider = NetworkImage(
+        imageUrl,
+        headers: _appState.jellyfinService.imageHeaders(),
+      );
+      
+      final imageStream = imageProvider.resolve(const ImageConfiguration());
+      final completer = Completer<ui.Image>();
+      
+      late ImageStreamListener listener;
+      listener = ImageStreamListener((info, _) {
+        completer.complete(info.image);
+        imageStream.removeListener(listener);
+      });
+      
+      imageStream.addListener(listener);
+      final image = await completer.future;
+      
+      final ByteData? byteData = await image.toByteData();
+      if (byteData == null) return;
+      
+      final pixels = byteData.buffer.asUint8List();
+      final colors = <Color>[];
+      
+      for (int i = 0; i < pixels.length; i += 400) {
+        if (i + 2 < pixels.length) {
+          final r = pixels[i];
+          final g = pixels[i + 1];
+          final b = pixels[i + 2];
+          colors.add(Color.fromRGBO(r, g, b, 1.0));
+        }
+      }
+      
+      colors.sort((a, b) {
+        final lumA = (0.299 * (a.r * 255.0).round() + 0.587 * (a.g * 255.0).round() + 0.114 * (a.b * 255.0).round());
+        final lumB = (0.299 * (b.r * 255.0).round() + 0.587 * (b.g * 255.0).round() + 0.114 * (b.b * 255.0).round());
+        return lumA.compareTo(lumB);
+      });
+      
+      if (mounted && colors.isNotEmpty) {
+        setState(() {
+          _paletteColors = colors;
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to extract colors: $e');
     }
   }
 
@@ -290,7 +352,37 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                         return KeyEventResult.handled;
                       },
                       child: Scaffold(
-                      body: SafeArea(
+                      body: Stack(
+                        children: [
+                          // Gradient background layer
+                          if (_paletteColors != null && _paletteColors!.length >= 3)
+                            Positioned.fill(
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: [
+                                      _paletteColors![0].withValues(alpha: 0.6),
+                                      _paletteColors![_paletteColors!.length ~/ 2].withValues(alpha: 0.5),
+                                      _paletteColors![_paletteColors!.length - 1].withValues(alpha: 0.4),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          // Blur layer for extra effect
+                          if (_paletteColors != null && _paletteColors!.length >= 3)
+                            Positioned.fill(
+                              child: BackdropFilter(
+                                filter: ui.ImageFilter.blur(sigmaX: 80, sigmaY: 80),
+                                child: Container(
+                                  color: Colors.black.withValues(alpha: 0.1),
+                                ),
+                              ),
+                            ),
+                          // Content layer
+                          SafeArea(
                         child: Column(
                           children: [
                             // Header with TabBar
@@ -500,6 +592,8 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                             ),
                           ],
                         ),
+                      ),
+                        ],
                       ),
                     ),
                   );
@@ -1017,18 +1111,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
       color: theme.colorScheme.onPrimaryContainer,
     );
 
-    return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => FullscreenVisualizerScreen(
-              track: track,
-              audioService: _audioService,
-            ),
-          ),
-        );
-      },
-      child: Container(
+    return Container(
         decoration: BoxDecoration(
           borderRadius: borderRadius,
         color: theme.colorScheme.primaryContainer,
@@ -1059,7 +1142,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
               : placeholder,
         ),
       ),
-    ),
     );
   }
 }
