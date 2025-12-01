@@ -1,6 +1,6 @@
 # Nautune 🎵🌊
 
-Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback, animated waveform visualization, and seamless Jellyfin integration.
+Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback and seamless Jellyfin integration.
 
 ## 🚀 Latest Updates (v1.9.1+)
 - **💾 Save Instant Mix as Playlist**: Save your favorite mixes for future listening
@@ -896,12 +896,12 @@ All iOS features are built and deployed via **Codemagic CI**:
 - [x] **Keyboard shortcuts for desktop** (Space, arrows, N/P/R/L)
 - [x] **ReplayGain normalization** for consistent volume
 - [x] **Lyrics API integration** (backend complete)
-- [ ] **Lyrics UI tab** - synced scrolling display in Full Player (in progress)
-- [ ] Enhanced search across all content types
+- [x] **Lyrics UI tab** - synced scrolling display in Full Player (in progress)
+- [x] Enhanced search across all content types
 - [ ] Equalizer and audio settings
 - [ ] **Sorting options** (by name, date added, year for albums/artists)
 - [ ] Cross-platform stability improvements (Windows, macOS, Android)
-- [ ] "Smart Resume" that restores current song, queue, shuffle, repeat, and scroll state on app return
+- [x] "Smart Resume" that restores current song, queue, shuffle, repeat, and scroll state on app return
 
 ## 🌊 The "Poseidon Dashboard" Roadmap
 
