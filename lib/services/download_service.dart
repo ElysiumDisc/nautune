@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:http/http.dart' as http;
@@ -335,7 +336,7 @@ class DownloadService extends ChangeNotifier {
 
       final artworkPath = await _getArtworkPath(track.id);
       final file = File(artworkPath);
-      
+
       if (await file.exists()) {
         return; // Already cached
       }
@@ -347,6 +348,30 @@ class DownloadService extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('Failed to cache artwork for ${track.name}: $e');
+    }
+  }
+
+  /// Extract actual duration from downloaded audio file
+  Future<Duration?> _extractAudioDuration(String filePath) async {
+    AudioPlayer? player;
+    try {
+      player = AudioPlayer();
+      await player.setSourceDeviceFile(filePath);
+
+      // Wait for duration to be available (with timeout)
+      Duration? duration;
+      for (int i = 0; i < 10; i++) {
+        duration = await player.getDuration();
+        if (duration != null) break;
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+
+      return duration;
+    } catch (e) {
+      debugPrint('Failed to extract audio duration from $filePath: $e');
+      return null;
+    } finally {
+      await player?.dispose();
     }
   }
 
@@ -561,19 +586,29 @@ class DownloadService extends ChangeNotifier {
 
       await sink.close();
 
+      // Extract actual duration from downloaded file
+      JellyfinTrack updatedTrack = item.track;
+      final actualDuration = await _extractAudioDuration(correctPath);
+      if (actualDuration != null) {
+        final actualTicks = actualDuration.inMicroseconds * 10;
+        updatedTrack = item.track.copyWith(runTimeTicks: actualTicks);
+        debugPrint('Updated duration for ${item.track.name}: ${actualDuration.inSeconds}s (was ${item.track.duration?.inSeconds ?? 0}s)');
+      }
+
       _downloads[trackId] = _downloads[trackId]!.copyWith(
+        track: updatedTrack,
         status: DownloadStatus.completed,
         progress: 1.0,
         completedAt: DateTime.now(),
       );
-      
+
       // Download artwork after track completes
-      await _downloadArtwork(item.track);
-      
+      await _downloadArtwork(updatedTrack);
+
       notifyListeners();
       await _saveDownloads();
-      
-      debugPrint('Download completed: ${item.track.name} ($extension)');
+
+      debugPrint('Download completed: ${updatedTrack.name} ($extension)');
     } catch (e) {
       debugPrint('Download failed for ${item.track.name}: $e');
       _downloads[trackId] = item.copyWith(

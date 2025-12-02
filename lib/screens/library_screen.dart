@@ -4312,21 +4312,23 @@ class AlphabetScrollbar extends StatelessWidget {
       top: 0,
       bottom: 0,
       child: Container(
-        width: 20,
+        width: 28,
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: _alphabet.map((letter) {
-            return GestureDetector(
-              onTap: () => _scrollToLetter(letter),
-              child: Container(
-                padding: const EdgeInsets.all(2),
-                child: Text(
-                  letter,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    color: theme.colorScheme.primary.withValues(alpha: 0.7),
+            return Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _scrollToLetter(letter),
+                child: Center(
+                  child: Text(
+                    letter,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.primary.withValues(alpha: 0.7),
+                    ),
                   ),
                 ),
               ),

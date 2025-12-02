@@ -75,8 +75,23 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
   }
 
   Future<void> _extractColors(JellyfinTrack track) async {
-    final tag = track.primaryImageTag;
-    if (tag == null || tag.isEmpty) {
+    // Use same fallback logic as _buildArtwork to ensure consistency
+    String? imageTag = track.primaryImageTag;
+    String? itemId = track.id;
+
+    // Fallback to album art if track doesn't have its own image
+    if (imageTag == null || imageTag.isEmpty) {
+      imageTag = track.albumPrimaryImageTag;
+      itemId = track.albumId ?? track.id;
+    }
+
+    // Further fallback to parent thumb
+    if (imageTag == null || imageTag.isEmpty) {
+      imageTag = track.parentThumbImageTag;
+      itemId = track.albumId ?? track.id;
+    }
+
+    if (imageTag == null || imageTag.isEmpty || itemId == null) {
       setState(() {
         _paletteColors = null;
       });
@@ -90,8 +105,8 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
 
     try {
       final imageUrl = _appState.jellyfinService.buildImageUrl(
-        itemId: track.id,
-        tag: tag,
+        itemId: itemId,
+        tag: imageTag,
         maxWidth: 100,
       );
 
