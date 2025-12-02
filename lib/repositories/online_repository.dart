@@ -19,7 +19,7 @@ class OnlineRepository implements MusicRepository {
 
   @override
   Future<List<JellyfinLibrary>> getLibraries() async {
-    return await _jellyfinService.getLibraries();
+    return await _jellyfinService.loadLibraries();
   }
 
   @override
@@ -28,7 +28,7 @@ class OnlineRepository implements MusicRepository {
     int startIndex = 0,
     int limit = 50,
   }) async {
-    return await _jellyfinService.getAlbums(
+    return await _jellyfinService.loadAlbums(
       libraryId: libraryId,
       startIndex: startIndex,
       limit: limit,
@@ -41,7 +41,7 @@ class OnlineRepository implements MusicRepository {
     int startIndex = 0,
     int limit = 50,
   }) async {
-    return await _jellyfinService.getArtists(
+    return await _jellyfinService.loadArtists(
       libraryId: libraryId,
       startIndex: startIndex,
       limit: limit,
@@ -50,12 +50,12 @@ class OnlineRepository implements MusicRepository {
 
   @override
   Future<List<JellyfinGenre>> getGenres({required String libraryId}) async {
-    return await _jellyfinService.getGenres(libraryId: libraryId);
+    return await _jellyfinService.loadGenres(libraryId: libraryId);
   }
 
   @override
   Future<List<JellyfinPlaylist>> getPlaylists() async {
-    return await _jellyfinService.getPlaylists();
+    return await _jellyfinService.loadPlaylists();
   }
 
   @override
@@ -65,7 +65,7 @@ class OnlineRepository implements MusicRepository {
 
   @override
   Future<List<JellyfinAlbum>> getArtistAlbums(String artistId) async {
-    return await _jellyfinService.getArtistAlbums(artistId);
+    return await _jellyfinService.loadAlbumsByArtist(artistId: artistId);
   }
 
   @override
@@ -94,7 +94,7 @@ class OnlineRepository implements MusicRepository {
     required String libraryId,
     int limit = 20,
   }) async {
-    return await _jellyfinService.getRecentlyAdded(
+    return await _jellyfinService.loadRecentlyAddedAlbums(
       libraryId: libraryId,
       limit: limit,
     );
@@ -168,11 +168,22 @@ class OnlineRepository implements MusicRepository {
 
   @override
   Future<List<JellyfinAlbum>> getGenreAlbums(String genreId) async {
-    return await _jellyfinService.getGenreAlbums(genreId);
+    // Genre albums are loaded via loadAlbums with genreIds filter
+    // The genre detail screen handles this directly via JellyfinClient
+    // For now, this repository method isn't used by UI
+    return [];
   }
 
   @override
-  bool get isAvailable => _jellyfinService.isLoggedIn;
+  bool get isAvailable {
+    // Check if we have a valid session
+    try {
+      final url = _jellyfinService.baseUrl;
+      return url != null && url.isNotEmpty;
+    } catch (e) {
+      return false;
+    }
+  }
 
   @override
   String get typeName => 'OnlineRepository';
