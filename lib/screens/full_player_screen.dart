@@ -104,26 +104,36 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
     });
 
     try {
-      final imageUrl = _appState.jellyfinService.buildImageUrl(
-        itemId: itemId,
-        tag: imageTag,
-        maxWidth: 100,
-      );
+      // Try to load from downloaded artwork first (for offline support)
+      ImageProvider imageProvider;
+      final artworkFile = await _appState.downloadService.getArtworkFile(track.id);
 
-      final imageProvider = NetworkImage(
-        imageUrl,
-        headers: _appState.jellyfinService.imageHeaders(),
-      );
-      
+      if (artworkFile != null && await artworkFile.exists()) {
+        // Use offline artwork
+        imageProvider = FileImage(artworkFile);
+        debugPrint('Using offline artwork for gradient extraction: ${track.name}');
+      } else {
+        // Fall back to network image
+        final imageUrl = _appState.jellyfinService.buildImageUrl(
+          itemId: itemId,
+          tag: imageTag,
+          maxWidth: 100,
+        );
+        imageProvider = NetworkImage(
+          imageUrl,
+          headers: _appState.jellyfinService.imageHeaders(),
+        );
+      }
+
       final imageStream = imageProvider.resolve(const ImageConfiguration());
       final completer = Completer<ui.Image>();
-      
+
       late ImageStreamListener listener;
       listener = ImageStreamListener((info, _) {
         completer.complete(info.image);
         imageStream.removeListener(listener);
       });
-      
+
       imageStream.addListener(listener);
       final image = await completer.future;
       
