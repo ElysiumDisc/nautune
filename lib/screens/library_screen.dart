@@ -105,7 +105,12 @@ class _LibraryScreenState extends State<LibraryScreen>
         final playlists = widget.appState.playlists;
         final isLoadingPlaylists = widget.appState.isLoadingPlaylists;
         final playlistsError = widget.appState.playlistsError;
-        final favoriteTracks = widget.appState.favoriteTracks;
+        var favoriteTracks = widget.appState.favoriteTracks;
+        if (widget.appState.isOfflineMode && favoriteTracks != null) {
+          favoriteTracks = favoriteTracks.where((t) => 
+            widget.appState.downloadService.isDownloaded(t.id)
+          ).toList();
+        }
         final isLoadingFavorites = widget.appState.isLoadingFavorites;
         final favoritesError = widget.appState.favoritesError;
 
