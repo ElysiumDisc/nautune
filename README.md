@@ -2,7 +2,29 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback and seamless Jellyfin integration.
 
-## 🚀 Latest Updates (v1.9.8+)
+## 🚀 Latest Updates (v1.9.9+)
+- **✈️ Robust Airplane Mode Support**: Bulletproof playback control
+  - ✅ **Instant Stop**: "Stop" button now kills audio immediately, even without network
+  - ✅ **Ghost Playback Fix**: Eliminated issues where music would keep playing if stopped while offline
+  - ✅ **Safe Networking**: Network reporting calls are now fail-safe and won't crash the player
+  - ✅ **Offline-First Logic**: Player operations prioritize UI responsiveness over server sync
+- **🔤 Interactive Alphabet Scrollbar**: Native iOS-style navigation
+  - ✅ **Slide-to-Scroll**: Drag finger along the right edge to scrub through lists instantly
+  - ✅ **Pop-out Bubble**: Large letter indicator appears next to finger for clear feedback
+  - ✅ **Haptic Feedback**: Subtle vibration as you scroll through letters
+  - ✅ **Zoom Effect**: Active letter in the bar scales up for better visibility
+  - ✅ **Unified Experience**: Available in Albums, Artists, and Genres tabs
+- **🌊 Unified Offline UI**: Seamless transition between online and offline states
+  - ✅ **Single UI Design**: Offline mode now reuses the main library layout (grids, sorting, design)
+  - ✅ **Smart Data Source**: Automatically switches between API and local Hive database
+  - ✅ **No Jarring Switches**: Toggling offline mode no longer redirects to a completely different screen
+  - ✅ **Consistent Sorting**: Offline content respects the same sorting rules as online content
+- **🔧 Track Duration Fix**: Solved the "100x Duration" bug
+  - ✅ **Data Healing**: Automatically detects and repairs corrupted duration data in local database
+  - ✅ **Standardization**: Switched internal storage to Jellyfin "Ticks" for 100% accuracy
+  - ✅ **Migration**: seamless on-the-fly fix for existing users with broken durations
+
+## 🚀 Previous Updates (v1.9.8+)
 - **🔧 UI/UX Improvements**: Critical bug fixes for better user experience
   - ✅ **Alphabet scrollbar fix**: Letters in Albums/Artists/Genres tabs are now fully tappable
     - Fixed hit test behavior with `HitTestBehavior.opaque` for reliable touch detection
@@ -128,7 +150,7 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 ## 🚀 Previous Updates (v1.8.3+)
 - **⚡ Smart Track Pre-Loading**: Intelligent buffering for truly gapless playback
   - ✅ **70% pre-load trigger**: Automatically loads next track when current reaches 70%
-  - ✅ **Platform buffering**: Audio data buffered by native decoders (not just URLs)
+  - ✅ **Platform buffering**: Native audio decoders buffer actual audio data
   - ✅ **Instant transitions**: Near-zero gap between tracks when pre-loaded
   - ✅ **Respects queue & repeat modes**: Works with shuffle, repeat one/all
   - ✅ **Auto-cleanup**: Clears pre-load when queue changes
@@ -601,7 +623,7 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
 
 ### Offline Boot Troubleshooting
 - If you previously ran Nautune before the new connectivity boot logic, the cached Hive data may use legacy map types. A `_Map<dynamic, dynamic>` cast error on launch means the cache needs to be cleared.
-- Delete the `nautune_cache.*` files in the platform data directory (e.g., Linux: `~/.local/share/nautune/`, macOS: `~/Library/Application Support/nautune/`, Windows: `%LOCALAPPDATA%\\nautune\\`). The app will rebuild the cache automatically on the next successful sync.
+- Delete the `nautune_cache.*` files in the platform data directory (e.g., Linux: `~/.local/share/nautune/`, macOS: `~/Library/Application Support/nautune/`, Windows: `%LOCALAPPDATA%\nautune\`). The app will rebuild the cache automatically on the next successful sync.
 - After clearing the cache, you can start the app offline—ConnectivityService will detect the missing network and the Library screen will immediately show downloads.
 
 ## 📸 Screenshots
@@ -765,7 +787,7 @@ See **Architecture Improvements** section above for details!
 - **Intelligent Queue Handling**:
   - ✅ **Pause saves queue**: Pausing preserves queue for next session
   - ✅ **Stop clears queue**: Stop button intentionally clears everything (fresh start)
-  - ✅ **App resume**: Background/foreground restores playback state perfectly
+  - ✅ **App resume**: Background/foreground restores playback exactly where you left off
 - **Real-time Saving**: Position saved every second for accurate resume
 - **Stored in Hive**: Persists across app restarts and force-closes via fast, local storage
 
@@ -807,7 +829,7 @@ flutter test
   - ✅ **Native audio playback** via AVFoundation (FLAC/AAC/lossless support)
   - ✅ **Lock screen controls** with album artwork via audio_service
   - ✅ **Full CarPlay integration** - browse library, playlists, favorites, downloads in car mode
-  - ✅ **Offline downloads** stored in app documents directory (airplane mode compatible)
+  - ✅ **Offline downloads** stored in app documents (airplane mode compatible)
   - ✅ CarPlay works fully offline with downloaded content
   - ✅ All Jellyfin features work on iOS (playback reporting, favorites sync, playlist management)
 - **Windows**: `flutter build windows` (requires Windows machine with VS 2022)

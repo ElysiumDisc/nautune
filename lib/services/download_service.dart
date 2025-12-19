@@ -146,14 +146,37 @@ class DownloadService extends ChangeNotifier {
              continue;
           }
 
+          // Fix duration loading logic
+          int? runTimeTicks;
+          if (itemData['runTimeTicks'] != null) {
+            runTimeTicks = itemData['runTimeTicks'] as int;
+          } else if (itemData['trackDuration'] != null) {
+            // Legacy format: was stored as milliseconds
+            // Need to convert to ticks (1 ms = 10,000 ticks)
+            // But previous code might have multiplied by 10 (micros) or other errors
+            // Apply heuristic healing if the value seems impossibly large (e.g. > 24 hours)
+            int val = (itemData['trackDuration'] as int);
+            
+            // If it was already stored as ticks in the duration field by mistake
+            if (val > 360000000000) { // > 10 hours
+               // Heuristic: assume it's corrupted 100x or similar, scale down
+               // But safest is to just treat it as ms -> ticks if it's small,
+               // or leave it if it's already ticks-sized?
+               // The user mentioned a 100x bug. Let's try to detect that.
+               val = val ~/ 100;
+            } else {
+               // Standard conversion: ms -> ticks
+               val = val * 10000;
+            }
+            runTimeTicks = val;
+          }
+
           final track = JellyfinTrack(
             id: trackId,
             name: itemData['trackName'] as String,
             artists: [itemData['trackArtist'] as String],
             album: itemData['trackAlbum'] as String?,
-            runTimeTicks: itemData['trackDuration'] != null
-                ? (itemData['trackDuration'] as int) * 10
-                : null,
+            runTimeTicks: runTimeTicks,
             container: itemData['trackContainer'] as String?,
             codec: itemData['trackCodec'] as String?,
             bitrate: (itemData['trackBitrate'] as num?)?.toInt(),

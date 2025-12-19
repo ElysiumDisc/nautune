@@ -111,101 +111,14 @@ class _LibraryScreenState extends State<LibraryScreen>
         Widget body;
 
         // If we're in offline mode or have no network, prioritize showing offline content
-        if (!widget.appState.networkAvailable || 
-            (widget.appState.isOfflineMode && widget.appState.downloadService.completedCount > 0)) {
-          // Show offline library directly
-          return Scaffold(
-            appBar: AppBar(
-              title: Row(
-                children: [
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      widget.appState.toggleOfflineMode();
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Icon(
-                        Icons.waves,
-                        color: const Color(0xFF7A3DF1),  // Violet when offline
-                        size: 28,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Nautune',
-                    style: GoogleFonts.pacifico(
-                      fontSize: 24,
-                      color: const Color(0xFFB39DDB),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Icon(
-                    Icons.offline_bolt,
-                    size: 20,
-                    color: const Color(0xFF7A3DF1),
-                  ),
-                ],
-              ),
-              actions: [
-                IconButton(
-                  icon: const Icon(Icons.refresh),
-                  onPressed: () => widget.appState.refreshLibraries(),
-                  tooltip: 'Retry connection',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.logout),
-                  onPressed: () => widget.appState.disconnect(),
-                ),
-              ],
-            ),
-            body: Column(
-              children: [
-                // Offline mode banner
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  color: theme.colorScheme.tertiaryContainer,
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.cloud_off,
-                        size: 20,
-                        color: theme.colorScheme.onTertiaryContainer,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'No internet connection. Showing downloaded content only.',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.onTertiaryContainer,
-                          ),
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: () => widget.appState.refreshLibraries(),
-                        child: Text(
-                          'Retry',
-                          style: TextStyle(
-                            color: theme.colorScheme.onTertiaryContainer,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(child: OfflineLibraryScreen()),
-              ],
-            ),
-            bottomNavigationBar: NowPlayingBar(
-              audioService: widget.appState.audioPlayerService,
-              appState: widget.appState,
-            ),
-          );
-        } else if (isLoadingLibraries && (libraries == null || libraries.isEmpty)) {
+        // if (!widget.appState.networkAvailable || 
+        //     (widget.appState.isOfflineMode && widget.appState.downloadService.completedCount > 0)) {
+        //   // Show offline library directly
+        //   return Scaffold( ... );
+        // } 
+        // Logic removed to maintain UI parity.
+        
+        if (isLoadingLibraries && (libraries == null || libraries.isEmpty)) {
           body = const Center(child: CircularProgressIndicator());
         } else if (libraryError != null) {
           body = _ErrorState(
@@ -260,7 +173,7 @@ class _LibraryScreenState extends State<LibraryScreen>
               ),
               // Swap Most/Downloads based on offline mode
               widget.appState.isOfflineMode
-                  ? OfflineLibraryScreen()
+                  ? _DownloadsTab(appState: widget.appState)
                   : _MostPlayedTab(appState: widget.appState, onAlbumTap: (album) => _navigateToAlbum(context, album)),
               _PlaylistsTab(
                 playlists: playlists,
@@ -663,10 +576,60 @@ class _LibraryTabState extends State<_LibraryTab> {
   }
 
   Widget _buildOfflineContent() {
+    final downloads = widget.appState.downloadService.completedDownloads;
+
     if (_selectedView == 'albums') {
-      return _OfflineAlbumsView(appState: widget.appState, onAlbumTap: widget.onAlbumTap);
+      final Map<String, List<dynamic>> albumsMap = {};
+      for (final download in downloads) {
+        final albumName = download.track.album ?? 'Unknown Album';
+        albumsMap.putIfAbsent(albumName, () => []).add(download);
+      }
+
+      final offlineAlbums = albumsMap.entries.map((entry) {
+        final firstTrack = entry.value.first.track;
+        return JellyfinAlbum(
+          id: firstTrack.albumId ?? firstTrack.id, // Fallback to track ID if album ID missing
+          name: entry.key,
+          artists: [firstTrack.displayArtist],
+          artistIds: const [], // IDs might not be available offline
+          primaryImageTag: firstTrack.albumPrimaryImageTag,
+        );
+      }).toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+
+      return _AlbumsTab(
+        albums: offlineAlbums,
+        isLoading: false,
+        isLoadingMore: false,
+        error: null,
+        scrollController: _albumsScrollController,
+        onRefresh: () async {}, // No-op offline
+        onAlbumTap: widget.onAlbumTap,
+        appState: widget.appState,
+      );
     } else {
-      return _OfflineArtistsView(appState: widget.appState);
+      final Map<String, List<dynamic>> artistsMap = {};
+      for (final download in downloads) {
+        final artistName = download.track.displayArtist;
+        artistsMap.putIfAbsent(artistName, () => []).add(download);
+      }
+
+      final offlineArtists = artistsMap.keys.map((name) {
+        return JellyfinArtist(
+          id: 'offline_$name',
+          name: name,
+        );
+      }).toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+
+      return _ArtistsTab(
+        appState: widget.appState,
+        artists: offlineArtists,
+        isLoading: false,
+        isLoadingMore: false,
+        error: null,
+        onRefresh: () async {},
+      );
     }
   }
 
@@ -2490,51 +2453,39 @@ class _RecentTabState extends State<_RecentTab> {
   }
 }
 
-class _ArtistsTab extends StatefulWidget {
-  const _ArtistsTab({required this.appState});
+class _ArtistsTab extends StatelessWidget {
+  const _ArtistsTab({
+    required this.appState,
+    this.artists,
+    this.isLoading = false,
+    this.isLoadingMore = false,
+    this.error,
+    this.scrollController,
+    this.onRefresh,
+  });
 
   final NautuneAppState appState;
-
-  @override
-  State<_ArtistsTab> createState() => _ArtistsTabState();
-}
-
-class _ArtistsTabState extends State<_ArtistsTab> {
-  late ScrollController _artistsScrollController;
-
-  @override
-  void initState() {
-    super.initState();
-    _artistsScrollController = ScrollController();
-    _artistsScrollController.addListener(_onArtistsScroll);
-  }
-
-  @override
-  void dispose() {
-    _artistsScrollController.dispose();
-    super.dispose();
-  }
-
-  void _onArtistsScroll() {
-    if (_artistsScrollController.position.pixels >=
-        _artistsScrollController.position.maxScrollExtent - 200) {
-      widget.appState.loadMoreArtists();
-    }
-  }
+  final List<JellyfinArtist>? artists;
+  final bool isLoading;
+  final bool isLoadingMore;
+  final Object? error;
+  final ScrollController? scrollController;
+  final VoidCallback? onRefresh;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final artists = widget.appState.artists;
-    final isLoading = widget.appState.isLoadingArtists;
-    final isLoadingMore = widget.appState.isLoadingMoreArtists;
-    final error = widget.appState.artistsError;
+    // Use passed values or fallback to appState (online mode)
+    final effectiveArtists = artists ?? appState.artists;
+    final effectiveIsLoading = artists != null ? isLoading : appState.isLoadingArtists;
+    final effectiveIsLoadingMore = artists != null ? isLoadingMore : appState.isLoadingMoreArtists;
+    final effectiveError = artists != null ? error : appState.artistsError;
 
-    if (isLoading && artists == null) {
+    if (effectiveIsLoading && effectiveArtists == null) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (error != null && artists == null) {
+    if (effectiveError != null && effectiveArtists == null) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -2549,17 +2500,23 @@ class _ArtistsTabState extends State<_ArtistsTab> {
               ),
               const SizedBox(height: 8),
               Text(
-                error.toString(),
+                effectiveError.toString(),
                 style: theme.textTheme.bodyMedium,
                 textAlign: TextAlign.center,
               ),
+              if (onRefresh != null)
+                TextButton.icon(
+                  onPressed: onRefresh,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry'),
+                ),
             ],
           ),
         ),
       );
     }
 
-    if (artists == null || artists.isEmpty) {
+    if (effectiveArtists == null || effectiveArtists.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -2576,16 +2533,17 @@ class _ArtistsTabState extends State<_ArtistsTab> {
     }
 
     return RefreshIndicator(
-      onRefresh: () => widget.appState.refreshLibraryData(),
+      onRefresh: () async => onRefresh?.call() ?? appState.refreshArtists(),
       child: LayoutBuilder(
         builder: (context, constraints) {
           // 4 columns on desktop (>800px), 3 columns on mobile
           final crossAxisCount = constraints.maxWidth > 800 ? 4 : 3;
+          final controller = scrollController ?? ScrollController();
 
           return Stack(
             children: [
               CustomScrollView(
-                controller: _artistsScrollController,
+                controller: controller,
                 slivers: [
                   // Artists grid
                   SliverPadding(
@@ -2599,7 +2557,7 @@ class _ArtistsTabState extends State<_ArtistsTab> {
                       ),
                       delegate: SliverChildBuilderDelegate(
                         (context, index) {
-                          if (index >= artists.length) {
+                          if (index >= effectiveArtists.length) {
                             return const Center(
                               child: Padding(
                                 padding: EdgeInsets.all(16.0),
@@ -2607,19 +2565,19 @@ class _ArtistsTabState extends State<_ArtistsTab> {
                               ),
                             );
                           }
-                          final artist = artists[index];
-                          return _ArtistCard(artist: artist, appState: widget.appState);
+                          final artist = effectiveArtists[index];
+                          return _ArtistCard(artist: artist, appState: appState);
                         },
-                        childCount: artists.length + (isLoadingMore ? 2 : 0),
+                        childCount: effectiveArtists.length + (effectiveIsLoadingMore ? 2 : 0),
                       ),
                     ),
                   ),
                 ],
               ),
               AlphabetScrollbar(
-                items: artists,
+                items: effectiveArtists,
                 getItemName: (artist) => (artist as JellyfinArtist).name,
-                scrollController: _artistsScrollController,
+                scrollController: controller,
                 itemHeight: (constraints.maxWidth / crossAxisCount) * (1 / 0.75) + 12,
                 crossAxisCount: crossAxisCount,
               ),
@@ -4256,7 +4214,7 @@ class _DownloadsTab extends StatelessWidget {
 }
 
 // Alphabet scrollbar for quick navigation
-class AlphabetScrollbar extends StatelessWidget {
+class AlphabetScrollbar extends StatefulWidget {
   const AlphabetScrollbar({
     super.key,
     required this.items,
@@ -4272,21 +4230,27 @@ class AlphabetScrollbar extends StatelessWidget {
   final double itemHeight;
   final int crossAxisCount;
 
+  @override
+  State<AlphabetScrollbar> createState() => _AlphabetScrollbarState();
+}
+
+class _AlphabetScrollbarState extends State<AlphabetScrollbar> {
   static const _alphabet = ['#', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I',
                              'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S',
                              'T', 'U', 'V', 'W', 'X', 'Y', 'Z'];
+  
+  String? _activeLetter;
+  double _bubbleY = 0.0;
 
   void _scrollToLetter(String letter) {
-    if (items.isEmpty) return;
+    if (widget.items.isEmpty) return;
 
-    // Find the first item starting with this letter
     int targetIndex = -1;
-    for (int i = 0; i < items.length; i++) {
-      final itemName = getItemName(items[i]).toUpperCase();
+    for (int i = 0; i < widget.items.length; i++) {
+      final itemName = widget.getItemName(widget.items[i]).toUpperCase();
       final firstChar = itemName.isNotEmpty ? itemName[0] : '';
 
       if (letter == '#') {
-        // # represents numbers
         if (RegExp(r'[0-9]').hasMatch(firstChar)) {
           targetIndex = i;
           break;
@@ -4298,16 +4262,36 @@ class AlphabetScrollbar extends StatelessWidget {
     }
 
     if (targetIndex >= 0) {
-      // Calculate row index for grid layout
-      final row = targetIndex ~/ crossAxisCount;
-      // Calculate pixel position (accounting for padding and spacing)
-      final targetPosition = (row * itemHeight) - 100.0; // 100px offset for better positioning
+      final row = targetIndex ~/ widget.crossAxisCount;
+      final targetPosition = (row * widget.itemHeight) - 100.0;
+      
+      // Use jumpTo for immediate response during drag, or animateTo for tap
+      if (_activeLetter != null) {
+        widget.scrollController.jumpTo(math.max(0, targetPosition));
+      } else {
+        widget.scrollController.animateTo(
+          math.max(0, targetPosition),
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+        );
+      }
+    }
+  }
 
-      scrollController.animateTo(
-        math.max(0, targetPosition),
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-      );
+  void _handleInput(Offset localPosition, double height) {
+    final double letterHeight = height / _alphabet.length;
+    final int index = (localPosition.dy / letterHeight)
+        .clamp(0, _alphabet.length - 1)
+        .toInt();
+    final String letter = _alphabet[index];
+
+    if (_activeLetter != letter) {
+      setState(() {
+        _activeLetter = letter;
+        _bubbleY = localPosition.dy.clamp(0, height - 60);
+      });
+      _scrollToLetter(letter);
+      HapticFeedback.selectionClick();
     }
   }
 
@@ -4315,35 +4299,73 @@ class AlphabetScrollbar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Positioned(
-      right: 0,
-      top: 0,
-      bottom: 0,
-      child: Container(
-        width: 28,
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: _alphabet.map((letter) {
-            return Expanded(
-              child: GestureDetector(
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        // The Touch Strip
+        Positioned(
+          right: 0,
+          top: 40,
+          bottom: 40,
+          width: 30,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: () => _scrollToLetter(letter),
-                child: Center(
-                  child: Text(
-                    letter,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.primary.withValues(alpha: 0.7),
-                    ),
+                onTapDown: (details) => _handleInput(details.localPosition, constraints.maxHeight),
+                onVerticalDragUpdate: (details) => _handleInput(details.localPosition, constraints.maxHeight),
+                onVerticalDragEnd: (_) => setState(() => _activeLetter = null),
+                onTapUp: (_) => setState(() => _activeLetter = null),
+                child: Container(
+                  color: Colors.transparent,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: _alphabet.map((letter) {
+                      final isActive = _activeLetter == letter;
+                      return AnimatedScale(
+                        scale: isActive ? 1.4 : 1.0,
+                        duration: const Duration(milliseconds: 100),
+                        child: Text(
+                          letter,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: isActive ? FontWeight.w900 : FontWeight.w600,
+                            color: isActive ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                          ),
+                        ),
+                      );
+                    }).toList(),
                   ),
                 ),
-              ),
-            );
-          }).toList(),
+              );
+            },
+          ),
         ),
-      ),
+
+        // The Pop Out Bubble
+        if (_activeLetter != null)
+           Positioned(
+             right: 50,
+             top: _bubbleY + 10, // Adjust based on layout
+             child: Container(
+               width: 60, height: 60,
+               alignment: Alignment.center,
+               decoration: BoxDecoration(
+                 color: theme.colorScheme.primaryContainer,
+                 shape: BoxShape.circle,
+                 boxShadow: [BoxShadow(blurRadius: 10, color: Colors.black26)],
+               ),
+               child: Text(
+                 _activeLetter!,
+                 style: TextStyle(
+                   fontSize: 32, 
+                   fontWeight: FontWeight.bold, 
+                   color: theme.colorScheme.onPrimaryContainer
+                 ),
+               ),
+             ),
+           ),
+      ],
     );
   }
 }

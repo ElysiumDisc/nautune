@@ -70,7 +70,7 @@ class DownloadItem {
       'trackName': track.name,
       'trackArtist': track.displayArtist,
       'trackAlbum': track.album,
-      'trackDuration': track.duration?.inMilliseconds,
+      'runTimeTicks': track.runTimeTicks,
       'trackContainer': track.container,
       'trackCodec': track.codec,
       'trackBitrate': track.bitrate,

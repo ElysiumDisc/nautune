@@ -752,26 +752,36 @@ class AudioPlayerService {
   }
 
   Future<void> stop() async {
+    // 1. Stop audio immediately to prevent "ghost" playback
+    await _player.stop();
+
     // Save the current track state BEFORE clearing, to preserve favorite status
     if (_currentTrack != null) {
-      await _stateStore.savePlaybackSnapshot(
-        currentTrack: _currentTrack,
-        position: _lastPosition,
-        queue: _queue,
-        currentQueueIndex: _currentIndex,
-        isPlaying: false,
-      );
+      try {
+        await _stateStore.savePlaybackSnapshot(
+          currentTrack: _currentTrack,
+          position: _lastPosition,
+          queue: _queue,
+          currentQueueIndex: _currentIndex,
+          isPlaying: false,
+        );
+      } catch (e) {
+        debugPrint('Error saving snapshot on stop: $e');
+      }
       
       // Report stop to Jellyfin
       if (_reportingService != null) {
-        await _reportingService!.reportPlaybackStopped(
-          _currentTrack!,
-          _lastPosition,
-        );
+        try {
+          await _reportingService!.reportPlaybackStopped(
+            _currentTrack!,
+            _lastPosition,
+          );
+        } catch (e) {
+          debugPrint('Failed to report playback stop (likely offline): $e');
+        }
       }
     }
     
-    await _player.stop();
     _currentTrack = null;
     _currentTrackController.add(null);
     _queue = []; // Create new growable list instead of clearing
@@ -780,7 +790,11 @@ class AudioPlayerService {
     _isShuffleEnabled = false;
     _shuffleController.add(_isShuffleEnabled);
     _emitIdleVisualizer();
-    await _stateStore.clearPlaybackData();
+    try {
+      await _stateStore.clearPlaybackData();
+    } catch (e) {
+      debugPrint('Error clearing playback data: $e');
+    }
   }
 
   // Alias methods for compatibility
