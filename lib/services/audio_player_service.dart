@@ -6,6 +6,7 @@ import 'package:audio_session/audio_session.dart';
 import 'package:audio_service/audio_service.dart' as audio_service;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:rxdart/rxdart.dart';
 
 import '../jellyfin/jellyfin_service.dart';
 import '../jellyfin/jellyfin_track.dart';
@@ -24,14 +25,21 @@ enum RepeatMode {
 class AudioPlayerService {
   static const int _visualizerBarCount = 24;
 
-  final AudioPlayer _player = AudioPlayer();
-  final AudioPlayer _nextPlayer = AudioPlayer();
+  AudioPlayer _player = AudioPlayer();
+  AudioPlayer _nextPlayer = AudioPlayer();
   final PlaybackStateStore _stateStore = PlaybackStateStore();
   DownloadService? _downloadService;
   PlaybackReportingService? _reportingService;
   NautuneAudioHandler? _audioHandler;
   JellyfinService? _jellyfinService;
   double _volume = 1.0;
+  
+  // Player subscriptions
+  StreamSubscription? _playerPosSub;
+  StreamSubscription? _playerDurSub;
+  StreamSubscription? _playerStateSub;
+  StreamSubscription? _playerCompleteSub;
+
   bool _isShuffleEnabled = false;
   bool _hasRestored = false;
   PlaybackState? _pendingState;
@@ -97,12 +105,16 @@ class AudioPlayerService {
   }
   
   // Streams
-  final StreamController<JellyfinTrack?> _currentTrackController = StreamController<JellyfinTrack?>.broadcast();
-  final StreamController<bool> _playingController = StreamController<bool>.broadcast();
-  final StreamController<Duration> _positionController = StreamController<Duration>.broadcast();
-  final StreamController<Duration?> _durationController = StreamController<Duration?>.broadcast();
-  final StreamController<List<JellyfinTrack>> _queueController = StreamController<List<JellyfinTrack>>.broadcast();
-  final StreamController<RepeatMode> _repeatModeController = StreamController<RepeatMode>.broadcast();
+  final StreamController<JellyfinTrack?> _currentTrackController = BehaviorSubject<JellyfinTrack?>();
+  final StreamController<bool> _playingController = BehaviorSubject<bool>.seeded(false);
+  
+  // Use BehaviorSubject to ensure new listeners get the latest value immediately
+  final BehaviorSubject<Duration> _positionController = BehaviorSubject<Duration>.seeded(Duration.zero);
+  final BehaviorSubject<Duration> _bufferedPositionController = BehaviorSubject<Duration>.seeded(Duration.zero);
+  final BehaviorSubject<Duration?> _durationController = BehaviorSubject<Duration?>.seeded(null);
+  
+  final StreamController<List<JellyfinTrack>> _queueController = BehaviorSubject<List<JellyfinTrack>>.seeded([]);
+  final StreamController<RepeatMode> _repeatModeController = BehaviorSubject<RepeatMode>.seeded(RepeatMode.off);
   
   Stream<JellyfinTrack?> get currentTrackStream => _currentTrackController.stream;
   Stream<bool> get playingStream => _playingController.stream;
@@ -114,6 +126,16 @@ class AudioPlayerService {
   Stream<bool> get shuffleStream => _shuffleController.stream;
   Stream<List<double>> get visualizerStream => _visualizerController.stream;
   
+  /// A stream that combines position, buffered position, and duration into a single snapshot.
+  /// This is the "Silver Bullet" for smooth progress bars.
+  Stream<PositionData> get positionDataStream =>
+      Rx.combineLatest3<Duration, Duration, Duration?, PositionData>(
+          _positionController.stream,
+          _bufferedPositionController.stream,
+          _durationController.stream,
+          (position, bufferedPosition, duration) => PositionData(
+              position, bufferedPosition, duration ?? Duration.zero));
+
   JellyfinTrack? get currentTrack => _currentTrack;
   bool get isPlaying => _player.state == PlayerState.playing;
   Duration get currentPosition => _lastPosition;
@@ -163,7 +185,7 @@ class AudioPlayerService {
   
   AudioPlayerService() {
     _initAudioSession();
-    _setupListeners();
+    _attachPlayerListeners(_player);
     _initAudioHandler();
     _player.setVolume(_volume);
     _nextPlayer.setVolume(_volume);
@@ -235,12 +257,21 @@ class AudioPlayerService {
     }
   }
   
-  void _setupListeners() {
+  void _detachListeners() {
+    _playerPosSub?.cancel();
+    _playerDurSub?.cancel();
+    _playerStateSub?.cancel();
+    _playerCompleteSub?.cancel();
+  }
+
+  void _attachPlayerListeners(AudioPlayer player) {
+    _detachListeners();
+    
     // Position updates
-    _player.onPositionChanged.listen((position) {
+    _playerPosSub = player.onPositionChanged.listen((position) {
       _positionController.add(position);
       _lastPosition = position;
-      if (_player.state == PlayerState.playing) {
+      if (player.state == PlayerState.playing) {
         _emitVisualizerFrame(position);
       }
       // Check if we should start crossfade
@@ -250,12 +281,12 @@ class AudioPlayerService {
     });
 
     // Duration updates
-    _player.onDurationChanged.listen((duration) {
+    _playerDurSub = player.onDurationChanged.listen((duration) {
       _durationController.add(duration);
     });
     
     // State changes
-    _player.onPlayerStateChanged.listen((state) {
+    _playerStateSub = player.onPlayerStateChanged.listen((state) {
       final isPlaying = state == PlayerState.playing;
       _playingController.add(isPlaying);
       
@@ -283,7 +314,7 @@ class AudioPlayerService {
     });
     
     // Track completion - gapless transition
-    _player.onPlayerComplete.listen((_) async {
+    _playerCompleteSub = player.onPlayerComplete.listen((_) async {
       if (!_isTransitioning) {
         await _gaplessTransition();
       }
@@ -313,24 +344,37 @@ class AudioPlayerService {
       if (_preloadedTrack?.id == nextTrack.id) {
         debugPrint('⚡ Using pre-loaded track for instant playback: ${nextTrack.name}');
 
-        // Swap players for instant transition
-        // Note: We can't actually swap AudioPlayer instances in audioplayers
-        // So we'll just play the pre-loaded track normally
-        // The pre-loading still helps because the platform has buffered it
+        // SWAP PLAYERS for seamless transition
+        // 1. Detach listeners from current player (which is ending)
+        _detachListeners();
+
+        // 2. Play the pre-loaded track (already loaded in _nextPlayer)
+        await _nextPlayer.setVolume(_volume);
+        await _nextPlayer.resume();
+
+        // 3. Stop the old player
+        await _player.stop();
+
+        // 4. Swap the references
+        final oldPlayer = _player;
+        _player = _nextPlayer;
+        _nextPlayer = oldPlayer; // Reuse old player for next pre-load
+
+        // 5. Re-attach listeners to the NEW main player
+        _attachPlayerListeners(_player);
+
+        // 6. Update AudioHandler so lockscreen controls work with new player
+        _audioHandler?.updatePlayer(_player);
+        _audioHandler?.updateNautuneMediaItem(nextTrack);
 
         _currentIndex++;
         _currentTrack = nextTrack;
         _currentTrackController.add(_currentTrack);
-
-        // Play the pre-loaded track (already loaded in _nextPlayer)
-        await _nextPlayer.setVolume(_volume);
-        await _nextPlayer.resume();
-
-        // Stop the old player
-        await _player.stop();
-
-        // Update handlers
-        _audioHandler?.updateNautuneMediaItem(nextTrack);
+        
+        // Immediately update duration from metadata
+        if (nextTrack.duration != null) {
+          _durationController.add(nextTrack.duration);
+        }
 
         // Clear pre-load state
         _preloadedTrack = null;
@@ -485,6 +529,11 @@ class AudioPlayerService {
 
     _currentTrack = track;
     _currentTrackController.add(track);
+
+    // Immediately update duration from metadata to prevent UI lag
+    if (track.duration != null) {
+      _durationController.add(track.duration);
+    }
     
     if (queueContext != null) {
       if (reorderQueue) {
@@ -771,14 +820,13 @@ class AudioPlayerService {
       
       // Report stop to Jellyfin
       if (_reportingService != null) {
-        try {
-          await _reportingService!.reportPlaybackStopped(
-            _currentTrack!,
-            _lastPosition,
-          );
-        } catch (e) {
+        // Fire and forget reporting to avoid blocking UI
+        _reportingService!.reportPlaybackStopped(
+          _currentTrack!,
+          _lastPosition,
+        ).catchError((e) {
           debugPrint('Failed to report playback stop (likely offline): $e');
-        }
+        });
       }
     }
     
@@ -1350,6 +1398,7 @@ class AudioPlayerService {
     _crossfadeTimer?.cancel();
     _interruptionSubscription?.cancel();
     _becomingNoisySubscription?.cancel();
+    _detachListeners();
     _audioHandler?.dispose();
     _player.dispose();
     _nextPlayer.dispose();
@@ -1357,6 +1406,7 @@ class AudioPlayerService {
     _currentTrackController.close();
     _playingController.close();
     _positionController.close();
+    _bufferedPositionController.close();
     _durationController.close();
     _queueController.close();
     _repeatModeController.close();
@@ -1364,4 +1414,16 @@ class AudioPlayerService {
     _shuffleController.close();
     _visualizerController.close();
   }
+}
+
+class PositionData {
+  const PositionData(
+    this.position,
+    this.bufferedPosition,
+    this.duration,
+  );
+
+  final Duration position;
+  final Duration bufferedPosition;
+  final Duration duration;
 }

@@ -2,29 +2,21 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback and seamless Jellyfin integration.
 
-## 🚀 Latest Updates (v1.9.9+)
-- **✈️ Robust Airplane Mode Support**: Bulletproof playback control
-  - ✅ **Instant Stop**: "Stop" button now kills audio immediately, even without network
-  - ✅ **Ghost Playback Fix**: Eliminated issues where music would keep playing if stopped while offline
-  - ✅ **Safe Networking**: Network reporting calls are now fail-safe and won't crash the player
-  - ✅ **Offline-First Logic**: Player operations prioritize UI responsiveness over server sync
-- **🔤 Interactive Alphabet Scrollbar**: Native iOS-style navigation
-  - ✅ **Slide-to-Scroll**: Drag finger along the right edge to scrub through lists instantly
-  - ✅ **Pop-out Bubble**: Large letter indicator appears next to finger for clear feedback
-  - ✅ **Haptic Feedback**: Subtle vibration as you scroll through letters
-  - ✅ **Zoom Effect**: Active letter in the bar scales up for better visibility
-  - ✅ **Unified Experience**: Available in Albums, Artists, and Genres tabs
-- **🌊 Unified Offline UI**: Seamless transition between online and offline states
-  - ✅ **Single UI Design**: Offline mode now reuses the main library layout (grids, sorting, design)
-  - ✅ **Smart Data Source**: Automatically switches between API and local Hive database
-  - ✅ **No Jarring Switches**: Toggling offline mode no longer redirects to a completely different screen
-  - ✅ **Consistent Sorting**: Offline content respects the same sorting rules as online content
-- **🔧 Track Duration Fix**: Solved the "100x Duration" bug
-  - ✅ **Data Healing**: Automatically detects and repairs corrupted duration data in local database
-  - ✅ **Standardization**: Switched internal storage to Jellyfin "Ticks" for 100% accuracy
-  - ✅ **Migration**: seamless on-the-fly fix for existing users with broken durations
+## 🚀 Latest Updates (v2.0.0+)
+- **💎 The "Silver Bullet" Progress Bar**: Buttery smooth tracking
+  - ✅ **Jitter-Free**: Replaced jumping sliders with `audio_video_progress_bar`
+  - ✅ **RxStream Synchronization**: Unified `PositionData` stream combines current position, buffered status, and metadata duration using `rxdart`
+  - ✅ **Instant Feedback**: Metadata duration is injected into the stream immediately upon selection, eliminating "--:--" lag
+- **⚡ True Gapless Player Swapping**: Zero-latency transitions
+  - ✅ **Dual-Player Engine**: Implemented physical player swapping (`_player` ↔ `_nextPlayer`) for instant track changes
+  - ✅ **Dynamic Listener Re-attachment**: UI and media controls automatically follow the active player instance during swaps
+  - ✅ **MPRIS/Lockscreen Sync**: Media controls stay synchronized with the active audio instance even across track boundaries
+- **🛡️ Playback Stability**:
+  - ✅ **Non-Blocking Stop**: "Stop" command now kills audio immediately and skips awaiting network reporting to prevent deadlocks
+  - ✅ **BehaviorSubject State**: Core playback streams migrated to `BehaviorSubject` for instant UI hydration on screen entry
+  - ✅ **Deadlock Prevention**: Fixed "Ghost Playback" where audio would continue if the network call to the server hung
 
-## 🚀 Previous Updates (v1.9.8+)
+## 🚀 Previous Updates (v1.9.9+)
 - **🔧 UI/UX Improvements**: Critical bug fixes for better user experience
   - ✅ **Alphabet scrollbar fix**: Letters in Albums/Artists/Genres tabs are now fully tappable
     - Fixed hit test behavior with `HitTestBehavior.opaque` for reliable touch detection

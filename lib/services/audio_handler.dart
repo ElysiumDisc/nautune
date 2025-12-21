@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../jellyfin/jellyfin_track.dart';
 
 class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_service.QueueHandler, audio_service.SeekHandler {
-  final AudioPlayer _player;
+  AudioPlayer _player;
   final void Function() onPlay;
   final void Function() onPause;
   final void Function() onStop;
@@ -26,6 +26,14 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
     required this.onSkipToPrevious,
     required this.onSeek,
   }) : _player = player {
+    _listenToPlayerState();
+  }
+
+  void updatePlayer(AudioPlayer newPlayer) {
+    _positionSubscription?.cancel();
+    _durationSubscription?.cancel();
+    _stateSubscription?.cancel();
+    _player = newPlayer;
     _listenToPlayerState();
   }
 
@@ -107,6 +115,7 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
 
   @override
   Future<void> stop() async {
+    // Fire and forget onStop to prevent deadlocks if reporting hangs
     onStop();
     await super.stop();
   }

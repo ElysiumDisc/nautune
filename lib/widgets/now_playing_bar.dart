@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
 
 import '../jellyfin/jellyfin_track.dart';
 import '../screens/full_player_screen.dart';
@@ -72,7 +73,25 @@ class NowPlayingBar extends StatelessWidget {
                         isPlaying: isPlaying,
                       ),
                       const SizedBox(height: 6),
-                      _PositionSlider(audioService: audioService),
+                      StreamBuilder<PositionData>(
+                        stream: audioService.positionDataStream,
+                        builder: (context, snapshot) {
+                          final positionData = snapshot.data ??
+                              const PositionData(Duration.zero, Duration.zero, Duration.zero);
+                          return ProgressBar(
+                            progress: positionData.position,
+                            buffered: positionData.bufferedPosition,
+                            total: positionData.duration,
+                            onSeek: audioService.seek,
+                            barHeight: 3.0,
+                            thumbRadius: 0.0, // Hide thumb for mini player
+                            progressBarColor: theme.colorScheme.secondary,
+                            baseBarColor: theme.colorScheme.secondary.withValues(alpha: 0.2),
+                            bufferedBarColor: theme.colorScheme.secondary.withValues(alpha: 0.1),
+                            timeLabelLocation: TimeLabelLocation.none,
+                          );
+                        },
+                      ),
                       const SizedBox(height: 4),
                       Row(
                         children: [
@@ -355,70 +374,3 @@ class _WaveformDisplayState extends State<_WaveformDisplay> {
   }
 }
 
-
-class _PositionSlider extends StatefulWidget {
-  const _PositionSlider({required this.audioService});
-
-  final AudioPlayerService audioService;
-
-  @override
-  State<_PositionSlider> createState() => _PositionSliderState();
-}
-
-class _PositionSliderState extends State<_PositionSlider> {
-  double? _pendingValue;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return StreamBuilder<Duration?>(
-      stream: widget.audioService.durationStream,
-      builder: (context, durationSnapshot) {
-        final duration = durationSnapshot.data ?? Duration.zero;
-
-        return StreamBuilder<Duration>(
-          stream: widget.audioService.positionStream,
-          builder: (context, positionSnapshot) {
-            final position = positionSnapshot.data ?? Duration.zero;
-            final hasDuration = duration.inMilliseconds > 0;
-            final max = hasDuration ? duration.inMilliseconds.toDouble() : 1.0;
-            final clampedPosition = position.inMilliseconds.clamp(0, max.toInt());
-            final sliderValue =
-                _pendingValue ?? (hasDuration ? clampedPosition.toDouble() : 0.0);
-
-            return SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: 3,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-                activeTrackColor: theme.colorScheme.secondary,
-                inactiveTrackColor:
-                    theme.colorScheme.secondary.withValues(alpha: 0.3),
-                thumbColor: theme.colorScheme.secondary,
-              ),
-              child: Slider(
-                value: sliderValue,
-                min: 0,
-                max: max,
-                onChanged: hasDuration
-                    ? (value) {
-                        setState(() => _pendingValue = value.clamp(0, max));
-                      }
-                    : null,
-                onChangeEnd: hasDuration
-                    ? (value) async {
-                        await widget.audioService.seek(
-                          Duration(milliseconds: value.toInt()),
-                        );
-                        setState(() => _pendingValue = null);
-                      }
-                    : null,
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-}

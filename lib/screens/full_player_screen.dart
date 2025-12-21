@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui' as ui show Image, ImageFilter;
 
+import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -200,44 +201,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
     _positionSub?.cancel();
     _playingSub?.cancel();
     super.dispose();
-  }
-
-  String _formatDuration(Duration d) {
-    final minutes = d.inMinutes;
-    final seconds = d.inSeconds % 60;
-    return '$minutes:${seconds.toString().padLeft(2, '0')}';
-  }
-
-  double _sliderValue(Duration position, Duration duration) {
-    if (duration.inMilliseconds > 0) {
-      final max = duration.inMilliseconds.toDouble();
-      final raw = position.inMilliseconds.toDouble();
-      if (raw < 0) return 0.0;
-      if (raw > max) return max;
-      return raw;
-    }
-    return 0.0;
-  }
-
-  double _sliderMax(Duration position, Duration duration) {
-    if (duration.inMilliseconds > 0) {
-      return duration.inMilliseconds.toDouble();
-    }
-    final pos = position.inMilliseconds.toDouble();
-    if (pos <= 0) {
-      return 1.0;
-    }
-    return pos;
-  }
-
-  void _seekFromGesture(double dx, double maxWidth, Duration duration) {
-    if (duration.inMilliseconds > 0 && maxWidth > 0) {
-      final ratio = (dx / maxWidth).clamp(0.0, 1.0);
-      final newPosition = Duration(
-        milliseconds: (duration.inMilliseconds * ratio).toInt(),
-      );
-      _audioService.seek(newPosition);
-    }
   }
 
   void _handleKeyEvent(KeyEvent event) {
@@ -925,60 +888,28 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   // Progress Slider
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      void scrub(double dx) => _seekFromGesture(
-                        dx,
-                        constraints.maxWidth,
-                        duration,
-                      );
-
-                      return GestureDetector(
-                        behavior: HitTestBehavior.translucent,
-                        onTapDown: (details) => scrub(details.localPosition.dx),
-                        onHorizontalDragUpdate: (details) => scrub(details.localPosition.dx),
-                        child: Column(
-                          children: [
-                            SliderTheme(
-                              data: SliderThemeData(
-                                trackHeight: 4,
-                                thumbShape: const RoundSliderThumbShape(
-                                  enabledThumbRadius: 8,
-                                ),
-                                overlayShape: const RoundSliderOverlayShape(
-                                  overlayRadius: 16,
-                                ),
-                              ),
-                              child: Slider(
-                                value: _sliderValue(position, duration),
-                                min: 0,
-                                max: _sliderMax(position, duration),
-                                onChanged: duration.inMilliseconds > 0
-                                    ? (value) {
-                                        _audioService.seek(
-                                          Duration(milliseconds: value.toInt()),
-                                        );
-                                      }
-                                    : null,
-                              ),
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    _formatDuration(position),
-                                    style: theme.textTheme.bodySmall,
-                                  ),
-                                  Text(
-                                    _formatDuration(duration),
-                                    style: theme.textTheme.bodySmall,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
+                  StreamBuilder<PositionData>(
+                    stream: _audioService.positionDataStream,
+                    builder: (context, snapshot) {
+                      final positionData = snapshot.data ??
+                          const PositionData(Duration.zero, Duration.zero, Duration.zero);
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                        child: ProgressBar(
+                          progress: positionData.position,
+                          buffered: positionData.bufferedPosition,
+                          total: positionData.duration,
+                          onSeek: _audioService.seek,
+                          barHeight: 4.0,
+                          thumbRadius: 8.0,
+                          thumbGlowRadius: 20.0,
+                          progressBarColor: theme.colorScheme.secondary,
+                          baseBarColor: theme.colorScheme.secondary.withValues(alpha: 0.2),
+                          bufferedBarColor: theme.colorScheme.secondary.withValues(alpha: 0.1),
+                          thumbColor: theme.colorScheme.secondary,
+                          timeLabelLocation: TimeLabelLocation.below,
+                          timeLabelPadding: 8.0,
+                          timeLabelTextStyle: theme.textTheme.bodySmall,
                         ),
                       );
                     },
