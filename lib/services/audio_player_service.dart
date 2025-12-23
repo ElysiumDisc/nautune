@@ -736,10 +736,15 @@ class AudioPlayerService {
       _lastPosition = position;
     }
     _emitIdleVisualizer();
+    // Save full playback state including queue so user can resume at exact position
     await _stateStore.savePlaybackSnapshot(
       currentTrack: _currentTrack,
       position: _lastPosition,
+      queue: _queue,
+      currentQueueIndex: _currentIndex,
       isPlaying: false,
+      repeatMode: _repeatMode.name,
+      shuffleEnabled: _isShuffleEnabled,
     );
   }
   
@@ -1093,6 +1098,29 @@ class AudioPlayerService {
         isPlaying: isPlaying,
       );
     }
+  }
+
+  /// Saves full playback state including queue - called when app goes to background
+  /// or is about to be force closed. This ensures user can resume exactly where they left off.
+  Future<void> saveFullPlaybackState() async {
+    if (_currentTrack == null) return;
+    
+    final position = await _player.getCurrentPosition();
+    if (position != null) {
+      _lastPosition = position;
+    }
+    
+    await _stateStore.savePlaybackSnapshot(
+      currentTrack: _currentTrack,
+      position: _lastPosition,
+      queue: _queue,
+      currentQueueIndex: _currentIndex,
+      isPlaying: isPlaying,
+      repeatMode: _repeatMode.name,
+      shuffleEnabled: _isShuffleEnabled,
+      volume: _volume,
+    );
+    debugPrint('💾 Full playback state saved: ${_currentTrack?.name} @ ${_lastPosition.inSeconds}s');
   }
   
   

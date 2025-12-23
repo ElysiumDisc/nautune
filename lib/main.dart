@@ -157,13 +157,14 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver {
   }
 
   void _savePlaybackState() {
-    // The audio player service already saves state periodically,
-    // but this ensures we save immediately when going to background
+    // Save full playback state when going to background or being force closed
     final audioService = widget.appState.audioPlayerService;
     final currentTrack = audioService.currentTrack;
     
     if (currentTrack != null) {
       debugPrint('💾 Saving playback state for: ${currentTrack.name}');
+      // Trigger a full state save including queue, position, and all settings
+      audioService.saveFullPlaybackState();
     }
   }
 

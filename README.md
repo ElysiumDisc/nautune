@@ -2,7 +2,20 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback and seamless Jellyfin integration.
 
-## 🚀 Latest Updates (v2.1.0+)
+## 🚀 Latest Updates (v2.3.0)
+- **💾 Enhanced Playback State Persistence**: Never lose your place again
+  - ✅ **Pause saves everything**: Queue, position, track, repeat mode, shuffle state all preserved
+  - ✅ **Resume exactly where you left off**: App remembers your exact playback position after pause
+  - ✅ **Force-close protection**: Full state saved on app lifecycle events (background, inactive, detached)
+  - ✅ **iOS & Linux support**: Works reliably on both platforms even after force quit
+  - ✅ **Stop still clears**: Stop button intentionally clears queue for fresh start (unchanged)
+- **🚗 CarPlay Fixes**: App now properly appears in CarPlay
+  - ✅ **Entitlements linked**: Fixed `CODE_SIGN_ENTITLEMENTS` configuration in Xcode project
+  - ✅ **AppDelegate fixed**: Returns `true` directly for CarPlay compatibility
+  - ✅ **Early initialization**: CarPlay service initializes immediately on app start
+  - ✅ **Works offline**: Browse and play downloaded music in car without internet
+
+## 🚀 Previous Updates (v2.1.0+)
 - **🚗 Enhanced CarPlay Integration**: Smarter, more reliable car experience
   - ✅ **Connection state tracking**: Properly detects CarPlay connect/disconnect events
   - ✅ **Auto-refresh on connect**: Library content refreshes when CarPlay connects
@@ -319,12 +332,6 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - Hardened startup logging (`Nautune initialization started/finished`) to make it easier to diagnose device issues from Xcode or `flutter logs`.
 - CarPlay integrations now match Jellyfin data more accurately by tracking album artist IDs and forwarding precise playback positions to the Jellyfin server.
 
-## 🏗️ Architecture Improvements (Phase 1 Complete, Phase 2: 90% Complete!)
-
-Nautune has undergone a major architectural refactoring to improve performance, maintainability, and scalability:
-
-### ✅ Phase 2: Provider Pattern Migration (90% Complete!)
-
 **Goal**: Migrate all screens from parameter-passing to Provider pattern for better state management
 
 **Completed Screens (9/10)**:
@@ -341,66 +348,6 @@ Nautune has undergone a major architectural refactoring to improve performance, 
 **Remaining**:
 - **LibraryScreen (Complete)** - Most complex screen with 7 tabs, final migration pending
 
-**Key Improvements**:
-- ✅ **Auto-refresh capability**: Detail screens detect connectivity changes and reload automatically
-- ✅ **Cleaner constructors**: Screens no longer need appState as parameter
-- ✅ **Better testability**: Screens can be tested with mock providers
-- ✅ **Reactive updates**: UI automatically rebuilds when state changes
-- ✅ **Consistent pattern**: All screens follow same state access approach
-
-### ✅ Download Service Migration to Hive
-- **Before**: Entire download database stored as a single JSON string in SharedPreferences
-- **After**: Hive-based structured storage with individual record access
-- **Impact**: ⚡ Instant save/load even with 1000+ downloads, no more UI jank
-- **Migration**: Automatic one-time migration from old format
-
-### ✅ State Management Refactoring
-The monolithic `NautuneAppState` (1674 lines) has been split into focused, testable providers:
-
-#### **SessionProvider** (200 lines)
-- Handles authentication, login/logout, session persistence
-- Independent and unit-testable
-- Single responsibility: auth only
-
-#### **UIStateProvider** (120 lines)
-- Manages UI-only state (volume bar, crossfade, scroll positions, tab index)
-- **Key win**: Toggling volume bar now rebuilds 1 widget instead of 1000+!
-- Completely independent from session/data concerns
-
-#### **LibraryDataProvider** (600 lines)
-- All library data fetching and caching (albums, artists, playlists, tracks, genres)
-- Pagination support for large libraries
-- Loading states and error handling
-- Depends on SessionProvider for auth context
-
-#### **ConnectivityProvider** (70 lines)
-- Network connectivity monitoring
-- Provider-compatible wrapper around ConnectivityService
-
-#### **DemoModeProvider** (240 lines)
-- Demo mode content and state management
-- Isolated from production data
-- Coordinates with SessionProvider and DownloadService
-
-### Performance Comparison
-
-| Action | Before | After |
-|--------|--------|-------|
-| Toggle volume bar | Rebuild 1000+ widgets | Rebuild 1 widget |
-| Save downloads | Encode ALL downloads to JSON | Save only changed data to Hive |
-| Test auth logic | Impossible (god object) | Easy (SessionProvider unit test) |
-| Fetch albums | Rebuild entire app | Rebuild album list only |
-
-### Benefits
-- ⚡ **Performance**: Granular rebuilds, no more full-app updates for UI changes
-- 🧪 **Testability**: Each provider can be unit tested independently
-- 🔧 **Maintainability**: Small focused classes (100-600 lines vs 1674)
-- 👨‍💻 **Developer Experience**: Clear separation of concerns, easy to extend
-- 🚀 **Future-Proof**: Ready for Phase 2 features (EQ, Lyrics, Scrobbling)
-
-**Status**: Phase 2 (Widget Refactoring) - **90% complete!** 9 out of 10 screens migrated to Provider pattern with auto-refresh capability.
-
----
 
 ## 🧪 Review / Demo Mode
 
@@ -649,116 +596,6 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
 <img src="screenshots/IMG_9048.jpg" width="300" alt="Nautune on iOS">
 <img src="screenshots/IMG_9052.jpg" width="300" alt="Nautune on iOS">
 
-## 🚀 Getting Started
-
-### Prerequisites
-- Flutter SDK (3.0+, stable channel, Dart SDK 3.9)
-- A running Jellyfin server
-- Linux (primary platform) or iOS
-
-### Installation
-
-1. **Clone the repository** (SSH recommended):
-```bash
-git clone git@github.com:ElysiumDisc/nautune.git
-cd nautune
-```
-
-2. **Install dependencies**:
-```bash
-flutter pub get
-```
-
-3. **Run the app**:
-```bash
-flutter run -d linux
-```
-
-### First Launch
-1. Enter your Jellyfin server URL (e.g., `http://192.168.1.100:8096`)
-2. Enter your username and password
-3. Select a music library from the available options
-4. Browse albums, tap one to see tracks
-5. Tap a track to start playback with waveform visualization!
-
-## 📦 Tech Stack
-
-```yaml
-# Core Audio - Platform-specific native backends
-audioplayers: ^6.1.0      # iOS:AVFoundation, Linux:GStreamer, Android:MediaPlayer
-audio_session: ^0.1.21    # Audio session configuration
-audio_service: ^0.18.15   # iOS lock screen controls and media notifications
-flutter_carplay: ^1.1.4   # iOS CarPlay integration with tab-based UI
-
-# Network & Connectivity
-connectivity_plus: ^7.0.0  # ConnectivityService uses DNS probes to decide if we should boot offline
-
-# Data & State
-shared_preferences: ^2.3.2 # Persistent storage for sessions and playback state
-http: ^1.2.2               # Jellyfin API communication
-```
-
-## 🏗️ Architecture
-
-```
-lib/
-├── providers/             # NEW! State management providers (Phase 1 refactoring)
-│   ├── session_provider.dart         # Auth, login, logout (200 lines)
-│   ├── ui_state_provider.dart        # UI state only (120 lines)
-│   ├── library_data_provider.dart    # Data fetching & caching (600 lines)
-│   ├── connectivity_provider.dart    # Network monitoring (70 lines)
-│   └── demo_mode_provider.dart       # Demo mode management (240 lines)
-├── jellyfin/              # Jellyfin API client, models, session management
-│   ├── jellyfin_client.dart
-│   ├── jellyfin_service.dart
-│   ├── jellyfin_session.dart
-│   ├── jellyfin_session_store.dart
-│   ├── jellyfin_album.dart
-│   ├── jellyfin_track.dart
-│   ├── jellyfin_artist.dart
-│   ├── jellyfin_playlist.dart
-│   └── jellyfin_library.dart
-├── models/                # App data models
-│   ├── playback_state.dart
-│   └── download_item.dart
-├── screens/               # UI screens
-│   ├── login_screen.dart
-│   ├── library_screen.dart (with 7 tabs!)
-│   ├── album_detail_screen.dart
-│   ├── artist_detail_screen.dart
-│   ├── playlist_detail_screen.dart
-│   └── full_player_screen.dart
-├── services/              # Business logic layer
-│   ├── audio_player_service.dart      # Native audio playback
-│   ├── download_service.dart          # NEW! Hive-based downloads
-│   ├── local_cache_service.dart       # Hive cache for metadata
-│   ├── playback_state_store.dart      # Persistent playback state
-│   ├── bootstrap_service.dart         # Fast startup with caching
-│   ├── connectivity_service.dart      # Network detection
-│   └── carplay_service.dart           # iOS CarPlay integration
-├── widgets/               # Reusable components
-│   ├── now_playing_bar.dart (with waveform!)
-│   ├── album_card.dart
-│   └── track_list_item.dart
-├── theme/                 # Deep Sea Purple theme
-│   └── nautune_theme.dart
-├── app_state.dart         # Legacy state (being phased out → providers)
-└── main.dart              # App entry point
-```
-
-### State Management Evolution
-
-**Before (Legacy)**:
-- `app_state.dart`: 1674-line god object managing everything
-- Every state change rebuilds the entire app
-
-**After (Phase 1)**:
-- **5 focused providers** with single responsibilities
-- Granular rebuilds (only affected widgets update)
-- Easy to test and maintain
-- Clear separation of concerns
-
-See **Architecture Improvements** section above for details!
 
 ## 🎨 Key Components
 

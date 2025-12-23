@@ -11,6 +11,8 @@ let flutterEngine = FlutterEngine(name: "SharedEngine", project: nil, allowHeadl
   ) -> Bool {
     flutterEngine.run()
     GeneratedPluginRegistrant.register(with: flutterEngine)
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    // Return true directly for CarPlay compatibility
+    // super.application() can interfere with CarPlay initialization
+    return true
   }
 }

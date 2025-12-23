@@ -62,13 +62,17 @@ class NautuneAppState extends ChangeNotifier {
     // Link download service to audio player for offline playback
     _audioPlayerService.setDownloadService(_downloadService);
     _audioPlayerService.setJellyfinService(_jellyfinService);
-    // CarPlay service is only available on iOS; defer creation until Flutter boots
+    // CarPlay service is only available on iOS; initialize early for CarPlay to work
+    // even when app is launched from CarPlay (phone app not open)
     if (Platform.isIOS) {
-      scheduleMicrotask(() {
+      scheduleMicrotask(() async {
         try {
           _carPlayService = CarPlayService(appState: this);
+          // Initialize CarPlay immediately so it shows up in CarPlay
+          await _carPlayService?.initialize();
+          debugPrint('✅ CarPlay service initialized early');
         } catch (error) {
-          debugPrint('CarPlay service construction failed: $error');
+          debugPrint('CarPlay service initialization failed: $error');
         }
       });
     }
@@ -733,14 +737,10 @@ class NautuneAppState extends ChangeNotifier {
       notifyListeners();
       debugPrint('Nautune initialization finished (session restored: ${_session != null}, offline: $_isOfflineMode)');
       
-      if (Platform.isIOS) {
-        scheduleMicrotask(() async {
-          try {
-            await _carPlayService?.initialize();
-          } catch (error) {
-            debugPrint('CarPlay initialization skipped: $error');
-          }
-        });
+      // CarPlay is now initialized early in constructor, no need to init here
+      // Just refresh content if connected
+      if (Platform.isIOS && _carPlayService != null) {
+        debugPrint('🚗 CarPlay: Refreshing content after app init');
       }
     }
   }
