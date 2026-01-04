@@ -19,6 +19,7 @@ class PlaybackState {
     this.showVolumeBar = true,
     this.crossfadeEnabled = false,
     this.crossfadeDurationSeconds = 3,
+    this.infiniteRadioEnabled = false,
   });
 
   final String? currentTrackId;
@@ -38,6 +39,7 @@ class PlaybackState {
   final bool showVolumeBar;
   final bool crossfadeEnabled;
   final int crossfadeDurationSeconds;
+  final bool infiniteRadioEnabled;
 
   bool get hasTrack => currentTrackId != null;
 
@@ -59,6 +61,7 @@ class PlaybackState {
     bool? showVolumeBar,
     bool? crossfadeEnabled,
     int? crossfadeDurationSeconds,
+    bool? infiniteRadioEnabled,
   }) {
     return PlaybackState(
       currentTrackId: currentTrackId ?? this.currentTrackId,
@@ -78,6 +81,7 @@ class PlaybackState {
       showVolumeBar: showVolumeBar ?? this.showVolumeBar,
       crossfadeEnabled: crossfadeEnabled ?? this.crossfadeEnabled,
       crossfadeDurationSeconds: crossfadeDurationSeconds ?? this.crossfadeDurationSeconds,
+      infiniteRadioEnabled: infiniteRadioEnabled ?? this.infiniteRadioEnabled,
     );
   }
 
@@ -100,6 +104,7 @@ class PlaybackState {
       'showVolumeBar': showVolumeBar,
       'crossfadeEnabled': crossfadeEnabled,
       'crossfadeDurationSeconds': crossfadeDurationSeconds,
+      'infiniteRadioEnabled': infiniteRadioEnabled,
     };
   }
 
@@ -131,6 +136,7 @@ class PlaybackState {
       showVolumeBar: json['showVolumeBar'] as bool? ?? true,
       crossfadeEnabled: json['crossfadeEnabled'] as bool? ?? false,
       crossfadeDurationSeconds: json['crossfadeDurationSeconds'] as int? ?? 3,
+      infiniteRadioEnabled: json['infiniteRadioEnabled'] as bool? ?? false,
     );
   }
 

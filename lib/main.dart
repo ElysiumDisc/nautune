@@ -219,7 +219,7 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver {
             }
 
             // Show library screen
-            return LibraryScreen(appState: widget.appState);
+            return const LibraryScreen();
           },
         ),
       ),

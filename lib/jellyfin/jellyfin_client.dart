@@ -107,12 +107,15 @@ class JellyfinClient {
     String? genreIds,
     int startIndex = 0,
     int limit = 50,
+    String sortBy = 'SortName',
+    String sortOrder = 'Ascending',
   }) async {
     final queryParams = {
       'ParentId': libraryId,
       'IncludeItemTypes': 'MusicAlbum',
       'Recursive': 'true',
-      'SortBy': 'SortName',
+      'SortBy': sortBy,
+      'SortOrder': sortOrder,
       'Fields': 'PrimaryImageAspectRatio,ProductionYear,Artists,AlbumArtists,ImageTags,Genres,GenreItems',
       'StartIndex': startIndex.toString(),
       'Limit': limit.toString(),
@@ -149,12 +152,14 @@ class JellyfinClient {
     required String libraryId,
     int startIndex = 0,
     int limit = 50,
+    String sortBy = 'SortName',
+    String sortOrder = 'Ascending',
   }) async {
     final uri = _buildUri('/Artists', {
       'ParentId': libraryId,
       'Recursive': 'true',
-      'SortBy': 'SortName',
-      'SortOrder': 'Ascending',
+      'SortBy': sortBy,
+      'SortOrder': sortOrder,
       'Fields': 'PrimaryImageAspectRatio,ImageTags,Overview,Genres,ChildCount,SongCount',
       'StartIndex': startIndex.toString(),
       'Limit': limit.toString(),

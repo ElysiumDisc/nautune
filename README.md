@@ -2,7 +2,28 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback and seamless Jellyfin integration.
 
-## 🚀 Latest Updates (v2.3.0)
+## 🚀 Latest Updates (v2.4.0)
+- **📻 Infinite Radio Mode**: Never-ending music discovery
+  - ✅ **Auto-generates queue**: Fetches similar tracks when queue runs low (≤2 tracks remaining)
+  - ✅ **Powered by Jellyfin InstantMix**: Uses server-side similarity analysis
+  - ✅ **Seamless continuation**: New tracks append silently without interrupting playback
+  - ✅ **No duplicates**: Automatically filters out tracks already in queue
+  - ✅ **Toggle in Settings**: Enable/disable under Audio Options
+  - ✅ **Persisted preference**: Setting survives app restarts
+- **🔢 Sorting Options**: Organize your library your way
+  - ✅ **Albums sort**: By name, date added, year, or play count
+  - ✅ **Artists sort**: By name, date added, or play count
+  - ✅ **Ascending/descending**: Toggle sort direction with one tap
+  - ✅ **Server-side sorting**: Fast results via Jellyfin API
+  - ✅ **Clean UI**: Dropdown + direction button in Library tab header
+- **🔲 System Tray (Desktop)**: Background playback controls
+  - ✅ **Linux/Windows/macOS**: Native system tray integration
+  - ✅ **Playback controls**: Play/Pause, Previous, Next from tray menu
+  - ✅ **Track info**: Current song displayed in tooltip and menu
+  - ✅ **Quick access**: Right-click for context menu
+  - ⚠️ **Linux requirement**: `libayatana-appindicator3-dev` package
+
+## 🚀 Previous Updates (v2.3.0)
 - **💾 Enhanced Playback State Persistence**: Never lose your place again
   - ✅ **Pause saves everything**: Queue, position, track, repeat mode, shuffle state all preserved
   - ✅ **Resume exactly where you left off**: App remembers your exact playback position after pause
@@ -148,12 +169,12 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - **🔀 UI Polish**: Better iconography across the app
   - ✅ **Shuffle icon**: Replaced emoji (🌊🌊) with proper Material Icons.shuffle
   - ✅ **Consistent design**: Professional icons in album and playlist screens
-- **🏗️ Phase 2 Architecture Migration - 90% Complete!**: Major Provider pattern adoption
-  - ✅ **9 screens migrated**: SettingsScreen, QueueScreen, FullPlayerScreen, AlbumDetailScreen, ArtistDetailScreen, PlaylistDetailScreen, GenreDetailScreen, OfflineLibraryScreen, and partial LibraryScreen
+- **🏗️ Phase 2 Architecture Migration - 100% Complete!**: Major Provider pattern adoption
+  - ✅ **All 10 screens migrated**: SettingsScreen, QueueScreen, FullPlayerScreen, AlbumDetailScreen, ArtistDetailScreen, PlaylistDetailScreen, GenreDetailScreen, OfflineLibraryScreen, and LibraryScreen
   - ✅ **Auto-refresh on connectivity**: Detail screens automatically reload when switching online/offline modes
   - ✅ **Smarter state management**: Screens use `Provider.of<NautuneAppState>` instead of parameter passing
   - ✅ **Better separation**: UI components decoupled from god object
-  - ✅ **Remaining**: Final LibraryScreen migration (10% - most complex screen with 7 tabs)
+  - ✅ **LibraryScreen complete**: Most complex screen (5 tabs) now uses Provider pattern
 - **🎨 Home Screen Redesign**: Clean horizontal-only layout with 6 discovery shelves
   - ✅ **Continue Listening**: Resume tracks from where you left off
   - ✅ **Recently Played**: Tracks you've played recently
@@ -332,21 +353,7 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
 - Hardened startup logging (`Nautune initialization started/finished`) to make it easier to diagnose device issues from Xcode or `flutter logs`.
 - CarPlay integrations now match Jellyfin data more accurately by tracking album artist IDs and forwarding precise playback positions to the Jellyfin server.
 
-**Goal**: Migrate all screens from parameter-passing to Provider pattern for better state management
-
-**Completed Screens (9/10)**:
-1. **SettingsScreen** - Uses SessionProvider + UIStateProvider
-2. **QueueScreen** - Uses Provider for audio service access
-3. **FullPlayerScreen** - Migrated with didChangeDependencies pattern
-4. **AlbumDetailScreen** - Auto-refreshes on connectivity changes
-5. **ArtistDetailScreen** - Uses Provider pattern
-6. **PlaylistDetailScreen** - Auto-refreshes on connectivity changes
-7. **GenreDetailScreen** - Auto-refreshes on connectivity changes
-8. **OfflineLibraryScreen** - Clean Provider-based implementation
-9. **LibraryScreen (Partial)** - Home tab fully refactored with 6 horizontal shelves
-
-**Remaining**:
-- **LibraryScreen (Complete)** - Most complex screen with 7 tabs, final migration pending
+fix any 
 
 
 ## 🧪 Review / Demo Mode
@@ -674,6 +681,7 @@ flutter test
   - ✅ Desktop icon included (`linux/nautune.png` + `nautune.desktop`)
   - ✅ Offline downloads stored in project `downloads/` directory
   - ✅ All Jellyfin features work on Linux
+  - ⚠️ **System Tray requires**: `sudo apt install libayatana-appindicator3-dev`
 - **iOS**: Builds produced by **Codemagic CI** with full feature support
   - ✅ **Native audio playback** via AVFoundation (FLAC/AAC/lossless support)
   - ✅ **Lock screen controls** with album artwork via audio_service
@@ -682,7 +690,9 @@ flutter test
   - ✅ CarPlay works fully offline with downloaded content
   - ✅ All Jellyfin features work on iOS (playback reporting, favorites sync, playlist management)
 - **Windows**: `flutter build windows` (requires Windows machine with VS 2022)
+  - ✅ System tray works out of the box
 - **macOS**: `flutter build macos` (requires macOS with Xcode)
+  - ✅ System tray works out of the box
 - **Web**: `flutter run -d chrome` for dev, `flutter build web` for production
 - **Android**: Not currently a focus; no Android SDK required for development
 
@@ -816,14 +826,10 @@ All iOS features are built and deployed via **Codemagic CI**:
   - Control surface in player UI
   - Platform fallback for non-Apple devices
 - [ ] **Equalizer and audio settings** - Fine-tune audio output with presets and custom EQ
-- [ ] **Sorting options** - Sort albums/artists by name, date added, year, or play count
+- [x] **Sorting options** - Sort albums/artists by name, date added, year, or play count ✅ v2.4.0
 - [ ] **Cross-platform stability** - Enhanced Windows, macOS, and Android support
 - [ ] **Smart Downloads** - Auto-download favorites and keep last 50 played songs offline
-- [ ] **Infinite Radio Mode** - Endless playback that auto-generates next track when queue is low
-
-## 🌊 The "Poseidon Dashboard" Roadmap
-
-Nautune is evolving into a best-in-class music player with a focus on native desktop integration and fluid mobile experiences.
+- [x] **Infinite Radio Mode** - Endless playback that auto-generates next track when queue is low ✅ v2.4.0
 
 ### Phase 1: Navigation Overhaul (The Skeleton)
 **Goal**: Make Nautune feel native on every platform
@@ -833,13 +839,12 @@ Nautune is evolving into a best-in-class music player with a focus on native des
   - Gives "Pro app" feel like Spotify/Roon
   - Better use of widescreen real estate
 - [ ] **Mini Player Mode** - Picture-in-picture always-on-top window
-- [ ] **System Tray Icon** - Background playback control
+- [x] **System Tray Icon** - Background playback control ✅ v2.4.0
 - [ ] **Command Palette** - `/` key opens VS Code-style command search
 - [x] **MPRIS Integration** - Media keys and notification center controls (already implemented!)
 - [x] **Keyboard shortcuts** - Space, arrows, N/P/R/L (completed!)
 
 **Mobile (iOS/Android)**:
-- [ ] **Translucent Bottom Bar** - Glassmorphism blur effect
 - [ ] **Haptic Feedback** - Vibrations on Play/Next/Seek for tactile response
 - [x] **CarPlay** - Full library browsing and offline playback (completed!)
 - [ ] **AirPlay** - HomePod and Apple TV integration for iOS/macOS
@@ -864,7 +869,7 @@ Nautune is evolving into a best-in-class music player with a focus on native des
 - [ ] **Smart Downloads** - "Auto-download favorites" and "Keep last 50 played songs offline"
 - [x] **Lyrics Support** - API integration complete, UI tab in progress
 - [x] **Smart Playlists / Instant Mix** - 50-track mixes from any track/album/artist with one-tap save as playlist (completed!)
-- [ ] **Infinite Radio Mode** - Endless playback that auto-generates next track when queue is low (future feature)
+- [x] **Infinite Radio Mode** - Endless playback that auto-generates next track when queue is low ✅ v2.4.0
 - [ ] **Instant Mix Enhancement** - Better integration with Jellyfin's `/InstantMix` endpoint
 
 ## 🐛 Known Issues

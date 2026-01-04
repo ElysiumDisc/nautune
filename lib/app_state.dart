@@ -26,6 +26,7 @@ import 'services/local_cache_service.dart';
 import 'services/playback_reporting_service.dart';
 import 'services/playback_state_store.dart';
 import 'services/playlist_sync_queue.dart';
+import 'services/tray_service.dart';
 
 // Import SessionProvider - this is new
 import 'providers/session_provider.dart';
@@ -77,6 +78,26 @@ class NautuneAppState extends ChangeNotifier {
       });
     }
 
+    // System tray service for desktop platforms
+    if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+      scheduleMicrotask(() async {
+        try {
+          _trayService = TrayService(audioService: _audioPlayerService);
+          await _trayService?.initialize();
+          // Listen to track changes to update tray
+          _audioPlayerService.currentTrackStream.listen((track) {
+            _trayService?.updateCurrentTrack(track);
+          });
+          _audioPlayerService.playingStream.listen((isPlaying) {
+            _trayService?.updatePlayingState(isPlaying);
+          });
+          debugPrint('✅ System tray service initialized');
+        } catch (error) {
+          debugPrint('System tray service initialization failed: $error');
+        }
+      });
+    }
+
     // Listen to demo mode provider changes
     _demoModeProvider?.addListener(_onDemoModeChanged);
 
@@ -98,6 +119,7 @@ class NautuneAppState extends ChangeNotifier {
   late final AudioPlayerService _audioPlayerService;
   late final DownloadService _downloadService;
   CarPlayService? _carPlayService;
+  TrayService? _trayService;
   StreamSubscription<bool>? _connectivitySubscription;
   bool _connectivityMonitorInitialized = false;
   Map<String, double> _libraryScrollOffsets = {};
@@ -105,6 +127,11 @@ class NautuneAppState extends ChangeNotifier {
   bool _showVolumeBar = true;
   bool _crossfadeEnabled = false;
   int _crossfadeDurationSeconds = 3;
+  bool _infiniteRadioEnabled = false;
+  SortOption _albumSortBy = SortOption.name;
+  SortOrder _albumSortOrder = SortOrder.ascending;
+  SortOption _artistSortBy = SortOption.name;
+  SortOrder _artistSortOrder = SortOrder.ascending;
   bool _isDemoMode = false;
   DemoContent? _demoContent;
   Map<String, JellyfinTrack> _demoTracks = {};
@@ -344,6 +371,11 @@ class NautuneAppState extends ChangeNotifier {
   bool get showVolumeBar => _showVolumeBar;
   bool get crossfadeEnabled => _crossfadeEnabled;
   int get crossfadeDurationSeconds => _crossfadeDurationSeconds;
+  bool get infiniteRadioEnabled => _infiniteRadioEnabled;
+  SortOption get albumSortBy => _albumSortBy;
+  SortOrder get albumSortOrder => _albumSortOrder;
+  SortOption get artistSortBy => _artistSortBy;
+  SortOrder get artistSortOrder => _artistSortOrder;
   int get initialLibraryTabIndex => _restoredLibraryTabIndex;
   double? scrollOffsetFor(String key) => _libraryScrollOffsets[key];
   String? get selectedLibraryId => _session?.selectedLibraryId;
@@ -579,6 +611,31 @@ class NautuneAppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void toggleInfiniteRadio(bool enabled) {
+    _infiniteRadioEnabled = enabled;
+    _audioPlayerService.setInfiniteRadioEnabled(enabled);
+    unawaited(_playbackStateStore.saveUiState(
+      infiniteRadioEnabled: enabled,
+    ));
+    notifyListeners();
+  }
+
+  /// Set album sort options and reload
+  Future<void> setAlbumSort(SortOption sortBy, SortOrder sortOrder) async {
+    if (_albumSortBy == sortBy && _albumSortOrder == sortOrder) return;
+    _albumSortBy = sortBy;
+    _albumSortOrder = sortOrder;
+    await _loadAlbumsForSelectedLibrary(forceRefresh: true);
+  }
+
+  /// Set artist sort options and reload
+  Future<void> setArtistSort(SortOption sortBy, SortOrder sortOrder) async {
+    if (_artistSortBy == sortBy && _artistSortOrder == sortOrder) return;
+    _artistSortBy = sortBy;
+    _artistSortOrder = sortOrder;
+    await _loadArtistsForSelectedLibrary(forceRefresh: true);
+  }
+
   void updateLibraryTabIndex(int index) {
     if (_restoredLibraryTabIndex == index) return;
     _restoredLibraryTabIndex = index;
@@ -677,12 +734,14 @@ class NautuneAppState extends ChangeNotifier {
       _showVolumeBar = storedPlaybackState.showVolumeBar;
       _crossfadeEnabled = storedPlaybackState.crossfadeEnabled;
       _crossfadeDurationSeconds = storedPlaybackState.crossfadeDurationSeconds;
+      _infiniteRadioEnabled = storedPlaybackState.infiniteRadioEnabled;
       _restoredLibraryTabIndex = storedPlaybackState.libraryTabIndex;
       _libraryScrollOffsets =
           Map<String, double>.from(storedPlaybackState.scrollOffsets);
       await _audioPlayerService.hydrateFromPersistence(storedPlaybackState);
       _audioPlayerService.setCrossfadeEnabled(_crossfadeEnabled);
       _audioPlayerService.setCrossfadeDuration(_crossfadeDurationSeconds);
+      _audioPlayerService.setInfiniteRadioEnabled(_infiniteRadioEnabled);
     }
 
     try {
@@ -1359,6 +1418,18 @@ class NautuneAppState extends ChangeNotifier {
     await _loadAlbumsForLibrary(libraryId, forceRefresh: forceRefresh);
   }
 
+  Future<void> _loadArtistsForSelectedLibrary({bool forceRefresh = false}) async {
+    final libraryId = _session?.selectedLibraryId;
+    if (libraryId == null) {
+      _artists = null;
+      _artistsError = null;
+      _isLoadingArtists = false;
+      notifyListeners();
+      return;
+    }
+    await _loadArtistsForLibrary(libraryId, forceRefresh: forceRefresh);
+  }
+
   Future<void> _loadPlaylistsForSelectedLibrary(
       {bool forceRefresh = false}) async {
     final libraryId = _session?.selectedLibraryId;
@@ -1406,6 +1477,8 @@ class NautuneAppState extends ChangeNotifier {
         libraryId: libraryId,
         startIndex: 0,
         limit: _albumsPageSize,
+        sortBy: _albumSortBy,
+        sortOrder: _albumSortOrder,
       );
       _albums = albums;
       _hasMoreAlbums = albums.length == _albumsPageSize;
@@ -1459,6 +1532,8 @@ class NautuneAppState extends ChangeNotifier {
         libraryId: libraryId,
         startIndex: _albumsPage * _albumsPageSize,
         limit: _albumsPageSize,
+        sortBy: _albumSortBy,
+        sortOrder: _albumSortOrder,
       );
       
       if (newAlbums.isEmpty || newAlbums.length < _albumsPageSize) {
@@ -1497,6 +1572,8 @@ class NautuneAppState extends ChangeNotifier {
         libraryId: libraryId,
         startIndex: 0,
         limit: _artistsPageSize,
+        sortBy: _artistSortBy,
+        sortOrder: _artistSortOrder,
       );
       _artists = artists;
       _hasMoreArtists = artists.length == _artistsPageSize;
@@ -1550,6 +1627,8 @@ class NautuneAppState extends ChangeNotifier {
         libraryId: libraryId,
         startIndex: _artistsPage * _artistsPageSize,
         limit: _artistsPageSize,
+        sortBy: _artistSortBy,
+        sortOrder: _artistSortOrder,
       );
       
       if (newArtists.isEmpty || newArtists.length < _artistsPageSize) {

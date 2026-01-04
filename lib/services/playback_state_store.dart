@@ -92,6 +92,7 @@ class PlaybackStateStore {
     bool? showVolumeBar,
     bool? crossfadeEnabled,
     int? crossfadeDurationSeconds,
+    bool? infiniteRadioEnabled,
   }) async {
     await update((state) {
       final mergedOffsets = Map<String, double>.from(state.scrollOffsets);
@@ -104,6 +105,7 @@ class PlaybackStateStore {
         showVolumeBar: showVolumeBar ?? state.showVolumeBar,
         crossfadeEnabled: crossfadeEnabled ?? state.crossfadeEnabled,
         crossfadeDurationSeconds: crossfadeDurationSeconds ?? state.crossfadeDurationSeconds,
+        infiniteRadioEnabled: infiniteRadioEnabled ?? state.infiniteRadioEnabled,
       );
     });
   }

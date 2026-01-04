@@ -27,11 +27,15 @@ class OnlineRepository implements MusicRepository {
     required String libraryId,
     int startIndex = 0,
     int limit = 50,
+    SortOption sortBy = SortOption.name,
+    SortOrder sortOrder = SortOrder.ascending,
   }) async {
     return await _jellyfinService.loadAlbums(
       libraryId: libraryId,
       startIndex: startIndex,
       limit: limit,
+      sortBy: sortOptionToJellyfin(sortBy),
+      sortOrder: sortOrderToJellyfin(sortOrder),
     );
   }
 
@@ -40,11 +44,15 @@ class OnlineRepository implements MusicRepository {
     required String libraryId,
     int startIndex = 0,
     int limit = 50,
+    SortOption sortBy = SortOption.name,
+    SortOrder sortOrder = SortOrder.ascending,
   }) async {
     return await _jellyfinService.loadArtists(
       libraryId: libraryId,
       startIndex: startIndex,
       limit: limit,
+      sortBy: sortOptionToJellyfin(sortBy),
+      sortOrder: sortOrderToJellyfin(sortOrder),
     );
   }
 

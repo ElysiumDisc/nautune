@@ -1,7 +1,7 @@
 name: nautune
 package_name: nautune
 display_name: Nautune  
-version: 1.0.0
+version: 2.5.0
 release: 1
 maintainer:
   name: Elysium Disc
@@ -9,6 +9,9 @@ maintainer:
 depends:
   - libgtk-3-0
   - libgstreamer1.0-0
+  - libayatana-appindicator3-1
+  - libdbusmenu-glib4
+  - libdbusmenu-gtk3-4
 short_description: Poseidon Music Player
 description: Nautune is a beautiful Jellyfin music client for Linux. Stream your music library with style and elegance.
 homepage: https://github.com/elysiumdisc/nautune

@@ -9,6 +9,7 @@ import '../services/playback_state_store.dart';
 /// Responsibilities:
 /// - Volume bar visibility
 /// - Crossfade settings
+/// - Infinite Radio mode
 /// - Library tab index
 /// - Scroll positions
 /// - UI preferences persistence
@@ -30,6 +31,7 @@ class UIStateProvider extends ChangeNotifier {
   bool _showVolumeBar = true;
   bool _crossfadeEnabled = false;
   int _crossfadeDurationSeconds = 3;
+  bool _infiniteRadioEnabled = false;
   int _libraryTabIndex = 0;
   Map<String, double> _scrollOffsets = {};
 
@@ -37,6 +39,7 @@ class UIStateProvider extends ChangeNotifier {
   bool get showVolumeBar => _showVolumeBar;
   bool get crossfadeEnabled => _crossfadeEnabled;
   int get crossfadeDurationSeconds => _crossfadeDurationSeconds;
+  bool get infiniteRadioEnabled => _infiniteRadioEnabled;
   int get libraryTabIndex => _libraryTabIndex;
   double? getScrollOffset(String key) => _scrollOffsets[key];
 
@@ -52,6 +55,7 @@ class UIStateProvider extends ChangeNotifier {
         _showVolumeBar = storedPlaybackState.showVolumeBar;
         _crossfadeEnabled = storedPlaybackState.crossfadeEnabled;
         _crossfadeDurationSeconds = storedPlaybackState.crossfadeDurationSeconds;
+        _infiniteRadioEnabled = storedPlaybackState.infiniteRadioEnabled;
         _libraryTabIndex = storedPlaybackState.libraryTabIndex;
         _scrollOffsets = Map<String, double>.from(storedPlaybackState.scrollOffsets);
 
@@ -94,6 +98,16 @@ class UIStateProvider extends ChangeNotifier {
     unawaited(_playbackStateStore.saveUiState(
       crossfadeEnabled: _crossfadeEnabled,
       crossfadeDurationSeconds: _crossfadeDurationSeconds,
+    ));
+    notifyListeners();
+  }
+
+  /// Toggle infinite radio mode on/off.
+  /// When enabled, new tracks are auto-generated when queue runs low.
+  void toggleInfiniteRadio(bool enabled) {
+    _infiniteRadioEnabled = enabled;
+    unawaited(_playbackStateStore.saveUiState(
+      infiniteRadioEnabled: enabled,
     ));
     notifyListeners();
   }

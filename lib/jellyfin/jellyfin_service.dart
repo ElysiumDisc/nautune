@@ -99,6 +99,8 @@ class JellyfinService {
     bool forceRefresh = false,
     int startIndex = 0,
     int limit = 50,
+    String sortBy = 'SortName',
+    String sortOrder = 'Ascending',
   }) async {
     final client = _client;
     final session = _session;
@@ -106,8 +108,8 @@ class JellyfinService {
       throw StateError('Authenticate before requesting albums.');
     }
     
-    // Only use cache for first page and when not forcing refresh
-    final cacheKey = libraryId;
+    // Only use cache for first page with default sorting and when not forcing refresh
+    final cacheKey = '$libraryId-$sortBy-$sortOrder';
     if (!forceRefresh && startIndex == 0) {
       final cached = _albumCache[cacheKey];
       if (cached != null && !cached.isExpired(_cacheTtl)) {
@@ -120,6 +122,8 @@ class JellyfinService {
       libraryId: libraryId,
       startIndex: startIndex,
       limit: limit,
+      sortBy: sortBy,
+      sortOrder: sortOrder,
     );
     
     // Only cache first page
@@ -135,6 +139,8 @@ class JellyfinService {
     bool forceRefresh = false,
     int startIndex = 0,
     int limit = 50,
+    String sortBy = 'SortName',
+    String sortOrder = 'Ascending',
   }) async {
     final client = _client;
     final session = _session;
@@ -142,8 +148,8 @@ class JellyfinService {
       throw StateError('Authenticate before requesting artists.');
     }
     
-    // Only use cache for first page and when not forcing refresh
-    final cacheKey = libraryId;
+    // Only use cache for first page with default sorting and when not forcing refresh
+    final cacheKey = '$libraryId-$sortBy-$sortOrder';
     if (!forceRefresh && startIndex == 0) {
       final cached = _artistCache[cacheKey];
       if (cached != null && !cached.isExpired(_cacheTtl)) {
@@ -156,6 +162,8 @@ class JellyfinService {
       libraryId: libraryId,
       startIndex: startIndex,
       limit: limit,
+      sortBy: sortBy,
+      sortOrder: sortOrder,
     );
     
     // Only cache first page

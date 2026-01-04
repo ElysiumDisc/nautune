@@ -116,6 +116,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ),
+          ListTile(
+            leading: Icon(Icons.all_inclusive, color: theme.colorScheme.primary),
+            title: const Text('Infinite Radio'),
+            subtitle: Text(
+              uiStateProvider.infiniteRadioEnabled
+                ? 'Auto-generates similar tracks when queue is low'
+                : 'Endless playback based on current track'
+            ),
+            trailing: Switch(
+              value: uiStateProvider.infiniteRadioEnabled,
+              onChanged: (value) {
+                uiStateProvider.toggleInfiniteRadio(value);
+              },
+            ),
+          ),
+          if (uiStateProvider.infiniteRadioEnabled)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                'Uses Jellyfin\'s Instant Mix to find similar tracks. Requires internet connection.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
           const Divider(),
           Padding(
             padding: const EdgeInsets.all(16),

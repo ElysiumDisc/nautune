@@ -55,6 +55,11 @@ class AudioPlayerService {
   Timer? _crossfadeTimer;
   bool _isCrossfading = false;
   
+  // Infinite Radio support
+  bool _infiniteRadioEnabled = false;
+  bool _isFetchingInfiniteRadio = false;
+  static const int _infiniteRadioThreshold = 2; // Fetch when 2 or fewer tracks remain
+  
   JellyfinTrack? _currentTrack;
   List<JellyfinTrack> _queue = [];
   int _currentIndex = 0;
@@ -87,6 +92,11 @@ class AudioPlayerService {
 
   void setCrossfadeDuration(int seconds) {
     _crossfadeDurationSeconds = seconds.clamp(0, 10);
+  }
+
+  void setInfiniteRadioEnabled(bool enabled) {
+    _infiniteRadioEnabled = enabled;
+    debugPrint('🔄 Infinite Radio: ${enabled ? "enabled" : "disabled"}');
   }
 
   void _cancelCrossfade() {
@@ -334,6 +344,10 @@ class AudioPlayerService {
       return;
     }
 
+    // Check if we need to fetch more tracks for infinite radio
+    // Do this before checking if we have a next track
+    await _checkInfiniteRadio();
+
     // Move to next track
     if (_currentIndex + 1 < _queue.length) {
       _isTransitioning = true;
@@ -400,6 +414,24 @@ class AudioPlayerService {
           queueContext: _queue,
           fromShuffle: _isShuffleEnabled,
         );
+      } else if (_infiniteRadioEnabled) {
+        // Try to fetch more tracks for infinite radio before stopping
+        debugPrint('📻 Queue ended, trying infinite radio...');
+        await _fetchInfiniteRadioTracks();
+        
+        // Check if we got new tracks
+        if (_currentIndex + 1 < _queue.length) {
+          _currentIndex++;
+          await playTrack(
+            _queue[_currentIndex],
+            queueContext: _queue,
+            fromShuffle: _isShuffleEnabled,
+          );
+        } else {
+          // No more tracks available
+          debugPrint('📻 Infinite Radio: No more tracks available, stopping');
+          await stop();
+        }
       } else {
         // Stop playback
         await stop();
@@ -1054,6 +1086,67 @@ class AudioPlayerService {
       fromShuffle: true,
     );
     debugPrint('🌊 Playing shuffled: ${shuffled.length} tracks');
+  }
+  
+  /// Check if we need to fetch more tracks for infinite radio mode
+  Future<void> _checkInfiniteRadio() async {
+    if (!_infiniteRadioEnabled || _isFetchingInfiniteRadio) return;
+    if (_jellyfinService == null || _currentTrack == null) return;
+    
+    // Calculate remaining tracks in queue
+    final remainingTracks = _queue.length - _currentIndex - 1;
+    
+    if (remainingTracks <= _infiniteRadioThreshold) {
+      debugPrint('📻 Infinite Radio: $remainingTracks tracks remaining, fetching more...');
+      await _fetchInfiniteRadioTracks();
+    }
+  }
+  
+  /// Fetch similar tracks using Jellyfin's Instant Mix and append to queue
+  Future<void> _fetchInfiniteRadioTracks() async {
+    if (_isFetchingInfiniteRadio || _jellyfinService == null || _currentTrack == null) {
+      return;
+    }
+    
+    _isFetchingInfiniteRadio = true;
+    
+    try {
+      // Use current track to find similar tracks
+      final mixTracks = await _jellyfinService!.getInstantMix(
+        itemId: _currentTrack!.id,
+        limit: 20, // Fetch 20 tracks at a time
+      );
+      
+      if (mixTracks.isEmpty) {
+        debugPrint('📻 Infinite Radio: No similar tracks found');
+        return;
+      }
+      
+      // Filter out tracks already in queue to avoid duplicates
+      final existingIds = _queue.map((t) => t.id).toSet();
+      final newTracks = mixTracks.where((t) => !existingIds.contains(t.id)).toList();
+      
+      if (newTracks.isEmpty) {
+        debugPrint('📻 Infinite Radio: All suggested tracks already in queue');
+        return;
+      }
+      
+      // Append new tracks to queue
+      _queue.addAll(newTracks);
+      
+      debugPrint('📻 Infinite Radio: Added ${newTracks.length} tracks to queue (total: ${_queue.length})');
+      
+      // Save updated queue
+      unawaited(_stateStore.savePlaybackSnapshot(
+        queue: _queue,
+        currentQueueIndex: _currentIndex,
+      ));
+      
+    } catch (e) {
+      debugPrint('📻 Infinite Radio: Failed to fetch tracks: $e');
+    } finally {
+      _isFetchingInfiniteRadio = false;
+    }
   }
   
   void _emitVisualizerFrame(Duration position) {

@@ -37,6 +37,8 @@ class OfflineRepository implements MusicRepository {
     required String libraryId,
     int startIndex = 0,
     int limit = 50,
+    SortOption sortBy = SortOption.name,
+    SortOrder sortOrder = SortOrder.ascending,
   }) async {
     final downloads = _downloadService.completedDownloads;
     final albums = <String, JellyfinAlbum>{};
@@ -57,8 +59,13 @@ class OfflineRepository implements MusicRepository {
       }
     }
 
-    final albumList = albums.values.toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
+    final albumList = albums.values.toList();
+    
+    // Sort based on options (offline only supports name sorting reliably)
+    albumList.sort((a, b) {
+      final comparison = a.name.compareTo(b.name);
+      return sortOrder == SortOrder.ascending ? comparison : -comparison;
+    });
 
     // Apply pagination
     final end = (startIndex + limit).clamp(0, albumList.length);
@@ -70,6 +77,8 @@ class OfflineRepository implements MusicRepository {
     required String libraryId,
     int startIndex = 0,
     int limit = 50,
+    SortOption sortBy = SortOption.name,
+    SortOrder sortOrder = SortOrder.ascending,
   }) async {
     final downloads = _downloadService.completedDownloads;
     final artists = <String, JellyfinArtist>{};
@@ -89,8 +98,13 @@ class OfflineRepository implements MusicRepository {
       }
     }
 
-    final artistList = artists.values.toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
+    final artistList = artists.values.toList();
+    
+    // Sort based on options (offline only supports name sorting reliably)
+    artistList.sort((a, b) {
+      final comparison = a.name.compareTo(b.name);
+      return sortOrder == SortOrder.ascending ? comparison : -comparison;
+    });
 
     // Apply pagination
     final end = (startIndex + limit).clamp(0, artistList.length);

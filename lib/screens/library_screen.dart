@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../jellyfin/jellyfin_album.dart';
@@ -15,6 +16,7 @@ import '../jellyfin/jellyfin_library.dart';
 import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../models/download_item.dart';
+import '../repositories/music_repository.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/jellyfin_image.dart';
 import '../widgets/now_playing_bar.dart';
@@ -26,9 +28,7 @@ import 'playlist_detail_screen.dart';
 import 'settings_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key, required this.appState});
-
-  final NautuneAppState appState;
+  const LibraryScreen({super.key});
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -41,6 +41,12 @@ class _LibraryScreenState extends State<LibraryScreen>
   final ScrollController _albumsScrollController = ScrollController();
   final ScrollController _playlistsScrollController = ScrollController();
   int _currentTabIndex = _homeTabIndex;
+  
+  // Provider-based state
+  NautuneAppState? _appState;
+  bool? _previousOfflineMode;
+  bool? _previousNetworkAvailable;
+  bool _hasInitialized = false;
 
   @override
   void initState() {
@@ -56,6 +62,32 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    
+    // Get appState with listening enabled for reactive updates
+    final currentAppState = Provider.of<NautuneAppState>(context, listen: true);
+    
+    if (!_hasInitialized) {
+      _appState = currentAppState;
+      _previousOfflineMode = currentAppState.isOfflineMode;
+      _previousNetworkAvailable = currentAppState.networkAvailable;
+      _hasInitialized = true;
+    } else {
+      _appState = currentAppState;
+      final currentOfflineMode = currentAppState.isOfflineMode;
+      final currentNetworkAvailable = currentAppState.networkAvailable;
+      
+      if (_previousOfflineMode != currentOfflineMode ||
+          _previousNetworkAvailable != currentNetworkAvailable) {
+        debugPrint('🔄 LibraryScreen: Connectivity changed (offline: $_previousOfflineMode -> $currentOfflineMode, network: $_previousNetworkAvailable -> $currentNetworkAvailable)');
+        _previousOfflineMode = currentOfflineMode;
+        _previousNetworkAvailable = currentNetworkAvailable;
+      }
+    }
+  }
+
+  @override
   void dispose() {
     _tabController.removeListener(_handleTabChange);
     _tabController.dispose();
@@ -68,7 +100,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     if (_albumsScrollController.position.pixels >=
         _albumsScrollController.position.maxScrollExtent - 200) {
       // Load more albums when near bottom
-      widget.appState.loadMoreAlbums();
+      _appState?.loadMoreAlbums();
     }
   }
 
@@ -76,7 +108,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     if (_playlistsScrollController.position.pixels >=
         _playlistsScrollController.position.maxScrollExtent - 200) {
       // Load more playlists when near bottom
-      // widget.appState.loadMorePlaylists();
+      // _appState?.loadMorePlaylists();
     }
   }
 
@@ -87,38 +119,45 @@ class _LibraryScreenState extends State<LibraryScreen>
     });
     // Refresh favorites when switching to favorites tab (tab index 1)
     if (_currentTabIndex == 1) {
-      widget.appState.refreshFavorites();
+      _appState?.refreshFavorites();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final appState = _appState;
+    
+    if (appState == null) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
     
     return AnimatedBuilder(
-      animation: widget.appState,
+      animation: appState,
       builder: (context, _) {
-        final libraries = widget.appState.libraries;
-        final isLoadingLibraries = widget.appState.isLoadingLibraries;
-        final libraryError = widget.appState.librariesError;
-        final selectedId = widget.appState.selectedLibraryId;
-        final playlists = widget.appState.playlists;
-        final isLoadingPlaylists = widget.appState.isLoadingPlaylists;
-        final playlistsError = widget.appState.playlistsError;
-        var favoriteTracks = widget.appState.favoriteTracks;
-        if (widget.appState.isOfflineMode && favoriteTracks != null) {
+        final libraries = appState.libraries;
+        final isLoadingLibraries = appState.isLoadingLibraries;
+        final libraryError = appState.librariesError;
+        final selectedId = appState.selectedLibraryId;
+        final playlists = appState.playlists;
+        final isLoadingPlaylists = appState.isLoadingPlaylists;
+        final playlistsError = appState.playlistsError;
+        var favoriteTracks = appState.favoriteTracks;
+        if (appState.isOfflineMode && favoriteTracks != null) {
           favoriteTracks = favoriteTracks.where((t) => 
-            widget.appState.downloadService.isDownloaded(t.id)
+            appState.downloadService.isDownloaded(t.id)
           ).toList();
         }
-        final isLoadingFavorites = widget.appState.isLoadingFavorites;
-        final favoritesError = widget.appState.favoritesError;
+        final isLoadingFavorites = appState.isLoadingFavorites;
+        final favoritesError = appState.favoritesError;
 
         Widget body;
 
         // If we're in offline mode or have no network, prioritize showing offline content
-        // if (!widget.appState.networkAvailable || 
-        //     (widget.appState.isOfflineMode && widget.appState.downloadService.completedCount > 0)) {
+        // if (!appState.networkAvailable || 
+        //     (appState.isOfflineMode && appState.downloadService.completedCount > 0)) {
         //   // Show offline library directly
         //   return Scaffold( ... );
         // } 
@@ -129,16 +168,16 @@ class _LibraryScreenState extends State<LibraryScreen>
         } else if (libraryError != null) {
           body = _ErrorState(
             message: 'Could not reach Jellyfin.\n${libraryError.toString()}',
-            onRetry: () => widget.appState.refreshLibraries(),
+            onRetry: () => appState.refreshLibraries(),
           );
         } else if (libraries == null || libraries.isEmpty) {
           body = _EmptyState(
-            onRefresh: () => widget.appState.refreshLibraries(),
+            onRefresh: () => appState.refreshLibraries(),
           );
         } else if (selectedId == null) {
           // Show library selection
           body = RefreshIndicator(
-            onRefresh: () => widget.appState.refreshLibraries(),
+            onRefresh: () => appState.refreshLibraries(),
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
@@ -154,7 +193,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                       child: _LibraryTile(
                         library: library,
                         groupValue: selectedId,
-                        onSelect: () => widget.appState.selectLibrary(library),
+                        onSelect: () => appState.selectLibrary(library),
                       ),
                     )),
               ],
@@ -166,30 +205,30 @@ class _LibraryScreenState extends State<LibraryScreen>
             controller: _tabController,
             children: [
               _LibraryTab(
-                appState: widget.appState,
+                appState: appState,
                 onAlbumTap: (album) => _navigateToAlbum(context, album),
               ),
               _FavoritesTab(
                 recentTracks: favoriteTracks,
                 isLoading: isLoadingFavorites,
                 error: favoritesError,
-                onRefresh: () => widget.appState.refreshFavorites(),
+                onRefresh: () => appState.refreshFavorites(),
                 onTrackTap: (track) => _playTrack(track),
-                appState: widget.appState,
+                appState: appState,
               ),
               // Swap Most/Downloads based on offline mode
-              widget.appState.isOfflineMode
-                  ? _DownloadsTab(appState: widget.appState)
-                  : _MostPlayedTab(appState: widget.appState, onAlbumTap: (album) => _navigateToAlbum(context, album)),
+              appState.isOfflineMode
+                  ? _DownloadsTab(appState: appState)
+                  : _MostPlayedTab(appState: appState, onAlbumTap: (album) => _navigateToAlbum(context, album)),
               _PlaylistsTab(
                 playlists: playlists,
                 isLoading: isLoadingPlaylists,
                 error: playlistsError,
                 scrollController: _playlistsScrollController,
-                onRefresh: () => widget.appState.refreshPlaylists(),
-                appState: widget.appState,
+                onRefresh: () => appState.refreshPlaylists(),
+                appState: appState,
               ),
-              _SearchTab(appState: widget.appState),
+              _SearchTab(appState: appState),
             ],
           );
         }
@@ -201,7 +240,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () {
-                    widget.appState.toggleOfflineMode();
+                    appState.toggleOfflineMode();
                   },
                   onLongPressStart: (details) {
                     // Show downloads management on long press (iOS/Android)
@@ -229,7 +268,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                     ),
                     child: Icon(
                       Icons.waves,
-                      color: widget.appState.isOfflineMode 
+                      color: appState.isOfflineMode 
                           ? const Color(0xFF7A3DF1)  // Violet when offline
                           : const Color(0xFFB39DDB),  // Light purple when online
                       size: 28,
@@ -258,7 +297,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                             fontWeight: FontWeight.w600,
                           ),
                         ),
-                        if (widget.appState.isOfflineMode) ...[
+                        if (appState.isOfflineMode) ...[
                           const SizedBox(width: 8),
                           Icon(
                             Icons.offline_bolt,
@@ -276,18 +315,18 @@ class _LibraryScreenState extends State<LibraryScreen>
               if (selectedId != null)
                 IconButton(
                   icon: const Icon(Icons.library_books_outlined),
-                  onPressed: () => widget.appState.clearLibrarySelection(),
+                  onPressed: () => appState.clearLibrarySelection(),
                 ),
               IconButton(
                 icon: const Icon(Icons.logout),
-                onPressed: () => widget.appState.disconnect(),
+                onPressed: () => appState.disconnect(),
               ),
             ],
           ),
           body: Column(
             children: [
               // Offline mode banner
-              if (widget.appState.isOfflineMode && !widget.appState.networkAvailable)
+              if (appState.isOfflineMode && !appState.networkAvailable)
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -309,7 +348,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                         ),
                       ),
                       TextButton(
-                        onPressed: () => widget.appState.refreshLibraries(),
+                        onPressed: () => appState.refreshLibraries(),
                         child: Text(
                           'Retry',
                           style: TextStyle(
@@ -343,8 +382,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                     label: 'Favorites',
                   ),
                   NavigationDestination(
-                    icon: Icon(widget.appState.isOfflineMode ? Icons.download : Icons.home_outlined),
-                    label: widget.appState.isOfflineMode ? 'Downloads' : 'Home',
+                    icon: Icon(appState.isOfflineMode ? Icons.download : Icons.home_outlined),
+                    label: appState.isOfflineMode ? 'Downloads' : 'Home',
                   ),
                   const NavigationDestination(
                     icon: Icon(Icons.queue_music),
@@ -357,8 +396,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                 ],
               ),
               NowPlayingBar(
-                audioService: widget.appState.audioPlayerService,
-                appState: widget.appState,
+                audioService: appState.audioPlayerService,
+                appState: appState,
               ),
             ],
           ),
@@ -378,10 +417,13 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   Future<void> _playTrack(JellyfinTrack track) async {
+    final appState = _appState;
+    if (appState == null) return;
+    
     try {
-      await widget.appState.audioPlayerService.playTrack(
+      await appState.audioPlayerService.playTrack(
         track,
-        queueContext: widget.appState.favoriteTracks,
+        queueContext: appState.favoriteTracks,
       );
     } catch (error) {
       if (!mounted) return;
@@ -540,6 +582,7 @@ class _LibraryTabState extends State<_LibraryTab> {
   @override
   Widget build(BuildContext context) {
     final isOffline = widget.appState.isOfflineMode;
+    final theme = Theme.of(context);
     
     return NestedScrollView(
       headerSliverBuilder: (context, innerBoxIsScrolled) {
@@ -547,31 +590,44 @@ class _LibraryTabState extends State<_LibraryTab> {
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.all(16.0),
-              child: SegmentedButton<String>(
-                segments: [
-                  const ButtonSegment(
-                    value: 'albums',
-                    label: Text('Albums'),
-                    icon: Icon(Icons.album),
+              child: Column(
+                children: [
+                  SegmentedButton<String>(
+                    segments: [
+                      const ButtonSegment(
+                        value: 'albums',
+                        label: Text('Albums'),
+                        icon: Icon(Icons.album),
+                      ),
+                      const ButtonSegment(
+                        value: 'artists',
+                        label: Text('Artists'),
+                        icon: Icon(Icons.person),
+                      ),
+                      if (!isOffline)
+                        const ButtonSegment(
+                          value: 'genres',
+                          label: Text('Genres'),
+                          icon: Icon(Icons.category),
+                        ),
+                    ],
+                    selected: {_selectedView},
+                    onSelectionChanged: (Set<String> newSelection) {
+                      setState(() {
+                        _selectedView = newSelection.first;
+                      });
+                    },
                   ),
-                  const ButtonSegment(
-                    value: 'artists',
-                    label: Text('Artists'),
-                    icon: Icon(Icons.person),
-                  ),
-                  if (!isOffline)
-                    const ButtonSegment(
-                      value: 'genres',
-                      label: Text('Genres'),
-                      icon: Icon(Icons.category),
+                  // Sort controls for albums and artists (not genres)
+                  if (!isOffline && _selectedView != 'genres')
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: _SortControls(
+                        appState: widget.appState,
+                        isAlbums: _selectedView == 'albums',
+                      ),
                     ),
                 ],
-                selected: {_selectedView},
-                onSelectionChanged: (Set<String> newSelection) {
-                  setState(() {
-                    _selectedView = newSelection.first;
-                  });
-                },
               ),
             ),
           ),
@@ -656,6 +712,126 @@ class _LibraryTabState extends State<_LibraryTab> {
     } else {
       return _GenresTab(appState: widget.appState);
     }
+  }
+}
+
+/// Sort controls for Albums/Artists tabs
+class _SortControls extends StatelessWidget {
+  const _SortControls({
+    required this.appState,
+    required this.isAlbums,
+  });
+
+  final NautuneAppState appState;
+  final bool isAlbums;
+
+  String _sortOptionLabel(SortOption option) {
+    switch (option) {
+      case SortOption.name:
+        return 'Name';
+      case SortOption.dateAdded:
+        return 'Date Added';
+      case SortOption.year:
+        return 'Year';
+      case SortOption.playCount:
+        return 'Play Count';
+    }
+  }
+
+  IconData _sortOptionIcon(SortOption option) {
+    switch (option) {
+      case SortOption.name:
+        return Icons.sort_by_alpha;
+      case SortOption.dateAdded:
+        return Icons.calendar_today;
+      case SortOption.year:
+        return Icons.date_range;
+      case SortOption.playCount:
+        return Icons.play_circle_outline;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final currentSort = isAlbums ? appState.albumSortBy : appState.artistSortBy;
+    final currentOrder = isAlbums ? appState.albumSortOrder : appState.artistSortOrder;
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        // Sort by dropdown - icon only
+        PopupMenuButton<SortOption>(
+          initialValue: currentSort,
+          tooltip: 'Sort by ${_sortOptionLabel(currentSort)}',
+          onSelected: (SortOption option) {
+            if (isAlbums) {
+              appState.setAlbumSort(option, currentOrder);
+            } else {
+              appState.setArtistSort(option, currentOrder);
+            }
+          },
+          itemBuilder: (context) => [
+            _buildMenuItem(SortOption.name, currentSort),
+            _buildMenuItem(SortOption.dateAdded, currentSort),
+            if (isAlbums) _buildMenuItem(SortOption.year, currentSort),
+            _buildMenuItem(SortOption.playCount, currentSort),
+          ],
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Icon(
+              _sortOptionIcon(currentSort),
+              size: 20,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        // Sort order toggle
+        IconButton(
+          icon: Icon(
+            currentOrder == SortOrder.ascending
+                ? Icons.arrow_upward
+                : Icons.arrow_downward,
+            size: 20,
+          ),
+          tooltip: currentOrder == SortOrder.ascending ? 'Ascending' : 'Descending',
+          onPressed: () {
+            final newOrder = currentOrder == SortOrder.ascending
+                ? SortOrder.descending
+                : SortOrder.ascending;
+            if (isAlbums) {
+              appState.setAlbumSort(currentSort, newOrder);
+            } else {
+              appState.setArtistSort(currentSort, newOrder);
+            }
+          },
+          style: IconButton.styleFrom(
+            backgroundColor: theme.colorScheme.surfaceContainerHighest,
+          ),
+        ),
+      ],
+    );
+  }
+
+  PopupMenuItem<SortOption> _buildMenuItem(SortOption option, SortOption current) {
+    return PopupMenuItem<SortOption>(
+      value: option,
+      child: Row(
+        children: [
+          if (option == current)
+            const Icon(Icons.check, size: 18)
+          else
+            const SizedBox(width: 18),
+          const SizedBox(width: 8),
+          Text(_sortOptionLabel(option)),
+        ],
+      ),
+    );
   }
 }
 
@@ -4322,6 +4498,22 @@ class _AlphabetScrollbarState extends State<AlphabetScrollbar> {
           width: 30,
           child: LayoutBuilder(
             builder: (context, constraints) {
+              // Calculate if we need to reduce letters based on available height
+              final availableHeight = constraints.maxHeight;
+              final letterHeight = 16.0; // Approximate height per letter
+              final maxLetters = (availableHeight / letterHeight).floor();
+              
+              // If not enough space for all letters, show subset
+              List<String> displayLetters = _alphabet;
+              if (maxLetters < _alphabet.length && maxLetters > 0) {
+                // Show every Nth letter to fit
+                final step = (_alphabet.length / maxLetters).ceil();
+                displayLetters = [];
+                for (int i = 0; i < _alphabet.length; i += step) {
+                  displayLetters.add(_alphabet[i]);
+                }
+              }
+              
               return GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTapDown: (details) => _handleInput(details.localPosition, constraints.maxHeight),
@@ -4332,17 +4524,20 @@ class _AlphabetScrollbarState extends State<AlphabetScrollbar> {
                   color: Colors.transparent,
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: _alphabet.map((letter) {
+                    mainAxisSize: MainAxisSize.min,
+                    children: displayLetters.map((letter) {
                       final isActive = _activeLetter == letter;
-                      return AnimatedScale(
-                        scale: isActive ? 1.4 : 1.0,
-                        duration: const Duration(milliseconds: 100),
-                        child: Text(
-                          letter,
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: isActive ? FontWeight.w900 : FontWeight.w600,
-                            color: isActive ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                      return Flexible(
+                        child: AnimatedScale(
+                          scale: isActive ? 1.4 : 1.0,
+                          duration: const Duration(milliseconds: 100),
+                          child: Text(
+                            letter,
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: isActive ? FontWeight.w900 : FontWeight.w600,
+                              color: isActive ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                            ),
                           ),
                         ),
                       );

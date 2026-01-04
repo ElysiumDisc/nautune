@@ -5,6 +5,44 @@ import '../jellyfin/jellyfin_library.dart';
 import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_track.dart';
 
+/// Sort options for albums and artists
+enum SortOption {
+  name,       // Sort by name (default)
+  dateAdded,  // Sort by date added to library
+  year,       // Sort by release year
+  playCount,  // Sort by play count
+}
+
+/// Sort order
+enum SortOrder {
+  ascending,
+  descending,
+}
+
+/// Convert SortOption to Jellyfin API parameter
+String sortOptionToJellyfin(SortOption option) {
+  switch (option) {
+    case SortOption.name:
+      return 'SortName';
+    case SortOption.dateAdded:
+      return 'DateCreated';
+    case SortOption.year:
+      return 'ProductionYear,SortName';
+    case SortOption.playCount:
+      return 'PlayCount';
+  }
+}
+
+/// Convert SortOrder to Jellyfin API parameter
+String sortOrderToJellyfin(SortOrder order) {
+  switch (order) {
+    case SortOrder.ascending:
+      return 'Ascending';
+    case SortOrder.descending:
+      return 'Descending';
+  }
+}
+
 /// Abstract repository interface for music data.
 ///
 /// Implementations:
@@ -22,6 +60,8 @@ abstract class MusicRepository {
     required String libraryId,
     int startIndex = 0,
     int limit = 50,
+    SortOption sortBy = SortOption.name,
+    SortOrder sortOrder = SortOrder.ascending,
   });
 
   /// Get artists for a specific library with pagination
@@ -29,6 +69,8 @@ abstract class MusicRepository {
     required String libraryId,
     int startIndex = 0,
     int limit = 50,
+    SortOption sortBy = SortOption.name,
+    SortOrder sortOrder = SortOrder.ascending,
   });
 
   /// Get genres for a specific library
