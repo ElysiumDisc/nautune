@@ -146,6 +146,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Padding(
             padding: const EdgeInsets.all(16),
             child: Text(
+              'Performance',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          ListTile(
+            leading: Icon(Icons.cached, color: theme.colorScheme.primary),
+            title: const Text('Cache Duration'),
+            subtitle: Text('${uiStateProvider.cacheTtlMinutes} minutes'),
+            trailing: SizedBox(
+              width: 150,
+              child: Slider(
+                value: uiStateProvider.cacheTtlMinutes.toDouble(),
+                min: 1,
+                max: 30,
+                divisions: 29,
+                label: '${uiStateProvider.cacheTtlMinutes} min',
+                onChanged: (value) {
+                  uiStateProvider.setCacheTtl(value.round());
+                },
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              'How long to keep album/artist data before refreshing from server. Lower = fresher data, higher = faster browsing.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ),
+          const Divider(),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
               'About',
               style: theme.textTheme.titleMedium?.copyWith(
                 color: theme.colorScheme.primary,

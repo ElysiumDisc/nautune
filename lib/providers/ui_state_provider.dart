@@ -10,6 +10,7 @@ import '../services/playback_state_store.dart';
 /// - Volume bar visibility
 /// - Crossfade settings
 /// - Infinite Radio mode
+/// - Cache TTL settings
 /// - Library tab index
 /// - Scroll positions
 /// - UI preferences persistence
@@ -32,6 +33,7 @@ class UIStateProvider extends ChangeNotifier {
   bool _crossfadeEnabled = false;
   int _crossfadeDurationSeconds = 3;
   bool _infiniteRadioEnabled = false;
+  int _cacheTtlMinutes = 2;
   int _libraryTabIndex = 0;
   Map<String, double> _scrollOffsets = {};
 
@@ -40,6 +42,7 @@ class UIStateProvider extends ChangeNotifier {
   bool get crossfadeEnabled => _crossfadeEnabled;
   int get crossfadeDurationSeconds => _crossfadeDurationSeconds;
   bool get infiniteRadioEnabled => _infiniteRadioEnabled;
+  int get cacheTtlMinutes => _cacheTtlMinutes;
   int get libraryTabIndex => _libraryTabIndex;
   double? getScrollOffset(String key) => _scrollOffsets[key];
 
@@ -56,6 +59,7 @@ class UIStateProvider extends ChangeNotifier {
         _crossfadeEnabled = storedPlaybackState.crossfadeEnabled;
         _crossfadeDurationSeconds = storedPlaybackState.crossfadeDurationSeconds;
         _infiniteRadioEnabled = storedPlaybackState.infiniteRadioEnabled;
+        _cacheTtlMinutes = storedPlaybackState.cacheTtlMinutes;
         _libraryTabIndex = storedPlaybackState.libraryTabIndex;
         _scrollOffsets = Map<String, double>.from(storedPlaybackState.scrollOffsets);
 
@@ -108,6 +112,16 @@ class UIStateProvider extends ChangeNotifier {
     _infiniteRadioEnabled = enabled;
     unawaited(_playbackStateStore.saveUiState(
       infiniteRadioEnabled: enabled,
+    ));
+    notifyListeners();
+  }
+
+  /// Set cache TTL in minutes (1-30).
+  /// Higher = faster browsing, Lower = fresher data.
+  void setCacheTtl(int minutes) {
+    _cacheTtlMinutes = minutes.clamp(1, 30);
+    unawaited(_playbackStateStore.saveUiState(
+      cacheTtlMinutes: _cacheTtlMinutes,
     ));
     notifyListeners();
   }

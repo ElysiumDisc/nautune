@@ -93,6 +93,7 @@ class PlaybackStateStore {
     bool? crossfadeEnabled,
     int? crossfadeDurationSeconds,
     bool? infiniteRadioEnabled,
+    int? cacheTtlMinutes,
   }) async {
     await update((state) {
       final mergedOffsets = Map<String, double>.from(state.scrollOffsets);
@@ -106,6 +107,7 @@ class PlaybackStateStore {
         crossfadeEnabled: crossfadeEnabled ?? state.crossfadeEnabled,
         crossfadeDurationSeconds: crossfadeDurationSeconds ?? state.crossfadeDurationSeconds,
         infiniteRadioEnabled: infiniteRadioEnabled ?? state.infiniteRadioEnabled,
+        cacheTtlMinutes: cacheTtlMinutes ?? state.cacheTtlMinutes,
       );
     });
   }

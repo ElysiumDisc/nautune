@@ -157,6 +157,51 @@ class LocalCacheService {
     return _readList(_k('genres', sessionKey, libraryId));
   }
 
+  /// Save album tracks for offline/cached viewing
+  Future<void> saveAlbumTracks(
+    String sessionKey, {
+    required String albumId,
+    required List<JellyfinTrack> data,
+  }) {
+    return _writeList(
+      _k('album_tracks', sessionKey, albumId),
+      data.map((e) => e.toStorageJson()).toList(),
+    );
+  }
+
+  /// Read cached album tracks
+  Future<List<JellyfinTrack>?> readAlbumTracks(
+    String sessionKey, {
+    required String albumId,
+  }) async {
+    final raw = _readList(_k('album_tracks', sessionKey, albumId));
+    return raw?.map(JellyfinTrack.fromStorageJson).toList();
+  }
+
+  /// Check if album tracks are cached
+  bool hasAlbumTracks(String sessionKey, {required String albumId}) {
+    final key = _k('album_tracks', sessionKey, albumId);
+    return _box.containsKey(key);
+  }
+
+  /// Pre-cache tracks for all downloaded albums
+  Future<void> cacheTracksForDownloadedAlbums(
+    String sessionKey,
+    Set<String> downloadedAlbumIds,
+    Future<List<JellyfinTrack>> Function(String albumId) fetchTracks,
+  ) async {
+    for (final albumId in downloadedAlbumIds) {
+      if (!hasAlbumTracks(sessionKey, albumId: albumId)) {
+        try {
+          final tracks = await fetchTracks(albumId);
+          await saveAlbumTracks(sessionKey, albumId: albumId, data: tracks);
+        } catch (e) {
+          // Skip if fetch fails - we'll try again later
+        }
+      }
+    }
+  }
+
   String _k(String namespace, String sessionKey, [String? libraryId]) {
     if (libraryId == null) {
       return '$namespace|$sessionKey';

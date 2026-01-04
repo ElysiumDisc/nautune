@@ -17,7 +17,7 @@ class JellyfinService {
       : _httpClient = httpClient ?? http.Client();
 
   final http.Client _httpClient;
-  final Duration _cacheTtl = const Duration(minutes: 2);
+  Duration _cacheTtl = const Duration(minutes: 2);
 
   JellyfinClient? _client;
   JellyfinSession? _session;
@@ -32,6 +32,13 @@ class JellyfinService {
 
   String? get baseUrl => _session?.serverUrl;
   String? get token => _session?.credentials.accessToken;
+  Duration get cacheTtl => _cacheTtl;
+
+  /// Set cache TTL duration
+  void setCacheTtl(Duration ttl) {
+    _cacheTtl = ttl;
+    debugPrint('📦 Cache TTL set to ${ttl.inMinutes} minutes');
+  }
 
   Future<JellyfinSession> connect({
     required String serverUrl,
@@ -74,6 +81,82 @@ class JellyfinService {
     _client = null;
     _session = null;
     _clearCaches();
+  }
+
+  /// Check server health - useful before heavy operations
+  Future<ServerHealth> checkServerHealth() async {
+    final client = _client;
+    if (client == null) {
+      return ServerHealth(
+        isHealthy: false,
+        latencyMs: 0,
+        error: 'Not connected',
+      );
+    }
+    return client.checkServerHealth();
+  }
+
+  /// Batch load albums, artists, and genres in parallel
+  /// Returns a record with all three lists
+  Future<({List<JellyfinAlbum> albums, List<JellyfinArtist> artists, List<JellyfinGenre> genres})> 
+  loadLibraryContentBatch({
+    required String libraryId,
+    bool forceRefresh = false,
+    int limit = 50,
+  }) async {
+    final client = _client;
+    final session = _session;
+    if (client == null || session == null) {
+      throw StateError('Authenticate before loading library content.');
+    }
+
+    debugPrint('🚀 Batch loading library content...');
+    final stopwatch = Stopwatch()..start();
+
+    // Run all three requests in parallel
+    final results = await Future.wait([
+      loadAlbums(libraryId: libraryId, forceRefresh: forceRefresh, limit: limit),
+      loadArtists(libraryId: libraryId, forceRefresh: forceRefresh, limit: limit),
+      loadGenres(libraryId: libraryId, forceRefresh: forceRefresh),
+    ]);
+
+    stopwatch.stop();
+    debugPrint('✅ Batch load complete in ${stopwatch.elapsedMilliseconds}ms');
+
+    return (
+      albums: results[0] as List<JellyfinAlbum>,
+      artists: results[1] as List<JellyfinArtist>,
+      genres: results[2] as List<JellyfinGenre>,
+    );
+  }
+
+  /// Batch search albums, artists, and tracks in parallel
+  Future<({List<JellyfinAlbum> albums, List<JellyfinArtist> artists, List<JellyfinTrack> tracks})>
+  searchAllBatch({
+    required String libraryId,
+    required String query,
+  }) async {
+    if (query.trim().isEmpty) {
+      return (albums: <JellyfinAlbum>[], artists: <JellyfinArtist>[], tracks: <JellyfinTrack>[]);
+    }
+
+    debugPrint('🔍 Batch searching: "$query"');
+    final stopwatch = Stopwatch()..start();
+
+    final results = await Future.wait([
+      searchAlbums(libraryId: libraryId, query: query),
+      searchArtists(libraryId: libraryId, query: query),
+      searchTracks(libraryId: libraryId, query: query),
+    ]);
+
+    stopwatch.stop();
+    debugPrint('✅ Batch search complete in ${stopwatch.elapsedMilliseconds}ms');
+
+    return (
+      albums: results[0] as List<JellyfinAlbum>,
+      artists: results[1] as List<JellyfinArtist>,
+      tracks: results[2] as List<JellyfinTrack>,
+    );
   }
 
   Future<List<JellyfinUser>> loadUsers() async {

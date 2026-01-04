@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.elysiumdisc.nautune</id>
+  <name>Nautune</name>
+  <summary>Poseidon Music Player for Jellyfin</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer_name>Elysium Disc</developer_name>
+  
+  <description>
+    <p>
+      Nautune is a beautiful cross-platform Jellyfin music player with a deep-sea theme. 
+      Stream your music library with style and elegance.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>Native audio playback with gapless transitions</li>
+      <li>Offline downloads for airplane mode</li>
+      <li>Infinite Radio Mode - endless music discovery</li>
+      <li>CarPlay support (iOS)</li>
+      <li>System tray controls (Desktop)</li>
+      <li>Crossfade between tracks</li>
+      <li>Smart playlists and Instant Mix</li>
+      <li>Lock screen controls</li>
+    </ul>
+  </description>
+  
+  <launchable type="desktop-id">nautune.desktop</launchable>
+  
+  <url type="homepage">https://github.com/ElysiumDisc/nautune</url>
+  <url type="bugtracker">https://github.com/ElysiumDisc/nautune/issues</url>
+  
+  <screenshots>
+    <screenshot type="default">
+      <caption>Library view with albums</caption>
+      <image>https://raw.githubusercontent.com/ElysiumDisc/nautune/main/screenshots/library.png</image>
+    </screenshot>
+  </screenshots>
+  
+  <categories>
+    <category>Audio</category>
+    <category>AudioVideo</category>
+    <category>Player</category>
+  </categories>
+  
+  <keywords>
+    <keyword>music</keyword>
+    <keyword>audio</keyword>
+    <keyword>jellyfin</keyword>
+    <keyword>player</keyword>
+    <keyword>streaming</keyword>
+  </keywords>
+  
+  <releases>
+    <release version="2.5.0" date="2026-01-04">
+      <description>
+        <p>New features:</p>
+        <ul>
+          <li>Infinite Radio Mode - auto-generates similar tracks when queue runs low</li>
+          <li>Sorting Options - sort albums/artists by name, date, year, or play count</li>
+          <li>System Tray - background playback controls on desktop</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+  
+  <content_rating type="oars-1.1" />
+  
+  <provides>
+    <binary>nautune</binary>
+  </provides>
+</component>

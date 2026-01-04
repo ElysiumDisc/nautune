@@ -2,7 +2,25 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback and seamless Jellyfin integration.
 
-## 🚀 Latest Updates (v2.4.0)
+## 🚀 Latest Updates (v2.5.0)
+- **⚡ API & Performance Optimizations**: Faster, more reliable server communication
+  - ✅ **Batch API Requests**: Albums, artists, genres load in parallel with `Future.wait()`
+  - ✅ **Request Retry with Backoff**: Auto-retries failed requests 3x with exponential backoff
+  - ✅ **HTTP Connection Pooling**: Reuses connections for faster subsequent requests
+  - ✅ **ETag Caching**: Skips re-downloading unchanged data (304 responses)
+  - ✅ **Server Health Check**: Ping server before heavy operations
+  - ✅ **Graceful Timeout Handling**: Shows "server slow" instead of cryptic errors
+- **⚙️ Cache Configuration**: Fine-tune performance
+  - ✅ **Configurable TTL**: Settings → Performance → Cache Duration (1-30 minutes)
+  - ✅ **Album Track Caching**: Pre-cache track lists for downloaded albums
+  - ✅ **Persisted setting**: Cache preference survives app restarts
+- **📳 Haptic Feedback (Mobile)**: Tactile response on iOS/Android
+  - ✅ **Play/Pause**: Light tap feedback
+  - ✅ **Next/Previous**: Medium tap feedback
+  - ✅ **Platform-aware**: Only triggers on mobile devices
+- **🔧 Code Quality**: Debouncer/Throttler utilities for search and scroll events
+
+## 🚀 Previous Updates (v2.4.0)
 - **📻 Infinite Radio Mode**: Never-ending music discovery
   - ✅ **Auto-generates queue**: Fetches similar tracks when queue runs low (≤2 tracks remaining)
   - ✅ **Powered by Jellyfin InstantMix**: Uses server-side similarity analysis
@@ -377,8 +395,6 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
 - **Native Engine**: Powered by `audioplayers` with platform-specific backends
   - 🍎 **iOS/macOS**: AVFoundation (hardware-accelerated, native FLAC support)
   - 🐧 **Linux**: GStreamer (native multimedia framework with FLAC codec)
-  - 🤖 **Android**: MediaPlayer
-  - 🪟 **Windows**: WinMM
 - **Gapless Playback**: True seamless transitions with intelligent pre-loading
   - ✅ **70% pre-load trigger**: Next track loads at 70% of current track
   - ✅ **Platform buffering**: Native decoders buffer actual audio data
@@ -447,27 +463,6 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
   - ✅ Tab-based navigation optimized for car displays
   - ✅ Seamless integration with iOS audio session
   - ✅ Clean, focused car-friendly UI
-
-### 🌊 Visual Experience
-- **Waveform Progress**: Real waveform from Jellyfin API with intelligent caching per track
-- **Scrubbable Mini Player**: Waveform strip and slider both seek playback instantly
-- **Now Playing Bar**: Always-visible controls, real-time progress indicator, and quick access to the full player
-- **Full Screen Player**: Auto-updating UI with StreamBuilder - play/pause, progress bar, and track info always in sync
-  - ✅ Compact, centered button layout optimized for mobile devices
-  - ✅ All playback controls in one row (favorite, skip, stop, play/pause, next, repeat)
-  - ✅ Visual indicators for active repeat/shuffle modes
-  - ✅ **Dynamic Gradient Background**: Automatically extracts colors from album art and creates a beautiful blurred gradient backdrop
-  - ✅ **Immersive Experience**: Gradient colors update in real-time when tracks change, matching the album artwork
-- **Deep Sea Purple Theme**: Oceanic gradient color scheme with light purple "Nautune" title (Pacifico font)
-- **Album & Artist Art**: Beautiful grid and list layouts with Jellyfin artwork (trident placeholder fallback)
-  - ✅ **Perfect text rendering**: Fixed iOS text overflow on album cards
-  - ✅ Optimized line height prevents cutoff with long artist names
-  - ✅ Consistent 2-line display across all platforms
-- **Smart Crossfade**: Smooth audio transitions between tracks
-  - ✅ Album-aware: No crossfade within same album (preserves artist's vision)
-  - ✅ Simple toggle in settings
-  - ✅ Exponential fade curves for natural sound
-  - ✅ Works with streaming and offline playback
 
 ### 📚 Library Browsing
 - **✅ Albums Tab**: Grid view with paginated loading (50 albums per page), album artwork, year, and artist info - click to see tracks
@@ -587,11 +582,6 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
   - ✅ Download progress tracking and cancellation
   - ✅ Batch album downloads
 
-### Offline Boot Troubleshooting
-- If you previously ran Nautune before the new connectivity boot logic, the cached Hive data may use legacy map types. A `_Map<dynamic, dynamic>` cast error on launch means the cache needs to be cleared.
-- Delete the `nautune_cache.*` files in the platform data directory (e.g., Linux: `~/.local/share/nautune/`, macOS: `~/Library/Application Support/nautune/`, Windows: `%LOCALAPPDATA%\nautune\`). The app will rebuild the cache automatically on the next successful sync.
-- After clearing the cache, you can start the app offline—ConnectivityService will detect the missing network and the Library screen will immediately show downloads.
-
 ## 📸 Screenshots
 
 ### Linux
@@ -659,6 +649,25 @@ flutter run -d linux --debug
 flutter build linux --release
 ```
 
+### Build Deb Package (Linux)
+```bash
+# Requires: dart pub global activate fastforge
+fastforge package --platform linux --targets deb
+```
+
+### Build AppImage (Linux)
+```bash
+flutter build linux --release && \
+rm -rf AppDir && \
+mkdir -p AppDir/usr/bin && \
+cp -r build/linux/x64/release/bundle/* AppDir/usr/bin/ && \
+cp linux/nautune.desktop AppDir/ && \
+cp linux/nautune.png AppDir/ && \
+cd AppDir && ln -s usr/bin/nautune AppRun && cd .. && \
+mkdir -p dist && \
+ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64.AppImage
+```
+
 ### Static Analysis
 ```bash
 flutter analyze
@@ -695,8 +704,6 @@ flutter test
   - ✅ System tray works out of the box
 - **Web**: `flutter run -d chrome` for dev, `flutter build web` for production
 - **Android**: Not currently a focus; no Android SDK required for development
-
-> **Development Tip**: Keep your Linux environment Snap-free. Use official Flutter tarball or FVM. Codemagic handles iOS builds automatically.
 
 ### 🚗 CarPlay Support (iOS Only)
 

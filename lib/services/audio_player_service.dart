@@ -12,6 +12,7 @@ import '../jellyfin/jellyfin_service.dart';
 import '../jellyfin/jellyfin_track.dart';
 import 'audio_handler.dart';
 import 'download_service.dart';
+import 'haptic_service.dart';
 import 'playback_reporting_service.dart';
 import 'playback_state_store.dart';
 import '../models/playback_state.dart';
@@ -762,6 +763,7 @@ class AudioPlayerService {
   }
   
   Future<void> pause() async {
+    HapticService.lightTap();
     await _player.pause();
     final position = await _player.getCurrentPosition();
     if (position != null) {
@@ -781,6 +783,7 @@ class AudioPlayerService {
   }
   
   Future<void> resume() async {
+    HapticService.lightTap();
     await _player.resume();
     await _stateStore.savePlaybackSnapshot(isPlaying: true);
   }
@@ -792,6 +795,7 @@ class AudioPlayerService {
   }
   
   Future<void> skipToNext() async {
+    HapticService.mediumTap();
     try {
       if (_currentIndex < _queue.length - 1) {
         _currentIndex++;
@@ -815,6 +819,7 @@ class AudioPlayerService {
   }
 
   Future<void> skipToPrevious() async {
+    HapticService.mediumTap();
     try {
       if (_currentIndex > 0) {
         _currentIndex--;

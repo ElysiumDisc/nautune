@@ -11,19 +11,61 @@ import 'jellyfin_library.dart';
 import 'jellyfin_playlist.dart';
 import 'jellyfin_track.dart';
 import 'jellyfin_user.dart';
+import 'robust_http_client.dart';
 
-/// Lightweight Jellyfin REST client to be expanded as features land.
+/// Lightweight Jellyfin REST client with robust HTTP handling.
+/// Features: connection pooling, retry with backoff, ETag caching.
 class JellyfinClient {
   JellyfinClient({
     required this.serverUrl,
     http.Client? httpClient,
-  })  : httpClient = httpClient ?? http.Client();
+  }) : _robustClient = RobustHttpClient(
+         client: httpClient,
+         maxRetries: 3,
+         baseTimeout: const Duration(seconds: 15),
+         enableEtagCache: true,
+       );
 
   final String serverUrl;
-  final http.Client httpClient;
+  final RobustHttpClient _robustClient;
+  
+  // For backward compatibility
+  http.Client get httpClient => http.Client();
 
   Uri _buildUri(String path, [Map<String, dynamic>? query]) {
     return Uri.parse(serverUrl).resolve(path).replace(queryParameters: query);
+  }
+
+  /// Check server health before heavy operations
+  Future<ServerHealth> checkServerHealth() async {
+    final stopwatch = Stopwatch()..start();
+    try {
+      final uri = _buildUri('/System/Info/Public');
+      final response = await _robustClient.get(uri, useCache: false);
+      stopwatch.stop();
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return ServerHealth(
+          isHealthy: true,
+          latencyMs: stopwatch.elapsedMilliseconds,
+          serverName: data['ServerName'] as String?,
+          version: data['Version'] as String?,
+        );
+      }
+      return ServerHealth(
+        isHealthy: false,
+        latencyMs: stopwatch.elapsedMilliseconds,
+        error: 'Server returned ${response.statusCode}',
+      );
+    } catch (e) {
+      stopwatch.stop();
+      return ServerHealth(
+        isHealthy: false,
+        latencyMs: stopwatch.elapsedMilliseconds,
+        error: e.toString(),
+      );
+    }
   }
 
   Future<JellyfinCredentials> authenticate({
@@ -31,7 +73,7 @@ class JellyfinClient {
     required String password,
   }) async {
     final uri = _buildUri('/Users/AuthenticateByName');
-    final response = await httpClient.post(
+    final response = await _robustClient.post(
       uri,
       headers: _defaultHeaders(),
       body: jsonEncode({'Username': username, 'Pw': password}),
@@ -59,7 +101,7 @@ class JellyfinClient {
 
   Future<List<JellyfinUser>> fetchUsers(JellyfinCredentials credentials) async {
     final uri = _buildUri('/Users');
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -81,7 +123,7 @@ class JellyfinClient {
     JellyfinCredentials credentials,
   ) async {
     final uri = _buildUri('/Users/${credentials.userId}/Views');
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -127,7 +169,7 @@ class JellyfinClient {
     
     final uri = _buildUri('/Users/${credentials.userId}/Items', queryParams);
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -165,7 +207,7 @@ class JellyfinClient {
       'Limit': limit.toString(),
     });
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -198,7 +240,7 @@ class JellyfinClient {
       'Fields': 'PrimaryImageAspectRatio,ProductionYear,Artists,AlbumArtists,ImageTags,Genres,GenreItems',
     });
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -236,7 +278,7 @@ class JellyfinClient {
     
     final uri = _buildUri('/Users/${credentials.userId}/Items', queryParams);
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -270,7 +312,7 @@ class JellyfinClient {
       'IncludeItemTypes': 'Audio',
     });
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -313,7 +355,7 @@ class JellyfinClient {
       'EnableUserData': 'true',
     });
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -357,7 +399,7 @@ class JellyfinClient {
       'EnableUserData': 'true',
     });
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -398,7 +440,7 @@ class JellyfinClient {
       'EnableImageTypes': 'Primary',
     });
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -435,7 +477,7 @@ class JellyfinClient {
       'EnableUserData': 'true',
     });
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -476,7 +518,7 @@ class JellyfinClient {
       'EnableUserData': 'true',
     });
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -516,7 +558,7 @@ class JellyfinClient {
           'PrimaryImageAspectRatio,ProductionYear,Artists,AlbumArtists,ImageTags',
     });
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -550,7 +592,7 @@ class JellyfinClient {
       'Fields': 'ImageTags,Overview,Genres,ChildCount,SongCount',
     });
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -587,7 +629,7 @@ class JellyfinClient {
       'EnableUserData': 'true',
     });
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -642,17 +684,17 @@ class JellyfinClient {
     
     switch (method.toUpperCase()) {
       case 'GET':
-        response = await httpClient.get(uri, headers: headers);
+        response = await _robustClient.get(uri, headers: headers);
         break;
       case 'POST':
-        response = await httpClient.post(
+        response = await _robustClient.post(
           uri,
           headers: headers,
           body: body != null ? jsonEncode(body) : null,
         );
         break;
       case 'DELETE':
-        response = await httpClient.delete(uri, headers: headers);
+        response = await _robustClient.delete(uri, headers: headers);
         break;
       default:
         throw ArgumentError('Unsupported HTTP method: $method');
@@ -692,7 +734,7 @@ class JellyfinClient {
     };
 
     final uri = _buildUri('/Genres', queryParams);
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -722,7 +764,7 @@ class JellyfinClient {
     };
 
     final uri = _buildUri('/Items/$itemId/InstantMix', queryParams);
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -745,7 +787,7 @@ class JellyfinClient {
     required String itemId,
   }) async {
     final uri = _buildUri('/Items/$itemId/PlaybackInfo');
-    final response = await httpClient.post(
+    final response = await _robustClient.post(
       uri,
       headers: _defaultHeaders(credentials),
       body: jsonEncode({
@@ -786,7 +828,7 @@ class JellyfinClient {
     };
 
     final uri = _buildUri('/Users/${credentials.userId}/Items', queryParams);
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -820,7 +862,7 @@ class JellyfinClient {
       'EnableImageTypes': 'Primary,Thumb',
     });
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -863,7 +905,7 @@ class JellyfinClient {
       'EnableUserData': 'true',
     });
 
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -896,7 +938,7 @@ class JellyfinClient {
     required String itemId,
   }) async {
     final uri = _buildUri('/Audio/$itemId/Lyrics');
-    final response = await httpClient.get(
+    final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
     );
@@ -919,4 +961,38 @@ class JellyfinClient {
       return null;
     }
   }
+  
+  /// Clear the HTTP cache (ETag/Last-Modified)
+  void clearHttpCache() {
+    _robustClient.clearCache();
+  }
+  
+  /// Close the HTTP client
+  void close() {
+    _robustClient.close();
+  }
+}
+
+/// Server health check result
+class ServerHealth {
+  final bool isHealthy;
+  final int latencyMs;
+  final String? serverName;
+  final String? version;
+  final String? error;
+
+  ServerHealth({
+    required this.isHealthy,
+    required this.latencyMs,
+    this.serverName,
+    this.version,
+    this.error,
+  });
+
+  bool get isSlow => latencyMs > 2000;
+  
+  @override
+  String toString() => isHealthy 
+    ? 'ServerHealth(healthy, ${latencyMs}ms, $serverName v$version)'
+    : 'ServerHealth(unhealthy, ${latencyMs}ms, error: $error)';
 }

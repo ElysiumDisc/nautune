@@ -128,6 +128,7 @@ class NautuneAppState extends ChangeNotifier {
   bool _crossfadeEnabled = false;
   int _crossfadeDurationSeconds = 3;
   bool _infiniteRadioEnabled = false;
+  int _cacheTtlMinutes = 2; // User-configurable cache TTL
   SortOption _albumSortBy = SortOption.name;
   SortOrder _albumSortOrder = SortOrder.ascending;
   SortOption _artistSortBy = SortOption.name;
@@ -372,6 +373,8 @@ class NautuneAppState extends ChangeNotifier {
   bool get crossfadeEnabled => _crossfadeEnabled;
   int get crossfadeDurationSeconds => _crossfadeDurationSeconds;
   bool get infiniteRadioEnabled => _infiniteRadioEnabled;
+  int get cacheTtlMinutes => _cacheTtlMinutes;
+  Duration get cacheTtl => Duration(minutes: _cacheTtlMinutes);
   SortOption get albumSortBy => _albumSortBy;
   SortOrder get albumSortOrder => _albumSortOrder;
   SortOption get artistSortBy => _artistSortBy;
@@ -620,6 +623,16 @@ class NautuneAppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Set cache TTL in minutes (1-60)
+  void setCacheTtl(int minutes) {
+    _cacheTtlMinutes = minutes.clamp(1, 60);
+    _jellyfinService.setCacheTtl(Duration(minutes: _cacheTtlMinutes));
+    unawaited(_playbackStateStore.saveUiState(
+      cacheTtlMinutes: _cacheTtlMinutes,
+    ));
+    notifyListeners();
+  }
+
   /// Set album sort options and reload
   Future<void> setAlbumSort(SortOption sortBy, SortOrder sortOrder) async {
     if (_albumSortBy == sortBy && _albumSortOrder == sortOrder) return;
@@ -735,6 +748,7 @@ class NautuneAppState extends ChangeNotifier {
       _crossfadeEnabled = storedPlaybackState.crossfadeEnabled;
       _crossfadeDurationSeconds = storedPlaybackState.crossfadeDurationSeconds;
       _infiniteRadioEnabled = storedPlaybackState.infiniteRadioEnabled;
+      _cacheTtlMinutes = storedPlaybackState.cacheTtlMinutes;
       _restoredLibraryTabIndex = storedPlaybackState.libraryTabIndex;
       _libraryScrollOffsets =
           Map<String, double>.from(storedPlaybackState.scrollOffsets);
@@ -742,6 +756,7 @@ class NautuneAppState extends ChangeNotifier {
       _audioPlayerService.setCrossfadeEnabled(_crossfadeEnabled);
       _audioPlayerService.setCrossfadeDuration(_crossfadeDurationSeconds);
       _audioPlayerService.setInfiniteRadioEnabled(_infiniteRadioEnabled);
+      _jellyfinService.setCacheTtl(Duration(minutes: _cacheTtlMinutes));
     }
 
     try {
