@@ -4439,14 +4439,26 @@ class _AlphabetScrollbarState extends State<AlphabetScrollbar> {
       final firstChar = itemName.isNotEmpty ? itemName[0] : '';
 
       if (letter == '#') {
+        // Looking for numbers
         if (RegExp(r'[0-9]').hasMatch(firstChar)) {
           targetIndex = i;
           break;
         }
       } else if (firstChar == letter) {
+        // Exact match found
+        targetIndex = i;
+        break;
+      } else if (firstChar.compareTo(letter) > 0 && !RegExp(r'[0-9]').hasMatch(firstChar)) {
+        // No exact match, but this item comes alphabetically after the letter
+        // Use this as fallback (first item past the selected letter)
         targetIndex = i;
         break;
       }
+    }
+
+    // If still no match and not looking for '#', scroll to end for letters near Z
+    if (targetIndex < 0 && letter != '#') {
+      targetIndex = widget.items.length - 1;
     }
 
     if (targetIndex >= 0) {
