@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
@@ -84,7 +85,9 @@ Future<void> main() async {
   // Initialize legacy app state
   unawaited(appState.initialize());
 
-  await windowManager.ensureInitialized();
+  if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+    await windowManager.ensureInitialized();
+  }
 
   runApp(
     NautuneApp(
