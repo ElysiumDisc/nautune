@@ -54,30 +54,37 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
     });
 
     // Listen to playback state changes
-    _stateSubscription = _player.onPlayerStateChanged.listen((state) {
-      final playing = state == PlayerState.playing;
-      final processingState = state == PlayerState.completed
-          ? audio_service.AudioProcessingState.completed
-          : state == PlayerState.playing || state == PlayerState.paused
-              ? audio_service.AudioProcessingState.ready
-              : audio_service.AudioProcessingState.idle;
+    _stateSubscription = _player.onPlayerStateChanged.listen(_broadcastState);
 
-      playbackState.add(playbackState.value.copyWith(
-        playing: playing,
-        controls: [
-          audio_service.MediaControl.skipToPrevious,
-          playing ? audio_service.MediaControl.pause : audio_service.MediaControl.play,
-          audio_service.MediaControl.stop,
-          audio_service.MediaControl.skipToNext,
-        ],
-        systemActions: const {
-          audio_service.MediaAction.seek,
-          audio_service.MediaAction.seekForward,
-          audio_service.MediaAction.seekBackward,
-        },
-        processingState: processingState,
-      ));
-    });
+    // Immediately broadcast current state to ensure UI/System sync
+    // This fixes the issue where swapping players (gapless playback)
+    // might miss the initial 'playing' event.
+    _broadcastState(_player.state);
+  }
+
+  void _broadcastState(PlayerState state) {
+    final playing = state == PlayerState.playing;
+    final processingState = state == PlayerState.completed
+        ? audio_service.AudioProcessingState.completed
+        : state == PlayerState.playing || state == PlayerState.paused
+            ? audio_service.AudioProcessingState.ready
+            : audio_service.AudioProcessingState.idle;
+
+    playbackState.add(playbackState.value.copyWith(
+      playing: playing,
+      controls: [
+        audio_service.MediaControl.skipToPrevious,
+        playing ? audio_service.MediaControl.pause : audio_service.MediaControl.play,
+        audio_service.MediaControl.stop,
+        audio_service.MediaControl.skipToNext,
+      ],
+      systemActions: const {
+        audio_service.MediaAction.seek,
+        audio_service.MediaAction.seekForward,
+        audio_service.MediaAction.seekBackward,
+      },
+      processingState: processingState,
+    ));
   }
 
   void updateNautuneMediaItem(JellyfinTrack track) {
