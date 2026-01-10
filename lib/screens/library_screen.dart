@@ -122,6 +122,42 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
   }
 
+  Future<void> _handleManualRefresh() async {
+    final appState = _appState;
+    if (appState == null) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Refreshing library...'),
+        duration: Duration(seconds: 1),
+      ),
+    );
+
+    // Refresh based on current tab
+    switch (_currentTabIndex) {
+      case 0: // Library (Albums/Artists)
+        await appState.refreshLibraryData();
+        break;
+      case 1: // Favorites
+        await appState.refreshFavorites();
+        break;
+      case 2: // Home/Downloads
+        if (appState.isOfflineMode) {
+           // Offline mode doesn't really need a "refresh" from server, maybe reload local files?
+           // For now, just reload UI state is fine via notifyListeners inside logic if needed.
+        } else {
+           await appState.refreshLibraryData();
+        }
+        break;
+      case 3: // Playlists
+        await appState.refreshPlaylists();
+        break;
+      case 4: // Search
+        // Search doesn't have a "refresh"
+        break;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -232,8 +268,16 @@ class _LibraryScreenState extends State<LibraryScreen>
           );
         }
 
-        return Scaffold(
-          appBar: AppBar(
+        return CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.f5): _handleManualRefresh,
+            const SingleActivator(LogicalKeyboardKey.keyR, control: true): _handleManualRefresh,
+            const SingleActivator(LogicalKeyboardKey.keyR, meta: true): _handleManualRefresh,
+          },
+          child: Focus(
+            autofocus: true,
+            child: Scaffold(
+              appBar: AppBar(
             title: Row(
               children: [
                 GestureDetector(
@@ -400,7 +444,9 @@ class _LibraryScreenState extends State<LibraryScreen>
               ),
             ],
           ),
-        );
+        ),
+      ),
+    );
       },
     );
   }
