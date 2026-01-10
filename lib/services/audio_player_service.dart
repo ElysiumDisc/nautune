@@ -932,40 +932,26 @@ class AudioPlayerService {
   }
 
   Future<void> stop() async {
-    // 1. Save state to persistence before stopping player or clearing memory
-    // This allows "Resume" functionality on next app launch
-    if (_currentTrack != null) {
-      try {
-        await _stateStore.savePlaybackSnapshot(
-          currentTrack: _currentTrack,
-          position: _lastPosition,
-          queue: _queue,
-          currentQueueIndex: _currentIndex,
-          isPlaying: false, // Mark as stopped/paused for next launch
-          repeatMode: _repeatMode.name,
-          shuffleEnabled: _isShuffleEnabled,
-          volume: _volume,
-        );
-        debugPrint('💾 Saved playback state on stop: ${_currentTrack?.name}');
-      } catch (e) {
-        debugPrint('Error saving snapshot on stop: $e');
-      }
-      
-      // Report stop to Jellyfin
-      if (_reportingService != null) {
-        // Fire and forget stop report
-        _reportingService?.reportPlaybackStopped(
-          _currentTrack!,
-          _lastPosition,
-        ).catchError((e) => debugPrint('Stop report failed: $e'));
-      }
-    }
-
-    // 2. Stop audio
+    // 1. Stop audio immediately
     await _player.stop();
+
+    // 2. CLEAR persistence so app starts fresh on next launch
+    try {
+      debugPrint('🧹 Clearing playback state on stop');
+      await _stateStore.clearPlaybackData();
+    } catch (e) {
+      debugPrint('Error clearing playback state: $e');
+    }
+    
+    // Report stop to Jellyfin
+    if (_currentTrack != null && _reportingService != null) {
+      _reportingService?.reportPlaybackStopped(
+        _currentTrack!,
+        _lastPosition,
+      ).catchError((e) => debugPrint('Stop report failed: $e'));
+    }
     
     // 3. CLEAR active memory state
-    // This makes the UI (Now Playing bar) and Lock Screen disappear
     _currentTrack = null;
     _currentTrackController.add(null);
     _queue = [];
