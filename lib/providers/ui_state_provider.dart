@@ -116,10 +116,10 @@ class UIStateProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Set cache TTL in minutes (1-30).
+  /// Set cache TTL in minutes (1-10080).
   /// Higher = faster browsing, Lower = fresher data.
   void setCacheTtl(int minutes) {
-    _cacheTtlMinutes = minutes.clamp(1, 30);
+    _cacheTtlMinutes = minutes.clamp(1, 10080);
     unawaited(_playbackStateStore.saveUiState(
       cacheTtlMinutes: _cacheTtlMinutes,
     ));

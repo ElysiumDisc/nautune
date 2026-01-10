@@ -835,9 +835,9 @@ class AudioPlayerService {
     _crossfadeTimer?.cancel();
     _crossfadeTimer = null;
     
-    // Quick fade out
-    const steps = 10;
-    const stepDuration = Duration(milliseconds: 30); // Total 300ms
+    // Quick fade out (gentler: 400ms total, 20Hz update rate)
+    const steps = 8;
+    const stepDuration = Duration(milliseconds: 50); 
     final startVolume = _volume;
     
     for (int i = 0; i < steps; i++) {
@@ -858,9 +858,9 @@ class AudioPlayerService {
     await _player.setVolume(0.0);
     await _player.resume();
 
-    // Quick fade in
-    const steps = 10;
-    const stepDuration = Duration(milliseconds: 30); // Total 300ms
+    // Quick fade in (gentler: 400ms total, 20Hz update rate)
+    const steps = 8;
+    const stepDuration = Duration(milliseconds: 50);
     final targetVolume = _volume;
 
     for (int i = 0; i <= steps; i++) {

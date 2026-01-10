@@ -4,7 +4,7 @@ import 'dart:ui' as ui show Image, ImageFilter;
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:palette_generator/palette_generator.dart';
+import 'package:material_color_utilities/material_color_utilities.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
@@ -127,40 +127,97 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
         );
       }
 
-      final paletteGenerator = await PaletteGenerator.fromImageProvider(
-        imageProvider,
-        maximumColorCount: 20,
-      );
+      final imageStream = imageProvider.resolve(const ImageConfiguration());
+      final completer = Completer<ui.Image>();
 
-      final colors = <Color>[];
+      late ImageStreamListener listener;
+      listener = ImageStreamListener((info, _) {
+        completer.complete(info.image);
+        imageStream.removeListener(listener);
+      });
+
+      imageStream.addListener(listener);
+      final image = await completer.future;
       
-      // Prioritize vibrant and dominant colors for a rich gradient
-      if (paletteGenerator.darkVibrantColor != null) {
-        colors.add(paletteGenerator.darkVibrantColor!.color);
-      }
-      if (paletteGenerator.dominantColor != null) {
-        colors.add(paletteGenerator.dominantColor!.color);
-      }
-      if (paletteGenerator.lightVibrantColor != null) {
-        colors.add(paletteGenerator.lightVibrantColor!.color);
-      }
-      if (paletteGenerator.mutedColor != null) {
-        colors.add(paletteGenerator.mutedColor!.color);
+      final ByteData? byteData = await image.toByteData();
+      if (byteData == null) return;
+      
+      final pixels = byteData.buffer.asUint32List();
+      
+      // Run the quantization to find the dominant color clusters
+      final result = await QuantizerCelebi().quantize(pixels, 128);
+      final colorToCount = result.colorToCount;
+      
+      // RAW VIBRANCY SCORING
+      // We ignore Material "suitability" and just want the colors that define the image.
+      // Score = Population * (Chroma^2). 
+      // This heavily favors saturated colors even if they are less frequent than dull backgrounds.
+      final sortedEntries = colorToCount.entries.toList()
+        ..sort((a, b) {
+          final hctA = Hct.fromInt(a.key);
+          final hctB = Hct.fromInt(b.key);
+          
+          // Chroma is 0..~120. Population is int.
+          // Squaring chroma gives massive weight to vibrancy.
+          final scoreA = a.value * (hctA.chroma * hctA.chroma);
+          final scoreB = b.value * (hctB.chroma * hctB.chroma);
+          
+          return scoreB.compareTo(scoreA);
+        });
+      
+      final selectedColors = <Color>[];
+      
+      for (final entry in sortedEntries) {
+        if (selectedColors.length >= 4) break;
+        
+        final colorInt = entry.key;
+        final hct = Hct.fromInt(colorInt);
+        
+        // Only filter pure grime/noise
+        // Keep dark colors if they are vibrant (deep purple/blue)
+        // Keep light colors if they are vibrant (neon yellow/cyan)
+        if (hct.chroma < 5) continue; // Skip absolute greys (unless image is B&W, handled by fallback)
+
+        // Distinctness check
+        bool isDistinct = true;
+        for (final existing in selectedColors) {
+          // ignore: deprecated_member_use
+          final existingHct = Hct.fromInt(existing.value);
+          final hueDiff = (hct.hue - existingHct.hue).abs();
+          final normalizedHueDiff = hueDiff > 180 ? 360 - hueDiff : hueDiff;
+          
+          // If hues are very close, skip (unless one is much brighter/darker?)
+          // Let's just enforce hue diversity.
+          if (normalizedHueDiff < 15) {
+            isDistinct = false;
+            break;
+          }
+        }
+        
+        if (isDistinct) {
+          selectedColors.add(Color(colorInt).withValues(alpha: 1.0));
+        }
       }
       
-      // Fallback if palette generator fails to find enough distinct colors
-      if (colors.isEmpty) {
+      // If we found nothing (e.g. B&W image), fall back to just population sort
+      if (selectedColors.isEmpty) {
+        final populationSorted = colorToCount.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
+        for (final entry in populationSorted.take(4)) {
+           selectedColors.add(Color(entry.key).withValues(alpha: 1.0));
+        }
+      }
+      
+      // Fallback
+      if (selectedColors.isEmpty) {
         final theme = Theme.of(context);
-        colors.add(theme.colorScheme.primaryContainer);
-        colors.add(theme.colorScheme.surface);
-      } else if (colors.length == 1) {
-        // Create a gradient from the single color to a darker shade
-        colors.add(colors[0].withValues(alpha: 0.5)); // Darker variant
+        selectedColors.add(theme.colorScheme.primaryContainer);
+        selectedColors.add(theme.colorScheme.surface);
       }
 
       if (mounted) {
         setState(() {
-          _paletteColors = colors;
+          _paletteColors = selectedColors;
         });
       }
     } catch (e) {
@@ -363,15 +420,28 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                                   gradient: LinearGradient(
                                     begin: Alignment.topLeft,
                                     end: Alignment.bottomRight,
-                                    colors: _paletteColors!.length >= 2 
+                                    colors: _paletteColors!.length >= 4
                                         ? [
-                                            _paletteColors![0].withValues(alpha: 0.8), // More pronounced
-                                            _paletteColors![1].withValues(alpha: 0.6),
+                                            _paletteColors![0].withValues(alpha: 0.9),
+                                            _paletteColors![1].withValues(alpha: 0.8),
+                                            _paletteColors![2].withValues(alpha: 0.7),
+                                            _paletteColors![3].withValues(alpha: 0.6),
                                           ]
-                                        : [
-                                            _paletteColors![0].withValues(alpha: 0.8),
-                                            Colors.black.withValues(alpha: 0.6),
-                                          ],
+                                        : _paletteColors!.length == 3
+                                            ? [
+                                                _paletteColors![0].withValues(alpha: 0.9),
+                                                _paletteColors![1].withValues(alpha: 0.75),
+                                                _paletteColors![2].withValues(alpha: 0.6),
+                                              ]
+                                            : _paletteColors!.length == 2
+                                                ? [
+                                                    _paletteColors![0].withValues(alpha: 0.9),
+                                                    _paletteColors![1].withValues(alpha: 0.7),
+                                                  ]
+                                                : [
+                                                    _paletteColors![0].withValues(alpha: 0.9),
+                                                    Colors.black.withValues(alpha: 0.8),
+                                                  ],
                                   ),
                                 ),
                               ),
@@ -380,9 +450,9 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                           if (_paletteColors != null && _paletteColors!.isNotEmpty)
                             Positioned.fill(
                               child: BackdropFilter(
-                                filter: ui.ImageFilter.blur(sigmaX: 100, sigmaY: 100), // Smoother blur
+                                filter: ui.ImageFilter.blur(sigmaX: 120, sigmaY: 120),
                                 child: Container(
-                                  color: Colors.black.withValues(alpha: 0.2), // Slight darken
+                                  color: Colors.black.withValues(alpha: 0.25), // Elegant darkening
                                 ),
                               ),
                             ),

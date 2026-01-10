@@ -23,6 +23,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return 'unknown';
     }
   }
+  String _formatDuration(int minutes) {
+    if (minutes < 60) return '$minutes minutes';
+    if (minutes < 1440) {
+      final hours = minutes ~/ 60;
+      return '$hours ${hours == 1 ? 'hour' : 'hours'}';
+    }
+    if (minutes < 10080) {
+      final days = minutes ~/ 1440;
+      return '$days ${days == 1 ? 'day' : 'days'}';
+    }
+    return '1 week';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -174,17 +187,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             leading: Icon(Icons.cached, color: theme.colorScheme.primary),
             title: const Text('Cache Duration'),
-            subtitle: Text('${uiStateProvider.cacheTtlMinutes} minutes'),
+            subtitle: Text(_formatDuration(uiStateProvider.cacheTtlMinutes)),
             trailing: SizedBox(
               width: 150,
-              child: Slider(
-                value: uiStateProvider.cacheTtlMinutes.toDouble(),
-                min: 1,
-                max: 30,
-                divisions: 29,
-                label: '${uiStateProvider.cacheTtlMinutes} min',
-                onChanged: (value) {
-                  uiStateProvider.setCacheTtl(value.round());
+              child: _CacheTtlSlider(
+                currentMinutes: uiStateProvider.cacheTtlMinutes,
+                onChanged: (minutes) {
+                  uiStateProvider.setCacheTtl(minutes);
+                  appState.setCacheTtl(minutes);
                 },
               ),
             ),
@@ -256,6 +266,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 16),
         ],
       ),
+    );
+  }
+}
+
+class _CacheTtlSlider extends StatelessWidget {
+  final int currentMinutes;
+  final ValueChanged<int> onChanged;
+
+  const _CacheTtlSlider({
+    required this.currentMinutes,
+    required this.onChanged,
+  });
+
+  static const List<int> _presets = [5, 30, 60, 360, 1440, 10080];
+
+  int _getClosestIndex(int minutes) {
+    int closestIndex = 0;
+    int minDiff = (minutes - _presets[0]).abs();
+    for (int i = 1; i < _presets.length; i++) {
+      int diff = (minutes - _presets[i]).abs();
+      if (diff < minDiff) {
+        minDiff = diff;
+        closestIndex = i;
+      }
+    }
+    return closestIndex;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final index = _getClosestIndex(currentMinutes);
+    return Slider(
+      value: index.toDouble(),
+      min: 0,
+      max: (_presets.length - 1).toDouble(),
+      divisions: _presets.length - 1,
+      onChanged: (value) {
+        onChanged(_presets[value.round()]);
+      },
     );
   }
 }

@@ -590,7 +590,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                             }
                           },
                         ),
-                        const Divider(height: 1),
+                        if (index < currentTracks.length - 1)
+                          Divider(
+                            height: 1,
+                            thickness: 0.5,
+                            indent: 72,
+                            endIndent: 16,
+                            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.2),
+                          ),
                       ],
                     );
                   },

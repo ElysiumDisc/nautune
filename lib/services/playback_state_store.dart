@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:hive_flutter/hive_flutter.dart';
 
@@ -7,6 +8,8 @@ import '../models/playback_state.dart';
 class PlaybackStateStore {
   static const _boxName = 'nautune_playback';
   static const _key = 'state';
+  
+  Completer<void>? _activeLock;
 
   Future<Box> _box() async {
     if (!Hive.isBoxOpen(_boxName)) {
@@ -51,9 +54,21 @@ class PlaybackStateStore {
   Future<void> save(PlaybackState state) => _persist(state);
 
   Future<void> update(PlaybackState Function(PlaybackState) transform) async {
-    final current = await _loadOrDefault();
-    final updated = transform(current);
-    await _persist(updated);
+    // Simple mutex to prevent race conditions during read-modify-write cycles
+    while (_activeLock != null) {
+      await _activeLock!.future;
+    }
+    final lock = Completer<void>();
+    _activeLock = lock;
+
+    try {
+      final current = await _loadOrDefault();
+      final updated = transform(current);
+      await _persist(updated);
+    } finally {
+      _activeLock = null;
+      lock.complete();
+    }
   }
 
   Future<void> savePlaybackSnapshot({

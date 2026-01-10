@@ -635,9 +635,9 @@ class NautuneAppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Set cache TTL in minutes (1-60)
+  /// Set cache TTL in minutes (1-10080)
   void setCacheTtl(int minutes) {
-    _cacheTtlMinutes = minutes.clamp(1, 60);
+    _cacheTtlMinutes = minutes.clamp(1, 10080);
     _jellyfinService.setCacheTtl(Duration(minutes: _cacheTtlMinutes));
     unawaited(_playbackStateStore.saveUiState(
       cacheTtlMinutes: _cacheTtlMinutes,

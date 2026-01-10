@@ -2,24 +2,20 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback and seamless Jellyfin integration.
 
-## 🚀 Latest Updates (v2.7.0)
-- **🎧 Audio Engine Hardening**: Major reliability improvements for playback
-  - ✅ **Gapless Toggle**: New setting to enable/disable seamless transitions (Settings → Audio Options)
-  - ✅ **Lock Screen Fix**: Fixed bug where lock screen controls would disappear between tracks
-    - Solved by updating AudioHandler state *before* stopping the previous player
-    - Ensures continuous "Playing" state report to OS, preventing session kill
-  - ✅ **Consecutive Playback Fix**: Eliminated pausing between tracks on iOS/Android
-    - Optimized transition logic to be non-blocking
-    - Removed "dead air" gaps that triggered background suspension
-  - ✅ **Smart Queue Preservation**: Stop button now clears UI but saves state
-    - "Stop" clears the active queue (no more ghost notifications)
-    - But fully saves state to DB so you can "Resume" later from a fresh app launch
-- **⚡ Feature Polish**:
-  - ✅ **Live Settings Update**: Toggling Crossfade or Gapless now applies immediately without restart
-  - ✅ **Active Track Highlight**: Currently playing track now clearly highlighted in Album view with icon + color
-  - ✅ **Transition Safety**: Added crash protection to gapless transition logic to prevent queue freezing
+## 🚀 Latest Updates (v2.7.5)
+- **🎵 Advanced Playlist Management**:
+  - ✅ **Drag-and-Drop Reordering**: Long-press and drag tracks to reorder them in any playlist
+  - ✅ **Offline Playlist Sync**: Download entire playlists with a single tap for airplane-mode listening
+  - ✅ **Visual Enhancements**: Playlist tracks now show individual album artwork instead of generic icons
+- **🎧 Playback Experience**:
+  - ✅ **Fade-on-Pause / Resume**: Smooth 400ms volume ramping when pausing/resuming for a premium audio feel
+  - ✅ **Swipe-to-Skip**: Horizontal swipe gestures on the bottom mini-player bar for quick track changes
+  - ✅ **Tray Robustness**: Improved Linux system tray stability with better error handling for missing platform plugins
+- **🎨 Immersive Visuals**:
+  - ✅ **Professional Color Extraction**: Migrated to `material_color_utilities` (Material You engine) for high-quality palette generation
+  - ✅ **Vibrant Gradients**: More pronounced and smoother background gradients in the full-screen player based on album art
 
-## 🚀 Previous Updates (v2.6.4)
+## 🚀 Previous Updates (v2.7.0)
 - **🔧 Critical Bug Fixes**: Improved reliability across all platforms
   - ✅ **Album continuous playback fixed**: Playing state now properly emitted after gapless transitions
     - Previously, albums would pause after each song instead of playing continuously
@@ -51,7 +47,7 @@ Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter a
   - ✅ **Server Health Check**: Ping server before heavy operations
   - ✅ **Graceful Timeout Handling**: Shows "server slow" instead of cryptic errors
 - **⚙️ Cache Configuration**: Fine-tune performance
-  - ✅ **Configurable TTL**: Settings → Performance → Cache Duration (1-30 minutes)
+  - ✅ **Configurable TTL**: Settings → Performance → Cache Duration (5 minutes to 1 week)
   - ✅ **Album Track Caching**: Pre-cache track lists for downloaded albums
   - ✅ **Persisted setting**: Cache preference survives app restarts
 - **📳 Haptic Feedback (Mobile)**: Tactile response on iOS/Android
