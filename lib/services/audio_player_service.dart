@@ -500,9 +500,16 @@ class AudioPlayerService {
     
     debugPrint('📥 Restoring playback state: ${state.currentTrackName ?? "Unknown"} (Queue: ${state.queueIds.length})');
     
-    final queue = await _buildQueueFromState(state);
+    try {
+      final queue = await _buildQueueFromState(state).timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          debugPrint('⚠️ Playback restoration timed out - skipping');
+          return [];
+        },
+      );
 
-    if (state.queueIds.isNotEmpty && queue.isEmpty) {
+      if (state.queueIds.isNotEmpty && queue.isEmpty) {
       // Wait until we can resolve queue items (likely requires Jellyfin session).
       _pendingState = state;
       return;
