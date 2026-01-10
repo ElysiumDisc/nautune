@@ -119,7 +119,7 @@ class PlaybackState {
   }
 
   factory PlaybackState.fromJson(Map<String, dynamic> json) {
-    final rawOffsets = json['scrollOffsets'] as Map<String, dynamic>? ?? const {};
+    final rawOffsets = json['scrollOffsets'] as Map? ?? const {};
     return PlaybackState(
       currentTrackId: json['currentTrackId'] as String?,
       currentTrackName: json['currentTrackName'] as String?,
@@ -132,16 +132,19 @@ class PlaybackState {
               .toList() ??
           const [],
       queueSnapshot: (json['queueSnapshot'] as List<dynamic>?)
-              ?.whereType<Map<String, dynamic>>()
+              ?.map((e) => Map<String, dynamic>.from(e as Map))
               .toList() ??
           const [],
       currentQueueIndex: json['currentQueueIndex'] as int? ?? 0,
       repeatMode: json['repeatMode'] as String? ?? 'off',
       shuffleEnabled: json['shuffleEnabled'] as bool? ?? false,
       volume: (json['volume'] as num?)?.toDouble() ?? 1.0,
-      scrollOffsets: rawOffsets.map(
-        (key, value) => MapEntry(key, (value as num).toDouble()),
-      ),
+      scrollOffsets: rawOffsets.entries.fold<Map<String, double>>({}, (map, entry) {
+        if (entry.key is String && entry.value is num) {
+          map[entry.key as String] = (entry.value as num).toDouble();
+        }
+        return map;
+      }),
       libraryTabIndex: json['libraryTabIndex'] as int? ?? 0,
       showVolumeBar: json['showVolumeBar'] as bool? ?? true,
       crossfadeEnabled: json['crossfadeEnabled'] as bool? ?? false,
