@@ -26,8 +26,15 @@ class ConnectivityService {
 
   /// Performs an immediate connectivity check.
   Future<bool> hasNetworkConnection() async {
-    final results = await _connectivity.checkConnectivity();
-    return _probeConnection(_extractPrimaryResult(results));
+    try {
+      final results = await _connectivity.checkConnectivity().timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => [ConnectivityResult.none],
+      );
+      return _probeConnection(_extractPrimaryResult(results));
+    } catch (e) {
+      return false;
+    }
   }
 
   Future<bool> _probeConnection(ConnectivityResult result) async {
