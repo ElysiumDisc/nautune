@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart';
 
 class JellyfinTrack {
   JellyfinTrack({
@@ -89,7 +88,7 @@ class JellyfinTrack {
     int? channels;
 
     // small helper to parse ints from num or numeric strings
-    int? _parseInt(dynamic v) {
+    int? parseInt(dynamic v) {
       if (v is int) return v;
       if (v is num) return v.toInt();
       if (v is String) return int.tryParse(v);
@@ -115,10 +114,10 @@ class JellyfinTrack {
         codec = audioStream['Codec'] is String
             ? (audioStream['Codec'] as String).toUpperCase()
             : null;
-        bitrate = _parseInt(audioStream['BitRate']);
-        sampleRate = _parseInt(audioStream['SampleRate']);
-        bitDepth = _parseInt(audioStream['BitDepth']);
-        channels = _parseInt(audioStream['Channels']);
+        bitrate = parseInt(audioStream['BitRate']);
+        sampleRate = parseInt(audioStream['SampleRate']);
+        bitDepth = parseInt(audioStream['BitDepth']);
+        channels = parseInt(audioStream['Channels']);
       }
     }
     // If MediaStreams is missing, these tracks may need re-scanning in Jellyfin

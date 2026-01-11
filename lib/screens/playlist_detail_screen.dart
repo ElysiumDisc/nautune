@@ -278,7 +278,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                       imageTag: track.primaryImageTag ?? track.albumPrimaryImageTag ?? '',
                                       trackId: track.id,
                                       boxFit: BoxFit.cover,
-                                      errorBuilder: (_, __, ___) => Container(
+                                      errorBuilder: (context, url, error) => Container(
                                         color: theme.colorScheme.secondaryContainer,
                                         child: Center(
                                           child: Text('${index + 1}', style: TextStyle(color: theme.colorScheme.onSecondaryContainer)),

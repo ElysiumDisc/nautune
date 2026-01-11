@@ -93,7 +93,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
       itemId = track.albumId ?? track.id;
     }
 
-    if (imageTag == null || imageTag.isEmpty || itemId == null) {
+    if (imageTag == null || imageTag.isEmpty) {
       setState(() {
         _paletteColors = null;
       });
@@ -131,13 +131,26 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
       final completer = Completer<ui.Image>();
 
       late ImageStreamListener listener;
-      listener = ImageStreamListener((info, _) {
-        completer.complete(info.image);
-        imageStream.removeListener(listener);
-      });
+      listener = ImageStreamListener(
+        (info, _) {
+          if (!completer.isCompleted) {
+            completer.complete(info.image);
+          }
+        },
+        onError: (error, stackTrace) {
+          if (!completer.isCompleted) {
+            completer.completeError(error, stackTrace);
+          }
+        },
+      );
 
       imageStream.addListener(listener);
-      final image = await completer.future;
+      ui.Image image;
+      try {
+        image = await completer.future.timeout(const Duration(seconds: 10));
+      } finally {
+        imageStream.removeListener(listener);
+      }
       
       final ByteData? byteData = await image.toByteData();
       if (byteData == null) return;
@@ -210,6 +223,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
       
       // Fallback
       if (selectedColors.isEmpty) {
+        if (!mounted) return;
         final theme = Theme.of(context);
         selectedColors.add(theme.colorScheme.primaryContainer);
         selectedColors.add(theme.colorScheme.surface);
@@ -547,6 +561,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                                                       itemId: track.id,
                                                       limit: 50,
                                                     );
+                                                    if (!parentContext.mounted) return;
                                                     if (mixTracks.isEmpty) {
                                                       ScaffoldMessenger.of(parentContext).showSnackBar(
                                                         const SnackBar(
@@ -561,6 +576,8 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                                                       queueContext: mixTracks,
                                                     );
                                                     
+                                                    if (!parentContext.mounted) return;
+
                                                     // Simple notification without persistent action button
                                                     ScaffoldMessenger.of(parentContext).showSnackBar(
                                                       SnackBar(
@@ -570,6 +587,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                                                       ),
                                                     );
                                                   } catch (e) {
+                                                    if (!parentContext.mounted) return;
                                                     ScaffoldMessenger.of(parentContext).showSnackBar(
                                                       SnackBar(
                                                         content: Text('Failed to create mix: $e'),
@@ -801,11 +819,11 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                           }
                         } finally {
                           // Close loading dialog
-                          if (mounted) Navigator.of(context).pop();
+                          if (context.mounted) Navigator.of(context).pop();
                         }
 
                         if (artist != null) {
-                          if (!mounted) return;
+                          if (!context.mounted) return;
                           Navigator.of(context).push(
                             MaterialPageRoute(
                               builder: (context) => ArtistDetailScreen(
@@ -814,7 +832,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                             ),
                           );
                         } else {
-                          if (!mounted) return;
+                          if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: Text('Could not find artist "$artistName"'),
@@ -1354,7 +1372,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
         borderRadius: borderRadius,
         child: AspectRatio(
           aspectRatio: 1,
-          child: (imageTag != null && imageTag.isNotEmpty && itemId != null)
+          child: (imageTag != null && imageTag.isNotEmpty)
               ? JellyfinImage(
                   key: ValueKey('$itemId-$imageTag'),
                   itemId: itemId,

@@ -8,14 +8,22 @@ import '../models/playback_state.dart';
 class PlaybackStateStore {
   static const _boxName = 'nautune_playback';
   static const _key = 'state';
-  
-  Completer<void>? _activeLock;
 
+  Completer<void>? _activeLock;
+  Box? _cachedBox;
+
+  /// Get or open the Hive box, keeping a cached reference to avoid repeated opens
   Future<Box> _box() async {
-    if (!Hive.isBoxOpen(_boxName)) {
-      return await Hive.openBox(_boxName);
+    if (_cachedBox != null && _cachedBox!.isOpen) {
+      return _cachedBox!;
     }
-    return Hive.box(_boxName);
+    _cachedBox = await Hive.openBox(_boxName);
+    return _cachedBox!;
+  }
+
+  /// Initialize the box early for faster first access
+  Future<void> initialize() async {
+    await _box();
   }
 
   Future<PlaybackState?> load() async {

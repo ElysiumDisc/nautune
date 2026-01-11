@@ -27,6 +27,11 @@ class JellyfinService {
   final Map<String, _CacheEntry<List<JellyfinTrack>>> _recentCache = {};
   final Map<String, _CacheEntry<List<JellyfinGenre>>> _genreCache = {};
 
+  // In-flight request deduplication - prevents duplicate network calls
+  final Map<String, Future<List<JellyfinAlbum>>> _albumRequests = {};
+  final Map<String, Future<List<JellyfinArtist>>> _artistRequests = {};
+  final Map<String, Future<List<JellyfinPlaylist>>> _playlistRequests = {};
+
   JellyfinSession? get session => _session;
   JellyfinClient? get jellyfinClient => _client;
 
@@ -190,7 +195,7 @@ class JellyfinService {
     if (client == null || session == null) {
       throw StateError('Authenticate before requesting albums.');
     }
-    
+
     // Only use cache for first page with default sorting and when not forcing refresh
     final cacheKey = '$libraryId-$sortBy-$sortOrder';
     if (!forceRefresh && startIndex == 0) {
@@ -198,9 +203,17 @@ class JellyfinService {
       if (cached != null && !cached.isExpired(_cacheTtl)) {
         return cached.value;
       }
+
+      // Check for in-flight request to avoid duplicate network calls
+      final inFlight = _albumRequests[cacheKey];
+      if (inFlight != null) {
+        debugPrint('📦 Reusing in-flight albums request for $cacheKey');
+        return inFlight;
+      }
     }
 
-    final albums = await client.fetchAlbums(
+    // Create the request and track it
+    final request = client.fetchAlbums(
       credentials: session.credentials,
       libraryId: libraryId,
       startIndex: startIndex,
@@ -208,13 +221,27 @@ class JellyfinService {
       sortBy: sortBy,
       sortOrder: sortOrder,
     );
-    
-    // Only cache first page
+
+    // Track in-flight request for first page only
     if (startIndex == 0) {
-      _albumCache[cacheKey] = _CacheEntry(albums);
+      _albumRequests[cacheKey] = request;
     }
-    
-    return albums;
+
+    try {
+      final albums = await request;
+
+      // Only cache first page
+      if (startIndex == 0) {
+        _albumCache[cacheKey] = _CacheEntry(albums);
+      }
+
+      return albums;
+    } finally {
+      // Clean up in-flight tracking
+      if (startIndex == 0) {
+        _albumRequests.remove(cacheKey);
+      }
+    }
   }
 
   Future<List<JellyfinArtist>> loadArtists({
@@ -230,7 +257,7 @@ class JellyfinService {
     if (client == null || session == null) {
       throw StateError('Authenticate before requesting artists.');
     }
-    
+
     // Only use cache for first page with default sorting and when not forcing refresh
     final cacheKey = '$libraryId-$sortBy-$sortOrder';
     if (!forceRefresh && startIndex == 0) {
@@ -238,9 +265,17 @@ class JellyfinService {
       if (cached != null && !cached.isExpired(_cacheTtl)) {
         return cached.value;
       }
+
+      // Check for in-flight request to avoid duplicate network calls
+      final inFlight = _artistRequests[cacheKey];
+      if (inFlight != null) {
+        debugPrint('📦 Reusing in-flight artists request for $cacheKey');
+        return inFlight;
+      }
     }
 
-    final artists = await client.fetchArtists(
+    // Create the request and track it
+    final request = client.fetchArtists(
       credentials: session.credentials,
       libraryId: libraryId,
       startIndex: startIndex,
@@ -248,13 +283,27 @@ class JellyfinService {
       sortBy: sortBy,
       sortOrder: sortOrder,
     );
-    
-    // Only cache first page
+
+    // Track in-flight request for first page only
     if (startIndex == 0) {
-      _artistCache[cacheKey] = _CacheEntry(artists);
+      _artistRequests[cacheKey] = request;
     }
-    
-    return artists;
+
+    try {
+      final artists = await request;
+
+      // Only cache first page
+      if (startIndex == 0) {
+        _artistCache[cacheKey] = _CacheEntry(artists);
+      }
+
+      return artists;
+    } finally {
+      // Clean up in-flight tracking
+      if (startIndex == 0) {
+        _artistRequests.remove(cacheKey);
+      }
+    }
   }
 
   Future<List<JellyfinAlbum>> loadAlbumsByArtist({
@@ -287,14 +336,29 @@ class JellyfinService {
       if (cached != null && !cached.isExpired(_cacheTtl)) {
         return cached.value;
       }
+
+      // Check for in-flight request to avoid duplicate network calls
+      final inFlight = _playlistRequests[cacheKey];
+      if (inFlight != null) {
+        debugPrint('📦 Reusing in-flight playlists request for $cacheKey');
+        return inFlight;
+      }
     }
 
-    final playlists = await client.fetchPlaylists(
+    final request = client.fetchPlaylists(
       credentials: session.credentials,
       libraryId: libraryId,
     );
-    _playlistCache[cacheKey] = _CacheEntry(playlists);
-    return playlists;
+
+    _playlistRequests[cacheKey] = request;
+
+    try {
+      final playlists = await request;
+      _playlistCache[cacheKey] = _CacheEntry(playlists);
+      return playlists;
+    } finally {
+      _playlistRequests.remove(cacheKey);
+    }
   }
 
   Future<List<JellyfinTrack>> loadRecentTracks({

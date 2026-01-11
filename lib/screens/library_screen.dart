@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -638,7 +637,6 @@ class _LibraryTabState extends State<_LibraryTab> {
   @override
   Widget build(BuildContext context) {
     final isOffline = widget.appState.isOfflineMode;
-    final theme = Theme.of(context);
     
     return NestedScrollView(
       headerSliverBuilder: (context, innerBoxIsScrolled) {
@@ -2129,6 +2127,7 @@ class _FavoritesTab extends StatelessWidget {
                                       itemId: track.id,
                                       limit: 50,
                                     );
+                                    if (!parentContext.mounted) return;
                                     if (mixTracks.isEmpty) {
                                       ScaffoldMessenger.of(parentContext).showSnackBar(
                                         const SnackBar(
@@ -2142,6 +2141,7 @@ class _FavoritesTab extends StatelessWidget {
                                       mixTracks.first,
                                       queueContext: mixTracks,
                                     );
+                                    if (!parentContext.mounted) return;
                                     ScaffoldMessenger.of(parentContext).showSnackBar(
                                       SnackBar(
                                         content: Text('Playing instant mix (${mixTracks.length} tracks)'),
@@ -2149,6 +2149,7 @@ class _FavoritesTab extends StatelessWidget {
                                       ),
                                     );
                                   } catch (e) {
+                                    if (!parentContext.mounted) return;
                                     ScaffoldMessenger.of(parentContext).showSnackBar(
                                       SnackBar(
                                         content: Text('Failed to create mix: $e'),
@@ -2835,252 +2836,6 @@ class _ArtistsTab extends StatelessWidget {
           );
         },
       ),
-    );
-  }
-}
-
-// Offline Albums View
-class _OfflineAlbumsView extends StatelessWidget {
-  const _OfflineAlbumsView({required this.appState, required this.onAlbumTap});
-
-  final NautuneAppState appState;
-  final Function(JellyfinAlbum) onAlbumTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return ListenableBuilder(
-      listenable: appState.downloadService,
-      builder: (context, _) {
-        final downloads = appState.downloadService.completedDownloads;
-        
-        if (downloads.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.offline_bolt, size: 64, color: theme.colorScheme.secondary),
-                const SizedBox(height: 16),
-                Text('No Offline Albums', style: theme.textTheme.titleLarge),
-                const SizedBox(height: 8),
-                Text('Download albums to listen offline', style: theme.textTheme.bodyMedium),
-              ],
-            ),
-          );
-        }
-
-        // Group by album
-        final albumsMap = <String, List<dynamic>>{};
-        for (final download in downloads) {
-          final albumName = download.track.album ?? 'Unknown Album';
-          albumsMap.putIfAbsent(albumName, () => []).add(download);
-        }
-
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            final crossAxisCount = constraints.maxWidth > 800 ? 4 : 2;
-            final albums = albumsMap.entries.toList();
-
-            return GridView.builder(
-              padding: const EdgeInsets.all(16),
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: crossAxisCount,
-                childAspectRatio: 0.75,
-                crossAxisSpacing: 16,
-                mainAxisSpacing: 16,
-              ),
-              itemCount: albums.length,
-              itemBuilder: (context, index) {
-                final entry = albums[index];
-                final albumName = entry.key;
-                final albumDownloads = entry.value;
-                final firstTrack = albumDownloads.first.track;
-
-                return Card(
-                  clipBehavior: Clip.antiAlias,
-                  child: InkWell(
-                    onTap: () {
-                      // Navigate to album detail instead of immediate playback
-                      // Create a JellyfinAlbum object from the downloaded tracks
-                      final album = JellyfinAlbum(
-                        id: firstTrack.albumId,
-                        name: albumName,
-                        artists: [firstTrack.displayArtist],
-                        artistIds: firstTrack.albumArtistIds ?? [],
-                      );
-                      onAlbumTap(album);
-                    },
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        AspectRatio(
-                          aspectRatio: 1,
-                          child: FutureBuilder<File?>(
-                            future: appState.downloadService.getArtworkFile(firstTrack.id),
-                            builder: (context, snapshot) {
-                              if (snapshot.hasData && snapshot.data != null) {
-                                return Image.file(
-                                  snapshot.data!,
-                                  fit: BoxFit.cover,
-                                );
-                              }
-                              return Container(
-                                color: theme.colorScheme.surfaceContainerHighest,
-                                child: Image.asset(
-                                  'assets/no_album_art.png',
-                                  fit: BoxFit.cover,
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                albumName,
-                                style: theme.textTheme.titleSmall?.copyWith(
-                                  color: theme.colorScheme.tertiary,
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                firstTrack.displayArtist,
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.tertiary.withValues(alpha: 0.7),
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                '${albumDownloads.length} tracks',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.tertiary.withValues(alpha: 0.5),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            );
-          },
-        );
-      },
-    );
-  }
-}
-
-// Offline Artists View
-class _OfflineArtistsView extends StatelessWidget {
-  const _OfflineArtistsView({required this.appState});
-
-  final NautuneAppState appState;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return ListenableBuilder(
-      listenable: appState.downloadService,
-      builder: (context, _) {
-        final downloads = appState.downloadService.completedDownloads;
-        
-        if (downloads.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.offline_bolt, size: 64, color: theme.colorScheme.secondary),
-                const SizedBox(height: 16),
-                Text('No Offline Artists', style: theme.textTheme.titleLarge),
-              ],
-            ),
-          );
-        }
-
-        // Group by artist
-        final artistsMap = <String, List<dynamic>>{};
-        for (final download in downloads) {
-          final artistName = download.track.displayArtist;
-          artistsMap.putIfAbsent(artistName, () => []).add(download);
-        }
-
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            final crossAxisCount = constraints.maxWidth > 800 ? 4 : 3;
-            final artists = artistsMap.entries.toList();
-
-            return GridView.builder(
-              padding: const EdgeInsets.all(16),
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: crossAxisCount,
-                childAspectRatio: 0.75,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-              ),
-              itemCount: artists.length,
-              itemBuilder: (context, index) {
-                final entry = artists[index];
-                final artistName = entry.key;
-                final artistDownloads = entry.value;
-
-                return InkWell(
-                  onTap: () {
-                    // Play all tracks by artist
-                    final tracks = artistDownloads.map((d) => d.track as JellyfinTrack).toList();
-                    appState.audioPlayerService.playTrack(
-                      tracks.first,
-                      queueContext: tracks,
-                    );
-                  },
-                  child: Column(
-                    children: [
-                      Expanded(
-                        child: AspectRatio(
-                          aspectRatio: 1,
-                          child: ClipOval(
-                            child: Image.asset(
-                              'assets/no_artist_art.png',
-                              fit: BoxFit.cover,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        artistName,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w500,
-                          color: theme.colorScheme.tertiary,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                      ),
-                      Text(
-                        '${artistDownloads.length} tracks',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.tertiary.withValues(alpha: 0.7),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            );
-          },
-        );
-      },
     );
   }
 }
@@ -3997,6 +3752,7 @@ class _SearchTabState extends State<_SearchTab> {
                                     itemId: track.id,
                                     limit: 50,
                                   );
+                                  if (!parentContext.mounted) return;
                                   if (mixTracks.isEmpty) {
                                     ScaffoldMessenger.of(parentContext).showSnackBar(
                                       const SnackBar(
@@ -4010,6 +3766,7 @@ class _SearchTabState extends State<_SearchTab> {
                                     mixTracks.first,
                                     queueContext: mixTracks,
                                   );
+                                  if (!parentContext.mounted) return;
                                   ScaffoldMessenger.of(parentContext).showSnackBar(
                                     SnackBar(
                                       content: Text('Playing instant mix (${mixTracks.length} tracks)'),
@@ -4017,6 +3774,7 @@ class _SearchTabState extends State<_SearchTab> {
                                     ),
                                   );
                                 } catch (e) {
+                                  if (!parentContext.mounted) return;
                                   ScaffoldMessenger.of(parentContext).showSnackBar(
                                     SnackBar(
                                       content: Text('Failed to create mix: $e'),

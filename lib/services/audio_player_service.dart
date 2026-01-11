@@ -398,6 +398,10 @@ class AudioPlayerService {
           _audioHandler?.updatePlayer(_nextPlayer);
           _audioHandler?.updateNautuneMediaItem(nextTrack);
 
+          // 3.5 Brief yield to ensure OS media controls are fully updated
+          // This prevents audio glitch from racing between handler update and player stop
+          await Future.delayed(const Duration(milliseconds: 50));
+
           // 4. Stop the old player (AudioHandler is no longer listening to this one)
           await _player.stop();
 

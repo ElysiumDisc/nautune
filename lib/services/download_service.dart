@@ -23,6 +23,10 @@ class DownloadService extends ChangeNotifier {
   Uint8List? _demoAudioBytes;
   final Set<String> _demoDownloadIds = <String>{};
 
+  // Secondary indexes for O(1) album/artist lookups instead of O(n) scans
+  final Map<String, Set<String>> _albumIndex = {}; // albumId -> Set<trackId>
+  final Map<String, Set<String>> _artistIndex = {}; // artistName -> Set<trackId>
+
   static const _boxName = 'nautune_downloads';
   static const _downloadsKey = 'downloads';
   static bool _hiveInitialized = false;
@@ -35,6 +39,7 @@ class DownloadService extends ChangeNotifier {
   Future<void> _initializeAndLoad() async {
     await _initHive();
     await _loadDownloads();
+    _rebuildIndexes(); // Build secondary indexes after loading
     await verifyAndCleanupDownloads();
   }
 
@@ -44,6 +49,26 @@ class DownloadService extends ChangeNotifier {
       _hiveInitialized = true;
     }
     _box = await Hive.openBox<dynamic>(_boxName);
+  }
+
+  /// Rebuild all secondary indexes from current downloads
+  void _rebuildIndexes() {
+    _albumIndex.clear();
+    _artistIndex.clear();
+    for (final item in _downloads.values) {
+      if (item.isCompleted) {
+        _addToIndexes(item.track);
+      }
+    }
+  }
+
+  /// Add a track to the secondary indexes
+  void _addToIndexes(JellyfinTrack track) {
+    final albumId = track.albumId ?? 'unknown';
+    _albumIndex.putIfAbsent(albumId, () => {}).add(track.id);
+
+    final artistName = track.displayArtist;
+    _artistIndex.putIfAbsent(artistName, () => {}).add(track.id);
   }
 
   List<DownloadItem> get downloads => _downloads.values.toList()
@@ -61,6 +86,18 @@ class DownloadService extends ChangeNotifier {
   DownloadItem? getDownload(String trackId) => _downloads[trackId];
 
   JellyfinTrack? trackFor(String trackId) => _downloads[trackId]?.track;
+
+  /// Get all track IDs for an album (O(1) lookup)
+  Set<String> trackIdsForAlbum(String albumId) => _albumIndex[albumId] ?? {};
+
+  /// Get all track IDs for an artist (O(1) lookup)
+  Set<String> trackIdsForArtist(String artistName) => _artistIndex[artistName] ?? {};
+
+  /// Get all unique album IDs
+  Iterable<String> get albumIds => _albumIndex.keys;
+
+  /// Get all unique artist names
+  Iterable<String> get artistNames => _artistIndex.keys;
 
   int get totalDownloads => _downloads.length;
   int get completedCount => completedDownloads.length;

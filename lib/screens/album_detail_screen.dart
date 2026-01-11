@@ -785,6 +785,8 @@ class _TrackTile extends StatelessWidget {
                                       limit: 50,
                                     );
 
+                                    if (!parentContext.mounted) return;
+
                                     if (mixTracks.isEmpty) {
                                       ScaffoldMessenger.of(parentContext).showSnackBar(
                                         const SnackBar(
@@ -800,6 +802,8 @@ class _TrackTile extends StatelessWidget {
                                       queueContext: mixTracks,
                                     );
 
+                                    if (!parentContext.mounted) return;
+
                                     // Simple notification without persistent action button
                                     ScaffoldMessenger.of(parentContext).showSnackBar(
                                       SnackBar(
@@ -809,6 +813,7 @@ class _TrackTile extends StatelessWidget {
                                       ),
                                     );
                                   } catch (e) {
+                                    if (!parentContext.mounted) return;
                                     ScaffoldMessenger.of(parentContext).showSnackBar(
                                       SnackBar(
                                         content: Text('Failed to create mix: $e'),

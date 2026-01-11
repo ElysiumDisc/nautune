@@ -1420,19 +1420,32 @@ class NautuneAppState extends ChangeNotifier {
       return;
     }
 
+    // Load all data in parallel with individual timeouts
+    // eagerError: false ensures one slow/failed request doesn't cancel others
     await Future.wait([
-      _loadAlbumsForLibrary(libraryId, forceRefresh: forceRefresh),
-      _loadArtistsForLibrary(libraryId, forceRefresh: forceRefresh),
-      _loadPlaylistsForLibrary(libraryId, forceRefresh: forceRefresh),
-      _loadRecentForLibrary(libraryId, forceRefresh: forceRefresh),
-      _loadRecentlyAddedForLibrary(libraryId, forceRefresh: forceRefresh),
-      _loadFavorites(forceRefresh: forceRefresh),
-      _loadGenres(libraryId, forceRefresh: forceRefresh),
-      _loadRecentlyPlayed(libraryId, forceRefresh: forceRefresh),
-      _loadMostPlayedTracks(libraryId, forceRefresh: forceRefresh),
-      _loadMostPlayedAlbums(libraryId, forceRefresh: forceRefresh),
-      _loadLongestTracks(libraryId, forceRefresh: forceRefresh),
-    ]);
+      _loadAlbumsForLibrary(libraryId, forceRefresh: forceRefresh)
+          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Albums load timed out')),
+      _loadArtistsForLibrary(libraryId, forceRefresh: forceRefresh)
+          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Artists load timed out')),
+      _loadPlaylistsForLibrary(libraryId, forceRefresh: forceRefresh)
+          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Playlists load timed out')),
+      _loadRecentForLibrary(libraryId, forceRefresh: forceRefresh)
+          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Recent load timed out')),
+      _loadRecentlyAddedForLibrary(libraryId, forceRefresh: forceRefresh)
+          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ RecentlyAdded load timed out')),
+      _loadFavorites(forceRefresh: forceRefresh)
+          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Favorites load timed out')),
+      _loadGenres(libraryId, forceRefresh: forceRefresh)
+          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Genres load timed out')),
+      _loadRecentlyPlayed(libraryId, forceRefresh: forceRefresh)
+          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ RecentlyPlayed load timed out')),
+      _loadMostPlayedTracks(libraryId, forceRefresh: forceRefresh)
+          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ MostPlayedTracks load timed out')),
+      _loadMostPlayedAlbums(libraryId, forceRefresh: forceRefresh)
+          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ MostPlayedAlbums load timed out')),
+      _loadLongestTracks(libraryId, forceRefresh: forceRefresh)
+          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ LongestTracks load timed out')),
+    ], eagerError: false);
   }
 
   Future<void> _loadAlbumsForSelectedLibrary({bool forceRefresh = false}) async {
@@ -2130,6 +2143,8 @@ class NautuneAppState extends ChangeNotifier {
   @override
   void dispose() {
     _connectivitySubscription?.cancel();
+    _demoModeProvider?.removeListener(_onDemoModeChanged);
+    _sessionProvider?.removeListener(_onSessionChanged);
     super.dispose();
   }
 

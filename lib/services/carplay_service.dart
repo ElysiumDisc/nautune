@@ -11,7 +11,10 @@ class CarPlayService {
   bool _isInitialized = false;
   bool _isConnected = false;
   StreamSubscription? _playbackSubscription;
-  
+
+  // Pagination limits for CarPlay (prevents performance issues with large libraries)
+  static const int _maxItemsPerPage = 100;
+
   CarPlayService({required this.appState});
   
   bool get isConnected => _isConnected;
@@ -131,7 +134,7 @@ class CarPlayService {
           items: [
             CPListItem(
               text: 'Albums',
-              detailText: 'Browse all albums',
+              detailText: _getAlbumCount(),
               onPress: (complete, self) async {
                 await _showAlbums();
                 complete();
@@ -139,7 +142,7 @@ class CarPlayService {
             ),
             CPListItem(
               text: 'Artists',
-              detailText: 'Browse all artists',
+              detailText: _getArtistCount(),
               onPress: (complete, self) async {
                 await _showArtists();
                 complete();
@@ -147,7 +150,7 @@ class CarPlayService {
             ),
             CPListItem(
               text: 'Playlists',
-              detailText: 'Your playlists',
+              detailText: _getPlaylistCount(),
               onPress: (complete, self) async {
                 await _showPlaylists();
                 complete();
@@ -159,14 +162,22 @@ class CarPlayService {
       systemIcon: 'music.note.house',
     );
 
-    final favoritesTab = CPListTemplate(
-      title: 'Favorites',
+    final recentTab = CPListTemplate(
+      title: 'Recent',
       sections: [
         CPListSection(
           items: [
             CPListItem(
+              text: 'Recently Played',
+              detailText: 'Your listening history',
+              onPress: (complete, self) async {
+                await _showRecentlyPlayed();
+                complete();
+              },
+            ),
+            CPListItem(
               text: 'Favorite Tracks',
-              detailText: 'Your hearted songs',
+              detailText: _getFavoriteCount(),
               onPress: (complete, self) async {
                 await _showFavorites();
                 complete();
@@ -175,7 +186,7 @@ class CarPlayService {
           ],
         ),
       ],
-      systemIcon: 'heart.fill',
+      systemIcon: 'clock.fill',
     );
 
     final downloadsTab = CPListTemplate(
@@ -185,7 +196,7 @@ class CarPlayService {
           items: [
             CPListItem(
               text: 'Downloaded Music',
-              detailText: 'Available offline',
+              detailText: _getDownloadCount(),
               onPress: (complete, self) async {
                 await _showDownloads();
                 complete();
@@ -198,19 +209,60 @@ class CarPlayService {
     );
 
     return CPTabBarTemplate(
-      templates: [libraryTab, favoritesTab, downloadsTab],
+      templates: [libraryTab, recentTab, downloadsTab],
     );
   }
 
-  Future<void> _showAlbums() async {
-    final albumsList = appState.albums ?? [];
+  // Helper methods for dynamic counts
+  String _getAlbumCount() {
+    final count = appState.albums?.length ?? 0;
+    if (appState.isLoadingAlbums) return 'Loading...';
+    return count > 0 ? '$count albums' : 'Browse all albums';
+  }
 
-    if (albumsList.isEmpty) {
+  String _getArtistCount() {
+    final count = appState.artists?.length ?? 0;
+    if (appState.isLoadingArtists) return 'Loading...';
+    return count > 0 ? '$count artists' : 'Browse all artists';
+  }
+
+  String _getPlaylistCount() {
+    final count = appState.playlists?.length ?? 0;
+    if (appState.isLoadingPlaylists) return 'Loading...';
+    return count > 0 ? '$count playlists' : 'Your playlists';
+  }
+
+  String _getFavoriteCount() {
+    final count = appState.favoriteTracks?.length ?? 0;
+    if (appState.isLoadingFavorites) return 'Loading...';
+    return count > 0 ? '$count songs' : 'Your hearted songs';
+  }
+
+  String _getDownloadCount() {
+    final count = appState.downloadService.completedDownloads.length;
+    return count > 0 ? '$count songs available offline' : 'Available offline';
+  }
+
+  Future<void> _showAlbums({int offset = 0}) async {
+    // Show loading state if data is being fetched
+    if (appState.isLoadingAlbums && appState.albums == null) {
+      await _showLoadingState('Albums');
+      return;
+    }
+
+    final allAlbums = appState.albums ?? [];
+
+    if (allAlbums.isEmpty) {
       await _showEmptyState('Albums', 'No albums available');
       return;
     }
 
-    final items = albumsList.map((album) => CPListItem(
+    // Paginate the list
+    final paginatedAlbums = allAlbums.skip(offset).take(_maxItemsPerPage).toList();
+    final hasMore = offset + _maxItemsPerPage < allAlbums.length;
+    final totalCount = allAlbums.length;
+
+    final items = paginatedAlbums.map((album) => CPListItem(
       text: album.name,
       detailText: album.artists.join(', '),
       onPress: (complete, self) async {
@@ -219,10 +271,27 @@ class CarPlayService {
       },
     )).toList();
 
+    // Add "Load More" item if there are more albums
+    if (hasMore) {
+      final remaining = totalCount - (offset + _maxItemsPerPage);
+      items.add(CPListItem(
+        text: 'Load More...',
+        detailText: '$remaining more albums',
+        onPress: (complete, self) async {
+          await _showAlbums(offset: offset + _maxItemsPerPage);
+          complete();
+        },
+      ));
+    }
+
+    final title = offset > 0
+        ? 'Albums (${offset + 1}-${offset + paginatedAlbums.length} of $totalCount)'
+        : 'Albums ($totalCount)';
+
     try {
       await FlutterCarplay.push(
         template: CPListTemplate(
-          title: 'Albums',
+          title: title,
           sections: [CPListSection(items: items)],
           systemIcon: 'music.note.list',
         ),
@@ -232,15 +301,26 @@ class CarPlayService {
     }
   }
 
-  Future<void> _showArtists() async {
-    final artistsList = appState.artists ?? [];
+  Future<void> _showArtists({int offset = 0}) async {
+    // Show loading state if data is being fetched
+    if (appState.isLoadingArtists && appState.artists == null) {
+      await _showLoadingState('Artists');
+      return;
+    }
 
-    if (artistsList.isEmpty) {
+    final allArtists = appState.artists ?? [];
+
+    if (allArtists.isEmpty) {
       await _showEmptyState('Artists', 'No artists available');
       return;
     }
 
-    final items = artistsList.map((artist) => CPListItem(
+    // Paginate the list
+    final paginatedArtists = allArtists.skip(offset).take(_maxItemsPerPage).toList();
+    final hasMore = offset + _maxItemsPerPage < allArtists.length;
+    final totalCount = allArtists.length;
+
+    final items = paginatedArtists.map((artist) => CPListItem(
       text: artist.name,
       onPress: (complete, self) async {
         await _showArtistAlbums(artist.id, artist.name);
@@ -248,10 +328,27 @@ class CarPlayService {
       },
     )).toList();
 
+    // Add "Load More" item if there are more artists
+    if (hasMore) {
+      final remaining = totalCount - (offset + _maxItemsPerPage);
+      items.add(CPListItem(
+        text: 'Load More...',
+        detailText: '$remaining more artists',
+        onPress: (complete, self) async {
+          await _showArtists(offset: offset + _maxItemsPerPage);
+          complete();
+        },
+      ));
+    }
+
+    final title = offset > 0
+        ? 'Artists (${offset + 1}-${offset + paginatedArtists.length} of $totalCount)'
+        : 'Artists ($totalCount)';
+
     try {
       await FlutterCarplay.push(
         template: CPListTemplate(
-          title: 'Artists',
+          title: title,
           sections: [CPListSection(items: items)],
           systemIcon: 'music.mic',
         ),
@@ -261,15 +358,26 @@ class CarPlayService {
     }
   }
 
-  Future<void> _showPlaylists() async {
-    final playlistsList = appState.playlists ?? [];
+  Future<void> _showPlaylists({int offset = 0}) async {
+    // Show loading state if data is being fetched
+    if (appState.isLoadingPlaylists && appState.playlists == null) {
+      await _showLoadingState('Playlists');
+      return;
+    }
 
-    if (playlistsList.isEmpty) {
+    final allPlaylists = appState.playlists ?? [];
+
+    if (allPlaylists.isEmpty) {
       await _showEmptyState('Playlists', 'No playlists available');
       return;
     }
 
-    final items = playlistsList.map((playlist) => CPListItem(
+    // Paginate the list
+    final paginatedPlaylists = allPlaylists.skip(offset).take(_maxItemsPerPage).toList();
+    final hasMore = offset + _maxItemsPerPage < allPlaylists.length;
+    final totalCount = allPlaylists.length;
+
+    final items = paginatedPlaylists.map((playlist) => CPListItem(
       text: playlist.name,
       detailText: '${playlist.trackCount} tracks',
       onPress: (complete, self) async {
@@ -278,10 +386,27 @@ class CarPlayService {
       },
     )).toList();
 
+    // Add "Load More" item if there are more playlists
+    if (hasMore) {
+      final remaining = totalCount - (offset + _maxItemsPerPage);
+      items.add(CPListItem(
+        text: 'Load More...',
+        detailText: '$remaining more playlists',
+        onPress: (complete, self) async {
+          await _showPlaylists(offset: offset + _maxItemsPerPage);
+          complete();
+        },
+      ));
+    }
+
+    final title = offset > 0
+        ? 'Playlists (${offset + 1}-${offset + paginatedPlaylists.length} of $totalCount)'
+        : 'Playlists ($totalCount)';
+
     try {
       await FlutterCarplay.push(
         template: CPListTemplate(
-          title: 'Playlists',
+          title: title,
           sections: [CPListSection(items: items)],
           systemIcon: 'music.note.list',
         ),
@@ -401,33 +526,60 @@ class CarPlayService {
     }
   }
 
-  Future<void> _showFavorites() async {
-    // Use favorite tracks directly instead of fetching from albums
-    final favoriteTracks = appState.favoriteTracks ?? [];
+  Future<void> _showFavorites({int offset = 0}) async {
+    // Show loading state if data is being fetched
+    if (appState.isLoadingFavorites && appState.favoriteTracks == null) {
+      await _showLoadingState('Favorites');
+      return;
+    }
 
-    if (favoriteTracks.isEmpty) {
+    final allFavorites = appState.favoriteTracks ?? [];
+
+    if (allFavorites.isEmpty) {
       await _showEmptyState('Favorites', 'No favorite tracks yet');
       return;
     }
 
-    final items = favoriteTracks.map((track) => CPListItem(
+    // Paginate the list
+    final paginatedFavorites = allFavorites.skip(offset).take(_maxItemsPerPage).toList();
+    final hasMore = offset + _maxItemsPerPage < allFavorites.length;
+    final totalCount = allFavorites.length;
+
+    final items = paginatedFavorites.map((track) => CPListItem(
       text: track.name,
       detailText: '${track.artists.join(', ')} • ${track.album}',
       onPress: (complete, self) {
         // Play track with favorites as queue context
         appState.audioPlayerService.playTrack(
           track,
-          queueContext: favoriteTracks,
+          queueContext: allFavorites,
           reorderQueue: false,
         );
         complete();
       },
     )).toList();
 
+    // Add "Load More" item if there are more favorites
+    if (hasMore) {
+      final remaining = totalCount - (offset + _maxItemsPerPage);
+      items.add(CPListItem(
+        text: 'Load More...',
+        detailText: '$remaining more songs',
+        onPress: (complete, self) async {
+          await _showFavorites(offset: offset + _maxItemsPerPage);
+          complete();
+        },
+      ));
+    }
+
+    final title = offset > 0
+        ? 'Favorites (${offset + 1}-${offset + paginatedFavorites.length} of $totalCount)'
+        : 'Favorites ($totalCount)';
+
     try {
       await FlutterCarplay.push(
         template: CPListTemplate(
-          title: 'Favorites',
+          title: title,
           sections: [CPListSection(items: items)],
           systemIcon: 'heart.fill',
         ),
@@ -437,39 +589,150 @@ class CarPlayService {
     }
   }
 
-  Future<void> _showDownloads() async {
-    final downloads = appState.downloadService.completedDownloads;
-
-    if (downloads.isEmpty) {
-      await _showEmptyState('Downloads', 'No downloaded music');
+  Future<void> _showRecentlyPlayed({int offset = 0}) async {
+    // Show loading state if data is being fetched
+    if (appState.isLoadingRecentlyPlayed && appState.recentlyPlayedTracks == null) {
+      await _showLoadingState('Recently Played');
       return;
     }
 
-    final downloadedTracks = downloads.map((d) => d.track).toList();
-    final items = downloads.map((download) => CPListItem(
-      text: download.track.name,
-      detailText: '${download.track.artists.join(', ')} • ${download.track.album}',
+    final allRecent = appState.recentlyPlayedTracks ?? [];
+
+    if (allRecent.isEmpty) {
+      await _showEmptyState('Recently Played', 'No listening history yet');
+      return;
+    }
+
+    // Paginate the list
+    final paginatedRecent = allRecent.skip(offset).take(_maxItemsPerPage).toList();
+    final hasMore = offset + _maxItemsPerPage < allRecent.length;
+    final totalCount = allRecent.length;
+
+    final items = paginatedRecent.map((track) => CPListItem(
+      text: track.name,
+      detailText: '${track.artists.join(', ')} • ${track.album}',
       onPress: (complete, self) {
-        // Play track with downloads as queue context
+        // Play track with recently played as queue context
         appState.audioPlayerService.playTrack(
-          download.track,
-          queueContext: downloadedTracks,
+          track,
+          queueContext: allRecent,
           reorderQueue: false,
         );
         complete();
       },
     )).toList();
 
+    // Add "Load More" item if there are more
+    if (hasMore) {
+      final remaining = totalCount - (offset + _maxItemsPerPage);
+      items.add(CPListItem(
+        text: 'Load More...',
+        detailText: '$remaining more songs',
+        onPress: (complete, self) async {
+          await _showRecentlyPlayed(offset: offset + _maxItemsPerPage);
+          complete();
+        },
+      ));
+    }
+
+    final title = offset > 0
+        ? 'Recently Played (${offset + 1}-${offset + paginatedRecent.length} of $totalCount)'
+        : 'Recently Played ($totalCount)';
+
     try {
       await FlutterCarplay.push(
         template: CPListTemplate(
-          title: 'Downloads',
+          title: title,
+          sections: [CPListSection(items: items)],
+          systemIcon: 'clock.fill',
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push RecentlyPlayed failed: $e');
+    }
+  }
+
+  Future<void> _showDownloads({int offset = 0}) async {
+    final allDownloads = appState.downloadService.completedDownloads;
+
+    if (allDownloads.isEmpty) {
+      await _showEmptyState('Downloads', 'No downloaded music');
+      return;
+    }
+
+    // Paginate the list
+    final paginatedDownloads = allDownloads.skip(offset).take(_maxItemsPerPage).toList();
+    final hasMore = offset + _maxItemsPerPage < allDownloads.length;
+    final totalCount = allDownloads.length;
+
+    final allTracks = allDownloads.map((d) => d.track).toList();
+    final items = paginatedDownloads.map((download) => CPListItem(
+      text: download.track.name,
+      detailText: '${download.track.artists.join(', ')} • ${download.track.album}',
+      onPress: (complete, self) {
+        // Play track with all downloads as queue context
+        appState.audioPlayerService.playTrack(
+          download.track,
+          queueContext: allTracks,
+          reorderQueue: false,
+        );
+        complete();
+      },
+    )).toList();
+
+    // Add "Load More" item if there are more downloads
+    if (hasMore) {
+      final remaining = totalCount - (offset + _maxItemsPerPage);
+      items.add(CPListItem(
+        text: 'Load More...',
+        detailText: '$remaining more songs',
+        onPress: (complete, self) async {
+          await _showDownloads(offset: offset + _maxItemsPerPage);
+          complete();
+        },
+      ));
+    }
+
+    final title = offset > 0
+        ? 'Downloads (${offset + 1}-${offset + paginatedDownloads.length} of $totalCount)'
+        : 'Downloads ($totalCount)';
+
+    try {
+      await FlutterCarplay.push(
+        template: CPListTemplate(
+          title: title,
           sections: [CPListSection(items: items)],
           systemIcon: 'arrow.down.circle',
         ),
       );
     } catch (e) {
       debugPrint('⚠️ CarPlay push Downloads failed: $e');
+    }
+  }
+
+  Future<void> _showLoadingState(String title) async {
+    try {
+      await FlutterCarplay.push(
+        template: CPListTemplate(
+          title: title,
+          sections: [
+            CPListSection(
+              items: [
+                CPListItem(
+                  text: 'Loading...',
+                  detailText: 'Please wait while content loads',
+                  onPress: (complete, self) {
+                    complete();
+                  },
+                ),
+              ],
+            ),
+          ],
+          systemIcon: 'arrow.clockwise',
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push LoadingState failed: $e');
     }
   }
 
