@@ -132,24 +132,24 @@ class CarPlayService {
             CPListItem(
               text: 'Albums',
               detailText: 'Browse all albums',
-              onPress: (complete, self) {
-                _showAlbums();
+              onPress: (complete, self) async {
+                await _showAlbums();
                 complete();
               },
             ),
             CPListItem(
               text: 'Artists',
               detailText: 'Browse all artists',
-              onPress: (complete, self) {
-                _showArtists();
+              onPress: (complete, self) async {
+                await _showArtists();
                 complete();
               },
             ),
             CPListItem(
               text: 'Playlists',
               detailText: 'Your playlists',
-              onPress: (complete, self) {
-                _showPlaylists();
+              onPress: (complete, self) async {
+                await _showPlaylists();
                 complete();
               },
             ),
@@ -167,8 +167,8 @@ class CarPlayService {
             CPListItem(
               text: 'Favorite Tracks',
               detailText: 'Your hearted songs',
-              onPress: (complete, self) {
-                _showFavorites();
+              onPress: (complete, self) async {
+                await _showFavorites();
                 complete();
               },
             ),
@@ -186,8 +186,8 @@ class CarPlayService {
             CPListItem(
               text: 'Downloaded Music',
               detailText: 'Available offline',
-              onPress: (complete, self) {
-                _showDownloads();
+              onPress: (complete, self) async {
+                await _showDownloads();
                 complete();
               },
             ),
@@ -202,91 +202,103 @@ class CarPlayService {
     );
   }
 
-  void _showAlbums() async {
+  Future<void> _showAlbums() async {
     final albumsList = appState.albums ?? [];
-    
+
     if (albumsList.isEmpty) {
-      _showEmptyState('Albums', 'No albums available');
+      await _showEmptyState('Albums', 'No albums available');
       return;
     }
-    
+
     final items = albumsList.map((album) => CPListItem(
       text: album.name,
       detailText: album.artists.join(', '),
-      onPress: (complete, self) {
-        _showAlbumTracks(album.id, album.name);
+      onPress: (complete, self) async {
+        await _showAlbumTracks(album.id, album.name);
         complete();
       },
     )).toList();
 
-    FlutterCarplay.push(
-      template: CPListTemplate(
-        title: 'Albums',
-        sections: [CPListSection(items: items)],
-        systemIcon: 'music.note.list',
-      ),
-    );
+    try {
+      await FlutterCarplay.push(
+        template: CPListTemplate(
+          title: 'Albums',
+          sections: [CPListSection(items: items)],
+          systemIcon: 'music.note.list',
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push Albums failed: $e');
+    }
   }
 
-  void _showArtists() async {
+  Future<void> _showArtists() async {
     final artistsList = appState.artists ?? [];
-    
+
     if (artistsList.isEmpty) {
-      _showEmptyState('Artists', 'No artists available');
+      await _showEmptyState('Artists', 'No artists available');
       return;
     }
-    
+
     final items = artistsList.map((artist) => CPListItem(
       text: artist.name,
-      onPress: (complete, self) {
-        _showArtistAlbums(artist.id, artist.name);
+      onPress: (complete, self) async {
+        await _showArtistAlbums(artist.id, artist.name);
         complete();
       },
     )).toList();
 
-    FlutterCarplay.push(
-      template: CPListTemplate(
-        title: 'Artists',
-        sections: [CPListSection(items: items)],
-        systemIcon: 'music.mic',
-      ),
-    );
+    try {
+      await FlutterCarplay.push(
+        template: CPListTemplate(
+          title: 'Artists',
+          sections: [CPListSection(items: items)],
+          systemIcon: 'music.mic',
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push Artists failed: $e');
+    }
   }
 
-  void _showPlaylists() async {
+  Future<void> _showPlaylists() async {
     final playlistsList = appState.playlists ?? [];
-    
+
     if (playlistsList.isEmpty) {
-      _showEmptyState('Playlists', 'No playlists available');
+      await _showEmptyState('Playlists', 'No playlists available');
       return;
     }
-    
+
     final items = playlistsList.map((playlist) => CPListItem(
       text: playlist.name,
       detailText: '${playlist.trackCount} tracks',
-      onPress: (complete, self) {
-        _showPlaylistTracks(playlist.id, playlist.name);
+      onPress: (complete, self) async {
+        await _showPlaylistTracks(playlist.id, playlist.name);
         complete();
       },
     )).toList();
 
-    FlutterCarplay.push(
-      template: CPListTemplate(
-        title: 'Playlists',
-        sections: [CPListSection(items: items)],
-        systemIcon: 'music.note.list',
-      ),
-    );
+    try {
+      await FlutterCarplay.push(
+        template: CPListTemplate(
+          title: 'Playlists',
+          sections: [CPListSection(items: items)],
+          systemIcon: 'music.note.list',
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push Playlists failed: $e');
+    }
   }
 
-  void _showAlbumTracks(String albumId, String albumName) async {
+  Future<void> _showAlbumTracks(String albumId, String albumName) async {
     final tracks = await appState.getAlbumTracks(albumId);
-    
+
     if (tracks.isEmpty) {
-      _showEmptyState(albumName, 'No tracks in this album');
+      await _showEmptyState(albumName, 'No tracks in this album');
       return;
     }
-    
+
     final items = tracks.map((track) {
       return CPListItem(
         text: track.name,
@@ -303,16 +315,20 @@ class CarPlayService {
       );
     }).toList();
 
-    FlutterCarplay.push(
-      template: CPListTemplate(
-        title: albumName,
-        sections: [CPListSection(items: items)],
-        systemIcon: 'music.note',
-      ),
-    );
+    try {
+      await FlutterCarplay.push(
+        template: CPListTemplate(
+          title: albumName,
+          sections: [CPListSection(items: items)],
+          systemIcon: 'music.note',
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push AlbumTracks failed: $e');
+    }
   }
 
-  void _showArtistAlbums(String artistId, String artistName) async {
+  Future<void> _showArtistAlbums(String artistId, String artistName) async {
     final albumsList = appState.albums ?? [];
     final albums = albumsList.where((album) {
       if (album.artistIds.contains(artistId)) {
@@ -320,38 +336,42 @@ class CarPlayService {
       }
       return album.artists.contains(artistName);
     }).toList();
-    
+
     if (albums.isEmpty) {
-      _showEmptyState(artistName, 'No albums from this artist');
+      await _showEmptyState(artistName, 'No albums from this artist');
       return;
     }
-    
+
     final items = albums.map((album) => CPListItem(
       text: album.name,
       detailText: album.artists.join(', '),
-      onPress: (complete, self) {
-        _showAlbumTracks(album.id, album.name);
+      onPress: (complete, self) async {
+        await _showAlbumTracks(album.id, album.name);
         complete();
       },
     )).toList();
 
-    FlutterCarplay.push(
-      template: CPListTemplate(
-        title: artistName,
-        sections: [CPListSection(items: items)],
-        systemIcon: 'music.note.list',
-      ),
-    );
+    try {
+      await FlutterCarplay.push(
+        template: CPListTemplate(
+          title: artistName,
+          sections: [CPListSection(items: items)],
+          systemIcon: 'music.note.list',
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push ArtistAlbums failed: $e');
+    }
   }
 
-  void _showPlaylistTracks(String playlistId, String playlistName) async {
+  Future<void> _showPlaylistTracks(String playlistId, String playlistName) async {
     final tracks = await appState.getPlaylistTracks(playlistId);
-    
+
     if (tracks.isEmpty) {
-      _showEmptyState(playlistName, 'No tracks in this playlist');
+      await _showEmptyState(playlistName, 'No tracks in this playlist');
       return;
     }
-    
+
     final items = tracks.map((track) {
       return CPListItem(
         text: track.name,
@@ -368,24 +388,28 @@ class CarPlayService {
       );
     }).toList();
 
-    FlutterCarplay.push(
-      template: CPListTemplate(
-        title: playlistName,
-        sections: [CPListSection(items: items)],
-        systemIcon: 'music.note',
-      ),
-    );
+    try {
+      await FlutterCarplay.push(
+        template: CPListTemplate(
+          title: playlistName,
+          sections: [CPListSection(items: items)],
+          systemIcon: 'music.note',
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push PlaylistTracks failed: $e');
+    }
   }
 
-  void _showFavorites() async {
+  Future<void> _showFavorites() async {
     // Use favorite tracks directly instead of fetching from albums
     final favoriteTracks = appState.favoriteTracks ?? [];
-    
+
     if (favoriteTracks.isEmpty) {
-      _showEmptyState('Favorites', 'No favorite tracks yet');
+      await _showEmptyState('Favorites', 'No favorite tracks yet');
       return;
     }
-    
+
     final items = favoriteTracks.map((track) => CPListItem(
       text: track.name,
       detailText: '${track.artists.join(', ')} • ${track.album}',
@@ -400,23 +424,27 @@ class CarPlayService {
       },
     )).toList();
 
-    FlutterCarplay.push(
-      template: CPListTemplate(
-        title: 'Favorites',
-        sections: [CPListSection(items: items)],
-        systemIcon: 'heart.fill',
-      ),
-    );
+    try {
+      await FlutterCarplay.push(
+        template: CPListTemplate(
+          title: 'Favorites',
+          sections: [CPListSection(items: items)],
+          systemIcon: 'heart.fill',
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push Favorites failed: $e');
+    }
   }
 
-  void _showDownloads() async {
+  Future<void> _showDownloads() async {
     final downloads = appState.downloadService.completedDownloads;
-    
+
     if (downloads.isEmpty) {
-      _showEmptyState('Downloads', 'No downloaded music');
+      await _showEmptyState('Downloads', 'No downloaded music');
       return;
     }
-    
+
     final downloadedTracks = downloads.map((d) => d.track).toList();
     final items = downloads.map((download) => CPListItem(
       text: download.track.name,
@@ -432,37 +460,45 @@ class CarPlayService {
       },
     )).toList();
 
-    FlutterCarplay.push(
-      template: CPListTemplate(
-        title: 'Downloads',
-        sections: [CPListSection(items: items)],
-        systemIcon: 'arrow.down.circle',
-      ),
-    );
+    try {
+      await FlutterCarplay.push(
+        template: CPListTemplate(
+          title: 'Downloads',
+          sections: [CPListSection(items: items)],
+          systemIcon: 'arrow.down.circle',
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push Downloads failed: $e');
+    }
   }
-  
-  void _showEmptyState(String title, String message) {
-    FlutterCarplay.push(
-      template: CPListTemplate(
-        title: title,
-        sections: [
-          CPListSection(
-            items: [
-              CPListItem(
-                text: message,
-                detailText: appState.isOfflineMode 
-                    ? 'You are offline. Downloaded music is available.'
-                    : 'Try refreshing your library',
-                onPress: (complete, self) {
-                  complete();
-                },
-              ),
-            ],
-          ),
-        ],
-        systemIcon: 'exclamationmark.circle',
-      ),
-    );
+
+  Future<void> _showEmptyState(String title, String message) async {
+    try {
+      await FlutterCarplay.push(
+        template: CPListTemplate(
+          title: title,
+          sections: [
+            CPListSection(
+              items: [
+                CPListItem(
+                  text: message,
+                  detailText: appState.isOfflineMode
+                      ? 'You are offline. Downloaded music is available.'
+                      : 'Try refreshing your library',
+                  onPress: (complete, self) {
+                    complete();
+                  },
+                ),
+              ],
+            ),
+          ],
+          systemIcon: 'exclamationmark.circle',
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push EmptyState failed: $e');
+    }
   }
 
   void updateNowPlaying({
