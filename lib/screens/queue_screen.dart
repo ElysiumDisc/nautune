@@ -28,6 +28,43 @@ class _QueueScreenState extends State<QueueScreen> {
               final queue = snapshot.data ?? audioService.queue;
               return Row(
                 children: [
+                  // Clear queue button
+                  if (queue.isNotEmpty)
+                    IconButton(
+                      icon: const Icon(Icons.playlist_remove),
+                      tooltip: 'Clear Queue',
+                      onPressed: () async {
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (dialogContext) => AlertDialog(
+                            title: const Text('Clear Queue'),
+                            content: Text(
+                              'Remove all ${queue.length} tracks from the queue?',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(dialogContext, false),
+                                child: const Text('Cancel'),
+                              ),
+                              FilledButton(
+                                onPressed: () => Navigator.pop(dialogContext, true),
+                                child: const Text('Clear'),
+                              ),
+                            ],
+                          ),
+                        );
+
+                        if (confirmed == true && context.mounted) {
+                          audioService.stop();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Queue cleared'),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      },
+                    ),
                   // Save queue as playlist button
                   if (queue.isNotEmpty)
                     IconButton(

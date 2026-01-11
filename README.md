@@ -2,7 +2,13 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback and seamless Jellyfin integration.
 
-## 🚀 Latest Updates (v2.7.9)
+## 🚀 Latest Updates (v2.8.0)
+- **🎵 Synced Lyrics Experience**:
+  - ✅ **Beautiful Lyrics UI**: New dedicated tab in the full-screen player with high-quality typography
+  - ✅ **Auto-Scrolling**: Active lyrics automatically center and scroll smoothly as the song plays
+  - ✅ **Tap-to-Seek**: Click any lyric line to instantly jump the audio to that exact moment
+  - ✅ **Intelligent Interactions**: Auto-scroll pauses when you're manually browsing lyrics and resumes after 2 seconds
+  - ✅ **Visual Focus**: Past lines are subtly dimmed while the current line is highlighted with primary colors and soft shadows
 - **🔒 Security Hardening**:
   - ✅ **Removed sensitive debug logging**: API error responses no longer log full body content that may contain user data
   - ✅ **Android network security config**: Explicit network security policy with documented cleartext allowance for local Jellyfin servers
@@ -918,7 +924,7 @@ All iOS features are built and deployed via **Codemagic CI**:
 - [x] **ReplayGain** - Automatic volume normalization (completed!)
 - [x] **Dynamic Album Art Gradients** - Fullscreen player extracts colors from album art for immersive gradient backgrounds (completed!)
 - [ ] **Smart Downloads** - "Auto-download favorites" and "Keep last 50 played songs offline"
-- [x] **Lyrics Support** - API integration complete, UI tab in progress
+- [x] **Lyrics Support** - Full synced UI with auto-scroll and tap-to-seek (completed!)
 - [x] **Smart Playlists / Instant Mix** - 50-track mixes from any track/album/artist with one-tap save as playlist (completed!)
 - [x] **Infinite Radio Mode** - Endless playback that auto-generates next track when queue is low ✅ v2.4.0
 - [ ] **Instant Mix Enhancement** - Better integration with Jellyfin's `/InstantMix` endpoint

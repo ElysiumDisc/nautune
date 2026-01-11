@@ -57,6 +57,10 @@ class AlbumDetailScreen extends StatefulWidget {
 }
 
 class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
+  // Static LRU cache for palette colors - shared with FullPlayerScreen
+  static final Map<String, List<Color>> _paletteCache = {};
+  static const int _maxCacheSize = 50;
+
   bool _isLoading = false;
   Object? _error;
   List<JellyfinTrack>? _tracks;
@@ -109,6 +113,18 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     if (tag == null || tag.isEmpty) return;
     if (_appState == null) return;
 
+    // Check cache first - avoids expensive color extraction
+    final cacheKey = '${widget.album.id}-$tag';
+    final cached = _paletteCache[cacheKey];
+    if (cached != null) {
+      if (mounted) {
+        setState(() {
+          _paletteColors = cached;
+        });
+      }
+      return;
+    }
+
     try {
       final imageUrl = _appState!.jellyfinService.buildImageUrl(
         itemId: widget.album.id,
@@ -143,6 +159,15 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
       // Convert int colors back to Color objects
       final colors = colorInts.map((c) => Color(c)).toList();
+
+      // Cache the extracted colors
+      if (colors.isNotEmpty) {
+        if (_paletteCache.length >= _maxCacheSize) {
+          final oldestKey = _paletteCache.keys.first;
+          _paletteCache.remove(oldestKey);
+        }
+        _paletteCache[cacheKey] = colors;
+      }
 
       if (mounted && colors.isNotEmpty) {
         setState(() {

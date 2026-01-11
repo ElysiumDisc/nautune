@@ -5,6 +5,7 @@ import '../jellyfin/jellyfin_track.dart';
 import '../screens/full_player_screen.dart';
 import '../screens/queue_screen.dart';
 import '../services/audio_player_service.dart';
+import '../services/haptic_service.dart';
 import '../app_state.dart';
 import 'jellyfin_waveform.dart';
 
@@ -60,9 +61,11 @@ class NowPlayingBar extends StatelessWidget {
                     if (velocity == null) return;
                     if (velocity < -200) {
                       // Swipe Left -> Next
+                      HapticService.mediumTap();
                       audioService.next();
                     } else if (velocity > 200) {
                       // Swipe Right -> Previous
+                      HapticService.mediumTap();
                       audioService.previous();
                     }
                   },
