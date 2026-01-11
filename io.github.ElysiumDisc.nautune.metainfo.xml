@@ -24,7 +24,7 @@
   <screenshots>
     <screenshot type="default">
       <caption>The main library view of Nautune</caption>
-      <image>https://raw.githubusercontent.com/ElysiumDisc/nautune/main/screenshots/home.png</image>
+      <image><image>https://raw.githubusercontent.com/ElysiumDisc/nautune/2.7.8/screenshots/home.png</image>
     </screenshot>
   </screenshots>
 
@@ -47,7 +47,7 @@
   </branding>
 
   <releases>
-    <release version="2.7.8" date="2026-01-10">
+    <release version="2.7.8" date="2026-01-11">
       <description>
         <p>Initial Flathub release. Features improved Jellyfin connection stability, UI refinements, and optimized Linux playback.</p>
       </description>
