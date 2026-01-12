@@ -2,7 +2,7 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback and seamless Jellyfin integration.
 
-## 🚀 Latest Updates (v3.2.0)
+## 🚀 Previous Updates (v3.2.0)
 - **🎨 Immersive Visual Overhaul**:
   - ✅ **Album Art Gradients**: The Full Player and Mini-Player now feature beautiful, opaque dynamic backgrounds derived directly from the current album art.
   - ✅ **Isolate-Powered Extraction**: Color palette generation runs in a background isolate, ensuring 60FPS UI performance during track transitions.
