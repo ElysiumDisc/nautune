@@ -13,6 +13,7 @@ import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../app_state.dart';
+import '../services/playback_state_store.dart' show StreamingQuality;
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_track.dart';
@@ -325,6 +326,21 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
           _loadingLyrics = false;
         });
       }
+    }
+  }
+
+  String _getStreamingModeLabel(StreamingQuality quality) {
+    switch (quality) {
+      case StreamingQuality.original:
+        return 'Direct';
+      case StreamingQuality.high:
+        return '320k';
+      case StreamingQuality.normal:
+        return '192k';
+      case StreamingQuality.low:
+        return '128k';
+      case StreamingQuality.auto:
+        return 'Auto';
     }
   }
 
@@ -1005,28 +1021,75 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                       ),
                     ],
 
-                    // Audio quality info
+                    // Audio quality info with streaming mode
                     if (track.audioQualityInfo != null) ...[
                       const SizedBox(height: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: theme.colorScheme.outline.withValues(alpha: 0.2),
-                            width: 1,
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          // File quality badge
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: theme.colorScheme.outline.withValues(alpha: 0.2),
+                                width: 1,
+                              ),
+                            ),
+                            child: Text(
+                              track.audioQualityInfo!,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.tertiary,
+                                fontWeight: FontWeight.w500,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
                           ),
-                        ),
-                        child: Text(
-                          track.audioQualityInfo!,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.tertiary,
-                            fontWeight: FontWeight.w500,
-                            letterSpacing: 0.5,
+                          const SizedBox(width: 8),
+                          // Streaming mode badge
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: _appState.streamingQuality == StreamingQuality.original
+                                  ? theme.colorScheme.primaryContainer.withValues(alpha: 0.5)
+                                  : theme.colorScheme.secondaryContainer.withValues(alpha: 0.5),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: _appState.streamingQuality == StreamingQuality.original
+                                    ? theme.colorScheme.primary.withValues(alpha: 0.3)
+                                    : theme.colorScheme.secondary.withValues(alpha: 0.3),
+                                width: 1,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  _appState.streamingQuality == StreamingQuality.original
+                                      ? Icons.high_quality
+                                      : Icons.compress,
+                                  size: 14,
+                                  color: _appState.streamingQuality == StreamingQuality.original
+                                      ? theme.colorScheme.primary
+                                      : theme.colorScheme.secondary,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _getStreamingModeLabel(_appState.streamingQuality),
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: _appState.streamingQuality == StreamingQuality.original
+                                        ? theme.colorScheme.primary
+                                        : theme.colorScheme.secondary,
+                                    fontWeight: FontWeight.w500,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                          textAlign: TextAlign.center,
-                        ),
+                        ],
                       ),
                     ],
                   ],

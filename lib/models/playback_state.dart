@@ -1,5 +1,64 @@
 import '../jellyfin/jellyfin_track.dart';
 
+/// Streaming quality options for audio playback
+enum StreamingQuality {
+  original, // Direct stream, no transcoding (lossless)
+  high,     // 320kbps
+  normal,   // 192kbps
+  low,      // 128kbps
+  auto,     // Original on WiFi, Normal on cellular
+}
+
+extension StreamingQualityExtension on StreamingQuality {
+  String get label {
+    switch (this) {
+      case StreamingQuality.original:
+        return 'Original (Lossless)';
+      case StreamingQuality.high:
+        return 'High (320 kbps)';
+      case StreamingQuality.normal:
+        return 'Normal (192 kbps)';
+      case StreamingQuality.low:
+        return 'Low (128 kbps)';
+      case StreamingQuality.auto:
+        return 'Auto (WiFi: Original, Cellular: Normal)';
+    }
+  }
+
+  /// Returns the max bitrate in bps, or null for original/direct stream
+  int? get maxBitrate {
+    switch (this) {
+      case StreamingQuality.original:
+        return null; // Direct stream, no transcoding
+      case StreamingQuality.high:
+        return 320000;
+      case StreamingQuality.normal:
+        return 192000;
+      case StreamingQuality.low:
+        return 128000;
+      case StreamingQuality.auto:
+        return null; // Determined at runtime
+    }
+  }
+
+  static StreamingQuality fromString(String? value) {
+    switch (value) {
+      case 'original':
+        return StreamingQuality.original;
+      case 'high':
+        return StreamingQuality.high;
+      case 'normal':
+        return StreamingQuality.normal;
+      case 'low':
+        return StreamingQuality.low;
+      case 'auto':
+        return StreamingQuality.auto;
+      default:
+        return StreamingQuality.original; // Default to lossless
+    }
+  }
+}
+
 class PlaybackState {
   PlaybackState({
     this.currentTrackId,
@@ -28,6 +87,8 @@ class PlaybackState {
     this.storageLimitMB = 0, // 0 = unlimited
     this.autoCleanupEnabled = false,
     this.autoCleanupDays = 30,
+    // Streaming quality
+    this.streamingQuality = StreamingQuality.original,
   });
 
   final String? currentTrackId;
@@ -56,6 +117,8 @@ class PlaybackState {
   final int storageLimitMB; // 0 = unlimited
   final bool autoCleanupEnabled;
   final int autoCleanupDays;
+  // Streaming quality
+  final StreamingQuality streamingQuality;
 
   bool get hasTrack => currentTrackId != null;
 
@@ -85,6 +148,7 @@ class PlaybackState {
     int? storageLimitMB,
     bool? autoCleanupEnabled,
     int? autoCleanupDays,
+    StreamingQuality? streamingQuality,
   }) {
     return PlaybackState(
       currentTrackId: currentTrackId ?? this.currentTrackId,
@@ -112,6 +176,7 @@ class PlaybackState {
       storageLimitMB: storageLimitMB ?? this.storageLimitMB,
       autoCleanupEnabled: autoCleanupEnabled ?? this.autoCleanupEnabled,
       autoCleanupDays: autoCleanupDays ?? this.autoCleanupDays,
+      streamingQuality: streamingQuality ?? this.streamingQuality,
     );
   }
 
@@ -142,6 +207,7 @@ class PlaybackState {
       'storageLimitMB': storageLimitMB,
       'autoCleanupEnabled': autoCleanupEnabled,
       'autoCleanupDays': autoCleanupDays,
+      'streamingQuality': streamingQuality.name,
     };
   }
 
@@ -184,6 +250,7 @@ class PlaybackState {
       storageLimitMB: (json['storageLimitMB'] as num?)?.toInt() ?? 0,
       autoCleanupEnabled: json['autoCleanupEnabled'] as bool? ?? false,
       autoCleanupDays: (json['autoCleanupDays'] as num?)?.toInt() ?? 30,
+      streamingQuality: StreamingQualityExtension.fromString(json['streamingQuality'] as String?),
     );
   }
 
@@ -217,6 +284,7 @@ class PlaybackState {
       storageLimitMB: storageLimitMB,
       autoCleanupEnabled: autoCleanupEnabled,
       autoCleanupDays: autoCleanupDays,
+      streamingQuality: streamingQuality,
     );
   }
 

@@ -4,6 +4,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import '../jellyfin/jellyfin_track.dart';
 import '../models/playback_state.dart';
+export '../models/playback_state.dart' show StreamingQuality, StreamingQualityExtension;
 
 class PlaybackStateStore {
   static const _boxName = 'nautune_playback';
@@ -130,6 +131,7 @@ class PlaybackStateStore {
     int? storageLimitMB,
     bool? autoCleanupEnabled,
     int? autoCleanupDays,
+    StreamingQuality? streamingQuality,
   }) async {
     await update((state) {
       final mergedOffsets = Map<String, double>.from(state.scrollOffsets);
@@ -150,6 +152,7 @@ class PlaybackStateStore {
         storageLimitMB: storageLimitMB ?? state.storageLimitMB,
         autoCleanupEnabled: autoCleanupEnabled ?? state.autoCleanupEnabled,
         autoCleanupDays: autoCleanupDays ?? state.autoCleanupDays,
+        streamingQuality: streamingQuality ?? state.streamingQuality,
       );
     });
   }

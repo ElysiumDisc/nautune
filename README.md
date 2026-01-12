@@ -2,7 +2,15 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback and seamless Jellyfin integration.
 
-## 🚀 Latest Updates (v3.2.1)
+## 🚀 Latest Updates (v3.3.0)
+- **🎵 Transcoding & Quality Control**:
+  - ✅ **Smart Transcoding**: Stream your music at 128k, 192k, or 320k to save bandwidth on mobile networks
+  - ✅ **Visual Quality Badge**: New indicator in the player shows exactly how you're streaming (e.g., "Direct", "128k Transcode")
+  - ✅ **Reliable Reporting**: Fixed playback reporting to correctly show "Transcode" status on your Jellyfin dashboard
+  - ✅ **Force Transcode**: Improved compatibility logic to ensure Jellyfin respects your bitrate limits, even for stubborn formats
+  - ✅ **Session Linking**: Transcoding sessions are now properly linked to playback reports for accurate server-side tracking
+
+## 🚀 Previous Updates (v3.2.1)
 - **🚗 CarPlay Navigation Fix**:
   - ✅ **Fixed infinite loading**: Resolved issue where CarPlay menus would spin indefinitely when browsing Albums, Artists, Playlists, Favorites, or Recently Played
   - ✅ **Navigation lock**: Added protection to prevent root template refreshes from interrupting active navigation

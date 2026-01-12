@@ -18,6 +18,7 @@ class PlaybackReportingService {
   }) : httpClient = httpClient ?? http.Client();
 
   String? _currentSessionId;
+  String _currentPlayMethod = 'DirectPlay';
   Timer? _progressTimer;
   Duration Function()? _positionProvider;
 
@@ -28,10 +29,12 @@ class PlaybackReportingService {
   Future<void> reportPlaybackStart(
     JellyfinTrack track, {
     String playMethod = 'DirectPlay',
+    String? sessionId,
   }) async {
     if (serverUrl.startsWith('demo://')) return;
 
-    _currentSessionId = DateTime.now().millisecondsSinceEpoch.toString();
+    _currentSessionId = sessionId ?? DateTime.now().millisecondsSinceEpoch.toString();
+    _currentPlayMethod = playMethod;
     
     debugPrint('📡 Reporting to Jellyfin: $serverUrl/Sessions/Playing');
     debugPrint('   Track: ${track.name} (${track.id})');
@@ -40,7 +43,8 @@ class PlaybackReportingService {
     final url = Uri.parse('$serverUrl/Sessions/Playing');
     final body = {
       'ItemId': track.id,
-      'SessionId': _currentSessionId,
+      // Use PlaySessionId to match the transcoding session we started
+      'PlaySessionId': _currentSessionId, 
       'PlayMethod': playMethod,
       'CanSeek': true,
       'IsPaused': false,
@@ -93,10 +97,10 @@ class PlaybackReportingService {
     
     final body = {
       'ItemId': track.id,
-      'SessionId': _currentSessionId,
+      'PlaySessionId': _currentSessionId,
       'PositionTicks': positionTicks,
       'IsPaused': isPaused,
-      'PlayMethod': 'DirectPlay',
+      'PlayMethod': _currentPlayMethod,
       'CanSeek': true,
       'RepeatMode': 'RepeatNone',
     };
@@ -134,9 +138,9 @@ class PlaybackReportingService {
     
     final body = {
       'ItemId': track.id,
-      'SessionId': _currentSessionId,
+      'PlaySessionId': _currentSessionId,
       'PositionTicks': positionTicks,
-      'PlayMethod': 'DirectPlay',
+      'PlayMethod': _currentPlayMethod,
     };
 
     try {

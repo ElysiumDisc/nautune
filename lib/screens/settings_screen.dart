@@ -3,6 +3,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../models/playback_state.dart' show StreamingQuality, StreamingQualityExtension;
 import '../providers/session_provider.dart';
 import '../providers/ui_state_provider.dart';
 import '../services/audio_cache_service.dart';
@@ -87,6 +88,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ),
+          ListTile(
+            leading: Icon(Icons.high_quality, color: theme.colorScheme.primary),
+            title: const Text('Streaming Quality'),
+            subtitle: Text(appState.streamingQuality.label),
+            trailing: DropdownButton<StreamingQuality>(
+              value: appState.streamingQuality,
+              underline: const SizedBox(),
+              onChanged: (StreamingQuality? value) {
+                if (value != null) {
+                  appState.setStreamingQuality(value);
+                }
+              },
+              items: StreamingQuality.values.map((quality) {
+                return DropdownMenuItem<StreamingQuality>(
+                  value: quality,
+                  child: Text(quality.label),
+                );
+              }).toList(),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              appState.streamingQuality == StreamingQuality.original
+                  ? 'Streams original file quality (FLAC, lossless)'
+                  : appState.streamingQuality == StreamingQuality.auto
+                      ? 'Original on WiFi, Normal on cellular'
+                      : 'Transcodes to MP3 at selected bitrate',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
           ListTile(
             leading: Icon(Icons.tune, color: theme.colorScheme.primary),
             title: const Text('Crossfade'),

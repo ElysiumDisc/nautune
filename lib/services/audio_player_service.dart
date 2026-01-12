@@ -88,7 +88,10 @@ class AudioPlayerService {
   bool _infiniteRadioEnabled = false;
   bool _isFetchingInfiniteRadio = false;
   static const int _infiniteRadioThreshold = 2; // Fetch when 2 or fewer tracks remain
-  
+
+  // Streaming quality
+  StreamingQuality _streamingQuality = StreamingQuality.original;
+
   JellyfinTrack? _currentTrack;
   List<JellyfinTrack> _queue = [];
   int _currentIndex = 0;
@@ -134,6 +137,49 @@ class AudioPlayerService {
       _clearPreload();
     }
     debugPrint('🔄 Gapless Playback: ${enabled ? "enabled" : "disabled"}');
+  }
+
+  void setStreamingQuality(StreamingQuality quality) {
+    _streamingQuality = quality;
+    debugPrint('🎵 Streaming quality: ${quality.label}');
+  }
+
+  StreamingQuality get streamingQuality => _streamingQuality;
+
+  /// Gets the appropriate stream URL based on quality setting.
+  /// Returns (url, isDirectStream) tuple.
+  /// If quality is "original", returns direct download URL (lossless).
+  /// Otherwise returns universal stream URL with appropriate bitrate.
+  (String? url, bool isDirectStream) _getStreamUrl(JellyfinTrack track, {String? sessionId}) {
+    final quality = _streamingQuality;
+
+    // For original/lossless quality, use direct download URL
+    if (quality == StreamingQuality.original) {
+      final url = track.directDownloadUrl();
+      debugPrint('🎵 Stream URL (Direct): $url');
+      return (url, true);
+    }
+
+    // For auto mode, default to original (WiFi detection handled elsewhere)
+    if (quality == StreamingQuality.auto) {
+      // TODO: Check network type and switch quality accordingly
+      // For now, default to original quality
+      final url = track.directDownloadUrl();
+      debugPrint('🎵 Stream URL (Auto/Direct): $url');
+      return (url, true);
+    }
+
+    // For transcoded quality, use the stream endpoint that forces transcoding
+    final bitrate = quality.maxBitrate ?? 320000;
+    final url = track.transcodedStreamUrl(
+      deviceId: _deviceId,
+      audioBitrate: bitrate,
+      audioCodec: 'mp3',
+      container: 'mp3',
+      playSessionId: sessionId,
+    );
+    debugPrint('🎵 Stream URL (Transcode ${bitrate ~/ 1000}kbps): $url');
+    return (url, false);
   }
 
   void _cancelCrossfade() {
@@ -374,7 +420,16 @@ class AudioPlayerService {
 
     // Duration updates
     _playerDurSub = player.onDurationChanged.listen((duration) {
-      _durationController.add(duration);
+      // For streams, player might report 0 or very small duration.
+      // If we have track metadata, prefer that unless player reports something reasonable.
+      if (duration.inSeconds > 0) {
+        _durationController.add(duration);
+      } else if (_currentTrack != null) {
+        // Fallback to metadata duration
+        _durationController.add(_currentTrack!.duration);
+      } else {
+        _durationController.add(duration);
+      }
     });
     
     // State changes
@@ -733,22 +788,19 @@ class AudioPlayerService {
     _audioHandler?.updateNautuneMediaItem(track);
     _audioHandler?.updateNautuneQueue(_queue);
     
+    // Generate a session ID to link the stream and the reporting
+    final sessionId = DateTime.now().millisecondsSinceEpoch.toString();
+
     // RESOLVE SOURCE BEFORE STOPPING PLAYER
     // This minimizes "dead air" time which causes iOS background suspension
-    final downloadUrl = track.directDownloadUrl();
-    final universalUrl = track.universalStreamUrl(
-      deviceId: _deviceId,
-      maxBitrate: 320000,
-      audioCodec: 'mp3',
-      container: 'mp3',
-    );
+    final (streamUrl, isDirectStream) = _getStreamUrl(track, sessionId: sessionId);
 
     // Don't stop yet! Resolve the source first.
 
     String? activeUrl;
     bool isOffline = false;
     bool isLocalFile = false;
-    
+
     // Check for downloaded file first (works in airplane mode!)
     final localPath = _downloadService?.getLocalPath(track.id);
     if (localPath != null) {
@@ -765,7 +817,7 @@ class AudioPlayerService {
           await _downloadService?.verifyAndCleanupDownloads();
         }
     }
-    
+
     // Check for cached file (pre-cached during album playback)
     if (activeUrl == null) {
       final cachedFile = await _audioCacheService.getCachedFile(track.id);
@@ -775,16 +827,17 @@ class AudioPlayerService {
         debugPrint('✅ Found in cache: ${cachedFile.path}');
       }
     }
-    
+
     // Try streaming if no local/cached file
     if (activeUrl == null) {
-      // We'll prefer downloadUrl, then universalUrl, then asset
-      // But we can't check validity easily without trying. 
-      // For streaming, we just assume the URL is good.
-      if (downloadUrl != null) {
-        activeUrl = downloadUrl;
-      } else if (universalUrl != null) {
-        activeUrl = universalUrl;
+      // Use the stream URL based on quality preference
+      if (streamUrl != null) {
+        activeUrl = streamUrl;
+        if (isDirectStream) {
+          debugPrint('🎵 Streaming: Original quality (direct)');
+        } else {
+          debugPrint('🎵 Streaming: ${_streamingQuality.label}');
+        }
       } else if (track.assetPathOverride != null) {
         activeUrl = track.assetPathOverride;
       }
@@ -823,33 +876,48 @@ class AudioPlayerService {
     }
 
     try {
+      // Seed duration immediately from metadata (important for streams)
+      _durationController.add(track.duration);
+
       await applySourceAndPlay();
-      
+
       // Report playback start to Jellyfin
       if (_reportingService != null) {
         debugPrint('🎵 Reporting playback start to Jellyfin: ${track.name}');
         await _reportingService?.reportPlaybackStart(
           track,
-          playMethod: isOffline ? 'DirectPlay' : (activeUrl == downloadUrl ? 'DirectStream' : 'Transcode'),
+          playMethod: isOffline ? 'DirectPlay' : (isDirectStream ? 'DirectStream' : 'Transcode'),
+          sessionId: sessionId,
         );
       }
-      
+
       _lastPlayingState = true;
     } on PlatformException {
-      // Fallback logic for streaming failure
-      if (!isLocalFile && activeUrl != universalUrl && universalUrl != null) {
-        debugPrint('⚠️ Primary stream failed, trying universal stream...');
-        activeUrl = universalUrl;
-        await applySourceAndPlay();
-          
-        // Report transcoded playback
-        if (_reportingService != null) {
+      // Fallback logic for streaming failure - try transcoded stream if direct failed
+      if (!isLocalFile && isDirectStream) {
+        final fallbackUrl = track.universalStreamUrl(
+          deviceId: _deviceId,
+          maxBitrate: 320000,
+          audioCodec: 'mp3',
+          container: 'mp3',
+        );
+        if (fallbackUrl != null) {
+          debugPrint('⚠️ Direct stream failed, trying transcoded stream...');
+          activeUrl = fallbackUrl;
+          await applySourceAndPlay();
+
+          // Report transcoded playback
+          if (_reportingService != null) {
             await _reportingService?.reportPlaybackStart(
               track,
               playMethod: 'Transcode',
+              sessionId: sessionId,
             );
+          }
+          _lastPlayingState = true;
+        } else {
+          rethrow;
         }
-        _lastPlayingState = true;
       } else {
         rethrow;
       }
@@ -1642,20 +1710,15 @@ class AudioPlayerService {
 
       // Try streaming if no local/cached file
       if (!loaded) {
-        final downloadUrl = track.directDownloadUrl();
-        final universalUrl = track.universalStreamUrl(
-          deviceId: _deviceId,
-          maxBitrate: 320000,
-          audioCodec: 'mp3',
-          container: 'mp3',
-        );
+        final (streamUrl, isDirectStream) = _getStreamUrl(track);
 
-        if (await trySetSource(downloadUrl)) {
+        if (await trySetSource(streamUrl)) {
           loaded = true;
-          debugPrint('✅ Pre-loaded from stream: ${track.name}');
-        } else if (await trySetSource(universalUrl)) {
-          loaded = true;
-          debugPrint('✅ Pre-loaded from universal stream: ${track.name}');
+          if (isDirectStream) {
+            debugPrint('✅ Pre-loaded from stream (original): ${track.name}');
+          } else {
+            debugPrint('✅ Pre-loaded from stream (${_streamingQuality.label}): ${track.name}');
+          }
         } else if (await trySetAssetSource(track.assetPathOverride)) {
           loaded = true;
           debugPrint('✅ Pre-loaded from asset: ${track.name}');

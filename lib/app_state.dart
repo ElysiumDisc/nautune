@@ -133,6 +133,7 @@ class NautuneAppState extends ChangeNotifier {
   bool _infiniteRadioEnabled = false;
   bool _gaplessPlaybackEnabled = true;
   int _cacheTtlMinutes = 2; // User-configurable cache TTL
+  StreamingQuality _streamingQuality = StreamingQuality.original; // Default to lossless
   SortOption _albumSortBy = SortOption.name;
   SortOrder _albumSortOrder = SortOrder.ascending;
   SortOption _artistSortBy = SortOption.name;
@@ -379,6 +380,7 @@ class NautuneAppState extends ChangeNotifier {
   bool get infiniteRadioEnabled => _infiniteRadioEnabled;
   bool get gaplessPlaybackEnabled => _gaplessPlaybackEnabled;
   int get cacheTtlMinutes => _cacheTtlMinutes;
+  StreamingQuality get streamingQuality => _streamingQuality;
   Duration get cacheTtl => Duration(minutes: _cacheTtlMinutes);
   SortOption get albumSortBy => _albumSortBy;
   SortOrder get albumSortOrder => _albumSortOrder;
@@ -648,6 +650,18 @@ class NautuneAppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Set streaming quality preference
+  void setStreamingQuality(StreamingQuality quality) {
+    if (_streamingQuality == quality) return;
+    _streamingQuality = quality;
+    _audioPlayerService.setStreamingQuality(quality);
+    unawaited(_playbackStateStore.saveUiState(
+      streamingQuality: quality,
+    ));
+    debugPrint('🎵 Streaming quality set to: ${quality.label}');
+    notifyListeners();
+  }
+
   /// Set album sort options and reload
   Future<void> setAlbumSort(SortOption sortBy, SortOrder sortOrder) async {
     if (_albumSortBy == sortBy && _albumSortOrder == sortOrder) return;
@@ -766,6 +780,7 @@ class NautuneAppState extends ChangeNotifier {
       _cacheTtlMinutes = storedPlaybackState.cacheTtlMinutes;
       _restoredLibraryTabIndex = storedPlaybackState.libraryTabIndex;
       _gaplessPlaybackEnabled = storedPlaybackState.gaplessPlaybackEnabled;
+      _streamingQuality = storedPlaybackState.streamingQuality;
       _libraryScrollOffsets =
           Map<String, double>.from(storedPlaybackState.scrollOffsets);
       await _audioPlayerService.hydrateFromPersistence(storedPlaybackState);
@@ -773,6 +788,7 @@ class NautuneAppState extends ChangeNotifier {
       _audioPlayerService.setCrossfadeDuration(_crossfadeDurationSeconds);
       _audioPlayerService.setInfiniteRadioEnabled(_infiniteRadioEnabled);
       _audioPlayerService.setGaplessPlaybackEnabled(_gaplessPlaybackEnabled);
+      _audioPlayerService.setStreamingQuality(_streamingQuality);
       _jellyfinService.setCacheTtl(Duration(minutes: _cacheTtlMinutes));
       
       // Restore download settings

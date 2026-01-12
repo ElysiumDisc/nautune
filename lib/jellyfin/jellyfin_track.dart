@@ -358,6 +358,7 @@ class JellyfinTrack {
   String? universalStreamUrl({
     required String deviceId,
     int maxBitrate = 192000,
+    int? audioBitrate,
     String audioCodec = 'mp3',
     String container = 'mp3',
   }) {
@@ -381,6 +382,67 @@ class JellyfinTrack {
       'EnableRedirection': 'true',
       'api_key': token!,
     };
+    // Add AudioBitrate to force specific transcoding bitrate
+    if (audioBitrate != null) {
+      query['AudioBitrate'] = '$audioBitrate';
+    }
+    return uri.replace(queryParameters: query).toString();
+  }
+
+  /// Returns a URL that FORCES transcoding via the /Audio/{Id}/stream.{container} endpoint.
+  /// This includes a "kitchen sink" of parameters to ensure strict bitrate limiting across Jellyfin versions.
+  String? transcodedStreamUrl({
+    required String deviceId,
+    required int audioBitrate,
+    String audioCodec = 'mp3',
+    String container = 'mp3',
+    String? playSessionId,
+  }) {
+    if (streamUrlOverride != null) {
+      return streamUrlOverride;
+    }
+    if (serverUrl == null || token == null) {
+      return null;
+    }
+
+    // Use /Audio/{Id}/stream.mp3 with explicit extension
+    final uri = Uri.parse(serverUrl!).resolve('/Audio/$id/stream.$container');
+    
+    final query = <String, String>{
+      // Force transcoding flags
+      'Static': 'false', 
+      'static': 'false',
+      'MediaSourceId': id,
+      'DeviceId': deviceId,
+      'deviceId': deviceId,
+      'api_key': token!,
+      
+      // Format specs
+      'Container': container,
+      'AudioCodec': audioCodec,
+      'audioCodec': audioCodec,
+      
+      // Bitrate limits (providing all variations to ensure one hits)
+      'AudioBitRate': '$audioBitrate',
+      'audioBitrate': '$audioBitrate',
+      'MaxStreamingBitrate': '$audioBitrate',
+      'maxStreamingBitrate': '$audioBitrate',
+      'bitrate': '$audioBitrate',
+      
+      // Channels
+      'MaxAudioChannels': '2',
+      'maxAudioChannels': '2',
+      
+      // Protocol
+      'TranscodingProtocol': 'http',
+      'TranscodingContainer': container,
+    };
+
+    // Link stream to playback session if provided
+    if (playSessionId != null) {
+      query['PlaySessionId'] = playSessionId;
+    }
+
     return uri.replace(queryParameters: query).toString();
   }
 
