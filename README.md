@@ -2,6 +2,13 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback and seamless Jellyfin integration.
 
+## 🚀 Latest Updates (v3.2.1)
+- **🚗 CarPlay Navigation Fix**:
+  - ✅ **Fixed infinite loading**: Resolved issue where CarPlay menus would spin indefinitely when browsing Albums, Artists, Playlists, Favorites, or Recently Played
+  - ✅ **Navigation lock**: Added protection to prevent root template refreshes from interrupting active navigation
+  - ✅ **Debounced state updates**: App state changes now debounce (500ms) before refreshing CarPlay UI, preventing rapid UI resets
+  - ✅ **Guaranteed completion**: All navigation handlers now use try/finally to ensure the CarPlay spinner always stops, even on errors
+
 ## 🚀 Previous Updates (v3.2.0)
 - **🎨 Immersive Visual Overhaul**:
   - ✅ **Album Art Gradients**: The Full Player and Mini-Player now feature beautiful, opaque dynamic backgrounds derived directly from the current album art.
