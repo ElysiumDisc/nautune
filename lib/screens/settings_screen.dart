@@ -91,34 +91,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             leading: Icon(Icons.high_quality, color: theme.colorScheme.primary),
             title: const Text('Streaming Quality'),
-            subtitle: Text(appState.streamingQuality.label),
-            trailing: DropdownButton<StreamingQuality>(
-              value: appState.streamingQuality,
-              underline: const SizedBox(),
-              onChanged: (StreamingQuality? value) {
+            subtitle: Text(
+              appState.streamingQuality == StreamingQuality.original
+                  ? 'Streams original quality (FLAC, lossless)'
+                  : appState.streamingQuality == StreamingQuality.auto
+                      ? 'Original on WiFi, Normal on cellular'
+                      : 'Transcodes to MP3 at selected bitrate',
+              style: theme.textTheme.bodySmall,
+            ),
+            trailing: PopupMenuButton<StreamingQuality>(
+              initialValue: appState.streamingQuality,
+              onSelected: (StreamingQuality? value) {
                 if (value != null) {
                   appState.setStreamingQuality(value);
                 }
               },
-              items: StreamingQuality.values.map((quality) {
-                return DropdownMenuItem<StreamingQuality>(
+              itemBuilder: (context) => StreamingQuality.values.map((quality) {
+                return PopupMenuItem<StreamingQuality>(
                   value: quality,
                   child: Text(quality.label),
                 );
               }).toList(),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              appState.streamingQuality == StreamingQuality.original
-                  ? 'Streams original file quality (FLAC, lossless)'
-                  : appState.streamingQuality == StreamingQuality.auto
-                      ? 'Original on WiFi, Normal on cellular'
-                      : 'Transcodes to MP3 at selected bitrate',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                fontStyle: FontStyle.italic,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      appState.streamingQuality.label,
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(Icons.arrow_drop_down, color: theme.colorScheme.primary),
+                  ],
+                ),
               ),
             ),
           ),

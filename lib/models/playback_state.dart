@@ -13,15 +13,15 @@ extension StreamingQualityExtension on StreamingQuality {
   String get label {
     switch (this) {
       case StreamingQuality.original:
-        return 'Original (Lossless)';
+        return 'Original';
       case StreamingQuality.high:
-        return 'High (320 kbps)';
+        return 'High (320k)';
       case StreamingQuality.normal:
-        return 'Normal (192 kbps)';
+        return 'Normal (192k)';
       case StreamingQuality.low:
-        return 'Low (128 kbps)';
+        return 'Low (128k)';
       case StreamingQuality.auto:
-        return 'Auto (WiFi: Original, Cellular: Normal)';
+        return 'Auto';
     }
   }
 
