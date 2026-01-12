@@ -93,7 +93,12 @@ class _MiniPlayerScreenState extends State<MiniPlayerScreen> with WindowListener
     super.initState();
     windowManager.addListener(this);
     
-    // Defer initialization to didChangeDependencies to access Provider
+    // Make window frameless for mini player
+    _makeFrameless();
+  }
+
+  Future<void> _makeFrameless() async {
+    await windowManager.setTitleBarStyle(TitleBarStyle.hidden, windowButtonVisibility: false);
   }
 
   @override
@@ -133,6 +138,9 @@ class _MiniPlayerScreenState extends State<MiniPlayerScreen> with WindowListener
   }
 
   Future<void> _restoreMainWindow() async {
+    // Restore standard title bar
+    await windowManager.setTitleBarStyle(TitleBarStyle.normal);
+    
     // Restore standard size
     await windowManager.setSize(const Size(1280, 800));
     await windowManager.setMinimumSize(const Size(400, 600));
