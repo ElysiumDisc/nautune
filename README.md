@@ -2,26 +2,19 @@
 
 Poseidon's cross-platform Jellyfin music player. Nautune is built with Flutter and delivers a beautiful deep-sea themed experience with smooth native audio playback and seamless Jellyfin integration.
 
-## 🚀 Latest Updates (v3.0.0)
-- **💾 Advanced Storage Management**:
-  - ✅ **Detailed Breakdown**: See exactly how much space each album and artist is using.
-  - ✅ **Smart Cleanup**: New tools to "Free 500MB" or "Clean Old Downloads" (older than 30 days) with one tap.
-  - ✅ **Storage Limits**: Set a hard cap on how much space Nautune can use (e.g., 2GB, 5GB, 10GB).
-  - ✅ **Auto-Cleanup**: Automatically remove downloads older than a configurable number of days.
-- **📥 Intelligent Download Service**:
-  - ✅ **Parallel Downloads**: Configurable concurrency (1-10 simultaneous downloads) for blazing fast library syncing.
-  - ✅ **WiFi-Only Enforcement**: Option to pause all downloads when on mobile data to save your data plan.
-  - ✅ **Background Notifications**: Real-time progress notifications in the system tray/shade showing download status even when the app is minimized.
-  - ✅ **Quick Download Presets**: One-tap buttons to download all your "Favorites," your "Top 20 Played," or "Recently Added" tracks.
-- **📈 Listen Time Tracking**:
-  - ✅ **Detailed Stats**: Nautune now tracks exactly how many times you've played a track and for how long.
-  - ✅ **Offline Persistence**: Stats are tracked even in airplane mode and synced/saved locally.
-  - ✅ **Data-Driven Discovery**: Powers the "Most Played" shelves with real, accurate listening data.
-- **🔄 Enhanced Offline Sync**:
-  - ✅ **Sync Status Indicator**: New animated icon in the app bar shows real-time sync status (syncing, pending actions, or offline).
-  - ✅ **Offline Action Queue**: Hearting tracks or creating playlists while offline is now more robust with improved retry logic and visual status.
+## 🚀 Latest Updates (v3.2.0)
+- **🎨 Immersive Visual Overhaul**:
+  - ✅ **Album Art Gradients**: The Full Player and Mini-Player now feature beautiful, opaque dynamic backgrounds derived directly from the current album art.
+  - ✅ **Isolate-Powered Extraction**: Color palette generation runs in a background isolate, ensuring 60FPS UI performance during track transitions.
+  - ✅ **Smart Palette Caching**: Recently played albums have their color profiles cached (LRU) for near-instant background updates.
+- **🖼️ Sleek Desktop Mini-Player**:
+  - ✅ **Frameless Design**: The desktop mini-player now uses a hidden title bar for a modern, "floating widget" aesthetic.
+  - ✅ **Window Dragging**: Even without a title bar, you can drag the mini-player anywhere on your screen by clicking and dragging the background.
+  - ✅ **Seamless Transitions**: Window decorations are automatically restored when expanding back to the full-size player.
+- **🎵 Refined Lyrics Experience**:
+  - ✅ **Optimized Backgrounds**: Adjusted blur (Sigma 100) and darkening overlays to ensure lyrics remain perfectly readable over vibrant album gradients.
 
-## 🚀 Previous Updates (v2.8.0)
+## 🚀 Previous Updates (v3.0.0)
 - **🎵 Synced Lyrics Experience**:
   - ✅ **Beautiful Lyrics UI**: New dedicated tab in the full-screen player with high-quality typography
   - ✅ **Auto-Scrolling**: Active lyrics automatically center and scroll smoothly as the song plays
