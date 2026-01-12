@@ -774,6 +774,15 @@ class NautuneAppState extends ChangeNotifier {
       _audioPlayerService.setInfiniteRadioEnabled(_infiniteRadioEnabled);
       _audioPlayerService.setGaplessPlaybackEnabled(_gaplessPlaybackEnabled);
       _jellyfinService.setCacheTtl(Duration(minutes: _cacheTtlMinutes));
+      
+      // Restore download settings
+      _downloadService.loadSettings(
+        maxConcurrentDownloads: storedPlaybackState.maxConcurrentDownloads,
+        wifiOnlyDownloads: storedPlaybackState.wifiOnlyDownloads,
+        storageLimitMB: storedPlaybackState.storageLimitMB,
+        autoCleanupEnabled: storedPlaybackState.autoCleanupEnabled,
+        autoCleanupDays: storedPlaybackState.autoCleanupDays,
+      );
     }
 
     try {

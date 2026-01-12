@@ -15,6 +15,7 @@ import 'providers/sync_status_provider.dart';
 import 'providers/ui_state_provider.dart';
 import 'screens/library_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/mini_player_screen.dart';
 import 'screens/queue_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/bootstrap_service.dart';
@@ -135,7 +136,7 @@ class NautuneApp extends StatefulWidget {
   State<NautuneApp> createState() => _NautuneAppState();
 }
 
-class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver {
+class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, WindowListener {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   StreamSubscription<String>? _traySubscription;
 
@@ -143,6 +144,11 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    
+    if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+      windowManager.addListener(this);
+      _initWindow();
+    }
     
     // Listen to tray actions
     final trayService = widget.appState.trayService;
@@ -153,23 +159,45 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver {
             MaterialPageRoute(builder: (_) => const SettingsScreen()),
           );
         } else if (action == 'show') {
-          final isMinimized = await windowManager.isMinimized();
           final isVisible = await windowManager.isVisible();
-          final isFocused = await windowManager.isFocused();
+          final isMinimized = await windowManager.isMinimized();
           
-          if (!isVisible || isMinimized) {
-            await windowManager.show();
-            await windowManager.restore();
-            await windowManager.focus();
+          if (isVisible && !isMinimized) {
+            await windowManager.hide();
           } else {
-            if (isFocused) {
-              await windowManager.minimize();
-            } else {
-              await windowManager.focus();
-            }
+            await _restoreWindow();
           }
+        } else if (action == 'quit') {
+          await _forceClose();
         }
       });
+    }
+  }
+
+  Future<void> _initWindow() async {
+    await windowManager.setPreventClose(true);
+  }
+
+  Future<void> _restoreWindow() async {
+    final isVisible = await windowManager.isVisible();
+    if (!isVisible) {
+      await windowManager.show();
+    }
+    if (await windowManager.isMinimized()) {
+      await windowManager.restore();
+    }
+    await windowManager.focus();
+  }
+
+  Future<void> _forceClose() async {
+    await windowManager.destroy();
+  }
+
+  @override
+  void onWindowClose() async {
+    final isPreventClose = await windowManager.isPreventClose();
+    if (isPreventClose) {
+      await windowManager.hide();
     }
   }
 
@@ -177,6 +205,9 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver {
   void dispose() {
     _traySubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+      windowManager.removeListener(this);
+    }
     super.dispose();
   }
 
@@ -256,6 +287,7 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver {
         debugShowCheckedModeBanner: false,
         routes: {
           '/queue': (context) => const QueueScreen(),
+          '/mini': (context) => const MiniPlayerScreen(),
         },
         home: Consumer2<SessionProvider, NautuneAppState>(
           builder: (context, session, app, _) {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui show Image, ImageFilter;
 
@@ -9,6 +10,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:material_color_utilities/material_color_utilities.dart';
 import 'package:provider/provider.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../app_state.dart';
 import '../jellyfin/jellyfin_album.dart';
@@ -276,6 +278,20 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
     }
   }
 
+  Future<void> _switchToMiniPlayer() async {
+    if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+      // 1. Resize window to compact size
+      await windowManager.setMinimumSize(const Size(300, 120));
+      await windowManager.setSize(const Size(400, 160));
+      await windowManager.setAlignment(Alignment.bottomRight);
+      
+      if (mounted) {
+        // 2. Navigate to mini player
+        Navigator.of(context).pushNamed('/mini');
+      }
+    }
+  }
+
   Future<void> _fetchLyrics(JellyfinTrack track) async {
     setState(() {
       _loadingLyrics = true;
@@ -479,25 +495,25 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                                     end: Alignment.bottomRight,
                                     colors: _paletteColors!.length >= 4
                                         ? [
-                                            _paletteColors![0].withValues(alpha: 0.9),
-                                            _paletteColors![1].withValues(alpha: 0.8),
-                                            _paletteColors![2].withValues(alpha: 0.7),
-                                            _paletteColors![3].withValues(alpha: 0.6),
+                                            _paletteColors![0],
+                                            _paletteColors![1],
+                                            _paletteColors![2],
+                                            _paletteColors![3],
                                           ]
                                         : _paletteColors!.length == 3
                                             ? [
-                                                _paletteColors![0].withValues(alpha: 0.9),
-                                                _paletteColors![1].withValues(alpha: 0.75),
-                                                _paletteColors![2].withValues(alpha: 0.6),
+                                                _paletteColors![0],
+                                                _paletteColors![1],
+                                                _paletteColors![2],
                                               ]
                                             : _paletteColors!.length == 2
                                                 ? [
-                                                    _paletteColors![0].withValues(alpha: 0.9),
-                                                    _paletteColors![1].withValues(alpha: 0.7),
+                                                    _paletteColors![0],
+                                                    _paletteColors![1],
                                                   ]
                                                 : [
-                                                    _paletteColors![0].withValues(alpha: 0.9),
-                                                    Colors.black.withValues(alpha: 0.8),
+                                                    _paletteColors![0],
+                                                    Colors.black,
                                                   ],
                                   ),
                                 ),
@@ -507,9 +523,9 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                           if (_paletteColors != null && _paletteColors!.isNotEmpty)
                             Positioned.fill(
                               child: BackdropFilter(
-                                filter: ui.ImageFilter.blur(sigmaX: 120, sigmaY: 120),
+                                filter: ui.ImageFilter.blur(sigmaX: 100, sigmaY: 100),
                                 child: Container(
-                                  color: Colors.black.withValues(alpha: 0.25), // Elegant darkening
+                                  color: Colors.black.withValues(alpha: 0.3), // Elegant darkening
                                 ),
                               ),
                             ),
@@ -538,6 +554,12 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                                     ],
                                   ),
                                   const Spacer(),
+                                  if (isDesktop)
+                                    IconButton(
+                                      icon: const Icon(Icons.picture_in_picture_alt_rounded),
+                                      tooltip: 'Mini Player',
+                                      onPressed: _switchToMiniPlayer,
+                                    ),
                                   IconButton(
                                     icon: const Icon(Icons.more_vert),
                                     onPressed: () {
