@@ -334,7 +334,14 @@ class AudioPlayerService {
     _crossfadePlayer = AudioPlayer();
   }
 
-  String get _deviceId => 'nautune-${Platform.operatingSystem}';
+  String get _deviceId {
+    // Prefer persistent device ID from session if available
+    final sessionDeviceId = _jellyfinService?.session?.deviceId;
+    if (sessionDeviceId != null) return sessionDeviceId;
+    
+    // Fallback to platform-based ID (legacy/offline without session)
+    return 'nautune-${Platform.operatingSystem}';
+  }
 
   Future<void> _initAudioHandler() async {
     // Initialize AudioService for all platforms (Mobile + Desktop)

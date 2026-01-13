@@ -33,7 +33,7 @@ static void my_application_activate(GApplication* application) {
   // in case the window manager does more exotic layout, e.g. tiling.
   // If running on Wayland assume the header bar will work (may need changing
   // if future cases occur).
-  gboolean use_header_bar = TRUE;
+  gboolean use_header_bar = FALSE;
 #ifdef GDK_WINDOWING_X11
   GdkScreen* screen = gtk_window_get_screen(window);
   if (GDK_IS_X11_SCREEN(screen)) {
@@ -51,6 +51,35 @@ static void my_application_activate(GApplication* application) {
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
   } else {
     gtk_window_set_title(window, "nautune");
+  }
+
+  // Set up icon search path and set default icon
+  GError* err = nullptr;
+  gchar* executable_path = g_file_read_link("/proc/self/exe", &err);
+  if (executable_path != nullptr) {
+    gchar* dir = g_path_get_dirname(executable_path);
+    
+        // Construct path to data/flutter_assets/assets/icon.png
+        gchar* icon_path = g_build_filename(dir, "data", "flutter_assets", "assets", "icon.png", nullptr);
+        
+        // Fallback path
+        gchar* fallback_path = g_build_filename(dir, "assets", "icon.png", nullptr);
+    
+        if (g_file_test(icon_path, G_FILE_TEST_EXISTS)) {
+            if (!gtk_window_set_icon_from_file(window, icon_path, &err)) {
+                g_clear_error(&err);
+            }
+        } else if (g_file_test(fallback_path, G_FILE_TEST_EXISTS)) {
+            if (!gtk_window_set_icon_from_file(window, fallback_path, &err)) {
+                g_clear_error(&err);
+            }
+        }
+        
+        g_free(icon_path);
+        g_free(fallback_path);
+        g_free(dir);
+        g_free(executable_path);  } else {
+    g_clear_error(&err);
   }
 
   gtk_window_set_default_size(window, 1280, 720);

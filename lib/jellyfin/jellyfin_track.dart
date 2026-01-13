@@ -17,6 +17,7 @@ class JellyfinTrack {
     this.albumPrimaryImageTag,
     this.parentThumbImageTag,
     this.isFavorite = false,
+    this.playCount,
     this.streamUrlOverride,
     this.assetPathOverride,
     this.normalizationGain,
@@ -43,6 +44,7 @@ class JellyfinTrack {
   final String? albumPrimaryImageTag;
   final String? parentThumbImageTag;
   final bool isFavorite;
+  final int? playCount;
   final String? streamUrlOverride;
   final String? assetPathOverride;
   final double? normalizationGain; // dB adjustment for ReplayGain
@@ -64,12 +66,19 @@ class JellyfinTrack {
 
     final userData = json['UserData'];
     bool isFavorite = false;
+    int? playCount;
     if (userData is Map) {
       final fav = userData['IsFavorite'];
       if (fav is bool) {
         isFavorite = fav;
       } else if (fav is num) {
         isFavorite = fav != 0;
+      }
+      final pc = userData['PlayCount'];
+      if (pc is int) {
+        playCount = pc;
+      } else if (pc is num) {
+        playCount = pc.toInt();
       }
     }
 
@@ -139,6 +148,7 @@ class JellyfinTrack {
       albumPrimaryImageTag: json['AlbumPrimaryImageTag'] is String ? json['AlbumPrimaryImageTag'] as String : null,
       parentThumbImageTag: json['ParentThumbImageTag'] is String ? json['ParentThumbImageTag'] as String : null,
       isFavorite: isFavorite,
+      playCount: playCount,
       streamUrlOverride: null,
       assetPathOverride: null,
       normalizationGain: normalizationGain,
@@ -167,6 +177,7 @@ class JellyfinTrack {
     String? albumPrimaryImageTag,
     String? parentThumbImageTag,
     bool? isFavorite,
+    int? playCount,
     String? streamUrlOverride,
     String? assetPathOverride,
     double? normalizationGain,
@@ -193,6 +204,7 @@ class JellyfinTrack {
       albumPrimaryImageTag: albumPrimaryImageTag ?? this.albumPrimaryImageTag,
       parentThumbImageTag: parentThumbImageTag ?? this.parentThumbImageTag,
       isFavorite: isFavorite ?? this.isFavorite,
+      playCount: playCount ?? this.playCount,
       streamUrlOverride: streamUrlOverride ?? this.streamUrlOverride,
       assetPathOverride: assetPathOverride ?? this.assetPathOverride,
       normalizationGain: normalizationGain ?? this.normalizationGain,

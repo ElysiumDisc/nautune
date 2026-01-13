@@ -237,7 +237,8 @@ class DownloadService extends ChangeNotifier {
   }
 
   void _updateNotification() {
-    if (_notificationService == null) return;
+    final notificationService = _notificationService;
+    if (notificationService == null) return;
     
     if (_activeDownloads == 0) {
        // Handled in _processQueue or finally block for completion
@@ -248,7 +249,7 @@ class DownloadService extends ChangeNotifier {
        // Find the active one
        try {
          final activeItem = _downloads.values.firstWhere((d) => d.isDownloading);
-         _notificationService!.showProgress(
+         notificationService.showProgress(
             title: 'Downloading ${activeItem.track.name}',
             body: '${(activeItem.progress * 100).toInt()}%',
             progress: (activeItem.progress * 100).toInt(),
@@ -257,7 +258,7 @@ class DownloadService extends ChangeNotifier {
          // Fallback if state is inconsistent
        }
     } else {
-       _notificationService!.showProgress(
+       notificationService.showProgress(
           title: 'Downloading $_activeDownloads tracks',
           body: '$_activeDownloads active, ${_downloadQueue.length} queued',
           progress: null,
@@ -518,16 +519,16 @@ class DownloadService extends ChangeNotifier {
   }
 
   Future<String> _getDownloadPath(JellyfinTrack track, {String? extension}) async {
-    Directory downloadsDir;
+    final docsDir = await getApplicationDocumentsDirectory();
+    final Directory downloadsDir;
 
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
       downloadsDir = Directory(
-        '${Directory.current.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads',
+        '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads',
       );
     } else {
       // iOS/Android: MUST use app documents directory (sandbox requirement)
-      final dir = await getApplicationDocumentsDirectory();
-      downloadsDir = Directory('${dir.path}/downloads');
+      downloadsDir = Directory('${docsDir.path}/downloads');
     }
     
     if (!await downloadsDir.exists()) {
@@ -543,15 +544,15 @@ class DownloadService extends ChangeNotifier {
   }
 
   Future<String> _getArtworkPath(String trackId) async {
-    Directory downloadsDir;
+    final docsDir = await getApplicationDocumentsDirectory();
+    final Directory downloadsDir;
 
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
       downloadsDir = Directory(
-        '${Directory.current.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads${Platform.pathSeparator}artwork',
+        '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads${Platform.pathSeparator}artwork',
       );
     } else {
-      final dir = await getApplicationDocumentsDirectory();
-      downloadsDir = Directory('${dir.path}/downloads/artwork');
+      downloadsDir = Directory('${docsDir.path}/downloads/artwork');
     }
     
     if (!await downloadsDir.exists()) {

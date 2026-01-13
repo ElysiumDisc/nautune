@@ -6,4 +6,4 @@ Icon=nautune
 Terminal=false
 Type=Application
 Categories=AudioVideo;Audio;Player;
-StartupWMClass=nautune
+StartupWMClass=com.elysiumdisc.nautune

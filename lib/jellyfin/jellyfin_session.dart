@@ -5,6 +5,7 @@ class JellyfinSession {
     required this.serverUrl,
     required this.username,
     required this.credentials,
+    required this.deviceId,
     this.selectedLibraryId,
     this.selectedLibraryName,
     this.isDemo = false,
@@ -13,6 +14,7 @@ class JellyfinSession {
   final String serverUrl;
   final String username;
   final JellyfinCredentials credentials;
+  final String deviceId;
   final String? selectedLibraryId;
   final String? selectedLibraryName;
   final bool isDemo;
@@ -24,6 +26,7 @@ class JellyfinSession {
       'serverUrl': serverUrl,
       'username': username,
       'credentials': credentials.toJson(),
+      'deviceId': deviceId,
       'selectedLibraryId': selectedLibraryId,
       'selectedLibraryName': selectedLibraryName,
       'isDemo': isDemo,
@@ -38,6 +41,7 @@ class JellyfinSession {
       serverUrl: json['serverUrl'] as String? ?? '',
       username: json['username'] as String? ?? '',
       credentials: JellyfinCredentials.fromJson(rawCredentials),
+      deviceId: json['deviceId'] as String? ?? 'unknown-device',
       selectedLibraryId: json['selectedLibraryId'] as String?,
       selectedLibraryName: json['selectedLibraryName'] as String?,
       isDemo: json['isDemo'] as bool? ?? false,
@@ -48,6 +52,7 @@ class JellyfinSession {
     String? serverUrl,
     String? username,
     JellyfinCredentials? credentials,
+    String? deviceId,
     Object? selectedLibraryId = _unset,
     Object? selectedLibraryName = _unset,
     bool? isDemo,
@@ -56,6 +61,7 @@ class JellyfinSession {
       serverUrl: serverUrl ?? this.serverUrl,
       username: username ?? this.username,
       credentials: credentials ?? this.credentials,
+      deviceId: deviceId ?? this.deviceId,
       selectedLibraryId: selectedLibraryId == _unset
           ? this.selectedLibraryId
           : selectedLibraryId as String?,

@@ -88,7 +88,8 @@ class FullPlayerScreen extends StatefulWidget {
   State<FullPlayerScreen> createState() => _FullPlayerScreenState();
 }
 
-class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerProviderStateMixin {
+class _FullPlayerScreenState extends State<FullPlayerScreen>
+    with SingleTickerProviderStateMixin {
   // Static LRU cache for palette colors - avoids re-extracting for frequently played albums
   static final Map<String, List<Color>> _paletteCache = {};
   static const int _maxCacheSize = 50;
@@ -102,7 +103,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
   late AudioPlayerService _audioService;
   late NautuneAppState _appState;
   List<Color>? _paletteColors;
-  
+
   // Lyrics scrolling state
   final ScrollController _lyricsScrollController = ScrollController();
   int _currentLyricIndex = -1;
@@ -194,12 +195,16 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
     try {
       // Try to load from downloaded artwork first (for offline support)
       ImageProvider imageProvider;
-      final artworkFile = await _appState.downloadService.getArtworkFile(track.id);
+      final artworkFile = await _appState.downloadService.getArtworkFile(
+        track.id,
+      );
 
       if (artworkFile != null && await artworkFile.exists()) {
         // Use offline artwork
         imageProvider = FileImage(artworkFile);
-        debugPrint('Using offline artwork for gradient extraction: ${track.name}');
+        debugPrint(
+          'Using offline artwork for gradient extraction: ${track.name}',
+        );
       } else {
         // Fall back to network image
         final imageUrl = _appState.jellyfinService.buildImageUrl(
@@ -237,7 +242,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
       } finally {
         imageStream.removeListener(listener);
       }
-      
+
       final ByteData? byteData = await image.toByteData();
       if (byteData == null) return;
 
@@ -285,7 +290,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
       await windowManager.setMinimumSize(const Size(300, 120));
       await windowManager.setSize(const Size(400, 160));
       await windowManager.setAlignment(Alignment.bottomRight);
-      
+
       if (mounted) {
         // 2. Navigate to mini player
         Navigator.of(context).pushNamed('/mini');
@@ -303,14 +308,18 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
     try {
       final jellyfinService = _appState.jellyfinService;
       final lyrics = await jellyfinService.getLyrics(track.id);
-      
+
       List<_LyricLine>? parsedLyrics;
       if (lyrics != null && lyrics['Lyrics'] != null) {
         final rawLyrics = lyrics['Lyrics'] as List<dynamic>;
-        parsedLyrics = rawLyrics.map((line) => _LyricLine(
-          text: line['Text'] as String? ?? '',
-          startTicks: line['Start'] as int?,
-        )).toList();
+        parsedLyrics = rawLyrics
+            .map(
+              (line) => _LyricLine(
+                text: line['Text'] as String? ?? '',
+                startTicks: line['Start'] as int?,
+              ),
+            )
+            .toList();
       }
 
       if (mounted) {
@@ -422,7 +431,9 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(newFavoriteStatus ? 'Added to favorites' : 'Removed from favorites'),
+          content: Text(
+            newFavoriteStatus ? 'Added to favorites' : 'Removed from favorites',
+          ),
           duration: const Duration(seconds: 2),
           backgroundColor: Colors.green,
         ),
@@ -461,319 +472,403 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
         final position = playerState.position;
         final duration = playerState.duration;
 
-                    if (track == null) {
-                      return Scaffold(
-                        appBar: AppBar(
-                          title: const Text('Now Playing'),
-                          leading: IconButton(
-                            icon: const Icon(Icons.arrow_back),
-                            onPressed: () => Navigator.of(context).pop(),
-                          ),
-                        ),
-                        body: Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.music_note, size: 64, color: theme.colorScheme.secondary),
-                              const SizedBox(height: 16),
-                              Text(
-                                'No track playing',
-                                style: theme.textTheme.titleLarge,
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }
+        if (track == null) {
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('Now Playing'),
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+            body: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.music_note,
+                    size: 64,
+                    color: theme.colorScheme.secondary,
+                  ),
+                  const SizedBox(height: 16),
+                  Text('No track playing', style: theme.textTheme.titleLarge),
+                ],
+              ),
+            ),
+          );
+        }
 
-                    final artwork = _buildArtwork(
-                      track: track,
-                      isDesktop: isDesktop,
-                      theme: theme,
-                    );
+        final artwork = _buildArtwork(
+          track: track,
+          isDesktop: isDesktop,
+          theme: theme,
+        );
 
-                    return Focus(
-                      autofocus: true,
-                      onKeyEvent: (node, event) {
-                        _handleKeyEvent(event);
-                        return KeyEventResult.handled;
-                      },
-                      child: Scaffold(
-                      body: Stack(
-                        children: [
-                          // Gradient background layer
-                          if (_paletteColors != null && _paletteColors!.isNotEmpty)
-                            Positioned.fill(
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                    colors: _paletteColors!.length >= 4
-                                        ? [
-                                            _paletteColors![0],
-                                            _paletteColors![1],
-                                            _paletteColors![2],
-                                            _paletteColors![3],
-                                          ]
-                                        : _paletteColors!.length == 3
-                                            ? [
-                                                _paletteColors![0],
-                                                _paletteColors![1],
-                                                _paletteColors![2],
-                                              ]
-                                            : _paletteColors!.length == 2
-                                                ? [
-                                                    _paletteColors![0],
-                                                    _paletteColors![1],
-                                                  ]
-                                                : [
-                                                    _paletteColors![0],
-                                                    Colors.black,
-                                                  ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          // Blur layer for extra effect
-                          if (_paletteColors != null && _paletteColors!.isNotEmpty)
-                            Positioned.fill(
-                              child: BackdropFilter(
-                                filter: ui.ImageFilter.blur(sigmaX: 100, sigmaY: 100),
-                                child: Container(
-                                  color: Colors.black.withValues(alpha: 0.3), // Elegant darkening
-                                ),
-                              ),
-                            ),
-                          // Content layer
-                          SafeArea(
-                        child: Column(
+        return Focus(
+          autofocus: true,
+          onKeyEvent: (node, event) {
+            _handleKeyEvent(event);
+            return KeyEventResult.handled;
+          },
+          child: Scaffold(
+            body: Stack(
+              children: [
+                // Gradient background layer
+                if (_paletteColors != null && _paletteColors!.isNotEmpty)
+                  Positioned.fill(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: _paletteColors!.length >= 4
+                              ? [
+                                  _paletteColors![0],
+                                  _paletteColors![1],
+                                  _paletteColors![2],
+                                  _paletteColors![3],
+                                ]
+                              : _paletteColors!.length == 3
+                              ? [
+                                  _paletteColors![0],
+                                  _paletteColors![1],
+                                  _paletteColors![2],
+                                ]
+                              : _paletteColors!.length == 2
+                              ? [_paletteColors![0], _paletteColors![1]]
+                              : [_paletteColors![0], Colors.black],
+                        ),
+                      ),
+                    ),
+                  ),
+                // Blur layer for extra effect
+                if (_paletteColors != null && _paletteColors!.isNotEmpty)
+                  Positioned.fill(
+                    child: BackdropFilter(
+                      filter: ui.ImageFilter.blur(sigmaX: 100, sigmaY: 100),
+                      child: Container(
+                        color: Colors.black.withValues(
+                          alpha: 0.3,
+                        ), // Elegant darkening
+                      ),
+                    ),
+                  ),
+                // Content layer
+                SafeArea(
+                  child: Column(
+                    children: [
+                      // Header with TabBar
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        child: Row(
                           children: [
-                            // Header with TabBar
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                              child: Row(
-                                children: [
-                                  IconButton(
-                                    icon: const Icon(Icons.expand_more),
-                                    onPressed: () => Navigator.of(context).pop(),
-                                  ),
-                                  const Spacer(),
-                                  TabBar(
-                                    controller: _tabController,
-                                    isScrollable: true,
-                                    tabAlignment: TabAlignment.center,
-                                    labelStyle: theme.textTheme.titleSmall,
-                                    tabs: const [
-                                      Tab(text: 'Now Playing'),
-                                      Tab(text: 'Lyrics'),
-                                    ],
-                                  ),
-                                  const Spacer(),
-                                  if (isDesktop)
-                                    IconButton(
-                                      icon: const Icon(Icons.picture_in_picture_alt_rounded),
-                                      tooltip: 'Mini Player',
-                                      onPressed: _switchToMiniPlayer,
-                                    ),
-                                  IconButton(
-                                    icon: const Icon(Icons.more_vert),
-                                    onPressed: () {
-                                      final parentContext = context;
-                                      showModalBottomSheet(
-                                        context: parentContext,
-                                        builder: (sheetContext) => SafeArea(
-                                          child: Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              ListTile(
-                                                leading: const Icon(Icons.play_arrow),
-                                                title: const Text('Play Next'),
-                                                onTap: () {
-                                                  Navigator.pop(sheetContext);
-                                                  _appState.audioPlayerService.playNext([track]);
-                                                  ScaffoldMessenger.of(parentContext).showSnackBar(
-                                                    SnackBar(
-                                                      content: Text('${track.name} will play next'),
-                                                      duration: const Duration(seconds: 2),
-                                                    ),
-                                                  );
-                                                },
-                                              ),
-                                              ListTile(
-                                                leading: const Icon(Icons.queue_music),
-                                                title: const Text('Add to Queue'),
-                                                onTap: () {
-                                                  Navigator.pop(sheetContext);
-                                                  _appState.audioPlayerService.addToQueue([track]);
-                                                  ScaffoldMessenger.of(parentContext).showSnackBar(
-                                                    SnackBar(
-                                                      content: Text('${track.name} added to queue'),
-                                                      duration: const Duration(seconds: 2),
-                                                    ),
-                                                  );
-                                                },
-                                              ),
-                                              ListTile(
-                                                leading: const Icon(Icons.playlist_add),
-                                                title: const Text('Add to Playlist'),
-                                                onTap: () async {
-                                                  Navigator.pop(sheetContext);
-                                                  await showAddToPlaylistDialog(
-                                                    context: parentContext,
-                                                    appState: _appState,
-                                                    tracks: [track],
-                                                  );
-                                                },
-                                              ),
-                                              ListTile(
-                                                leading: const Icon(Icons.auto_awesome),
-                                                title: const Text('Instant Mix'),
-                                                onTap: () async {
-                                                  Navigator.pop(sheetContext);
-                                                  try {
-                                                    ScaffoldMessenger.of(parentContext).showSnackBar(
-                                                      const SnackBar(
-                                                        content: Text('Creating instant mix...'),
-                                                        duration: Duration(seconds: 1),
-                                                      ),
-                                                    );
-                                                    final mixTracks = await _appState.jellyfinService.getInstantMix(
-                                                      itemId: track.id,
-                                                      limit: 50,
-                                                    );
-                                                    if (!parentContext.mounted) return;
-                                                    if (mixTracks.isEmpty) {
-                                                      ScaffoldMessenger.of(parentContext).showSnackBar(
-                                                        const SnackBar(
-                                                          content: Text('No similar tracks found'),
-                                                          duration: Duration(seconds: 2),
-                                                        ),
-                                                      );
-                                                      return;
-                                                    }
-                                                    await _appState.audioPlayerService.playTrack(
-                                                      mixTracks.first,
-                                                      queueContext: mixTracks,
-                                                    );
-                                                    
-                                                    if (!parentContext.mounted) return;
-
-                                                    // Simple notification without persistent action button
-                                                    ScaffoldMessenger.of(parentContext).showSnackBar(
-                                                      SnackBar(
-                                                        content: Text('Playing instant mix (${mixTracks.length} tracks)'),
-                                                        duration: const Duration(seconds: 2),
-                                                        behavior: SnackBarBehavior.floating,
-                                                      ),
-                                                    );
-                                                  } catch (e) {
-                                                    if (!parentContext.mounted) return;
-                                                    ScaffoldMessenger.of(parentContext).showSnackBar(
-                                                      SnackBar(
-                                                        content: Text('Failed to create mix: $e'),
-                                                        backgroundColor: Theme.of(parentContext).colorScheme.error,
-                                                      ),
-                                                    );
-                                                  }
-                                                },
-                                              ),
-                                              ListTile(
-                                                leading: const Icon(Icons.download),
-                                                title: const Text('Download Track'),
-                                                onTap: () async {
-                                                  Navigator.pop(sheetContext);
-                                                  final messenger = ScaffoldMessenger.of(parentContext);
-                                                  final theme = Theme.of(parentContext);
-                                                  final downloadService = _appState.downloadService;
-                                                  try {
-                                                    final existing = downloadService.getDownload(track.id);
-                                                    if (existing != null) {
-                                                      if (existing.isCompleted) {
-                                                        messenger.showSnackBar(
-                                                          SnackBar(
-                                                            content: Text('"${track.name}" is already downloaded'),
-                                                            duration: const Duration(seconds: 2),
-                                                          ),
-                                                        );
-                                                        return;
-                                                      }
-                                                      if (existing.isFailed) {
-                                                        await downloadService.retryDownload(track.id);
-                                                        messenger.showSnackBar(
-                                                          SnackBar(
-                                                            content: Text('Retrying download for ${track.name}'),
-                                                            duration: const Duration(seconds: 2),
-                                                          ),
-                                                        );
-                                                        return;
-                                                      }
-                                                      messenger.showSnackBar(
-                                                        SnackBar(
-                                                          content: Text('"${track.name}" is already in the download queue'),
-                                                          duration: const Duration(seconds: 2),
-                                                        ),
-                                                      );
-                                                      return;
-                                                    }
-                                                    await downloadService.downloadTrack(track);
-                                                    messenger.showSnackBar(
-                                                      SnackBar(
-                                                        content: Text('Downloading ${track.name}'),
-                                                        duration: const Duration(seconds: 2),
-                                                      ),
-                                                    );
-                                                  } catch (e) {
-                                                    messenger.showSnackBar(
-                                                      SnackBar(
-                                                        content: Text('Failed to download ${track.name}: $e'),
-                                                        backgroundColor: theme.colorScheme.error,
-                                                      ),
-                                                    );
-                                                  }
-                                                },
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                ],
-                              ),
+                            IconButton(
+                              icon: const Icon(Icons.expand_more),
+                              onPressed: () => Navigator.of(context).pop(),
                             ),
-
-                            Expanded(
-                              child: TabBarView(
-                                controller: _tabController,
-                                children: [
-                                  // Tab 1: Now Playing (existing content)
-                                  _buildNowPlayingTab(
-                                    track: track,
-                                    isPlaying: isPlaying,
-                                    position: position,
-                                    duration: duration,
-                                    isDesktop: isDesktop,
-                                    theme: theme,
-                                    artwork: artwork,
-                                  ),
-
-                                  // Tab 2: Lyrics
-                                  _buildLyricsTab(
-                                    track: track,
-                                    position: position,
-                                    theme: theme,
-                                  ),
-                                ],
+                            const Spacer(),
+                            TabBar(
+                              controller: _tabController,
+                              isScrollable: true,
+                              tabAlignment: TabAlignment.center,
+                              labelStyle: theme.textTheme.titleSmall,
+                              tabs: const [
+                                Tab(text: 'Now Playing'),
+                                Tab(text: 'Lyrics'),
+                              ],
+                            ),
+                            const Spacer(),
+                            if (isDesktop)
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.picture_in_picture_alt_rounded,
+                                ),
+                                tooltip: 'Mini Player',
+                                onPressed: _switchToMiniPlayer,
                               ),
+                            IconButton(
+                              icon: const Icon(Icons.more_vert),
+                              onPressed: () {
+                                final parentContext = context;
+                                showModalBottomSheet(
+                                  context: parentContext,
+                                  builder: (sheetContext) => SafeArea(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        ListTile(
+                                          leading: const Icon(Icons.play_arrow),
+                                          title: const Text('Play Next'),
+                                          onTap: () {
+                                            Navigator.pop(sheetContext);
+                                            _appState.audioPlayerService
+                                                .playNext([track]);
+                                            ScaffoldMessenger.of(
+                                              parentContext,
+                                            ).showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  '${track.name} will play next',
+                                                ),
+                                                duration: const Duration(
+                                                  seconds: 2,
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                        ListTile(
+                                          leading: const Icon(
+                                            Icons.queue_music,
+                                          ),
+                                          title: const Text('Add to Queue'),
+                                          onTap: () {
+                                            Navigator.pop(sheetContext);
+                                            _appState.audioPlayerService
+                                                .addToQueue([track]);
+                                            ScaffoldMessenger.of(
+                                              parentContext,
+                                            ).showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  '${track.name} added to queue',
+                                                ),
+                                                duration: const Duration(
+                                                  seconds: 2,
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                        ListTile(
+                                          leading: const Icon(
+                                            Icons.playlist_add,
+                                          ),
+                                          title: const Text('Add to Playlist'),
+                                          onTap: () async {
+                                            Navigator.pop(sheetContext);
+                                            await showAddToPlaylistDialog(
+                                              context: parentContext,
+                                              appState: _appState,
+                                              tracks: [track],
+                                            );
+                                          },
+                                        ),
+                                        ListTile(
+                                          leading: const Icon(
+                                            Icons.auto_awesome,
+                                          ),
+                                          title: const Text('Instant Mix'),
+                                          onTap: () async {
+                                            Navigator.pop(sheetContext);
+                                            try {
+                                              ScaffoldMessenger.of(
+                                                parentContext,
+                                              ).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text(
+                                                    'Creating instant mix...',
+                                                  ),
+                                                  duration: Duration(
+                                                    seconds: 1,
+                                                  ),
+                                                ),
+                                              );
+                                              final mixTracks = await _appState
+                                                  .jellyfinService
+                                                  .getInstantMix(
+                                                    itemId: track.id,
+                                                    limit: 50,
+                                                  );
+                                              if (!parentContext.mounted) {
+                                                return;
+                                              }
+                                              if (mixTracks.isEmpty) {
+                                                ScaffoldMessenger.of(
+                                                  parentContext,
+                                                ).showSnackBar(
+                                                  const SnackBar(
+                                                    content: Text(
+                                                      'No similar tracks found',
+                                                    ),
+                                                    duration: Duration(
+                                                      seconds: 2,
+                                                    ),
+                                                  ),
+                                                );
+                                                return;
+                                              }
+                                              await _appState.audioPlayerService
+                                                  .playTrack(
+                                                    mixTracks.first,
+                                                    queueContext: mixTracks,
+                                                  );
+
+                                              if (!parentContext.mounted) {
+                                                return;
+                                              }
+
+                                              // Simple notification without persistent action button
+                                              ScaffoldMessenger.of(
+                                                parentContext,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Playing instant mix (${mixTracks.length} tracks)',
+                                                  ),
+                                                  duration: const Duration(
+                                                    seconds: 2,
+                                                  ),
+                                                  behavior:
+                                                      SnackBarBehavior.floating,
+                                                ),
+                                              );
+                                            } catch (e) {
+                                              if (!parentContext.mounted) {
+                                                return;
+                                              }
+                                              ScaffoldMessenger.of(
+                                                parentContext,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Failed to create mix: $e',
+                                                  ),
+                                                  backgroundColor: Theme.of(
+                                                    parentContext,
+                                                  ).colorScheme.error,
+                                                ),
+                                              );
+                                            }
+                                          },
+                                        ),
+                                        ListTile(
+                                          leading: const Icon(Icons.download),
+                                          title: const Text('Download Track'),
+                                          onTap: () async {
+                                            Navigator.pop(sheetContext);
+                                            final messenger =
+                                                ScaffoldMessenger.of(
+                                                  parentContext,
+                                                );
+                                            final theme = Theme.of(
+                                              parentContext,
+                                            );
+                                            final downloadService =
+                                                _appState.downloadService;
+                                            try {
+                                              final existing = downloadService
+                                                  .getDownload(track.id);
+                                              if (existing != null) {
+                                                if (existing.isCompleted) {
+                                                  messenger.showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        '"${track.name}" is already downloaded',
+                                                      ),
+                                                      duration: const Duration(
+                                                        seconds: 2,
+                                                      ),
+                                                    ),
+                                                  );
+                                                  return;
+                                                }
+                                                if (existing.isFailed) {
+                                                  await downloadService
+                                                      .retryDownload(track.id);
+                                                  messenger.showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        'Retrying download for ${track.name}',
+                                                      ),
+                                                      duration: const Duration(
+                                                        seconds: 2,
+                                                      ),
+                                                    ),
+                                                  );
+                                                  return;
+                                                }
+                                                messenger.showSnackBar(
+                                                  SnackBar(
+                                                    content: Text(
+                                                      '"${track.name}" is already in the download queue',
+                                                    ),
+                                                    duration: const Duration(
+                                                      seconds: 2,
+                                                    ),
+                                                  ),
+                                                );
+                                                return;
+                                              }
+                                              await downloadService
+                                                  .downloadTrack(track);
+                                              messenger.showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Downloading ${track.name}',
+                                                  ),
+                                                  duration: const Duration(
+                                                    seconds: 2,
+                                                  ),
+                                                ),
+                                              );
+                                            } catch (e) {
+                                              messenger.showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Failed to download ${track.name}: $e',
+                                                  ),
+                                                  backgroundColor:
+                                                      theme.colorScheme.error,
+                                                ),
+                                              );
+                                            }
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
                             ),
                           ],
                         ),
                       ),
-                        ],
+
+                      Expanded(
+                        child: TabBarView(
+                          controller: _tabController,
+                          children: [
+                            // Tab 1: Now Playing (existing content)
+                            _buildNowPlayingTab(
+                              track: track,
+                              isPlaying: isPlaying,
+                              position: position,
+                              duration: duration,
+                              isDesktop: isDesktop,
+                              theme: theme,
+                              artwork: artwork,
+                            ),
+
+                            // Tab 2: Lyrics
+                            _buildLyricsTab(
+                              track: track,
+                              position: position,
+                              theme: theme,
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  );
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
       },
     );
   }
@@ -795,544 +890,655 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
             horizontal: isDesktop ? size.width * 0.15 : 24,
             vertical: 16,
           ),
-          child: Column(
-            children: [
-              // Top section: Artwork and Track Info
-              Expanded(
-                flex: 3,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // Artwork - Much larger now
-                    Flexible(
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: isDesktop ? 500 : size.width * 0.85,
-                          maxHeight: isDesktop ? 500 : size.height * 0.5,
-                        ),
-                        child: AspectRatio(
-                          aspectRatio: 1,
-                          child: artwork,
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Track Info - Compact
-                    Text(
-                      track.name,
-                      style: (isDesktop
-                              ? theme.textTheme.headlineMedium
-                              : theme.textTheme.titleLarge)
-                          ?.copyWith(fontWeight: FontWeight.bold),
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-
-                    const SizedBox(height: 8),
-
-                    // Artist - clickable to navigate to artist detail
-                    GestureDetector(
-                      onTap: () async {
-                        // Get the artist name from the track
-                        final artistName = track.artists.isNotEmpty ? track.artists.first : track.displayArtist;
-
-                        // Show loading indicator
-                        if (!mounted) return;
-                        showDialog(
-                          context: context,
-                          barrierDismissible: false,
-                          builder: (context) => const Center(
-                            child: CircularProgressIndicator(),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return Column(
+                children: [
+                  // Top section: Artwork and Track Info
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        // Artwork - Scaled to fit
+                        Flexible(
+                          child: FittedBox(
+                            fit: BoxFit.contain,
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxWidth: isDesktop ? 1000 : size.width * 0.98,
+                                maxHeight: isDesktop ? 1000 : size.height * 0.7,
+                              ),
+                              child: AspectRatio(
+                                aspectRatio: 1,
+                                child: artwork,
+                              ),
+                            ),
                           ),
-                        );
+                        ),
 
-                        JellyfinArtist? artist;
+                        const SizedBox(height: 24),
 
-                        try {
-                          // First, search in already loaded artists
-                          var artists = _appState.artists ?? [];
-                          artist = artists.where((a) =>
-                            a.name.toLowerCase() == artistName.toLowerCase()
-                          ).firstOrNull;
+                        // Track Info - Compact
+                        Text(
+                          track.name,
+                          style:
+                              (isDesktop
+                                      ? theme.textTheme.headlineMedium
+                                      : theme.textTheme.titleLarge)
+                                  ?.copyWith(fontWeight: FontWeight.bold),
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
 
-                          // If not found, keep loading more pages until we find it or run out
-                          if (artist == null && _appState.hasMoreArtists) {
-                            for (int i = 0; i < 10; i++) { // Max 10 pages = 500 artists
-                              await _appState.loadMoreArtists();
-                              artists = _appState.artists ?? [];
+                        const SizedBox(height: 8),
 
-                              artist = artists.where((a) =>
-                                a.name.toLowerCase() == artistName.toLowerCase()
-                              ).firstOrNull;
+                        // Artist - clickable to navigate to artist detail
+                        GestureDetector(
+                          onTap: () async {
+                            // Get the artist name from the track
+                            final artistName = track.artists.isNotEmpty
+                                ? track.artists.first
+                                : track.displayArtist;
 
-                              if (artist != null || !_appState.hasMoreArtists) {
-                                break;
+                            // Show loading indicator
+                            if (!mounted) return;
+                            showDialog(
+                              context: context,
+                              barrierDismissible: false,
+                              builder: (context) => const Center(
+                                child: CircularProgressIndicator(),
+                              ),
+                            );
+
+                            JellyfinArtist? artist;
+
+                            try {
+                              // First, search in already loaded artists
+                              var artists = _appState.artists ?? [];
+                              artist = artists
+                                  .where(
+                                    (a) =>
+                                        a.name.toLowerCase() ==
+                                        artistName.toLowerCase(),
+                                  )
+                                  .firstOrNull;
+
+                              // If not found, keep loading more pages until we find it or run out
+                              if (artist == null && _appState.hasMoreArtists) {
+                                for (int i = 0; i < 10; i++) {
+                                  // Max 10 pages = 500 artists
+                                  await _appState.loadMoreArtists();
+                                  artists = _appState.artists ?? [];
+
+                                  artist = artists
+                                      .where(
+                                        (a) =>
+                                            a.name.toLowerCase() ==
+                                            artistName.toLowerCase(),
+                                      )
+                                      .firstOrNull;
+
+                                  if (artist != null ||
+                                      !_appState.hasMoreArtists) {
+                                    break;
+                                  }
+                                }
                               }
+
+                              // If still not found, try downloads for offline mode
+                              if (artist == null) {
+                                final downloads = _appState
+                                    .downloadService
+                                    .completedDownloads;
+                                final artistTracks = downloads
+                                    .where(
+                                      (d) => d.track.artists.any(
+                                        (a) =>
+                                            a.toLowerCase() ==
+                                            artistName.toLowerCase(),
+                                      ),
+                                    )
+                                    .map((d) => d.track)
+                                    .toList();
+
+                                if (artistTracks.isNotEmpty) {
+                                  // Create synthetic artist for offline mode
+                                  artist = JellyfinArtist(
+                                    id: 'offline_$artistName',
+                                    name: artistName,
+                                  );
+                                }
+                              }
+                            } finally {
+                              // Close loading dialog
+                              if (context.mounted) Navigator.of(context).pop();
                             }
-                          }
 
-                          // If still not found, try downloads for offline mode
-                          if (artist == null) {
-                            final downloads = _appState.downloadService.completedDownloads;
-                            final artistTracks = downloads
-                                .where((d) => d.track.artists.any((a) =>
-                                  a.toLowerCase() == artistName.toLowerCase()
-                                ))
-                                .map((d) => d.track)
-                                .toList();
-
-                            if (artistTracks.isNotEmpty) {
-                              // Create synthetic artist for offline mode
-                              artist = JellyfinArtist(
-                                id: 'offline_$artistName',
-                                name: artistName,
+                            if (artist != null) {
+                              if (!context.mounted) return;
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      ArtistDetailScreen(artist: artist!),
+                                ),
+                              );
+                            } else {
+                              if (!context.mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Could not find artist "$artistName"',
+                                  ),
+                                  duration: const Duration(seconds: 2),
+                                ),
                               );
                             }
-                          }
-                        } finally {
-                          // Close loading dialog
-                          if (context.mounted) Navigator.of(context).pop();
-                        }
-
-                        if (artist != null) {
-                          if (!context.mounted) return;
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => ArtistDetailScreen(
-                                artist: artist!,
+                          },
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.person,
+                                size: 16,
+                                color: theme.colorScheme.tertiary.withValues(
+                                  alpha: 0.7,
+                                ),
                               ),
-                            ),
-                          );
-                        } else {
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Could not find artist "$artistName"'),
-                              duration: const Duration(seconds: 2),
-                            ),
-                          );
-                        }
-                      },
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.person,
-                            size: 16,
-                            color: theme.colorScheme.tertiary.withValues(alpha: 0.7),
+                              const SizedBox(width: 4),
+                              Flexible(
+                                child: Text(
+                                  track.displayArtist,
+                                  style:
+                                      (isDesktop
+                                              ? theme.textTheme.headlineSmall
+                                              : theme.textTheme.titleMedium)
+                                          ?.copyWith(
+                                            color: theme.colorScheme.tertiary,
+                                            decoration:
+                                                TextDecoration.underline,
+                                            decorationColor: theme
+                                                .colorScheme
+                                                .tertiary
+                                                .withValues(alpha: 0.5),
+                                          ),
+                                  textAlign: TextAlign.center,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 4),
-                          Flexible(
-                            child: Text(
-                              track.displayArtist,
-                              style: (isDesktop
-                                      ? theme.textTheme.titleMedium
-                                      : theme.textTheme.bodyLarge)
-                                  ?.copyWith(
-                                color: theme.colorScheme.tertiary,
-                                decoration: TextDecoration.underline,
-                                decorationColor: theme.colorScheme.tertiary.withValues(alpha: 0.5),
-                              ),
-                              textAlign: TextAlign.center,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                        ),
+
+                        // Album - clickable to navigate to album detail
+                        if (track.album != null && track.albumId != null) ...[
+                          const SizedBox(height: 4),
+                          GestureDetector(
+                            onTap: () async {
+                              // First try to find in online cache
+                              final albums = _appState.albums ?? [];
+                              var album = albums
+                                  .where((a) => a.id == track.albumId)
+                                  .firstOrNull;
+
+                              // If not found and we have downloads, create a synthetic album from downloads
+                              if (album == null) {
+                                final downloads = _appState
+                                    .downloadService
+                                    .completedDownloads;
+                                final albumTracks = downloads
+                                    .where(
+                                      (d) => d.track.albumId == track.albumId,
+                                    )
+                                    .map((d) => d.track)
+                                    .toList();
+
+                                if (albumTracks.isNotEmpty) {
+                                  // Create a synthetic JellyfinAlbum for offline mode
+                                  album = JellyfinAlbum(
+                                    id: track.albumId!,
+                                    name: track.album!,
+                                    artists: track.artists,
+                                    primaryImageTag: track.albumPrimaryImageTag,
+                                    genres: const [],
+                                  );
+                                }
+                              }
+
+                              if (album != null) {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (context) =>
+                                        AlbumDetailScreen(album: album!),
+                                  ),
+                                );
+                              } else {
+                                // Album not available
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      'Album "${track.album}" not available offline',
+                                    ),
+                                    duration: const Duration(seconds: 2),
+                                  ),
+                                );
+                              }
+                            },
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.album,
+                                  size: 16,
+                                  color: theme.colorScheme.onSurfaceVariant
+                                      .withValues(alpha: 0.7),
+                                ),
+                                const SizedBox(width: 4),
+                                Flexible(
+                                  child: Text(
+                                    track.album!,
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                      decoration: TextDecoration.underline,
+                                      decorationColor: theme
+                                          .colorScheme
+                                          .onSurfaceVariant
+                                          .withValues(alpha: 0.3),
+                                    ),
+                                    textAlign: TextAlign.center,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
-                      ),
-                    ),
 
-                    // Album - clickable to navigate to album detail
-                    if (track.album != null && track.albumId != null) ...[
-                      const SizedBox(height: 4),
-                      GestureDetector(
-                        onTap: () async {
-                          // First try to find in online cache
-                          final albums = _appState.albums ?? [];
-                          var album = albums.where((a) => a.id == track.albumId).firstOrNull;
-
-                          // If not found and we have downloads, create a synthetic album from downloads
-                          if (album == null) {
-                            final downloads = _appState.downloadService.completedDownloads;
-                            final albumTracks = downloads
-                                .where((d) => d.track.albumId == track.albumId)
-                                .map((d) => d.track)
-                                .toList();
-
-                            if (albumTracks.isNotEmpty) {
-                              // Create a synthetic JellyfinAlbum for offline mode
-                              album = JellyfinAlbum(
-                                id: track.albumId!,
-                                name: track.album!,
-                                artists: track.artists,
-                                primaryImageTag: track.albumPrimaryImageTag,
-                                genres: const [],
-                              );
-                            }
-                          }
-
-                          if (album != null) {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (context) => AlbumDetailScreen(
-                                  album: album!,
+                        // Audio quality info with streaming mode (stacked vertically)
+                        if (track.audioQualityInfo != null) ...[
+                          const SizedBox(height: 8),
+                          // File quality badge
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.surfaceContainerHighest
+                                  .withValues(alpha: 0.3),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: theme.colorScheme.outline.withValues(
+                                  alpha: 0.2,
                                 ),
-                              ),
-                            );
-                          } else {
-                            // Album not available
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Album "${track.album}" not available offline'),
-                                duration: const Duration(seconds: 2),
-                              ),
-                            );
-                          }
-                        },
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.album,
-                              size: 16,
-                              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
-                            ),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                track.album!,
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                  decoration: TextDecoration.underline,
-                                  decorationColor: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
-                                ),
-                                textAlign: TextAlign.center,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                                width: 1,
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                    ],
-
-                    // Audio quality info with streaming mode (stacked vertically)
-                    if (track.audioQualityInfo != null) ...[
-                      const SizedBox(height: 8),
-                      // File quality badge
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: theme.colorScheme.outline.withValues(alpha: 0.2),
-                            width: 1,
-                          ),
-                        ),
-                        child: Text(
-                          track.audioQualityInfo!,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.tertiary,
-                            fontWeight: FontWeight.w500,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      // Streaming mode badge (below file quality)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: _appState.streamingQuality == StreamingQuality.original
-                              ? theme.colorScheme.primaryContainer.withValues(alpha: 0.5)
-                              : theme.colorScheme.secondaryContainer.withValues(alpha: 0.5),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: _appState.streamingQuality == StreamingQuality.original
-                                ? theme.colorScheme.primary.withValues(alpha: 0.3)
-                                : theme.colorScheme.secondary.withValues(alpha: 0.3),
-                            width: 1,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _appState.streamingQuality == StreamingQuality.original
-                                  ? Icons.high_quality
-                                  : Icons.compress,
-                              size: 14,
-                              color: _appState.streamingQuality == StreamingQuality.original
-                                  ? theme.colorScheme.primary
-                                  : theme.colorScheme.secondary,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              _getStreamingModeLabel(_appState.streamingQuality),
+                            child: Text(
+                              track.audioQualityInfo!,
                               style: theme.textTheme.bodySmall?.copyWith(
-                                color: _appState.streamingQuality == StreamingQuality.original
-                                    ? theme.colorScheme.primary
-                                    : theme.colorScheme.secondary,
+                                color: theme.colorScheme.tertiary,
                                 fontWeight: FontWeight.w500,
                                 letterSpacing: 0.5,
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-
-              // Bottom section: Controls (pinned to bottom)
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Progress Slider
-                  StreamBuilder<PositionData>(
-                    stream: _audioService.positionDataStream,
-                    builder: (context, snapshot) {
-                      final positionData = snapshot.data ??
-                          const PositionData(Duration.zero, Duration.zero, Duration.zero);
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                        child: ProgressBar(
-                          progress: positionData.position,
-                          buffered: positionData.bufferedPosition,
-                          total: positionData.duration,
-                          onSeek: _audioService.seek,
-                          barHeight: 4.0,
-                          thumbRadius: 8.0,
-                          thumbGlowRadius: 20.0,
-                          progressBarColor: theme.colorScheme.secondary,
-                          baseBarColor: theme.colorScheme.secondary.withValues(alpha: 0.2),
-                          bufferedBarColor: theme.colorScheme.secondary.withValues(alpha: 0.1),
-                          thumbColor: theme.colorScheme.secondary,
-                          timeLabelLocation: TimeLabelLocation.below,
-                          timeLabelPadding: 8.0,
-                          timeLabelTextStyle: theme.textTheme.bodySmall,
-                        ),
-                      );
-                    },
-                  ),
-
-                  const SizedBox(height: 8),
-
-                  // Volume Slider
-                  StreamBuilder<double>(
-                    stream: _audioService.volumeStream,
-                    initialData: _audioService.volume,
-                    builder: (context, volumeSnapshot) {
-                      final double volume =
-                          volumeSnapshot.data ?? _audioService.volume;
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.volume_mute, size: 20),
-                            Expanded(
-                              child: SliderTheme(
-                                data: SliderTheme.of(context).copyWith(
-                                  activeTrackColor: theme.colorScheme.tertiary,
-                                  inactiveTrackColor: theme.colorScheme.tertiary.withValues(alpha: 0.2),
-                                  thumbColor: theme.colorScheme.tertiary,
-                                  overlayColor: theme.colorScheme.tertiary.withValues(alpha: 0.1),
-                                ),
-                                child: Slider(
-                                  value: volume,
-                                  min: 0,
-                                  max: 1,
-                                  onChanged: (value) {
-                                    _audioService.setVolume(value);
-                                  },
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '${(volume * 100).round()}%',
-                              style: theme.textTheme.bodySmall,
-                            ),
-                            const SizedBox(width: 8),
-                            const Icon(Icons.volume_up, size: 20),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Playback Controls
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        icon: Icon(
-                          track.isFavorite ? Icons.favorite : Icons.favorite_border,
-                          size: isDesktop ? 32 : 26,
-                        ),
-                        onPressed: () async {
-                          try {
-                            final currentFavoriteStatus = track.isFavorite;
-                            final newFavoriteStatus = !currentFavoriteStatus;
-
-                            debugPrint('🎯 Favorite button clicked: current=$currentFavoriteStatus, new=$newFavoriteStatus');
-
-                            // Update Jellyfin server (with offline queue support)
-                            await _appState.markFavorite(track.id, newFavoriteStatus);
-
-                            // Update track object with new favorite status
-                            final updatedTrack = track.copyWith(isFavorite: newFavoriteStatus);
-                            debugPrint('🔄 Updating track: old isFavorite=${track.isFavorite}, new isFavorite=${updatedTrack.isFavorite}');
-                            _audioService.updateCurrentTrack(updatedTrack);
-
-                            // Force UI rebuild
-                            if (mounted) setState(() {});
-
-                            // Refresh favorites list in app state
-                            await _appState.refreshFavorites();
-
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(newFavoriteStatus ? 'Added to favorites' : 'Removed from favorites'),
-                                duration: const Duration(seconds: 2),
-                                backgroundColor: Colors.green,
-                              ),
-                            );
-                          } catch (e) {
-                            debugPrint('❌ Error toggling favorite: $e');
-                            if (!context.mounted) return;
-                            final isOfflineError = e.toString().contains('Offline') ||
-                                e.toString().contains('queued');
-
-                            // Update track optimistically even when offline
-                            if (isOfflineError) {
-                              final currentFavoriteStatus = track.isFavorite;
-                              final newFavoriteStatus = !currentFavoriteStatus;
-                              final updatedTrack = track.copyWith(isFavorite: newFavoriteStatus);
-                              _audioService.updateCurrentTrack(updatedTrack);
-                              if (mounted) setState(() {});
-                            }
-
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                    isOfflineError
-                                        ? 'Offline: Favorite will sync when online'
-                                        : 'Failed to update favorite: $e'),
-                                backgroundColor: isOfflineError ? Colors.orange : theme.colorScheme.error,
-                              ),
-                            );
-                          }
-                        },
-                        color: track.isFavorite ? Colors.red : null,
-                      ),
-
-                      SizedBox(width: isDesktop ? 16 : 4),
-
-                      IconButton(
-                        icon: Icon(
-                          Icons.skip_previous,
-                          size: isDesktop ? 48 : 40,
-                        ),
-                        onPressed: () => _audioService.previous(),
-                      ),
-
-                      SizedBox(width: isDesktop ? 24 : 8),
-
-                      IconButton(
-                        icon: Icon(
-                          Icons.stop,
-                          size: isDesktop ? 40 : 32,
-                        ),
-                        onPressed: () => _audioService.stop(),
-                        color: theme.colorScheme.error,
-                      ),
-
-                      SizedBox(width: isDesktop ? 24 : 8),
-
-                      Container(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: theme.colorScheme.primary,
-                          boxShadow: [
-                            BoxShadow(
-                              color: theme.colorScheme.primary.withValues(alpha: 0.4),
-                              blurRadius: 16,
-                              spreadRadius: 2,
-                            ),
-                          ],
-                        ),
-                        child: IconButton(
-                          icon: Icon(
-                            isPlaying ? Icons.pause : Icons.play_arrow,
-                            size: isDesktop ? 56 : 48,
                           ),
-                          onPressed: () => _audioService.playPause(),
-                          color: theme.colorScheme.onPrimary,
-                        ),
-                      ),
-
-                      SizedBox(width: isDesktop ? 24 : 8),
-
-                      IconButton(
-                        icon: Icon(
-                          Icons.skip_next,
-                          size: isDesktop ? 48 : 40,
-                        ),
-                        onPressed: () => _audioService.next(),
-                      ),
-
-                      SizedBox(width: isDesktop ? 16 : 4),
-
-                      // Repeat button
-                      StreamBuilder<RepeatMode>(
-                        stream: _audioService.repeatModeStream,
-                        initialData: _audioService.repeatMode,
-                        builder: (context, snapshot) {
-                          final repeatMode = snapshot.data ?? RepeatMode.off;
-                          IconData icon;
-                          Color? color;
-
-                          switch (repeatMode) {
-                            case RepeatMode.off:
-                              icon = Icons.repeat;
-                              color = null;
-                              break;
-                            case RepeatMode.all:
-                              icon = Icons.repeat;
-                              color = theme.colorScheme.primary;
-                              break;
-                            case RepeatMode.one:
-                              icon = Icons.repeat_one;
-                              color = theme.colorScheme.primary;
-                              break;
-                          }
-
-                          return IconButton(
-                            icon: Icon(
-                              icon,
-                              size: isDesktop ? 32 : 26,
-                              color: color,
+                          const SizedBox(height: 6),
+                          // Streaming mode badge (below file quality)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
                             ),
-                            onPressed: () => _audioService.toggleRepeatMode(),
+                            decoration: BoxDecoration(
+                              color:
+                                  _appState.streamingQuality ==
+                                      StreamingQuality.original
+                                  ? theme.colorScheme.primaryContainer
+                                        .withValues(alpha: 0.5)
+                                  : theme.colorScheme.secondaryContainer
+                                        .withValues(alpha: 0.5),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color:
+                                    _appState.streamingQuality ==
+                                        StreamingQuality.original
+                                    ? theme.colorScheme.primary.withValues(
+                                        alpha: 0.3,
+                                      )
+                                    : theme.colorScheme.secondary.withValues(
+                                        alpha: 0.3,
+                                      ),
+                                width: 1,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  _appState.streamingQuality ==
+                                          StreamingQuality.original
+                                      ? Icons.high_quality
+                                      : Icons.compress,
+                                  size: 14,
+                                  color:
+                                      _appState.streamingQuality ==
+                                          StreamingQuality.original
+                                      ? theme.colorScheme.primary
+                                      : theme.colorScheme.secondary,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _getStreamingModeLabel(
+                                    _appState.streamingQuality,
+                                  ),
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color:
+                                        _appState.streamingQuality ==
+                                            StreamingQuality.original
+                                        ? theme.colorScheme.primary
+                                        : theme.colorScheme.secondary,
+                                    fontWeight: FontWeight.w500,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+
+                  // Bottom section: Controls (pinned to bottom)
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Progress Slider
+                      StreamBuilder<PositionData>(
+                        stream: _audioService.positionDataStream,
+                        builder: (context, snapshot) {
+                          final positionData =
+                              snapshot.data ??
+                              const PositionData(
+                                Duration.zero,
+                                Duration.zero,
+                                Duration.zero,
+                              );
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 24.0,
+                            ),
+                            child: ProgressBar(
+                              progress: positionData.position,
+                              buffered: positionData.bufferedPosition,
+                              total: positionData.duration,
+                              onSeek: _audioService.seek,
+                              barHeight: 4.0,
+                              thumbRadius: 8.0,
+                              thumbGlowRadius: 20.0,
+                              progressBarColor: theme.colorScheme.secondary,
+                              baseBarColor: theme.colorScheme.secondary
+                                  .withValues(alpha: 0.2),
+                              bufferedBarColor: theme.colorScheme.secondary
+                                  .withValues(alpha: 0.1),
+                              thumbColor: theme.colorScheme.secondary,
+                              timeLabelLocation: TimeLabelLocation.below,
+                              timeLabelPadding: 8.0,
+                              timeLabelTextStyle: theme.textTheme.bodySmall,
+                            ),
                           );
                         },
+                      ),
+
+                      const SizedBox(height: 8),
+
+                      // Volume Slider
+                      StreamBuilder<double>(
+                        stream: _audioService.volumeStream,
+                        initialData: _audioService.volume,
+                        builder: (context, volumeSnapshot) {
+                          final double volume =
+                              volumeSnapshot.data ?? _audioService.volume;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.volume_mute, size: 20),
+                                Expanded(
+                                  child: SliderTheme(
+                                    data: SliderTheme.of(context).copyWith(
+                                      activeTrackColor:
+                                          theme.colorScheme.tertiary,
+                                      inactiveTrackColor: theme
+                                          .colorScheme
+                                          .tertiary
+                                          .withValues(alpha: 0.2),
+                                      thumbColor: theme.colorScheme.tertiary,
+                                      overlayColor: theme.colorScheme.tertiary
+                                          .withValues(alpha: 0.1),
+                                    ),
+                                    child: Slider(
+                                      value: volume,
+                                      min: 0,
+                                      max: 1,
+                                      onChanged: (value) {
+                                        _audioService.setVolume(value);
+                                      },
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '${(volume * 100).round()}%',
+                                  style: theme.textTheme.bodySmall,
+                                ),
+                                const SizedBox(width: 8),
+                                const Icon(Icons.volume_up, size: 20),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // Playback Controls
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          IconButton(
+                            icon: Icon(
+                              track.isFavorite
+                                  ? Icons.favorite
+                                  : Icons.favorite_border,
+                              size: isDesktop ? 32 : 26,
+                            ),
+                            onPressed: () async {
+                              try {
+                                final currentFavoriteStatus = track.isFavorite;
+                                final newFavoriteStatus =
+                                    !currentFavoriteStatus;
+
+                                debugPrint(
+                                  '🎯 Favorite button clicked: current=$currentFavoriteStatus, new=$newFavoriteStatus',
+                                );
+
+                                // Update Jellyfin server (with offline queue support)
+                                await _appState.markFavorite(
+                                  track.id,
+                                  newFavoriteStatus,
+                                );
+
+                                // Update track object with new favorite status
+                                final updatedTrack = track.copyWith(
+                                  isFavorite: newFavoriteStatus,
+                                );
+                                debugPrint(
+                                  '🔄 Updating track: old isFavorite=${track.isFavorite}, new isFavorite=${updatedTrack.isFavorite}',
+                                );
+                                _audioService.updateCurrentTrack(updatedTrack);
+
+                                // Force UI rebuild
+                                if (mounted) setState(() {});
+
+                                // Refresh favorites list in app state
+                                await _appState.refreshFavorites();
+
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      newFavoriteStatus
+                                          ? 'Added to favorites'
+                                          : 'Removed from favorites',
+                                    ),
+                                    duration: const Duration(seconds: 2),
+                                    backgroundColor: Colors.green,
+                                  ),
+                                );
+                              } catch (e) {
+                                debugPrint('❌ Error toggling favorite: $e');
+                                if (!context.mounted) return;
+                                final isOfflineError =
+                                    e.toString().contains('Offline') ||
+                                    e.toString().contains('queued');
+
+                                // Update track optimistically even when offline
+                                if (isOfflineError) {
+                                  final currentFavoriteStatus =
+                                      track.isFavorite;
+                                  final newFavoriteStatus =
+                                      !currentFavoriteStatus;
+                                  final updatedTrack = track.copyWith(
+                                    isFavorite: newFavoriteStatus,
+                                  );
+                                  _audioService.updateCurrentTrack(
+                                    updatedTrack,
+                                  );
+                                  if (mounted) setState(() {});
+                                }
+
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      isOfflineError
+                                          ? 'Offline: Favorite will sync when online'
+                                          : 'Failed to update favorite: $e',
+                                    ),
+                                    backgroundColor: isOfflineError
+                                        ? Colors.orange
+                                        : theme.colorScheme.error,
+                                  ),
+                                );
+                              }
+                            },
+                            color: track.isFavorite ? Colors.red : null,
+                          ),
+
+                          SizedBox(width: isDesktop ? 16 : 4),
+
+                          IconButton(
+                            icon: Icon(
+                              Icons.skip_previous,
+                              size: isDesktop ? 48 : 40,
+                            ),
+                            onPressed: () => _audioService.previous(),
+                          ),
+
+                          SizedBox(width: isDesktop ? 24 : 8),
+
+                          IconButton(
+                            icon: Icon(Icons.stop, size: isDesktop ? 40 : 32),
+                            onPressed: () => _audioService.stop(),
+                            color: theme.colorScheme.error,
+                          ),
+
+                          SizedBox(width: isDesktop ? 24 : 8),
+
+                          Container(
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: theme.colorScheme.primary,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: theme.colorScheme.primary.withValues(
+                                    alpha: 0.4,
+                                  ),
+                                  blurRadius: 16,
+                                  spreadRadius: 2,
+                                ),
+                              ],
+                            ),
+                            child: IconButton(
+                              icon: Icon(
+                                isPlaying ? Icons.pause : Icons.play_arrow,
+                                size: isDesktop ? 56 : 48,
+                              ),
+                              onPressed: () => _audioService.playPause(),
+                              color: theme.colorScheme.onPrimary,
+                            ),
+                          ),
+
+                          SizedBox(width: isDesktop ? 24 : 8),
+
+                          IconButton(
+                            icon: Icon(
+                              Icons.skip_next,
+                              size: isDesktop ? 48 : 40,
+                            ),
+                            onPressed: () => _audioService.next(),
+                          ),
+
+                          SizedBox(width: isDesktop ? 16 : 4),
+
+                          // Repeat button
+                          StreamBuilder<RepeatMode>(
+                            stream: _audioService.repeatModeStream,
+                            initialData: _audioService.repeatMode,
+                            builder: (context, snapshot) {
+                              final repeatMode =
+                                  snapshot.data ?? RepeatMode.off;
+                              IconData icon;
+                              Color? color;
+
+                              switch (repeatMode) {
+                                case RepeatMode.off:
+                                  icon = Icons.repeat;
+                                  color = null;
+                                  break;
+                                case RepeatMode.all:
+                                  icon = Icons.repeat;
+                                  color = theme.colorScheme.primary;
+                                  break;
+                                case RepeatMode.one:
+                                  icon = Icons.repeat_one;
+                                  color = theme.colorScheme.primary;
+                                  break;
+                              }
+
+                              return IconButton(
+                                icon: Icon(
+                                  icon,
+                                  size: isDesktop ? 32 : 26,
+                                  color: color,
+                                ),
+                                onPressed: () =>
+                                    _audioService.toggleRepeatMode(),
+                              );
+                            },
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ],
-              ),
-            ],
+              );
+            },
           ),
         );
       },
@@ -1368,10 +1574,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
               color: theme.colorScheme.secondary.withValues(alpha: 0.5),
             ),
             const SizedBox(height: 24),
-            Text(
-              'No lyrics available',
-              style: theme.textTheme.headlineSmall,
-            ),
+            Text('No lyrics available', style: theme.textTheme.headlineSmall),
             const SizedBox(height: 12),
             Text(
               'Lyrics not found for this track',
@@ -1449,8 +1652,8 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
               onTap: () {
                 if (line.startTicks != null) {
                   // Jellyfin ticks are 100ns units
-                   final microseconds = line.startTicks! ~/ 10;
-                   _audioService.seek(Duration(microseconds: microseconds));
+                  final microseconds = line.startTicks! ~/ 10;
+                  _audioService.seek(Duration(microseconds: microseconds));
                 }
               },
               child: Padding(
@@ -1460,22 +1663,26 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
                   style: theme.textTheme.titleLarge!.copyWith(
                     color: isCurrent
                         ? theme.colorScheme.primary
-                        : theme.colorScheme.onSurfaceVariant.withValues(alpha: isPast ? 0.3 : 0.6),
+                        : theme.colorScheme.onSurfaceVariant.withValues(
+                            alpha: isPast ? 0.3 : 0.6,
+                          ),
                     fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
                     fontSize: isCurrent ? 28 : 20,
                     height: 1.4,
-                    shadows: isCurrent ? [
-                      Shadow(
-                        color: theme.colorScheme.primary.withValues(alpha: 0.4),
-                        blurRadius: 12,
-                        offset: const Offset(0, 2),
-                      )
-                    ] : [],
+                    shadows: isCurrent
+                        ? [
+                            Shadow(
+                              color: theme.colorScheme.primary.withValues(
+                                alpha: 0.4,
+                              ),
+                              blurRadius: 12,
+                              offset: const Offset(0, 2),
+                            ),
+                          ]
+                        : [],
                   ),
                   textAlign: TextAlign.center,
-                  child: Text(
-                    line.text.isEmpty ? '♫' : line.text,
-                  ),
+                  child: Text(line.text.isEmpty ? '♫' : line.text),
                 ),
               ),
             );
@@ -1491,12 +1698,12 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
     required ThemeData theme,
   }) {
     final borderRadius = BorderRadius.circular(isDesktop ? 24 : 16);
-    final maxWidth = isDesktop ? 800 : 500;
+    final maxWidth = isDesktop ? 1024 : 800;
     final placeholder = Container(
       color: theme.colorScheme.primaryContainer,
       child: Icon(
         Icons.album,
-        size: isDesktop ? 120 : 80,
+        size: isDesktop ? 160 : 100,
         color: theme.colorScheme.onPrimaryContainer,
       ),
     );
@@ -1518,8 +1725,8 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
     }
 
     return Container(
-        decoration: BoxDecoration(
-          borderRadius: borderRadius,
+      decoration: BoxDecoration(
+        borderRadius: borderRadius,
         color: theme.colorScheme.primaryContainer,
         boxShadow: [
           BoxShadow(
@@ -1555,10 +1762,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> with SingleTickerPr
 }
 
 class _LyricLine {
-  _LyricLine({
-    required this.text,
-    this.startTicks,
-  });
+  _LyricLine({required this.text, this.startTicks});
 
   final String text;
   final int? startTicks; // Jellyfin uses ticks (100 nanoseconds)

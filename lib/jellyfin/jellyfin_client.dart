@@ -18,6 +18,7 @@ import 'robust_http_client.dart';
 class JellyfinClient {
   JellyfinClient({
     required this.serverUrl,
+    required this.deviceId,
     http.Client? httpClient,
   }) : _robustClient = RobustHttpClient(
          client: httpClient,
@@ -27,6 +28,7 @@ class JellyfinClient {
        );
 
   final String serverUrl;
+  final String deviceId;
   final RobustHttpClient _robustClient;
   
   // For backward compatibility
@@ -117,6 +119,30 @@ class JellyfinClient {
         .whereType<Map<String, dynamic>>()
         .map(JellyfinUser.fromJson)
         .toList();
+  }
+
+  /// Fetches the current user's profile info including profile image tag.
+  Future<JellyfinUser> fetchCurrentUser(JellyfinCredentials credentials) async {
+    final uri = _buildUri('/Users/${credentials.userId}');
+    final response = await _robustClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch user profile: ${response.statusCode}',
+      );
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    return JellyfinUser.fromJson(data);
+  }
+
+  /// Builds the URL for a user's profile image.
+  String? getUserImageUrl(String userId, String? imageTag) {
+    if (imageTag == null) return null;
+    return '$serverUrl/Users/$userId/Images/Primary?tag=$imageTag';
   }
 
   Future<List<JellyfinLibrary>> fetchLibraries(
@@ -680,8 +706,8 @@ class JellyfinClient {
     final headers = <String, String>{
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-      'X-Emby-Authorization': 'MediaBrowser Client="Nautune", Device="Linux", '
-          'DeviceId="nautune-dev", Version="0.1.0"',
+      'X-Emby-Authorization': 'MediaBrowser Client="Nautune", Device="${defaultTargetPlatform.name}", '
+          'DeviceId="$deviceId", Version="3.5.0+1"',
     };
 
     if (credentials != null) {
@@ -844,9 +870,10 @@ class JellyfinClient {
       'SortOrder': 'Descending',
       'Recursive': 'true',
       'Limit': limit.toString(),
-      'Filters': 'IsPlayed',
-      'Fields': 'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams',
+      // 'Filters': 'IsPlayed', // Removed to ensure Artists/Albums show up even if not marked "fully played"
+      'Fields': 'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,UserData',
       'EnableImageTypes': 'Primary,Thumb',
+      'EnableUserData': 'true',
     };
 
     final uri = _buildUri('/Users/${credentials.userId}/Items', queryParams);

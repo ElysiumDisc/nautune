@@ -3,15 +3,37 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:uuid/uuid.dart';
 
 import 'jellyfin_session.dart';
 
 class JellyfinSessionStore {
   static const _boxName = 'nautune_session';
   static const _sessionKey = 'session';
+  static const _deviceIdKey = 'device_id';
   static const _secureStorageKey = 'hive_encryption_key';
   
   final _secureStorage = const FlutterSecureStorage();
+
+  /// Retrieves or generates a persistent unique Device ID
+  Future<String> getDeviceId() async {
+    try {
+      final box = await _box();
+      String? deviceId = box.get(_deviceIdKey);
+      
+      if (deviceId == null) {
+        deviceId = const Uuid().v4();
+        await box.put(_deviceIdKey, deviceId);
+        debugPrint('🆔 JellyfinSessionStore: Generated new Device ID: $deviceId');
+      } else {
+         debugPrint('🆔 JellyfinSessionStore: reused Device ID: $deviceId');
+      }
+      return deviceId;
+    } catch (e) {
+      debugPrint('❌ JellyfinSessionStore: Failed to get device ID: $e');
+      return 'nautune-fallback-${DateTime.now().millisecondsSinceEpoch}';
+    }
+  }
 
   Future<Box> _box() async {
     try {

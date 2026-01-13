@@ -217,6 +217,7 @@ class NautuneAppState extends ChangeNotifier {
               accessToken: 'demo-token',
               userId: 'demo-user',
             ),
+            deviceId: 'demo-device',
             selectedLibraryId: provider.library!.id,
             selectedLibraryName: provider.library!.name,
             isDemo: true,
@@ -270,15 +271,15 @@ class NautuneAppState extends ChangeNotifier {
             _session = JellyfinSession(
               serverUrl: 'demo://nautune',
               username: 'tester',
-              credentials: const JellyfinCredentials(
-                accessToken: 'demo-token',
-                userId: 'demo-user',
-              ),
-              selectedLibraryId: provider.library!.id,
-              selectedLibraryName: provider.library!.name,
-              isDemo: true,
-            );
-
+                          credentials: const JellyfinCredentials(
+                            accessToken: 'demo-token',
+                            userId: 'demo-user',
+                          ),
+                          deviceId: 'demo-device',
+                          selectedLibraryId: provider.library!.id,
+                          selectedLibraryName: provider.library!.name,
+                          isDemo: true,
+                        );
             final session = _session!;
             final reportingService = PlaybackReportingService(
               serverUrl: session.serverUrl,
@@ -542,6 +543,7 @@ class NautuneAppState extends ChangeNotifier {
         accessToken: 'demo-token',
         userId: 'demo-user',
       ),
+      deviceId: 'demo-device',
       selectedLibraryId: content.library.id,
       selectedLibraryName: content.library.name,
       isDemo: true,

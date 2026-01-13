@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui show Image, ImageFilter;
 
@@ -401,7 +400,7 @@ class _MiniPlayerScreenState extends State<MiniPlayerScreen> with WindowListener
                             Text(
                               track.displayArtist,
                               style: theme.textTheme.bodySmall?.copyWith(
-                                color: onSurfaceColor.withOpacity(0.9),
+                                color: onSurfaceColor.withValues(alpha: 0.9),
                                 shadows: [
                                   Shadow(
                                     offset: const Offset(0, 1),
@@ -469,7 +468,7 @@ class _MiniPlayerScreenState extends State<MiniPlayerScreen> with WindowListener
                               onSeek: audioService.seek,
                               barHeight: 3,
                               thumbRadius: 0, // Hidden thumb until hover/interaction ideally
-                              baseBarColor: onSurfaceColor.withOpacity(0.3),
+                              baseBarColor: onSurfaceColor.withValues(alpha: 0.3),
                               progressBarColor: primaryColor,
                               timeLabelLocation: TimeLabelLocation.none,
                             ),
@@ -486,7 +485,7 @@ class _MiniPlayerScreenState extends State<MiniPlayerScreen> with WindowListener
                 right: 4,
                 child: IconButton(
                   icon: const Icon(Icons.open_in_full_rounded),
-                  color: onSurfaceColor.withOpacity(0.8),
+                  color: onSurfaceColor.withValues(alpha: 0.8),
                   tooltip: 'Expand',
                   iconSize: 18,
                   onPressed: _restoreMainWindow,

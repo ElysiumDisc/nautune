@@ -95,10 +95,12 @@ class SessionProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
+      final deviceId = await _sessionStore.getDeviceId();
       final session = await _jellyfinService.connect(
         serverUrl: serverUrl,
         username: username,
         password: password,
+        deviceId: deviceId,
       );
 
       _session = session;
@@ -148,6 +150,7 @@ class SessionProvider extends ChangeNotifier {
           accessToken: 'demo-token',
           userId: 'demo-user',
         ),
+        deviceId: 'demo-device',
         selectedLibraryId: libraryId,
         selectedLibraryName: libraryName,
         isDemo: true,

@@ -2,7 +2,7 @@ name: nautune
 description: "Nautune - Poseidon Music Player for Jellyfin"
 publish_to: 'none'
 
-version: 3.4.0+1
+version: 3.5.0+1
 
 environment:
   sdk: ^3.9.2
@@ -40,6 +40,7 @@ dependencies:
   material_color_utilities: ^0.11.1
   flutter_secure_storage: ^10.0.0
   flutter_local_notifications: ^19.5.0
+  uuid: ^4.5.2
   # audio_visualizer: Removed - requires separate player instance, causes double playback/memory issues
 
 dev_dependencies:
@@ -70,5 +71,4 @@ flutter_launcher_icons:
     generate: false
   macos:
     generate: false
-  linux:
-    generate: false
+  linux: "icon.png"

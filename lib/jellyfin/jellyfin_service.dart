@@ -49,11 +49,13 @@ class JellyfinService {
     required String serverUrl,
     required String username,
     required String password,
+    required String deviceId,
   }) async {
     final normalizedUrl = _normalizeServerUrl(serverUrl);
     final client = JellyfinClient(
       serverUrl: normalizedUrl,
       httpClient: _httpClient,
+      deviceId: deviceId,
     );
     final credentials = await client.authenticate(
       username: username,
@@ -64,6 +66,7 @@ class JellyfinService {
       serverUrl: normalizedUrl,
       username: username,
       credentials: credentials,
+      deviceId: deviceId,
     );
 
     _client = client;
@@ -77,6 +80,7 @@ class JellyfinService {
     _client = JellyfinClient(
       serverUrl: session.serverUrl,
       httpClient: _httpClient,
+      deviceId: session.deviceId,
     );
     _session = session;
     _clearCaches();
@@ -99,6 +103,26 @@ class JellyfinService {
       );
     }
     return client.checkServerHealth();
+  }
+
+  /// Fetches the current user's profile info including profile image.
+  Future<JellyfinUser> getCurrentUser() async {
+    final client = _client;
+    final session = _session;
+    if (client == null || session == null) {
+      throw StateError('Not connected');
+    }
+    return client.fetchCurrentUser(session.credentials);
+  }
+
+  /// Gets the URL for the current user's profile image.
+  String? getUserProfileImageUrl() {
+    final client = _client;
+    final session = _session;
+    if (client == null || session == null) return null;
+    // We need to fetch the user first to get the image tag
+    // For now, return a URL that might work if user has an image
+    return '${session.serverUrl}/Users/${session.credentials.userId}/Images/Primary';
   }
 
   /// Batch load albums, artists, and genres in parallel
@@ -822,6 +846,7 @@ class JellyfinService {
     final client = JellyfinClient(
       serverUrl: session.serverUrl,
       httpClient: _httpClient,
+      deviceId: session.deviceId,
     );
 
     if (shouldBeFavorite) {
@@ -888,6 +913,7 @@ class JellyfinService {
     final client = JellyfinClient(
       serverUrl: session.serverUrl,
       httpClient: _httpClient,
+      deviceId: session.deviceId,
     );
 
     final response = await client.request(
@@ -914,6 +940,7 @@ class JellyfinService {
     final client = JellyfinClient(
       serverUrl: session.serverUrl,
       httpClient: _httpClient,
+      deviceId: session.deviceId,
     );
 
     final response = await client.request(

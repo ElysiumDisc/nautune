@@ -24,6 +24,7 @@ import 'artist_detail_screen.dart';
 import 'genre_detail_screen.dart';
 import 'offline_library_screen.dart';
 import 'playlist_detail_screen.dart';
+import 'profile_screen.dart';
 import 'settings_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
@@ -389,6 +390,17 @@ class _LibraryScreenState extends State<LibraryScreen>
                   icon: const Icon(Icons.library_books_outlined),
                   onPressed: () => appState.clearLibrarySelection(),
                 ),
+              IconButton(
+                icon: const Icon(Icons.person_outline),
+                tooltip: 'Profile & Stats',
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const ProfileScreen(),
+                    ),
+                  );
+                },
+              ),
               IconButton(
                 icon: const Icon(Icons.logout),
                 onPressed: () => appState.disconnect(),
@@ -3046,8 +3058,6 @@ class _GenreCard extends StatelessWidget {
 
 
 
-enum _SearchScope { albums, artists, tracks }
-
 class _SearchTab extends StatefulWidget {
   const _SearchTab({required this.appState});
 
@@ -3059,11 +3069,8 @@ class _SearchTab extends StatefulWidget {
 
 class _SearchTabState extends State<_SearchTab> {
   final TextEditingController _controller = TextEditingController();
-  final Map<_SearchScope, List<String>> _recentQueries = {
-    for (final s in _SearchScope.values) s: <String>[],
-  };
+  List<String> _recentQueries = [];
   String _lastQuery = '';
-  _SearchScope _scope = _SearchScope.albums;
   bool _isLoading = false;
   List<JellyfinAlbum> _albumResults = const [];
   List<JellyfinArtist> _artistResults = const [];
@@ -3071,6 +3078,7 @@ class _SearchTabState extends State<_SearchTab> {
   Object? _error;
   static const int _historyLimit = 10;
   static const String _boxName = 'nautune_search_history';
+  static const String _historyKey = 'global_search_history';
 
   @override
   void initState() {
@@ -3083,9 +3091,6 @@ class _SearchTabState extends State<_SearchTab> {
     _controller.dispose();
     super.dispose();
   }
-  
-  String _prefKeyForScope(_SearchScope scope) =>
-      'search_history_${scope.name}';
 
   Future<Box> _box() async {
     if (!Hive.isBoxOpen(_boxName)) {
@@ -3093,52 +3098,47 @@ class _SearchTabState extends State<_SearchTab> {
     }
     return Hive.box(_boxName);
   }
-  
+
   Future<void> _loadRecentQueries() async {
     final box = await _box();
     if (!mounted) return;
+    final raw = box.get(_historyKey);
     setState(() {
-      for (final scope in _SearchScope.values) {
-        final raw = box.get(_prefKeyForScope(scope));
-        if (raw is List) {
-          _recentQueries[scope] = raw.cast<String>();
-        } else {
-          _recentQueries[scope] = const [];
-        }
+      if (raw is List) {
+        _recentQueries = raw.cast<String>();
+      } else {
+        _recentQueries = [];
       }
     });
   }
-  
-  Future<void> _persistRecentQueries(_SearchScope scope) async {
+
+  Future<void> _persistRecentQueries() async {
     final box = await _box();
-    await box.put(
-      _prefKeyForScope(scope),
-      _recentQueries[scope]!,
-    );
+    await box.put(_historyKey, _recentQueries);
   }
-  
-  Future<void> _clearRecentQueries(_SearchScope scope) async {
-    if (_recentQueries[scope]!.isEmpty) return;
+
+  Future<void> _clearRecentQueries() async {
+    if (_recentQueries.isEmpty) return;
     setState(() {
-      _recentQueries[scope] = <String>[];
+      _recentQueries = [];
     });
     final box = await _box();
-    await box.delete(_prefKeyForScope(scope));
+    await box.delete(_historyKey);
   }
   
-  Future<void> _rememberQuery(_SearchScope scope, String query) async {
+  Future<void> _rememberQuery(String query) async {
     final trimmed = query.trim();
     if (trimmed.isEmpty) return;
-    final list = _recentQueries[scope]!;
+    final list = List<String>.from(_recentQueries);
     list.removeWhere((item) => item.toLowerCase() == trimmed.toLowerCase());
     list.insert(0, trimmed);
     while (list.length > _historyLimit) {
       list.removeLast();
     }
     setState(() {
-      _recentQueries[scope] = List<String>.from(list);
+      _recentQueries = list;
     });
-    await _persistRecentQueries(scope);
+    await _persistRecentQueries();
   }
 
   Future<void> _performSearch(String query) async {
@@ -3160,136 +3160,99 @@ class _SearchTabState extends State<_SearchTab> {
     }
 
     setState(() => _isLoading = true);
-    unawaited(_rememberQuery(_scope, trimmed));
+    unawaited(_rememberQuery(trimmed));
 
-    // Demo mode: search bundled showcase data
+    // Demo mode: search bundled showcase data (all types)
     if (widget.appState.isDemoMode) {
-      if (_scope == _SearchScope.albums) {
-        final albums = widget.appState.demoAlbums;
-        final matches = albums
-            .where((album) =>
-                album.name.toLowerCase().contains(lowerQuery) ||
-                album.displayArtist.toLowerCase().contains(lowerQuery))
-            .toList();
-        if (!mounted || _lastQuery != trimmed) return;
-        setState(() {
-          _albumResults = matches;
-          _artistResults = const [];
-          _trackResults = const [];
-          _isLoading = false;
-        });
-      } else if (_scope == _SearchScope.artists) {
-        final artists = widget.appState.demoArtists;
-        final matches = artists
-            .where((artist) => artist.name.toLowerCase().contains(lowerQuery))
-            .toList();
-        if (!mounted || _lastQuery != trimmed) return;
-        setState(() {
-          _artistResults = matches;
-          _albumResults = const [];
-          _trackResults = const [];
-          _isLoading = false;
-        });
-      } else {
-        final tracks = widget.appState.demoTracks;
-        final matches = tracks
-            .where((track) =>
-                track.name.toLowerCase().contains(lowerQuery) ||
-                (track.album?.toLowerCase().contains(lowerQuery) ?? false) ||
-                track.displayArtist.toLowerCase().contains(lowerQuery))
-            .toList();
-        if (!mounted || _lastQuery != trimmed) return;
-        setState(() {
-          _trackResults = matches;
-          _albumResults = const [];
-          _artistResults = const [];
-          _isLoading = false;
-        });
-      }
+      final albums = widget.appState.demoAlbums
+          .where((album) =>
+              album.name.toLowerCase().contains(lowerQuery) ||
+              album.displayArtist.toLowerCase().contains(lowerQuery))
+          .toList();
+      final artists = widget.appState.demoArtists
+          .where((artist) => artist.name.toLowerCase().contains(lowerQuery))
+          .toList();
+      final tracks = widget.appState.demoTracks
+          .where((track) =>
+              track.name.toLowerCase().contains(lowerQuery) ||
+              (track.album?.toLowerCase().contains(lowerQuery) ?? false) ||
+              track.displayArtist.toLowerCase().contains(lowerQuery))
+          .toList();
+      if (!mounted || _lastQuery != trimmed) return;
+      setState(() {
+        _albumResults = albums;
+        _artistResults = artists;
+        _trackResults = tracks;
+        _isLoading = false;
+      });
       return;
     }
     
-    // Offline mode: search downloaded content only
+    // Offline mode: search downloaded content only (global search)
     if (widget.appState.isOfflineMode) {
       try {
         final downloads = widget.appState.downloadService.completedDownloads;
-        if (_scope == _SearchScope.albums) {
-          final Map<String, List<DownloadItem>> albumGroups = {};
-          
-          for (final download in downloads) {
-            final albumName = download.track.album ?? 'Unknown Album';
-            if (!albumGroups.containsKey(albumName)) {
-              albumGroups[albumName] = [];
-            }
-            albumGroups[albumName]!.add(download);
+
+        // Build album groups for album search
+        final Map<String, List<DownloadItem>> albumGroups = {};
+        for (final download in downloads) {
+          final albumName = download.track.album ?? 'Unknown Album';
+          if (!albumGroups.containsKey(albumName)) {
+            albumGroups[albumName] = [];
           }
-          
-          // Filter albums by query
-          final matchingAlbums = albumGroups.entries
-              .where((entry) => entry.key.toLowerCase().contains(lowerQuery))
-              .map((entry) {
-            final firstTrack = entry.value.first.track;
-            return JellyfinAlbum(
-              id: firstTrack.albumId ?? firstTrack.id,
-              name: entry.key,
-              artists: [firstTrack.displayArtist],
-              artistIds: const [],
-            );
-          }).toList();
-          
-          if (!mounted || _lastQuery != trimmed) return;
-          setState(() {
-            _albumResults = matchingAlbums;
-            _artistResults = const [];
-            _trackResults = const [];
-            _isLoading = false;
-          });
-        } else if (_scope == _SearchScope.artists) {
-          // Search artists in offline mode
-          final Map<String, List<DownloadItem>> artistGroups = {};
-          
-          for (final download in downloads) {
-            final artistName = download.track.displayArtist;
-            if (!artistGroups.containsKey(artistName)) {
-              artistGroups[artistName] = [];
-            }
-            artistGroups[artistName]!.add(download);
-          }
-          
-          // Filter artists by query
-          final matchingArtists = artistGroups.keys
-              .where((name) => name.toLowerCase().contains(lowerQuery))
-              .map((name) => JellyfinArtist(
-                id: 'offline_$name',
-                name: name,
-              ))
-              .toList();
-          
-          if (!mounted || _lastQuery != trimmed) return;
-          setState(() {
-            _albumResults = const [];
-            _artistResults = matchingArtists;
-            _trackResults = const [];
-            _isLoading = false;
-          });
-        } else {
-          final matches = downloads
-              .map((download) => download.track)
-              .where((track) {
-                final albumName = track.album?.toLowerCase() ?? '';
-                return track.name.toLowerCase().contains(lowerQuery) ||
-                    track.displayArtist.toLowerCase().contains(lowerQuery) ||
-                    albumName.contains(lowerQuery);
-              })
-              .toList();
-          if (!mounted || _lastQuery != trimmed) return;
-          setState(() {
-            _albumResults = const [];
-            _artistResults = const [];
-            _trackResults = matches;
-            _isLoading = false;
-          });
+          albumGroups[albumName]!.add(download);
         }
+
+        // Filter albums by query
+        final matchingAlbums = albumGroups.entries
+            .where((entry) => entry.key.toLowerCase().contains(lowerQuery))
+            .map((entry) {
+          final firstTrack = entry.value.first.track;
+          return JellyfinAlbum(
+            id: firstTrack.albumId ?? firstTrack.id,
+            name: entry.key,
+            artists: [firstTrack.displayArtist],
+            artistIds: const [],
+          );
+        }).toList();
+
+        // Build artist groups for artist search
+        final Map<String, List<DownloadItem>> artistGroups = {};
+        for (final download in downloads) {
+          final artistName = download.track.displayArtist;
+          if (!artistGroups.containsKey(artistName)) {
+            artistGroups[artistName] = [];
+          }
+          artistGroups[artistName]!.add(download);
+        }
+
+        // Filter artists by query
+        final matchingArtists = artistGroups.keys
+            .where((name) => name.toLowerCase().contains(lowerQuery))
+            .map((name) => JellyfinArtist(
+              id: 'offline_$name',
+              name: name,
+            ))
+            .toList();
+
+        // Filter tracks by query
+        final matchingTracks = downloads
+            .map((download) => download.track)
+            .where((track) {
+              final albumName = track.album?.toLowerCase() ?? '';
+              return track.name.toLowerCase().contains(lowerQuery) ||
+                  track.displayArtist.toLowerCase().contains(lowerQuery) ||
+                  albumName.contains(lowerQuery);
+            })
+            .toList();
+
+        if (!mounted || _lastQuery != trimmed) return;
+        setState(() {
+          _albumResults = matchingAlbums;
+          _artistResults = matchingArtists;
+          _trackResults = matchingTracks;
+          _isLoading = false;
+        });
       } catch (e) {
         if (!mounted || _lastQuery != trimmed) return;
         setState(() {
@@ -3317,44 +3280,18 @@ class _SearchTabState extends State<_SearchTab> {
     }
 
     try {
-      if (_scope == _SearchScope.albums) {
-        final albums = await widget.appState.jellyfinService.searchAlbums(
-          libraryId: libraryId,
-          query: trimmed,
-        );
-        if (!mounted || _lastQuery != trimmed) return;
-        setState(() {
-          _albumResults = albums;
-          _artistResults = const [];
-          _trackResults = const [];
-          _isLoading = false;
-        });
-      } else if (_scope == _SearchScope.artists) {
-        final artists = await widget.appState.jellyfinService.searchArtists(
-          libraryId: libraryId,
-          query: trimmed,
-        );
-        if (!mounted || _lastQuery != trimmed) return;
-        setState(() {
-          _artistResults = artists;
-          _albumResults = const [];
-          _trackResults = const [];
-          _isLoading = false;
-        });
-      } else {
-        final tracks = await widget.appState.jellyfinService.searchTracks(
-          libraryId: libraryId,
-          query: trimmed,
-        );
-        if (!mounted || _lastQuery != trimmed) return;
-        setState(() {
-          _trackResults = tracks;
-          _albumResults = const [];
-          _artistResults = const [];
-          _isLoading = false;
-        });
-      }
+      // Global search - search all content types in parallel
+      final results = await widget.appState.jellyfinService.searchAllBatch(
+        libraryId: libraryId,
+        query: trimmed,
+      );
       if (!mounted || _lastQuery != trimmed) return;
+      setState(() {
+        _albumResults = results.albums;
+        _artistResults = results.artists;
+        _trackResults = results.tracks;
+        _isLoading = false;
+      });
     } catch (error) {
       if (!mounted || _lastQuery != trimmed) return;
       setState(() {
@@ -3384,53 +3321,14 @@ class _SearchTabState extends State<_SearchTab> {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-          child: SegmentedButton<_SearchScope>(
-            segments: const [
-              ButtonSegment(
-                value: _SearchScope.albums,
-                icon: Icon(Icons.album_outlined),
-                label: Text('Albums'),
-              ),
-              ButtonSegment(
-                value: _SearchScope.artists,
-                icon: Icon(Icons.person_outline),
-                label: Text('Artists'),
-              ),
-              ButtonSegment(
-                value: _SearchScope.tracks,
-                icon: Icon(Icons.music_note_outlined),
-                label: Text('Tracks'),
-              ),
-            ],
-            selected: {_scope},
-            onSelectionChanged: (selection) {
-              final scope = selection.first;
-              setState(() {
-                _scope = scope;
-                _albumResults = const [];
-                _artistResults = const [];
-                _trackResults = const [];
-              });
-              if (_lastQuery.isNotEmpty) {
-                _performSearch(_lastQuery);
-              }
-            },
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
           child: TextField(
             controller: _controller,
             onSubmitted: _performSearch,
             textInputAction: TextInputAction.search,
             decoration: InputDecoration(
               prefixIcon: const Icon(Icons.search),
-              hintText: switch (_scope) {
-                _SearchScope.albums => 'Search albums',
-                _SearchScope.artists => 'Search artists',
-                _SearchScope.tracks => 'Search tracks',
-              },
+              hintText: 'Search albums, artists, tracks...',
               filled: true,
               fillColor: theme.colorScheme.surfaceContainerHighest,
               border: OutlineInputBorder(
@@ -3444,8 +3342,7 @@ class _SearchTabState extends State<_SearchTab> {
             ),
           ),
         ),
-        if (_controller.text.trim().isEmpty &&
-            (_recentQueries[_scope]?.isNotEmpty ?? false))
+        if (_controller.text.trim().isEmpty && _recentQueries.isNotEmpty)
           _buildRecentQueriesSection(theme),
         if (_error != null)
           Padding(
@@ -3475,8 +3372,7 @@ class _SearchTabState extends State<_SearchTab> {
   }
   
   Widget _buildRecentQueriesSection(ThemeData theme) {
-    final history = _recentQueries[_scope] ?? const <String>[];
-    if (history.isEmpty) {
+    if (_recentQueries.isEmpty) {
       return const SizedBox.shrink();
     }
     return Padding(
@@ -3497,7 +3393,7 @@ class _SearchTabState extends State<_SearchTab> {
               IconButton(
                 tooltip: 'Clear recent searches',
                 icon: const Icon(Icons.close),
-                onPressed: () => unawaited(_clearRecentQueries(_scope)),
+                onPressed: () => unawaited(_clearRecentQueries()),
               ),
             ],
           ),
@@ -3505,7 +3401,7 @@ class _SearchTabState extends State<_SearchTab> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              for (final query in history)
+              for (final query in _recentQueries)
                 ActionChip(
                   label: Text(query),
                   onPressed: () {
@@ -3524,370 +3420,60 @@ class _SearchTabState extends State<_SearchTab> {
     if (_lastQuery.isEmpty) {
       return Center(
         child: Text(
-          switch (_scope) {
-            _SearchScope.albums =>
-              'Search your library by album name.',
-            _SearchScope.artists =>
-              'Search your library by artist name.',
-            _SearchScope.tracks =>
-              'Search across tracks you can play.',
-          },
+          'Search across albums, artists, and tracks.',
           style: theme.textTheme.titleMedium,
           textAlign: TextAlign.center,
         ),
       );
     }
 
-    if (_scope == _SearchScope.albums) {
-      if (_albumResults.isEmpty) {
-        return Center(
-          child: Text(
-            'No albums found for "$_lastQuery"',
-            style: theme.textTheme.titleMedium,
-            textAlign: TextAlign.center,
-          ),
-        );
-      }
-      return ListView.separated(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-        itemCount: _albumResults.length,
-        separatorBuilder: (context, _) => const SizedBox(height: 8),
-        itemBuilder: (context, index) {
-          final album = _albumResults[index];
-          return Card(
-            child: ListTile(
-              leading: const Icon(Icons.album_outlined),
-              title: Text(album.name),
-              subtitle: Text(album.displayArtist),
-              trailing: album.productionYear != null
-                  ? Text('${album.productionYear}')
-                  : null,
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => AlbumDetailScreen(
-                      album: album,
-                    ),
-                  ),
-                );
-              },
-            ),
-          );
-        },
-      );
-    }
+    final hasResults = _albumResults.isNotEmpty ||
+                      _artistResults.isNotEmpty ||
+                      _trackResults.isNotEmpty;
 
-    if (_scope == _SearchScope.artists) {
-      if (_artistResults.isEmpty) {
-        return Center(
-          child: Text(
-            'No artists found for "$_lastQuery"',
-            style: theme.textTheme.titleMedium,
-            textAlign: TextAlign.center,
-          ),
-        );
-      }
-
-      return ListView.separated(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-        itemCount: _artistResults.length,
-        separatorBuilder: (context, _) => const SizedBox(height: 8),
-        itemBuilder: (context, index) {
-          final artist = _artistResults[index];
-          
-          // Build subtitle with genres and counts
-          final subtitleParts = <String>[];
-          if (artist.genres != null && artist.genres!.isNotEmpty) {
-            subtitleParts.add(artist.genres!.take(3).join(', '));
-          }
-          if (artist.albumCount != null && artist.albumCount! > 0) {
-            subtitleParts.add('${artist.albumCount} albums');
-          }
-          if (artist.songCount != null && artist.songCount! > 0) {
-            subtitleParts.add('${artist.songCount} songs');
-          }
-          
-          final subtitle = subtitleParts.isNotEmpty
-              ? subtitleParts.join(' • ')
-              : null;
-          
-          return Card(
-            child: ListTile(
-              leading: artist.primaryImageTag != null
-                  ? CircleAvatar(
-                      backgroundImage: NetworkImage(
-                        widget.appState.jellyfinService.buildImageUrl(
-                          itemId: artist.id,
-                          tag: artist.primaryImageTag!,
-                          maxWidth: 100,
-                        ),
-                      ),
-                    )
-                  : const CircleAvatar(
-                      child: Icon(Icons.person_outline),
-                    ),
-              title: Text(
-                artist.name,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: const Color(0xFF8CB1D9),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              subtitle: subtitle != null
-                  ? Text(
-                      subtitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF9CC7F2),
-                      ),
-                    )
-                  : null,
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ArtistDetailScreen(
-                      artist: artist,
-                    ),
-                  ),
-                );
-              },
-            ),
-          );
-        },
-      );
-    }
-
-    if (_trackResults.isEmpty) {
+    if (!hasResults) {
       return Center(
         child: Text(
-          'No tracks found for "$_lastQuery"',
+          'No results found for "$_lastQuery"',
           style: theme.textTheme.titleMedium,
           textAlign: TextAlign.center,
         ),
       );
     }
 
-    return ListView.separated(
+    return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-      itemCount: _trackResults.length,
-      separatorBuilder: (context, _) => const SizedBox(height: 8),
-      itemBuilder: (context, index) {
-        final track = _trackResults[index];
-        final subtitleParts = <String>[
-          track.displayArtist,
-          if (track.album != null && track.album!.isNotEmpty) track.album!,
-        ];
-        final visibleSubtitleParts =
-            subtitleParts.where((part) => part.isNotEmpty).toList();
-
-        return Card(
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: theme.colorScheme.primaryContainer,
-              child: Icon(
-                Icons.music_note,
-                color: theme.colorScheme.onPrimaryContainer,
-              ),
-            ),
-            title: Text(
-              track.name,
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.tertiary,
-              ),
-            ),
-            subtitle: visibleSubtitleParts.isNotEmpty
-                ? Text(
-                    visibleSubtitleParts.join(' • '),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall,
-                  )
-                : null,
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (track.duration != null)
-                  Text(
-                    _formatDuration(track.duration!),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                const SizedBox(width: 4),
-                IconButton(
-                  icon: const Icon(Icons.more_vert, size: 20),
-                  onPressed: () {
-                    final parentContext = context;
-                    showModalBottomSheet(
-                      context: parentContext,
-                      builder: (sheetContext) => SafeArea(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            ListTile(
-                              leading: const Icon(Icons.play_arrow),
-                              title: const Text('Play Next'),
-                              onTap: () {
-                                Navigator.pop(sheetContext);
-                                widget.appState.audioPlayerService.playNext([track]);
-                                ScaffoldMessenger.of(parentContext).showSnackBar(
-                                  SnackBar(
-                                    content: Text('${track.name} will play next'),
-                                    duration: const Duration(seconds: 2),
-                                  ),
-                                );
-                              },
-                            ),
-                            ListTile(
-                              leading: const Icon(Icons.queue_music),
-                              title: const Text('Add to Queue'),
-                              onTap: () {
-                                Navigator.pop(sheetContext);
-                                widget.appState.audioPlayerService.addToQueue([track]);
-                                ScaffoldMessenger.of(parentContext).showSnackBar(
-                                  SnackBar(
-                                    content: Text('${track.name} added to queue'),
-                                    duration: const Duration(seconds: 2),
-                                  ),
-                                );
-                              },
-                            ),
-                            ListTile(
-                              leading: const Icon(Icons.playlist_add),
-                              title: const Text('Add to Playlist'),
-                              onTap: () async {
-                                Navigator.pop(sheetContext);
-                                await showAddToPlaylistDialog(
-                                  context: parentContext,
-                                  appState: widget.appState,
-                                  tracks: [track],
-                                );
-                              },
-                            ),
-                            ListTile(
-                              leading: const Icon(Icons.auto_awesome),
-                              title: const Text('Instant Mix'),
-                              onTap: () async {
-                                Navigator.pop(sheetContext);
-                                try {
-                                  ScaffoldMessenger.of(parentContext).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('Creating instant mix...'),
-                                      duration: Duration(seconds: 1),
-                                    ),
-                                  );
-                                  final mixTracks = await widget.appState.jellyfinService.getInstantMix(
-                                    itemId: track.id,
-                                    limit: 50,
-                                  );
-                                  if (!parentContext.mounted) return;
-                                  if (mixTracks.isEmpty) {
-                                    ScaffoldMessenger.of(parentContext).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('No similar tracks found'),
-                                        duration: Duration(seconds: 2),
-                                      ),
-                                    );
-                                    return;
-                                  }
-                                  await widget.appState.audioPlayerService.playTrack(
-                                    mixTracks.first,
-                                    queueContext: mixTracks,
-                                  );
-                                  if (!parentContext.mounted) return;
-                                  ScaffoldMessenger.of(parentContext).showSnackBar(
-                                    SnackBar(
-                                      content: Text('Playing instant mix (${mixTracks.length} tracks)'),
-                                      duration: const Duration(seconds: 2),
-                                    ),
-                                  );
-                                } catch (e) {
-                                  if (!parentContext.mounted) return;
-                                  ScaffoldMessenger.of(parentContext).showSnackBar(
-                                    SnackBar(
-                                      content: Text('Failed to create mix: $e'),
-                                      backgroundColor: Theme.of(parentContext).colorScheme.error,
-                                    ),
-                                  );
-                                }
-                              },
-                            ),
-                            ListTile(
-                              leading: const Icon(Icons.download),
-                              title: const Text('Download Track'),
-                              onTap: () async {
-                                Navigator.pop(sheetContext);
-                                final messenger = ScaffoldMessenger.of(parentContext);
-                                final theme = Theme.of(parentContext);
-                                final downloadService = widget.appState.downloadService;
-                                try {
-                                  final existing = downloadService.getDownload(track.id);
-                                  if (existing != null) {
-                                    if (existing.isCompleted) {
-                                      messenger.showSnackBar(
-                                        SnackBar(
-                                          content: Text('"${track.name}" is already downloaded'),
-                                          duration: const Duration(seconds: 2),
-                                        ),
-                                      );
-                                      return;
-                                    }
-                                    if (existing.isFailed) {
-                                      await downloadService.retryDownload(track.id);
-                                      messenger.showSnackBar(
-                                        SnackBar(
-                                          content: Text('Retrying download for ${track.name}'),
-                                          duration: const Duration(seconds: 2),
-                                        ),
-                                      );
-                                      return;
-                                    }
-                                    messenger.showSnackBar(
-                                      SnackBar(
-                                        content: Text('"${track.name}" is already in the download queue'),
-                                        duration: const Duration(seconds: 2),
-                                      ),
-                                    );
-                                    return;
-                                  }
-                                  await downloadService.downloadTrack(track);
-                                  messenger.showSnackBar(
-                                    SnackBar(
-                                      content: Text('Downloading ${track.name}'),
-                                      duration: const Duration(seconds: 2),
-                                    ),
-                                  );
-                                } catch (e) {
-                                  messenger.showSnackBar(
-                                    SnackBar(
-                                      content: Text('Failed to download ${track.name}: $e'),
-                                      backgroundColor: theme.colorScheme.error,
-                                    ),
-                                  );
-                                }
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
-              ],
-            ),
-            onTap: () {
-              widget.appState.audioPlayerService.playTrack(
-                track,
-                queueContext: _trackResults,
-              );
-            },
+      children: [
+        // Artists section
+        if (_artistResults.isNotEmpty) ...[
+          _buildSectionHeader(theme, 'Artists', Icons.person, _artistResults.length),
+          const SizedBox(height: 8),
+          ...List.generate(
+            _artistResults.length,
+            (index) => _buildArtistTile(theme, _artistResults[index]),
           ),
-        );
-      },
+          const SizedBox(height: 16),
+        ],
+        // Albums section
+        if (_albumResults.isNotEmpty) ...[
+          _buildSectionHeader(theme, 'Albums', Icons.album, _albumResults.length),
+          const SizedBox(height: 8),
+          ...List.generate(
+            _albumResults.length,
+            (index) => _buildAlbumTile(theme, _albumResults[index]),
+          ),
+          const SizedBox(height: 16),
+        ],
+        // Tracks section
+        if (_trackResults.isNotEmpty) ...[
+          _buildSectionHeader(theme, 'Tracks', Icons.music_note, _trackResults.length),
+          const SizedBox(height: 8),
+          ...List.generate(
+            _trackResults.length,
+            (index) => _buildTrackTile(theme, _trackResults[index]),
+          ),
+        ],
+      ],
     );
   }
 
@@ -3895,6 +3481,132 @@ class _SearchTabState extends State<_SearchTab> {
     final minutes = duration.inMinutes;
     final seconds = duration.inSeconds.remainder(60);
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildSectionHeader(ThemeData theme, String title, IconData icon, int count) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: theme.colorScheme.primary),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+            color: theme.colorScheme.primary,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.primaryContainer,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            '$count',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.primary,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildArtistTile(ThemeData theme, JellyfinArtist artist) {
+    return Card(
+      child: ListTile(
+        leading: artist.primaryImageTag != null
+            ? CircleAvatar(
+                backgroundImage: NetworkImage(
+                  widget.appState.jellyfinService.buildImageUrl(
+                    itemId: artist.id,
+                    tag: artist.primaryImageTag!,
+                    maxWidth: 100,
+                  ),
+                ),
+              )
+            : const CircleAvatar(child: Icon(Icons.person_outline)),
+        title: Text(
+          artist.name,
+          style: theme.textTheme.titleMedium?.copyWith(
+            color: const Color(0xFF8CB1D9),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: artist.songCount != null
+            ? Text('${artist.songCount} songs')
+            : null,
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ArtistDetailScreen(artist: artist),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildAlbumTile(ThemeData theme, JellyfinAlbum album) {
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.album_outlined),
+        title: Text(album.name),
+        subtitle: Text(album.displayArtist),
+        trailing: album.productionYear != null
+            ? Text('${album.productionYear}')
+            : null,
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => AlbumDetailScreen(album: album),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildTrackTile(ThemeData theme, JellyfinTrack track) {
+    return Card(
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: theme.colorScheme.primaryContainer,
+          child: Icon(
+            Icons.music_note,
+            color: theme.colorScheme.primary,
+          ),
+        ),
+        title: Text(
+          track.name,
+          style: theme.textTheme.titleMedium?.copyWith(
+            color: theme.colorScheme.tertiary,
+          ),
+        ),
+        subtitle: Text(
+          '${track.displayArtist}${track.album != null ? ' • ${track.album}' : ''}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: track.duration != null
+            ? Text(
+                _formatDuration(track.duration!),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              )
+            : null,
+        onTap: () {
+          widget.appState.audioPlayerService.playTrack(
+            track,
+            queueContext: _trackResults,
+          );
+        },
+      ),
+    );
   }
 }
 
