@@ -48,25 +48,17 @@ Nautune follows a clean data structure on Linux for easy backups and management:
 ## 📸 Screenshots
 
 ### Linux / Desktop
-<img src="screenshots/linux-ipad1.png" width="400" alt="Nautune on Linux - Library Picker">
+<img src="screenshots/linux-ipad1.png" width="400" alt="Nautune on Linux">
 <img src="screenshots/linux-ipad2.png" width="400" alt="Nautune on Linux">
 
 ### iOS
-<img src="screenshots/ios1.png" width="250" alt="Nautune on iOS">
-<img src="screenshots/ios2.png" width="250" alt="Nautune on iOS">
-<img src="screenshots/ios3.png" width="250" alt="Nautune on iOS">
-<img src="screenshots/ios4.png" width="250" alt="Nautune on iOS">
 <img src="screenshots/ios5.png" width="250" alt="Nautune on iOS">
 <img src="screenshots/ios6.png" width="250" alt="Nautune on iOS">
 <img src="screenshots/ios7.jpg" width="250" alt="Nautune on iOS">
-<img src="screenshots/ios8.jpg" width="250" alt="Nautune on iOS">
 <img src="screenshots/ios9.jpg" width="250" alt="Nautune on iOS">
 
 ### CarPlay
-<img src="screenshots/carplay1.png" width="300" alt="Nautune CarPlay">
-<img src="screenshots/carplay2.png" width="300" alt="Nautune CarPlay">
 <img src="screenshots/carplay3.png" width="300" alt="Nautune CarPlay">
-<img src="screenshots/carplay4.png" width="300" alt="Nautune CarPlay">
 <img src="screenshots/carplay5.png" width="300" alt="Nautune CarPlay">
 
 ## 🧪 Review / Demo Mode
