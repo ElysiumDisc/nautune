@@ -165,14 +165,13 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 guard status == noErr else { return }
 
                 // Get plugin instance and process
-                if let storage = MTAudioProcessingTapGetStorage(tap) {
-                    let plugin = Unmanaged<AudioFFTPlugin>.fromOpaque(storage).takeUnretainedValue()
-                    plugin.processAudioBuffer(bufferListInOut, frames: numberFramesOut.pointee)
-                }
+                let storage = MTAudioProcessingTapGetStorage(tap)
+                let plugin = Unmanaged<AudioFFTPlugin>.fromOpaque(storage).takeUnretainedValue()
+                plugin.processAudioBuffer(bufferListInOut, frames: numberFramesOut.pointee)
             }
         )
 
-        var tap: Unmanaged<MTAudioProcessingTap>?
+        var tap: MTAudioProcessingTap?
         let status = MTAudioProcessingTapCreate(
             kCFAllocatorDefault,
             &callbacks,
@@ -187,7 +186,7 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
         // Create audio mix with tap
         let inputParams = AVMutableAudioMixInputParameters(track: audioTrack)
-        inputParams.audioTapProcessor = audioTap.takeRetainedValue()
+        inputParams.audioTapProcessor = audioTap
 
         let audioMix = AVMutableAudioMix()
         audioMix.inputParameters = [inputParams]
