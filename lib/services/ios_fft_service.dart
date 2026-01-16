@@ -4,8 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:rxdart/rxdart.dart';
 
-/// Real-time FFT analysis on iOS using AVAudioEngine native bridge.
-/// Captures app's audio output for visualization.
+/// Real-time FFT analysis on iOS using MTAudioProcessingTap.
+/// Creates a shadow AVPlayer that loads the same audio URL with an audio tap
+/// to capture real FFT data without affecting the main player.
 class IOSFFTService {
   static IOSFFTService? _instance;
   static IOSFFTService get instance => _instance ??= IOSFFTService._();
@@ -17,6 +18,8 @@ class IOSFFTService {
 
   StreamSubscription? _eventSubscription;
   bool _isCapturing = false;
+  bool _initialized = false;
+  String? _currentUrl;
 
   // FFT output stream
   final _fftController = BehaviorSubject<IOSFFTData>.seeded(IOSFFTData.zero);
@@ -33,6 +36,8 @@ class IOSFFTService {
       return false;
     }
 
+    if (_initialized) return true;
+
     try {
       final available = await _methodChannel.invokeMethod<bool>('isAvailable');
       if (available == true) {
@@ -40,7 +45,8 @@ class IOSFFTService {
         _eventSubscription = _eventChannel
             .receiveBroadcastStream()
             .listen(_handleFFTEvent, onError: _handleError);
-        debugPrint('🎵 iOS FFT: Initialized');
+        _initialized = true;
+        debugPrint('🎵 iOS FFT: Initialized with MTAudioProcessingTap');
         return true;
       }
     } catch (e) {
@@ -49,9 +55,25 @@ class IOSFFTService {
     return false;
   }
 
+  /// Set the audio URL for FFT analysis
+  /// This creates a shadow player with audio tap
+  Future<void> setAudioUrl(String url) async {
+    if (!Platform.isIOS || !_initialized) return;
+    if (url == _currentUrl) return;
+
+    _currentUrl = url;
+
+    try {
+      await _methodChannel.invokeMethod('setAudioUrl', {'url': url});
+      debugPrint('🎵 iOS FFT: Set audio URL');
+    } catch (e) {
+      debugPrint('🎵 iOS FFT: setAudioUrl error - $e');
+    }
+  }
+
   /// Start capturing audio for FFT analysis
   Future<void> startCapture() async {
-    if (_isCapturing || !Platform.isIOS) return;
+    if (_isCapturing || !Platform.isIOS || !_initialized) return;
 
     try {
       await _methodChannel.invokeMethod('startCapture');
@@ -74,6 +96,17 @@ class IOSFFTService {
       _isCapturing = false;
       _fftController.add(IOSFFTData.zero);
       debugPrint('🎵 iOS FFT: Capture stopped');
+    }
+  }
+
+  /// Sync shadow player position with main player
+  Future<void> syncPosition(double positionSeconds) async {
+    if (!_isCapturing || !Platform.isIOS) return;
+
+    try {
+      await _methodChannel.invokeMethod('syncPosition', {'position': positionSeconds});
+    } catch (e) {
+      // Ignore sync errors - not critical
     }
   }
 
@@ -101,6 +134,8 @@ class IOSFFTService {
     stopCapture();
     _eventSubscription?.cancel();
     _fftController.close();
+    _currentUrl = null;
+    _initialized = false;
     _instance = null;
   }
 }

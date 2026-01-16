@@ -5,9 +5,9 @@
 ## 🚀 Latest Updates (v4.4.0)
 
 ### 🎵 Real-Time FFT Audio Visualizer
-- **True Audio-Reactive Waves**: Visualizer now follows ACTUAL audio frequencies, not just metadata
+- **True Audio-Reactive Waves**: Visualizer follows ACTUAL audio frequencies
 - **Linux**: PulseAudio system loopback captures real audio output via `parec`
-- **iOS**: AVAudioEngine + Accelerate vDSP FFT taps into app audio
+- **iOS**: MTAudioProcessingTap captures app audio via shadow AVPlayer
 - **Bass SLAM**: Waves explode on bass drops with 30x boost
 - **Treble Shimmer**: High frequencies create sparkle effects with 80x boost
 - **Musical Smoothing**: Fast attack (0.6) / slow decay (0.12) for natural feel
@@ -65,7 +65,7 @@
 
 
 ## ✨ Key Features
-- **Real-Time FFT Visualizer**: True audio-reactive waves using PulseAudio (Linux) and AVAudioEngine (iOS)
+- **Real-Time FFT Visualizer**: True audio-reactive waves using PulseAudio (Linux) and MTAudioProcessingTap (iOS)
 - **Bioluminescent Waves**: Track-reactive animation that adapts to loudness and genre
 - **Smart Lyrics**: Multi-source lyrics with sync, caching, and pre-fetching
 - **Theme Palettes**: 6 stunning themes including OLED dark and light mode
@@ -83,7 +83,7 @@
 | Platform | FFT Method | Status |
 |----------|-----------|--------|
 | Linux | PulseAudio `parec` loopback | ✅ Real FFT |
-| iOS | AVAudioEngine + vDSP | ✅ Real FFT |
+| iOS | MTAudioProcessingTap + vDSP | ✅ Real FFT |
 | macOS | Metadata fallback | 🔄 Fallback |
 | Android | Metadata fallback | 🔄 Fallback |
 | Windows | Metadata fallback | 🔄 Fallback |
@@ -92,7 +92,7 @@
 - **Framework**: Flutter (Dart)
 - **Local Storage**: Hive (NoSQL) for high-speed metadata caching
 - **Audio Engine**: Audioplayers with custom platform-specific optimizations
-- **FFT Processing**: Custom Cooley-Tukey implementation (Linux), Apple Accelerate vDSP (iOS)
+- **FFT Processing**: Custom Cooley-Tukey (Linux), Apple Accelerate vDSP (iOS)
 - **Image Processing**: Material Color Utilities for vibrant palette generation
 
 ## 📂 File Structure (Linux)

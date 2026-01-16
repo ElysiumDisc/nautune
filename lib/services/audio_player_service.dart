@@ -22,6 +22,7 @@ import 'playback_state_store.dart';
 import '../models/playback_state.dart';
 import '../models/play_stats.dart';
 import 'local_cache_service.dart';
+import 'ios_fft_service.dart';
 
 enum RepeatMode {
   off,      // No repeat
@@ -421,6 +422,11 @@ class AudioPlayerService {
   }
   
   Future<void> _initAudioSession() async {
+    // Initialize iOS FFT service (only does work on iOS)
+    if (Platform.isIOS) {
+      unawaited(IOSFFTService.instance.initialize());
+    }
+
     try {
       final session = await AudioSession.instance;
       await session.configure(const AudioSessionConfiguration.music());
@@ -474,6 +480,10 @@ class AudioPlayerService {
       _checkPreloadTrigger(position);
       // Pre-fetch lyrics for next track at ~50% playback
       _checkLyricsPrefetch(position);
+      // Sync iOS FFT shadow player position (every ~2 seconds)
+      if (Platform.isIOS && position.inSeconds % 2 == 0) {
+        IOSFFTService.instance.syncPosition(position.inSeconds.toDouble());
+      }
     });
 
     // Duration updates
@@ -975,6 +985,13 @@ class AudioPlayerService {
       }
 
       _lastPlayingState = true;
+
+      // Start iOS FFT capture with the audio URL
+      if (Platform.isIOS) {
+        final fftUrl = isLocalFile ? 'file://$activeUrl' : activeUrl;
+        await IOSFFTService.instance.setAudioUrl(fftUrl);
+        await IOSFFTService.instance.startCapture();
+      }
     } on PlatformException {
       // Fallback logic for streaming failure - try transcoded stream if direct failed
       if (!isLocalFile && isDirectStream) {
@@ -998,6 +1015,12 @@ class AudioPlayerService {
             );
           }
           _lastPlayingState = true;
+
+          // Start iOS FFT capture with fallback URL
+          if (Platform.isIOS) {
+            await IOSFFTService.instance.setAudioUrl(fallbackUrl);
+            await IOSFFTService.instance.startCapture();
+          }
         } else {
           rethrow;
         }
@@ -1172,6 +1195,11 @@ class AudioPlayerService {
   Future<void> stop() async {
     // 1. Stop audio immediately
     await _player.stop();
+
+    // Stop iOS FFT capture
+    if (Platform.isIOS) {
+      await IOSFFTService.instance.stopCapture();
+    }
 
     // 2. CLEAR persistence so app starts fresh on next launch
     try {

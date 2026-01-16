@@ -110,7 +110,7 @@ class _BioluminescentVisualizerState extends State<BioluminescentVisualizer>
 
       if (available) {
         _useIOSFFT = true;
-        debugPrint('🌊 Visualizer: Using AVAudioEngine real FFT (iOS)');
+        debugPrint('🌊 Visualizer: Using MTAudioProcessingTap real FFT (iOS)');
 
         // Listen to real FFT data
         _fftSubscription = iosService.fftStream.listen((fft) {
