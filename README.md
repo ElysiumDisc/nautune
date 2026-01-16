@@ -16,7 +16,7 @@
 - **Listening Analytics**: Heatmaps, streaks, and weekly comparisons
 - **Global Search**: Unified search across your entire library with instant results
 - **Smart Offline Mode**: Full support for downloaded content with seamless transition
-- **High-Fidelity Playback**: Native backends for all platforms ensuring bit-perfect audio
+- **High-Fidelity Playback**: Native backends for Linux and iOS ensuring bit-perfect audio
 - **CarPlay Support**: Take your Jellyfin library on the road with CarPlay interface
 - **Personalized Home**: Discover, On This Day, and For You recommendation shelves
 
@@ -55,9 +55,6 @@
 | Linux | PulseAudio `parec` loopback | ✅ Instant |
 | iOS (downloaded) | MTAudioProcessingTap + vDSP | ✅ Instant |
 | iOS (streaming) | Cache then tap | ✅ After cache |
-| macOS | Metadata fallback | 🔄 Fallback |
-| Android | Metadata fallback | 🔄 Fallback |
-| Windows | Metadata fallback | 🔄 Fallback |
 
 ## 🛠 Technical Foundation
 - **Framework**: Flutter (Dart)
@@ -125,7 +122,7 @@ flutter analyze
 
 | Feature | Platform | Status |
 |---------|----------|--------|
-| Desktop Remote Control | iOS → Linux/macOS | 🔜 Planned |
+| Desktop Remote Control | iOS → Linux | 🔜 Planned |
 
 Control desktop playback from iOS device over local network.
 
