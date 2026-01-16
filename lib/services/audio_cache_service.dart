@@ -69,37 +69,42 @@ class AudioCacheService {
   
   /// Pre-cache a single track in the background
   /// Returns the cached file, or null if caching failed
-  Future<File?> cacheTrack(JellyfinTrack track) async {
+  /// If [streamUrl] is provided, uses that URL instead of direct download URL
+  /// (useful for caching transcoded streams to match playback quality)
+  Future<File?> cacheTrack(JellyfinTrack track, {String? streamUrl}) async {
     if (_cacheManager == null) {
       await initialize();
     }
-    
-    final trackId = track.id;
-    
+
+    // Use stream URL hash as cache key if provided (different quality = different cache)
+    final trackId = streamUrl != null
+        ? '${track.id}_${streamUrl.hashCode}'
+        : track.id;
+
     // Already caching this track - wait for it
     if (_cachingInProgress.contains(trackId)) {
       return _cacheCompleters[trackId]?.future;
     }
-    
+
     // Check if already cached
     final existing = await getCachedFile(trackId);
     if (existing != null) {
       debugPrint('✅ Track already cached: ${track.name}');
       return existing;
     }
-    
+
     // Get the streaming URL
-    final url = track.directDownloadUrl();
+    final url = streamUrl ?? track.directDownloadUrl();
     if (url == null) {
       debugPrint('⚠️ No URL available for track: ${track.name}');
       return null;
     }
-    
+
     // Start caching
     _cachingInProgress.add(trackId);
     final completer = Completer<File?>();
     _cacheCompleters[trackId] = completer;
-    
+
     try {
       debugPrint('📥 Caching track: ${track.name}');
       final file = await _cacheManager!.getSingleFile(url, key: trackId);

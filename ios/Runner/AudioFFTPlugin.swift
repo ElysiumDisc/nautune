@@ -10,7 +10,6 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private var eventSink: FlutterEventSink?
     private var shadowPlayer: AVPlayer?
     private var playerItem: AVPlayerItem?
-    private var audioTap: Unmanaged<MTAudioProcessingTap>?
     private var isCapturing = false
     private var currentUrl: String?
 
@@ -23,11 +22,12 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private let fftSize: Int = 2048
     private var log2n: vDSP_Length = 0
 
-    // Audio format from tap
-    private var audioFormat: AudioStreamBasicDescription?
+    // Singleton for callback access
+    private static var sharedInstance: AudioFFTPlugin?
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         let instance = AudioFFTPlugin()
+        sharedInstance = instance
 
         // Method channel for commands
         let methodChannel = FlutterMethodChannel(
@@ -113,7 +113,7 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         currentUrl = urlString
 
         // Clean up old player
-        stopCapture()
+        cleanupPlayer()
 
         guard let url = URL(string: urlString) else {
             print("🎵 AudioFFTPlugin: Invalid URL")
@@ -143,15 +143,33 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         }
 
-        // Create tap callbacks - use static functions with context pointer
+        // Create tap callbacks
         var callbacks = MTAudioProcessingTapCallbacks(
             version: kMTAudioProcessingTapCallbacksVersion_0,
-            clientInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()),
-            init: tapInit,
-            finalize: tapFinalize,
-            prepare: tapPrepare,
-            unprepare: tapUnprepare,
-            process: tapProcess
+            clientInfo: UnsafeMutableRawPointer(mutating: Unmanaged.passUnretained(self).toOpaque()),
+            init: { (tap, clientInfo, tapStorageOut) in
+                tapStorageOut.pointee = clientInfo
+            },
+            finalize: { (tap) in
+                // Cleanup if needed
+            },
+            prepare: { (tap, maxFrames, processingFormat) in
+                print("🎵 AudioFFTPlugin: Tap prepared")
+            },
+            unprepare: { (tap) in
+                // Cleanup if needed
+            },
+            process: { (tap, numberFrames, flags, bufferListInOut, numberFramesOut, flagsOut) in
+                // Get source audio
+                let status = MTAudioProcessingTapGetSourceAudio(tap, numberFrames, bufferListInOut, flagsOut, nil, numberFramesOut)
+                guard status == noErr else { return }
+
+                // Get plugin instance and process
+                if let storage = MTAudioProcessingTapGetStorage(tap) {
+                    let plugin = Unmanaged<AudioFFTPlugin>.fromOpaque(storage).takeUnretainedValue()
+                    plugin.processAudioBuffer(bufferListInOut, frames: numberFramesOut.pointee)
+                }
+            }
         )
 
         var tap: Unmanaged<MTAudioProcessingTap>?
@@ -167,11 +185,9 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             return
         }
 
-        self.audioTap = audioTap
-
         // Create audio mix with tap
         let inputParams = AVMutableAudioMixInputParameters(track: audioTrack)
-        inputParams.audioTapProcessor = audioTap.takeUnretainedValue()
+        inputParams.audioTapProcessor = audioTap.takeRetainedValue()
 
         let audioMix = AVMutableAudioMix()
         audioMix.inputParameters = [inputParams]
@@ -187,11 +203,7 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         // If capture was already requested, start now
         if isCapturing {
             shadowPlayer?.play()
-            if syncTimer == nil {
-                syncTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-                    self?.checkSync()
-                }
-            }
+            startSyncTimer()
             print("🎵 AudioFFTPlugin: Auto-started capture after setup")
         }
     }
@@ -213,14 +225,17 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             player.play()
         }
 
+        startSyncTimer()
+        print("🎵 AudioFFTPlugin: Capture started")
+    }
+
+    private func startSyncTimer() {
         // Start position sync timer if not already running
         if syncTimer == nil {
             syncTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
                 self?.checkSync()
             }
         }
-
-        print("🎵 AudioFFTPlugin: Capture started")
     }
 
     private func stopCapture() {
@@ -230,16 +245,16 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         syncTimer = nil
 
         shadowPlayer?.pause()
-        shadowPlayer = nil
-        playerItem = nil
-
-        if let tap = audioTap {
-            tap.release()
-            audioTap = nil
-        }
 
         sendFFTData(bass: 0, mid: 0, treble: 0, amplitude: 0)
         print("🎵 AudioFFTPlugin: Capture stopped")
+    }
+
+    private func cleanupPlayer() {
+        stopCapture()
+        shadowPlayer = nil
+        playerItem = nil
+        currentUrl = nil
     }
 
     private func syncPosition(_ position: Double) {
@@ -362,36 +377,4 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             ])
         }
     }
-}
-
-// MARK: - MTAudioProcessingTap Callbacks (C-style)
-
-private func tapInit(tap: MTAudioProcessingTap, clientInfo: UnsafeMutableRawPointer?, tapStorageOut: UnsafeMutablePointer<UnsafeMutableRawPointer?>) {
-    tapStorageOut.pointee = clientInfo
-}
-
-private func tapFinalize(tap: MTAudioProcessingTap) {
-    // Cleanup if needed
-}
-
-private func tapPrepare(tap: MTAudioProcessingTap, maxFrames: CMItemCount, processingFormat: UnsafePointer<AudioStreamBasicDescription>) {
-    print("🎵 AudioFFTPlugin: Tap prepared, format: \(processingFormat.pointee.mSampleRate)Hz, \(processingFormat.pointee.mChannelsPerFrame) channels")
-}
-
-private func tapUnprepare(tap: MTAudioProcessingTap) {
-    // Cleanup if needed
-}
-
-private func tapProcess(tap: MTAudioProcessingTap, numberFrames: CMItemCount, flags: MTAudioProcessingTapFlags, bufferListInOut: UnsafeMutablePointer<AudioBufferList>, numberFramesOut: UnsafeMutablePointer<CMItemCount>, flagsOut: UnsafeMutablePointer<MTAudioProcessingTapFlags>) {
-    // Get source audio
-    var status = MTAudioProcessingTapGetSourceAudio(tap, numberFrames, bufferListInOut, flagsOut, nil, numberFramesOut)
-    guard status == noErr else { return }
-
-    // Get plugin instance from storage
-    var storage: UnsafeMutableRawPointer?
-    status = MTAudioProcessingTapGetStorage(tap, &storage)
-    guard status == noErr, let clientInfo = storage else { return }
-
-    let plugin = Unmanaged<AudioFFTPlugin>.fromOpaque(clientInfo).takeUnretainedValue()
-    plugin.processAudioBuffer(bufferListInOut, frames: numberFramesOut.pointee)
 }

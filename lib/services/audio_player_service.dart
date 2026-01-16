@@ -986,11 +986,16 @@ class AudioPlayerService {
 
       _lastPlayingState = true;
 
-      // Start iOS FFT capture with the audio URL
+      // iOS FFT: Use local file immediately, or cache streaming track first
       if (Platform.isIOS) {
-        final fftUrl = isLocalFile ? 'file://$activeUrl' : activeUrl;
-        await IOSFFTService.instance.setAudioUrl(fftUrl);
-        await IOSFFTService.instance.startCapture();
+        if (isLocalFile) {
+          // Local file - start FFT immediately
+          await IOSFFTService.instance.setAudioUrl('file://$activeUrl');
+          await IOSFFTService.instance.startCapture();
+        } else {
+          // Streaming - cache in background (same quality as playback), then start FFT
+          _cacheTrackForIOSFFT(track, activeUrl);
+        }
       }
     } on PlatformException {
       // Fallback logic for streaming failure - try transcoded stream if direct failed
@@ -1015,12 +1020,7 @@ class AudioPlayerService {
             );
           }
           _lastPlayingState = true;
-
-          // Start iOS FFT capture with fallback URL
-          if (Platform.isIOS) {
-            await IOSFFTService.instance.setAudioUrl(fallbackUrl);
-            await IOSFFTService.instance.startCapture();
-          }
+          // No iOS FFT for streaming - would double bandwidth
         } else {
           rethrow;
         }
@@ -1190,6 +1190,45 @@ class AudioPlayerService {
       debugPrint('❌ Skip to previous failed: $e');
       rethrow;
     }
+  }
+
+  /// Cache streaming track for iOS FFT visualization.
+  /// Once cached, starts FFT from local file and syncs to current position.
+  /// Uses the same [streamUrl] as playback to match transcoding quality.
+  void _cacheTrackForIOSFFT(JellyfinTrack track, String streamUrl) {
+    if (!Platform.isIOS) return;
+
+    final trackId = track.id;
+    debugPrint('🎵 iOS FFT: Caching track for visualization: ${track.name}');
+
+    // Cache in background using same stream URL as playback
+    _audioCacheService.cacheTrack(track, streamUrl: streamUrl).then((cachedFile) async {
+      if (cachedFile == null) {
+        debugPrint('⚠️ iOS FFT: Cache failed for ${track.name}');
+        return;
+      }
+
+      // Make sure we're still playing the same track
+      if (_currentTrack?.id != trackId) {
+        debugPrint('🎵 iOS FFT: Track changed, skipping FFT start');
+        return;
+      }
+
+      // Start FFT from cached file
+      final filePath = 'file://${cachedFile.path}';
+      debugPrint('🎵 iOS FFT: Starting from cache: ${track.name}');
+
+      await IOSFFTService.instance.setAudioUrl(filePath);
+      await IOSFFTService.instance.startCapture();
+
+      // Sync to current playback position
+      final currentPos = _lastPosition.inSeconds.toDouble();
+      await IOSFFTService.instance.syncPosition(currentPos);
+
+      debugPrint('🎵 iOS FFT: Synced to position ${currentPos}s');
+    }).catchError((e) {
+      debugPrint('⚠️ iOS FFT: Error caching for FFT: $e');
+    });
   }
 
   Future<void> stop() async {

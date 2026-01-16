@@ -82,8 +82,9 @@
 
 | Platform | FFT Method | Status |
 |----------|-----------|--------|
-| Linux | PulseAudio `parec` loopback | ✅ Real FFT |
-| iOS | MTAudioProcessingTap + vDSP | ✅ Real FFT |
+| Linux | PulseAudio `parec` loopback | ✅ Instant |
+| iOS (downloaded) | MTAudioProcessingTap + vDSP | ✅ Instant |
+| iOS (streaming) | Cache then tap | ✅ After cache |
 | macOS | Metadata fallback | 🔄 Fallback |
 | Android | Metadata fallback | 🔄 Fallback |
 | Windows | Metadata fallback | 🔄 Fallback |
