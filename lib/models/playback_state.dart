@@ -91,8 +91,14 @@ class PlaybackState {
     this.streamingQuality = StreamingQuality.original,
     // Theme
     this.themePaletteId = 'purple_ocean',
+    this.customPrimaryColor,  // Custom theme primary color (stored as int)
+    this.customSecondaryColor,  // Custom theme secondary color (stored as int)
+    this.customThemeIsLight = false,  // Whether custom theme is light mode
     // Visualizer
     this.visualizerEnabled = true,
+    // Smart caching
+    this.preCacheTrackCount = 3,  // 0 = off, 3, 5, or 10
+    this.wifiOnlyCaching = false,
   });
 
   final String? currentTrackId;
@@ -125,8 +131,14 @@ class PlaybackState {
   final StreamingQuality streamingQuality;
   // Theme
   final String themePaletteId;
+  final int? customPrimaryColor;  // Custom theme primary (Color.value)
+  final int? customSecondaryColor;  // Custom theme secondary (Color.value)
+  final bool customThemeIsLight;  // Whether custom theme is light
   // Visualizer
   final bool visualizerEnabled;
+  // Smart caching
+  final int preCacheTrackCount;  // 0 = off, 3, 5, or 10
+  final bool wifiOnlyCaching;
 
   bool get hasTrack => currentTrackId != null;
 
@@ -158,7 +170,12 @@ class PlaybackState {
     int? autoCleanupDays,
     StreamingQuality? streamingQuality,
     String? themePaletteId,
+    int? customPrimaryColor,
+    int? customSecondaryColor,
+    bool? customThemeIsLight,
     bool? visualizerEnabled,
+    int? preCacheTrackCount,
+    bool? wifiOnlyCaching,
   }) {
     return PlaybackState(
       currentTrackId: currentTrackId ?? this.currentTrackId,
@@ -188,7 +205,12 @@ class PlaybackState {
       autoCleanupDays: autoCleanupDays ?? this.autoCleanupDays,
       streamingQuality: streamingQuality ?? this.streamingQuality,
       themePaletteId: themePaletteId ?? this.themePaletteId,
+      customPrimaryColor: customPrimaryColor ?? this.customPrimaryColor,
+      customSecondaryColor: customSecondaryColor ?? this.customSecondaryColor,
+      customThemeIsLight: customThemeIsLight ?? this.customThemeIsLight,
       visualizerEnabled: visualizerEnabled ?? this.visualizerEnabled,
+      preCacheTrackCount: preCacheTrackCount ?? this.preCacheTrackCount,
+      wifiOnlyCaching: wifiOnlyCaching ?? this.wifiOnlyCaching,
     );
   }
 
@@ -221,7 +243,12 @@ class PlaybackState {
       'autoCleanupDays': autoCleanupDays,
       'streamingQuality': streamingQuality.name,
       'themePaletteId': themePaletteId,
+      'customPrimaryColor': customPrimaryColor,
+      'customSecondaryColor': customSecondaryColor,
+      'customThemeIsLight': customThemeIsLight,
       'visualizerEnabled': visualizerEnabled,
+      'preCacheTrackCount': preCacheTrackCount,
+      'wifiOnlyCaching': wifiOnlyCaching,
     };
   }
 
@@ -266,7 +293,12 @@ class PlaybackState {
       autoCleanupDays: (json['autoCleanupDays'] as num?)?.toInt() ?? 30,
       streamingQuality: StreamingQualityExtension.fromString(json['streamingQuality'] as String?),
       themePaletteId: json['themePaletteId'] as String? ?? 'purple_ocean',
+      customPrimaryColor: (json['customPrimaryColor'] as num?)?.toInt(),
+      customSecondaryColor: (json['customSecondaryColor'] as num?)?.toInt(),
+      customThemeIsLight: json['customThemeIsLight'] as bool? ?? false,
       visualizerEnabled: json['visualizerEnabled'] as bool? ?? true,
+      preCacheTrackCount: (json['preCacheTrackCount'] as num?)?.toInt() ?? 3,
+      wifiOnlyCaching: json['wifiOnlyCaching'] as bool? ?? false,
     );
   }
 
@@ -302,7 +334,12 @@ class PlaybackState {
       autoCleanupDays: autoCleanupDays,
       streamingQuality: streamingQuality,
       themePaletteId: themePaletteId, // Preserve theme preference
+      customPrimaryColor: customPrimaryColor, // Preserve custom theme colors
+      customSecondaryColor: customSecondaryColor,
+      customThemeIsLight: customThemeIsLight,
       visualizerEnabled: visualizerEnabled, // Preserve visualizer preference
+      preCacheTrackCount: preCacheTrackCount, // Preserve smart cache settings
+      wifiOnlyCaching: wifiOnlyCaching,
     );
   }
 

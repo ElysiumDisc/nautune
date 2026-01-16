@@ -2,7 +2,7 @@ name: nautune
 description: "Nautune - Poseidon Music Player for Jellyfin"
 publish_to: 'none'
 
-version: 4.4.4+1
+version: 4.8.0+1
 
 environment:
   sdk: ^3.9.2
@@ -42,6 +42,7 @@ dependencies:
   flutter_secure_storage: ^10.0.0
   flutter_local_notifications: ^19.5.0
   uuid: ^4.5.2
+  flutter_colorpicker: ^1.1.0
 
 dev_dependencies:
   flutter_test:

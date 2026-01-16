@@ -2099,6 +2099,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
         return Icons.diamond; // Treasure
       case IconType.tracks:
         return Icons.auto_awesome; // Pearls/shells sparkle
+      case IconType.genres:
+        return Icons.navigation; // Navigation/compass for genre exploration
+      case IconType.special:
+        return Icons.nightlight_round; // Moon/night for time-based milestones
     }
   }
 
@@ -2116,6 +2120,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
         return const Color(0xFFFFD700); // Gold treasure
       case IconType.tracks:
         return const Color(0xFFEC4899); // Pearl pink
+      case IconType.genres:
+        return const Color(0xFF06B6D4); // Cyan - navigation/compass color
+      case IconType.special:
+        return const Color(0xFF8B5CF6); // Violet - mystical night creatures
     }
   }
 }

@@ -19,6 +19,7 @@ import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../services/audio_player_service.dart';
+import '../services/share_service.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/bioluminescent_visualizer.dart';
 import '../widgets/jellyfin_image.dart';
@@ -530,6 +531,19 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
           _loadingLyrics = false;
         });
       }
+    }
+  }
+
+  String _getLyricsSourceLabel(String source) {
+    switch (source) {
+      case 'jellyfin':
+        return 'Server';
+      case 'lrclib':
+        return 'LRCLIB';
+      case 'lyricsovh':
+        return 'lyrics.ovh';
+      default:
+        return source;
     }
   }
 
@@ -1056,6 +1070,115 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                                 ),
                                               );
                                             }
+                                          },
+                                        ),
+                                        ListTile(
+                                          leading: const Icon(Icons.share),
+                                          title: const Text('Share'),
+                                          onTap: () async {
+                                            Navigator.pop(sheetContext);
+                                            final messenger = ScaffoldMessenger.of(parentContext);
+                                            final theme = Theme.of(parentContext);
+                                            final downloadService = _appState.downloadService;
+                                            final shareService = ShareService.instance;
+
+                                            if (!shareService.isAvailable) {
+                                              messenger.showSnackBar(
+                                                const SnackBar(
+                                                  content: Text('Sharing not available on this platform'),
+                                                  duration: Duration(seconds: 2),
+                                                ),
+                                              );
+                                              return;
+                                            }
+
+                                            final result = await shareService.shareTrack(
+                                              track: track,
+                                              downloadService: downloadService,
+                                            );
+
+                                            if (!parentContext.mounted) return;
+
+                                            switch (result) {
+                                              case ShareResult.success:
+                                                messenger.showSnackBar(
+                                                  SnackBar(
+                                                    content: Text('Shared "${track.name}"'),
+                                                    duration: const Duration(seconds: 2),
+                                                  ),
+                                                );
+                                                break;
+                                              case ShareResult.cancelled:
+                                                break;
+                                              case ShareResult.notDownloaded:
+                                                final shouldDownload = await showDialog<bool>(
+                                                  context: parentContext,
+                                                  builder: (dialogContext) => AlertDialog(
+                                                    title: const Text('Track Not Downloaded'),
+                                                    content: Text(
+                                                      'To share "${track.name}", it needs to be downloaded first. '
+                                                      'Would you like to download it now?'
+                                                    ),
+                                                    actions: [
+                                                      TextButton(
+                                                        onPressed: () => Navigator.pop(dialogContext, false),
+                                                        child: const Text('Cancel'),
+                                                      ),
+                                                      FilledButton(
+                                                        onPressed: () => Navigator.pop(dialogContext, true),
+                                                        child: const Text('Download'),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                );
+                                                if (shouldDownload == true && parentContext.mounted) {
+                                                  await downloadService.downloadTrack(track);
+                                                  messenger.showSnackBar(
+                                                    SnackBar(
+                                                      content: Text('Downloading "${track.name}"...'),
+                                                      duration: const Duration(seconds: 2),
+                                                    ),
+                                                  );
+                                                }
+                                                break;
+                                              case ShareResult.fileNotFound:
+                                                messenger.showSnackBar(
+                                                  SnackBar(
+                                                    content: Text('File for "${track.name}" not found'),
+                                                    backgroundColor: theme.colorScheme.error,
+                                                    duration: const Duration(seconds: 3),
+                                                  ),
+                                                );
+                                                break;
+                                              case ShareResult.error:
+                                                messenger.showSnackBar(
+                                                  SnackBar(
+                                                    content: Text('Failed to share "${track.name}"'),
+                                                    backgroundColor: theme.colorScheme.error,
+                                                    duration: const Duration(seconds: 3),
+                                                  ),
+                                                );
+                                                break;
+                                            }
+                                          },
+                                        ),
+                                        ListTile(
+                                          leading: const Icon(Icons.lyrics),
+                                          title: const Text('Refresh Lyrics'),
+                                          subtitle: Text(
+                                            _lyricsSource != null
+                                                ? 'Source: ${_getLyricsSourceLabel(_lyricsSource!)}'
+                                                : 'Fetch new lyrics',
+                                          ),
+                                          onTap: () {
+                                            Navigator.pop(sheetContext);
+                                            _refreshLyrics(track);
+                                            ScaffoldMessenger.of(parentContext).showSnackBar(
+                                              const SnackBar(
+                                                content: Text('Refreshing lyrics...'),
+                                                duration: Duration(seconds: 1),
+                                              ),
+                                            );
                                           },
                                         ),
                                       ],
@@ -1840,22 +1963,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
       );
     }
 
-    // Source indicator for lyrics
-    String? sourceLabel;
-    if (_lyricsSource != null) {
-      switch (_lyricsSource) {
-        case 'jellyfin':
-          sourceLabel = 'From server';
-          break;
-        case 'lrclib':
-          sourceLabel = 'From LRCLIB';
-          break;
-        case 'lyricsovh':
-          sourceLabel = 'From lyrics.ovh';
-          break;
-      }
-    }
-
     // Find current lyric based on position
     final currentTicks = position.inMicroseconds * 10;
     int activeIndex = 0;
@@ -1961,51 +2068,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
             ),
           ),
         ),
-        // Source indicator and refresh button at bottom
-        if (sourceLabel != null)
-          Positioned(
-            bottom: 16,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surface.withValues(alpha: 0.9),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: theme.colorScheme.outline.withValues(alpha: 0.2),
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.lyrics,
-                      size: 14,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      sourceLabel,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () => _refreshLyrics(track),
-                      child: Icon(
-                        Icons.refresh,
-                        size: 16,
-                        color: theme.colorScheme.primary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+        // Source indicator removed - now in three-dot menu
       ],
     );
   }

@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../services/share_service.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/jellyfin_image.dart';
 import '../widgets/now_playing_bar.dart';
@@ -920,6 +921,98 @@ class _TrackTile extends StatelessWidget {
                                         backgroundColor: theme.colorScheme.error,
                                       ),
                                     );
+                                  }
+                                },
+                              ),
+                              ListTile(
+                                leading: const Icon(Icons.share),
+                                title: const Text('Share'),
+                                onTap: () async {
+                                  Navigator.pop(sheetContext);
+                                  final messenger = ScaffoldMessenger.of(parentContext);
+                                  final theme = Theme.of(parentContext);
+                                  final downloadService = appState.downloadService;
+                                  final shareService = ShareService.instance;
+
+                                  if (!shareService.isAvailable) {
+                                    messenger.showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Sharing not available on this platform'),
+                                        duration: Duration(seconds: 2),
+                                      ),
+                                    );
+                                    return;
+                                  }
+
+                                  final result = await shareService.shareTrack(
+                                    track: track,
+                                    downloadService: downloadService,
+                                  );
+
+                                  if (!parentContext.mounted) return;
+
+                                  switch (result) {
+                                    case ShareResult.success:
+                                      messenger.showSnackBar(
+                                        SnackBar(
+                                          content: Text('Shared "${track.name}"'),
+                                          duration: const Duration(seconds: 2),
+                                        ),
+                                      );
+                                      break;
+                                    case ShareResult.cancelled:
+                                      // User cancelled - no feedback needed
+                                      break;
+                                    case ShareResult.notDownloaded:
+                                      // Offer to download first
+                                      final shouldDownload = await showDialog<bool>(
+                                        context: parentContext,
+                                        builder: (dialogContext) => AlertDialog(
+                                          title: const Text('Track Not Downloaded'),
+                                          content: Text(
+                                            'To share "${track.name}", it needs to be downloaded first. '
+                                            'Would you like to download it now?'
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(dialogContext, false),
+                                              child: const Text('Cancel'),
+                                            ),
+                                            FilledButton(
+                                              onPressed: () => Navigator.pop(dialogContext, true),
+                                              child: const Text('Download'),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                      if (shouldDownload == true && parentContext.mounted) {
+                                        await downloadService.downloadTrack(track);
+                                        messenger.showSnackBar(
+                                          SnackBar(
+                                            content: Text('Downloading "${track.name}"...'),
+                                            duration: const Duration(seconds: 2),
+                                          ),
+                                        );
+                                      }
+                                      break;
+                                    case ShareResult.fileNotFound:
+                                      messenger.showSnackBar(
+                                        SnackBar(
+                                          content: Text('File for "${track.name}" not found'),
+                                          backgroundColor: theme.colorScheme.error,
+                                          duration: const Duration(seconds: 3),
+                                        ),
+                                      );
+                                      break;
+                                    case ShareResult.error:
+                                      messenger.showSnackBar(
+                                        SnackBar(
+                                          content: Text('Failed to share "${track.name}"'),
+                                          backgroundColor: theme.colorScheme.error,
+                                          duration: const Duration(seconds: 3),
+                                        ),
+                                      );
+                                      break;
                                   }
                                 },
                               ),

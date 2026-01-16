@@ -11,16 +11,23 @@ import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_service.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../models/download_item.dart';
+import 'audio_cache_service.dart';
 import 'connectivity_service.dart';
 import 'notification_service.dart';
 
-/// Storage statistics for downloads
+/// Storage statistics for downloads AND cache
 class StorageStats {
+  // Download stats
   final int totalBytes;
   final int trackCount;
   final Map<String, int> byAlbum; // albumId -> bytes
   final Map<String, int> byArtist; // artistName -> bytes
   final Map<String, String> albumNames; // albumId -> albumName
+
+  // Cache stats (smart pre-cached tracks)
+  final int cacheBytes;
+  final int cacheFileCount;
+  final List<String> cachedTrackIds;
 
   StorageStats({
     required this.totalBytes,
@@ -28,9 +35,14 @@ class StorageStats {
     required this.byAlbum,
     required this.byArtist,
     required this.albumNames,
+    this.cacheBytes = 0,
+    this.cacheFileCount = 0,
+    this.cachedTrackIds = const [],
   });
 
   String get formattedTotal => _formatBytes(totalBytes);
+  String get formattedCache => _formatBytes(cacheBytes);
+  String get formattedCombined => _formatBytes(totalBytes + cacheBytes);
 
   static String _formatBytes(int bytes) {
     if (bytes < 1024) return '$bytes B';
@@ -110,6 +122,24 @@ class DownloadService extends ChangeNotifier {
     final artistName = track.displayArtist;
     _artistIndex.putIfAbsent(artistName, () => {}).add(track.id);
   }
+
+  /// Remove a track from the secondary indexes
+  void _removeFromIndexes(JellyfinTrack track) {
+    final albumId = track.albumId ?? 'unknown';
+    _albumIndex[albumId]?.remove(track.id);
+    if (_albumIndex[albumId]?.isEmpty ?? false) {
+      _albumIndex.remove(albumId);
+    }
+
+    final artistName = track.displayArtist;
+    _artistIndex[artistName]?.remove(track.id);
+    if (_artistIndex[artistName]?.isEmpty ?? false) {
+      _artistIndex.remove(artistName);
+    }
+  }
+
+  // Lock to prevent race conditions between download and delete operations
+  final Set<String> _operationLocks = {};
 
   List<DownloadItem> get downloads => _downloads.values.toList()
     ..sort((a, b) => b.queuedAt.compareTo(a.queuedAt));
@@ -543,23 +573,32 @@ class DownloadService extends ChangeNotifier {
         .path;
   }
 
-  Future<String> _getArtworkPath(String trackId) async {
+  /// Get artwork path - uses albumId to avoid duplicating same album art for every track
+  Future<String> _getArtworkPath(String albumId) async {
     final docsDir = await getApplicationDocumentsDirectory();
-    final Directory downloadsDir;
+    final Directory artworkDir;
 
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      downloadsDir = Directory(
+      artworkDir = Directory(
         '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads${Platform.pathSeparator}artwork',
       );
     } else {
-      downloadsDir = Directory('${docsDir.path}/downloads/artwork');
+      artworkDir = Directory('${docsDir.path}/downloads/artwork');
     }
-    
-    if (!await downloadsDir.exists()) {
-      await downloadsDir.create(recursive: true);
+
+    if (!await artworkDir.exists()) {
+      await artworkDir.create(recursive: true);
     }
-    
-    return File('${downloadsDir.path}/$trackId.jpg').absolute.path;
+
+    return File('${artworkDir.path}/$albumId.jpg').absolute.path;
+  }
+
+  /// Get artwork path for a track (uses its albumId)
+  Future<String?> getArtworkPathForTrack(String trackId) async {
+    final item = _downloads[trackId];
+    if (item == null) return null;
+    final albumId = item.track.albumId ?? item.track.id;
+    return _getArtworkPath(albumId);
   }
 
   Future<void> _downloadArtwork(JellyfinTrack track) async {
@@ -567,17 +606,19 @@ class DownloadService extends ChangeNotifier {
       final artworkUrl = track.artworkUrl();
       if (artworkUrl == null) return;
 
-      final artworkPath = await _getArtworkPath(track.id);
+      // Use albumId for artwork storage to avoid duplicates
+      final albumId = track.albumId ?? track.id;
+      final artworkPath = await _getArtworkPath(albumId);
       final file = File(artworkPath);
 
       if (await file.exists()) {
-        return; // Already cached
+        return; // Already cached for this album
       }
 
       final response = await http.get(Uri.parse(artworkUrl));
       if (response.statusCode == 200) {
         await file.writeAsBytes(response.bodyBytes);
-        debugPrint('Artwork cached: ${track.name}');
+        debugPrint('Artwork cached for album: $albumId');
       }
     } catch (e) {
       debugPrint('Failed to cache artwork for ${track.name}: $e');
@@ -881,84 +922,204 @@ class DownloadService extends ChangeNotifier {
   }
 
   Future<void> deleteDownload(String trackId) async {
-    final item = _downloads[trackId];
-    if (item == null) return;
+    // Prevent concurrent operations on same track
+    if (_operationLocks.contains(trackId)) {
+      debugPrint('⚠️ Delete blocked: operation in progress for $trackId');
+      return;
+    }
+    _operationLocks.add(trackId);
 
-    // This method is for permanently deleting a download regardless of owners
-    // (e.g., from an "all downloads" list)
-    // If there are owners, this implies a forced deletion.
-    await _performDelete(trackId, item.localPath);
-    _downloads.remove(trackId);
-    _downloadQueue.remove(trackId);
-    _demoDownloadIds.remove(trackId);
-    
-    notifyListeners();
-    await _saveDownloads();
-    
-    debugPrint('Permanently deleted download: ${item.track.name}');
+    try {
+      final item = _downloads[trackId];
+      if (item == null) return;
+
+      // This method is for permanently deleting a download regardless of owners
+      // (e.g., from an "all downloads" list)
+      // If there are owners, this implies a forced deletion.
+      final deleted = await _performDelete(trackId, item);
+      if (!deleted) {
+        debugPrint('⚠️ Failed to delete files for ${item.track.name}');
+      }
+
+      _removeFromIndexes(item.track);
+      _downloads.remove(trackId);
+      _downloadQueue.remove(trackId);
+      _demoDownloadIds.remove(trackId);
+
+      notifyListeners();
+      await _saveDownloads();
+
+      debugPrint('Permanently deleted download: ${item.track.name}');
+    } finally {
+      _operationLocks.remove(trackId);
+    }
   }
 
   Future<void> deleteDownloadReference(String trackId, String ownerId) async {
-    final item = _downloads[trackId];
-    if (item == null) return;
-
-    // Remove the owner ID
-    item.owners.remove(ownerId);
-    debugPrint('Removed owner "$ownerId" from track "${item.track.name}". Remaining owners: ${item.owners.length}');
-
-    // If no more owners, proceed with removal
-    if (item.owners.isEmpty) {
-      // If download is queued or in progress, just remove from queue/map
-      if (item.isQueued || item.isDownloading) {
-        _downloadQueue.remove(trackId);
-        _downloads.remove(trackId);
-        _demoDownloadIds.remove(trackId);
-        debugPrint('Cancelled ${item.isQueued ? "queued" : "in-progress"} download: ${item.track.name}');
-      } else {
-        // Only delete file if download was completed
-        await _performDelete(trackId, item.localPath);
-        _downloads.remove(trackId);
-        _downloadQueue.remove(trackId);
-        _demoDownloadIds.remove(trackId);
-        debugPrint('No more owners for "${item.track.name}". Physically deleted.');
-      }
-      await _saveDownloads();
-    } else {
-      // If owners still exist, just save the updated item (with fewer owners)
-      await _saveDownloads();
-      debugPrint('Track "${item.track.name}" still has owners. Not physically deleted.');
+    // Prevent concurrent operations on same track
+    if (_operationLocks.contains(trackId)) {
+      debugPrint('⚠️ Delete reference blocked: operation in progress for $trackId');
+      return;
     }
+    _operationLocks.add(trackId);
 
-    notifyListeners();
+    try {
+      final item = _downloads[trackId];
+      if (item == null) return;
+
+      // Remove the owner ID
+      item.owners.remove(ownerId);
+      debugPrint('Removed owner "$ownerId" from track "${item.track.name}". Remaining owners: ${item.owners.length}');
+
+      // If no more owners, proceed with removal
+      if (item.owners.isEmpty) {
+        // If download is queued or in progress, just remove from queue/map
+        if (item.isQueued || item.isDownloading) {
+          _downloadQueue.remove(trackId);
+          _removeFromIndexes(item.track);
+          _downloads.remove(trackId);
+          _demoDownloadIds.remove(trackId);
+          debugPrint('Cancelled ${item.isQueued ? "queued" : "in-progress"} download: ${item.track.name}');
+        } else {
+          // Only delete file if download was completed
+          await _performDelete(trackId, item);
+          _removeFromIndexes(item.track);
+          _downloads.remove(trackId);
+          _downloadQueue.remove(trackId);
+          _demoDownloadIds.remove(trackId);
+          debugPrint('No more owners for "${item.track.name}". Physically deleted.');
+        }
+        await _saveDownloads();
+      } else {
+        // If owners still exist, just save the updated item (with fewer owners)
+        await _saveDownloads();
+        debugPrint('Track "${item.track.name}" still has owners. Not physically deleted.');
+      }
+
+      notifyListeners();
+    } finally {
+      _operationLocks.remove(trackId);
+    }
   }
 
-  Future<void> _performDelete(String trackId, String localPath) async {
+  /// Perform physical deletion of track file and artwork (if no other tracks use it)
+  /// Returns true if deletion succeeded, false otherwise
+  Future<bool> _performDelete(String trackId, DownloadItem item) async {
+    bool success = true;
+
     try {
-      final file = File(localPath);
+      // Delete track file
+      final file = File(item.localPath);
       if (await file.exists()) {
         await file.delete();
-        debugPrint('Deleted file: $localPath');
+        debugPrint('Deleted file: ${item.localPath}');
       }
-      
-      // Also delete cached artwork
-      final artworkPath = await _getArtworkPath(trackId);
-      final artworkFile = File(artworkPath);
-      if (await artworkFile.exists()) {
-        await artworkFile.delete();
-        debugPrint('Deleted artwork: $artworkPath');
+
+      // Only delete artwork if no other downloaded tracks share this album
+      final albumId = item.track.albumId ?? item.track.id;
+      final albumTrackIds = trackIdsForAlbum(albumId);
+
+      // Remove current track from consideration (it's being deleted)
+      final remainingTracks = albumTrackIds.where((id) => id != trackId).toList();
+
+      if (remainingTracks.isEmpty) {
+        // No other tracks from this album - safe to delete artwork
+        final artworkPath = await _getArtworkPath(albumId);
+        final artworkFile = File(artworkPath);
+        if (await artworkFile.exists()) {
+          await artworkFile.delete();
+          debugPrint('Deleted artwork for album: $albumId');
+        }
+      } else {
+        debugPrint('Keeping artwork for album $albumId (${remainingTracks.length} tracks remain)');
       }
     } catch (e) {
       debugPrint('Error during physical deletion of $trackId: $e');
+      success = false;
     }
+
+    return success;
   }
 
+  /// Clear all downloads - complete reset including orphaned files
   Future<void> clearAllDownloads() async {
-    for (final item in completedDownloads) {
-      // Intentionally call deleteDownload to force removal of all files
-      // regardless of owner, as this is a "clear all" operation.
-      await deleteDownload(item.track.id);
+    debugPrint('🗑️ Starting complete downloads reset...');
+
+    // First, delete all tracked downloads
+    final trackedIds = _downloads.keys.toList();
+    for (final trackId in trackedIds) {
+      final item = _downloads[trackId];
+      if (item != null) {
+        try {
+          final file = File(item.localPath);
+          if (await file.exists()) {
+            await file.delete();
+          }
+        } catch (e) {
+          debugPrint('Error deleting track file: $e');
+        }
+      }
     }
+
+    // Clear all state
+    _downloads.clear();
+    _downloadQueue.clear();
     _demoDownloadIds.clear();
+    _albumIndex.clear();
+    _artistIndex.clear();
+
+    // Delete entire artwork folder to handle any orphaned/corrupted artwork
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
+      final Directory artworkDir;
+      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+        artworkDir = Directory(
+          '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads${Platform.pathSeparator}artwork',
+        );
+      } else {
+        artworkDir = Directory('${docsDir.path}/downloads/artwork');
+      }
+
+      if (await artworkDir.exists()) {
+        await artworkDir.delete(recursive: true);
+        debugPrint('Deleted artwork folder');
+      }
+    } catch (e) {
+      debugPrint('Error clearing artwork folder: $e');
+    }
+
+    // Also scan for orphaned audio files not in our tracking
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
+      final Directory downloadsDir;
+      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+        downloadsDir = Directory(
+          '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads',
+        );
+      } else {
+        downloadsDir = Directory('${docsDir.path}/downloads');
+      }
+
+      if (await downloadsDir.exists()) {
+        await for (final entity in downloadsDir.list()) {
+          if (entity is File) {
+            // Delete audio files (not directories)
+            try {
+              await entity.delete();
+              debugPrint('Deleted orphaned file: ${entity.path}');
+            } catch (e) {
+              debugPrint('Error deleting orphaned file: $e');
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error scanning for orphaned files: $e');
+    }
+
+    await _saveDownloads();
+    notifyListeners();
+    debugPrint('✅ Downloads reset complete');
   }
 
   Future<void> retryDownload(String trackId) async {
@@ -1034,12 +1195,32 @@ class DownloadService extends ChangeNotifier {
       }
     }
 
+    // Get cache stats from AudioCacheService
+    int cacheBytes = 0;
+    int cacheFileCount = 0;
+    List<String> cachedTrackIds = [];
+
+    try {
+      // Ensure cache service is initialized
+      await AudioCacheService.instance.initialize();
+      final cacheStats = await AudioCacheService.instance.getCacheStats();
+      cacheBytes = (cacheStats['totalSizeBytes'] as int?) ?? 0;
+      cacheFileCount = (cacheStats['fileCount'] as int?) ?? 0;
+      cachedTrackIds = await AudioCacheService.instance.getCachedTrackIds();
+      debugPrint('📦 Storage stats: downloads=$totalBytes bytes ($trackCount tracks), cache=$cacheBytes bytes ($cacheFileCount files)');
+    } catch (e) {
+      debugPrint('⚠️ Error getting cache stats: $e');
+    }
+
     return StorageStats(
       totalBytes: totalBytes,
       trackCount: trackCount,
       byAlbum: byAlbum,
       byArtist: byArtist,
       albumNames: albumNames,
+      cacheBytes: cacheBytes,
+      cacheFileCount: cacheFileCount,
+      cachedTrackIds: cachedTrackIds,
     );
   }
 
@@ -1059,14 +1240,20 @@ class DownloadService extends ChangeNotifier {
   }
 
   /// Cleanup downloads older than specified duration
+  /// Only deletes tracks with no remaining owners (respects playlists, etc.)
   Future<int> cleanupByAge(Duration maxAge) async {
     final cutoff = DateTime.now().subtract(maxAge);
     final toDelete = <String>[];
 
     for (final item in completedDownloads) {
       final completedAt = item.completedAt;
+      // Only consider tracks with no owners or just the auto-cleanup owner
       if (completedAt != null && completedAt.isBefore(cutoff)) {
-        toDelete.add(item.track.id);
+        if (item.owners.isEmpty) {
+          toDelete.add(item.track.id);
+        } else {
+          debugPrint('Skipping age cleanup for "${item.track.name}" - has ${item.owners.length} owners');
+        }
       }
     }
 
@@ -1076,11 +1263,12 @@ class DownloadService extends ChangeNotifier {
       deletedCount++;
     }
 
-    debugPrint('Cleaned up $deletedCount downloads older than ${maxAge.inDays} days');
+    debugPrint('Cleaned up $deletedCount ownerless downloads older than ${maxAge.inDays} days');
     return deletedCount;
   }
 
   /// Cleanup downloads to free space, starting with oldest
+  /// Only deletes tracks with no remaining owners (respects playlists, etc.)
   Future<int> cleanupToFreeSpace(int targetFreeMB) async {
     if (targetFreeMB <= 0) return 0;
 
@@ -1090,8 +1278,9 @@ class DownloadService extends ChangeNotifier {
 
     if (currentSize <= targetSize) return 0;
 
-    // Sort by completion date (oldest first)
+    // Sort by completion date (oldest first), only consider tracks with no owners
     final sortedDownloads = List<DownloadItem>.from(completedDownloads)
+      ..removeWhere((item) => item.owners.isNotEmpty)
       ..sort((a, b) {
         final aDate = a.completedAt ?? DateTime(2000);
         final bDate = b.completedAt ?? DateTime(2000);
@@ -1111,31 +1300,38 @@ class DownloadService extends ChangeNotifier {
       }
     }
 
-    debugPrint('Cleaned up $deletedCount downloads to free ${targetFreeMB}MB');
+    debugPrint('Cleaned up $deletedCount ownerless downloads to free ${targetFreeMB}MB');
     return deletedCount;
   }
 
   /// Cleanup all downloads for a specific album
+  /// Uses deleteDownloadReference to respect other owners (e.g., playlists)
   Future<int> cleanupAlbum(String albumId) async {
     final trackIds = trackIdsForAlbum(albumId).toList();
     int deletedCount = 0;
     for (final trackId in trackIds) {
-      await deleteDownload(trackId);
-      deletedCount++;
+      final item = _downloads[trackId];
+      final hadOwner = item?.owners.contains(albumId) ?? false;
+      await deleteDownloadReference(trackId, albumId);
+      // Count as deleted if album was an owner (track may still exist if other owners)
+      if (hadOwner) deletedCount++;
     }
-    debugPrint('Cleaned up $deletedCount tracks from album $albumId');
+    debugPrint('Removed album $albumId ownership from $deletedCount tracks');
     return deletedCount;
   }
 
   /// Cleanup all downloads for a specific artist
+  /// Uses deleteDownloadReference to respect other owners (e.g., playlists)
   Future<int> cleanupArtist(String artistName) async {
     final trackIds = trackIdsForArtist(artistName).toList();
     int deletedCount = 0;
     for (final trackId in trackIds) {
-      await deleteDownload(trackId);
-      deletedCount++;
+      final item = _downloads[trackId];
+      final hadOwner = item?.owners.contains(artistName) ?? false;
+      await deleteDownloadReference(trackId, artistName);
+      if (hadOwner) deletedCount++;
     }
-    debugPrint('Cleaned up $deletedCount tracks from artist $artistName');
+    debugPrint('Removed artist $artistName ownership from $deletedCount tracks');
     return deletedCount;
   }
 

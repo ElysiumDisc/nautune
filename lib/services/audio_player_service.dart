@@ -23,6 +23,8 @@ import '../models/playback_state.dart';
 import '../models/play_stats.dart';
 import 'local_cache_service.dart';
 import 'ios_fft_service.dart';
+import 'pulseaudio_fft_service.dart';
+import 'connectivity_service.dart';
 
 enum RepeatMode {
   off,      // No repeat
@@ -134,6 +136,11 @@ class AudioPlayerService {
   // Streaming quality
   StreamingQuality _streamingQuality = StreamingQuality.original;
 
+  // Smart caching settings
+  int _preCacheTrackCount = 3;  // 0 = off, 3, 5, or 10
+  bool _wifiOnlyCaching = false;
+  ConnectivityService? _connectivityService;
+
   JellyfinTrack? _currentTrack;
   List<JellyfinTrack> _queue = [];
   int _currentIndex = 0;
@@ -188,6 +195,23 @@ class AudioPlayerService {
   }
 
   StreamingQuality get streamingQuality => _streamingQuality;
+
+  void setConnectivityService(ConnectivityService service) {
+    _connectivityService = service;
+  }
+
+  void setPreCacheTrackCount(int count) {
+    _preCacheTrackCount = count;
+    debugPrint('📦 Pre-cache track count: $count');
+  }
+
+  void setWifiOnlyCaching(bool value) {
+    _wifiOnlyCaching = value;
+    debugPrint('📦 WiFi-only caching: $value');
+  }
+
+  int get preCacheTrackCount => _preCacheTrackCount;
+  bool get wifiOnlyCaching => _wifiOnlyCaching;
 
   /// Gets the appropriate stream URL based on quality setting.
   /// Returns (url, isDirectStream) tuple.
@@ -422,9 +446,12 @@ class AudioPlayerService {
   }
   
   Future<void> _initAudioSession() async {
-    // Initialize iOS FFT service (only does work on iOS)
+    // Initialize FFT services for real audio visualization
     if (Platform.isIOS) {
       unawaited(IOSFFTService.instance.initialize());
+    }
+    if (Platform.isLinux) {
+      unawaited(PulseAudioFFTService.instance.initialize());
     }
 
     try {
@@ -634,6 +661,9 @@ class AudioPlayerService {
 
           // Pre-warm album art for upcoming tracks
           _imagePrewarmService?.prewarmQueueImages(_queue, _currentIndex);
+
+          // Smart pre-cache more upcoming tracks
+          unawaited(_smartPreCacheUpcoming(_queue, _currentIndex));
 
           // Clear pre-load state
           _preloadedTrack = null;
@@ -997,6 +1027,11 @@ class AudioPlayerService {
           _cacheTrackForIOSFFT(track, activeUrl);
         }
       }
+
+      // Linux FFT: PulseAudio captures system audio directly (no file path needed)
+      if (Platform.isLinux) {
+        PulseAudioFFTService.instance.startCapture();
+      }
     } on PlatformException {
       // Fallback logic for streaming failure - try transcoded stream if direct failed
       if (!isLocalFile && isDirectStream) {
@@ -1065,10 +1100,20 @@ class AudioPlayerService {
       reorderQueue: false,
     );
     
-    // Pre-cache remaining album tracks in background (skip first since it's playing)
-    if (ordered.length > 1) {
-      unawaited(_audioCacheService.cacheAlbumTracks(ordered, startIndex: 1));
-    }
+    // Smart pre-cache upcoming tracks based on user settings
+    unawaited(_smartPreCacheUpcoming(ordered, 0));
+  }
+
+  /// Trigger smart pre-caching for upcoming tracks in queue.
+  /// Uses user's configured pre-cache count and WiFi-only settings.
+  Future<void> _smartPreCacheUpcoming(List<JellyfinTrack> queue, int currentIndex) async {
+    await _audioCacheService.smartPreCacheQueue(
+      queue: queue,
+      currentIndex: currentIndex,
+      preCacheCount: _preCacheTrackCount,
+      wifiOnly: _wifiOnlyCaching,
+      connectivityService: _connectivityService,
+    );
   }
   
   Future<void> pause() async {
@@ -1244,9 +1289,12 @@ class AudioPlayerService {
     // 1. Stop audio immediately
     await _player.stop();
 
-    // Stop iOS FFT capture
+    // Stop FFT capture
     if (Platform.isIOS) {
       await IOSFFTService.instance.stopCapture();
+    }
+    if (Platform.isLinux) {
+      PulseAudioFFTService.instance.stopCapture();
     }
 
     // 2. CLEAR persistence so app starts fresh on next launch

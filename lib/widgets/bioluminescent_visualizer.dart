@@ -43,9 +43,9 @@ class _BioluminescentVisualizerState extends State<BioluminescentVisualizer>
   StreamSubscription? _frequencySubscription;
   StreamSubscription? _fftSubscription;
 
-  // Real FFT sources
-  bool _usePulseAudioFFT = false;  // Linux
-  bool _useIOSFFT = false;         // iOS
+  // Real FFT sources - check synchronously from singleton services
+  bool get _usePulseAudioFFT => Platform.isLinux && PulseAudioFFTService.instance.isAvailable;
+  bool get _useIOSFFT => Platform.isIOS && IOSFFTService.instance.isAvailable;
 
   @override
   void initState() {
@@ -57,15 +57,14 @@ class _BioluminescentVisualizerState extends State<BioluminescentVisualizer>
 
     _initFFTSource();
 
-    // Listen to playing state - start/stop animation and FFT capture
+    // Listen to playing state - start/stop animation only
+    // FFT capture lifecycle is managed by audio_player_service for both iOS and Linux
     _playingSubscription = widget.audioService.playingStream.listen((playing) {
       if (mounted) {
         if (playing) {
           _animationController.repeat();
-          _startFFTCapture();
         } else {
           _animationController.stop();
-          _stopFFTCapture();
         }
       }
     });
@@ -73,59 +72,31 @@ class _BioluminescentVisualizerState extends State<BioluminescentVisualizer>
     // Initial state
     if (widget.audioService.isPlaying) {
       _animationController.repeat();
-      _startFFTCapture();
     }
   }
 
-  Future<void> _initFFTSource() async {
-    // Try PulseAudio loopback on Linux
-    if (Platform.isLinux) {
-      final pulseService = PulseAudioFFTService.instance;
-      final available = await pulseService.initialize();
-
-      if (available) {
-        _usePulseAudioFFT = true;
-        debugPrint('🌊 Visualizer: Using PulseAudio real FFT (Linux)');
-
-        // Listen to real FFT data
-        _fftSubscription = pulseService.fftStream.listen((fft) {
-          _targetBass = fft.bass;
-          _targetMid = fft.mid;
-          _targetTreble = fft.treble;
-          _targetAmplitude = fft.amplitude;
-        });
-
-        // Start capture if already playing
-        if (widget.audioService.isPlaying) {
-          pulseService.startCapture();
-        }
-        return;
-      }
+  void _initFFTSource() {
+    // Subscribe to real FFT stream if available (services are singletons, already initialized)
+    if (_usePulseAudioFFT) {
+      debugPrint('🌊 Visualizer: Subscribing to PulseAudio real FFT (Linux)');
+      _fftSubscription = PulseAudioFFTService.instance.fftStream.listen((fft) {
+        _targetBass = fft.bass;
+        _targetMid = fft.mid;
+        _targetTreble = fft.treble;
+        _targetAmplitude = fft.amplitude;
+      });
+      return;
     }
 
-    // Try AVAudioEngine FFT on iOS
-    if (Platform.isIOS) {
-      final iosService = IOSFFTService.instance;
-      final available = await iosService.initialize();
-
-      if (available) {
-        _useIOSFFT = true;
-        debugPrint('🌊 Visualizer: Using MTAudioProcessingTap real FFT (iOS)');
-
-        // Listen to real FFT data
-        _fftSubscription = iosService.fftStream.listen((fft) {
-          _targetBass = fft.bass;
-          _targetMid = fft.mid;
-          _targetTreble = fft.treble;
-          _targetAmplitude = fft.amplitude;
-        });
-
-        // Start capture if already playing
-        if (widget.audioService.isPlaying) {
-          iosService.startCapture();
-        }
-        return;
-      }
+    if (_useIOSFFT) {
+      debugPrint('🌊 Visualizer: Subscribing to iOS real FFT');
+      _fftSubscription = IOSFFTService.instance.fftStream.listen((fft) {
+        _targetBass = fft.bass;
+        _targetMid = fft.mid;
+        _targetTreble = fft.treble;
+        _targetAmplitude = fft.amplitude;
+      });
+      return;
     }
 
     // Fallback: metadata-driven frequency bands
@@ -138,28 +109,12 @@ class _BioluminescentVisualizerState extends State<BioluminescentVisualizer>
     });
   }
 
-  void _startFFTCapture() {
-    if (_usePulseAudioFFT) {
-      PulseAudioFFTService.instance.startCapture();
-    } else if (_useIOSFFT) {
-      IOSFFTService.instance.startCapture();
-    }
-  }
-
-  void _stopFFTCapture() {
-    if (_usePulseAudioFFT) {
-      PulseAudioFFTService.instance.stopCapture();
-    } else if (_useIOSFFT) {
-      IOSFFTService.instance.stopCapture();
-    }
-  }
-
   @override
   void dispose() {
     _fftSubscription?.cancel();
     _frequencySubscription?.cancel();
     _playingSubscription?.cancel();
-    _stopFFTCapture();
+    // FFT capture lifecycle is managed by audio_player_service (not here)
     _animationController.dispose();
     super.dispose();
   }

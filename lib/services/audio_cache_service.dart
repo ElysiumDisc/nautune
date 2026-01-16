@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 
 import '../jellyfin/jellyfin_track.dart';
+import 'connectivity_service.dart';
 
 /// Service for pre-caching audio tracks for smoother playback.
 /// Uses flutter_cache_manager for efficient file caching with automatic eviction.
@@ -129,18 +130,66 @@ class AudioCacheService {
     int? maxTracks,
   }) async {
     if (tracks.isEmpty) return;
-    
-    final endIndex = maxTracks != null 
+
+    final endIndex = maxTracks != null
         ? (startIndex + maxTracks).clamp(0, tracks.length)
         : tracks.length;
-    
+
     debugPrint('🎵 Pre-caching ${endIndex - startIndex} tracks starting from index $startIndex');
-    
+
     // Cache tracks sequentially to avoid overwhelming the network
     for (int i = startIndex; i < endIndex; i++) {
       // Don't await - let it cache in background
       unawaited(_cacheTrackSilently(tracks[i]));
       // Small delay between requests to be gentle on the server
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+  }
+
+  /// Smart pre-cache upcoming tracks based on user settings.
+  ///
+  /// [queue] - The current playback queue
+  /// [currentIndex] - Index of currently playing track
+  /// [preCacheCount] - Number of tracks to pre-cache (0 = disabled, 3, 5, or 10)
+  /// [wifiOnly] - If true, only cache when on WiFi
+  /// [connectivityService] - Service to check WiFi status
+  Future<void> smartPreCacheQueue({
+    required List<JellyfinTrack> queue,
+    required int currentIndex,
+    required int preCacheCount,
+    required bool wifiOnly,
+    ConnectivityService? connectivityService,
+  }) async {
+    // Check if caching is disabled
+    if (preCacheCount <= 0) {
+      debugPrint('📦 Smart cache: Disabled (count = 0)');
+      return;
+    }
+
+    // Check WiFi-only restriction
+    if (wifiOnly && connectivityService != null) {
+      final isWifi = await connectivityService.isOnWifi();
+      if (!isWifi) {
+        debugPrint('📦 Smart cache: Skipped (WiFi-only enabled, not on WiFi)');
+        return;
+      }
+    }
+
+    // Calculate tracks to cache
+    final startIdx = currentIndex + 1;
+    if (startIdx >= queue.length) {
+      debugPrint('📦 Smart cache: No upcoming tracks to cache');
+      return;
+    }
+
+    final endIdx = (startIdx + preCacheCount).clamp(0, queue.length);
+    final tracksToCache = queue.sublist(startIdx, endIdx);
+
+    debugPrint('📦 Smart cache: Pre-caching ${tracksToCache.length} upcoming tracks');
+
+    // Cache tracks sequentially in background
+    for (final track in tracksToCache) {
+      unawaited(_cacheTrackSilently(track));
       await Future.delayed(const Duration(milliseconds: 100));
     }
   }
@@ -167,11 +216,49 @@ class AudioCacheService {
   
   /// Clear all cached audio files
   Future<void> clearCache() async {
-    if (_cacheManager == null) return;
-    
+    int deletedCount = 0;
+    int deletedBytes = 0;
+
     try {
-      await _cacheManager!.emptyCache();
-      debugPrint('🗑️ Audio cache cleared');
+      // Clear flutter_cache_manager's internal database
+      if (_cacheManager != null) {
+        await _cacheManager!.emptyCache();
+      }
+
+      // Also manually delete files from all cache directories
+      final tempDir = await getTemporaryDirectory();
+      final possibleDirs = [
+        Directory(path.join(tempDir.path, _cacheKey)),
+        Directory(path.join(tempDir.path, 'libCachedImageData')),
+        Directory(path.join(tempDir.path, 'flutter_cache')),
+      ];
+
+      for (final dir in possibleDirs) {
+        if (await dir.exists()) {
+          await for (final entity in dir.list(recursive: true)) {
+            if (entity is File) {
+              final fileName = path.basename(entity.path);
+              // Skip database files
+              if (!fileName.endsWith('.json') && !fileName.endsWith('.db')) {
+                try {
+                  final size = await entity.length();
+                  await entity.delete();
+                  deletedCount++;
+                  deletedBytes += size;
+                } catch (e) {
+                  debugPrint('⚠️ Could not delete ${entity.path}: $e');
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Clear in-progress tracking
+      _cachingInProgress.clear();
+      _cacheCompleters.clear();
+
+      debugPrint('🗑️ Audio cache cleared: $deletedCount files, ${(deletedBytes / (1024 * 1024)).toStringAsFixed(2)} MB');
     } catch (e) {
       debugPrint('⚠️ Error clearing cache: $e');
     }
@@ -180,33 +267,95 @@ class AudioCacheService {
   /// Get cache statistics
   Future<Map<String, dynamic>> getCacheStats() async {
     if (_cacheManager == null) {
-      return {'initialized': false};
+      return {'initialized': false, 'fileCount': 0, 'totalSizeBytes': 0};
     }
-    
+
     try {
-      final cacheDir = await _getCacheDirectory();
-      final dir = Directory(cacheDir);
+      // flutter_cache_manager stores files in temp dir with cache key subfolder
+      final tempDir = await getTemporaryDirectory();
       int fileCount = 0;
       int totalSize = 0;
-      
-      if (await dir.exists()) {
-        await for (final entity in dir.list(recursive: true)) {
-          if (entity is File) {
-            fileCount++;
-            totalSize += await entity.length();
+      final List<String> cachedFiles = [];
+
+      // Search for cache files in flutter_cache_manager's location
+      // It stores files in: temp_dir/libCachedImageData (for images) and similar for audio
+      // Also check the cache key folder
+      final possibleDirs = [
+        Directory(path.join(tempDir.path, _cacheKey)),
+        Directory(path.join(tempDir.path, 'libCachedImageData')),
+        Directory(path.join(tempDir.path, 'flutter_cache')),
+      ];
+
+      for (final dir in possibleDirs) {
+        if (await dir.exists()) {
+          await for (final entity in dir.list(recursive: true)) {
+            if (entity is File) {
+              // Skip database files, only count audio files
+              final fileName = path.basename(entity.path);
+              if (!fileName.endsWith('.json') && !fileName.endsWith('.db')) {
+                fileCount++;
+                totalSize += await entity.length();
+                cachedFiles.add(fileName);
+              }
+            }
           }
         }
       }
-      
+
       return {
         'initialized': true,
         'fileCount': fileCount,
         'totalSizeBytes': totalSize,
         'totalSizeMB': (totalSize / (1024 * 1024)).toStringAsFixed(2),
         'cachingInProgress': _cachingInProgress.length,
+        'cachedFiles': cachedFiles,
       };
     } catch (e) {
-      return {'initialized': true, 'error': e.toString()};
+      debugPrint('⚠️ Error getting cache stats: $e');
+      return {'initialized': true, 'error': e.toString(), 'fileCount': 0, 'totalSizeBytes': 0};
+    }
+  }
+
+  /// Get list of cached track IDs
+  Future<List<String>> getCachedTrackIds() async {
+    if (_cacheManager == null) {
+      return [];
+    }
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final List<String> trackIds = [];
+
+      // Search in flutter_cache_manager's cache locations
+      final possibleDirs = [
+        Directory(path.join(tempDir.path, _cacheKey)),
+        Directory(path.join(tempDir.path, 'libCachedImageData')),
+        Directory(path.join(tempDir.path, 'flutter_cache')),
+      ];
+
+      for (final dir in possibleDirs) {
+        if (await dir.exists()) {
+          await for (final entity in dir.list(recursive: true)) {
+            if (entity is File) {
+              final fileName = path.basenameWithoutExtension(entity.path);
+              // Skip database/metadata files
+              if (fileName.endsWith('.json') || fileName.contains('cache')) {
+                continue;
+              }
+              // Extract track ID (before any underscore for hash variants)
+              final trackId = fileName.split('_').first;
+              if (trackId.isNotEmpty && !trackIds.contains(trackId)) {
+                trackIds.add(trackId);
+              }
+            }
+          }
+        }
+      }
+
+      return trackIds;
+    } catch (e) {
+      debugPrint('⚠️ Error getting cached track IDs: $e');
+      return [];
     }
   }
   

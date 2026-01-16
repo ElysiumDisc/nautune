@@ -37,6 +37,10 @@ class UIStateProvider extends ChangeNotifier {
   int _libraryTabIndex = 0;
   Map<String, double> _scrollOffsets = {};
 
+  // Smart caching settings
+  int _preCacheTrackCount = 3;  // 0 = off, 3, 5, or 10
+  bool _wifiOnlyCaching = false;
+
   // Download settings
   int _maxConcurrentDownloads = 3;
   bool _wifiOnlyDownloads = false;
@@ -52,6 +56,10 @@ class UIStateProvider extends ChangeNotifier {
   int get cacheTtlMinutes => _cacheTtlMinutes;
   int get libraryTabIndex => _libraryTabIndex;
   double? getScrollOffset(String key) => _scrollOffsets[key];
+
+  // Smart caching getters
+  int get preCacheTrackCount => _preCacheTrackCount;
+  bool get wifiOnlyCaching => _wifiOnlyCaching;
 
   // Download settings getters
   int get maxConcurrentDownloads => _maxConcurrentDownloads;
@@ -76,6 +84,10 @@ class UIStateProvider extends ChangeNotifier {
         _cacheTtlMinutes = storedPlaybackState.cacheTtlMinutes;
         _libraryTabIndex = storedPlaybackState.libraryTabIndex;
         _scrollOffsets = Map<String, double>.from(storedPlaybackState.scrollOffsets);
+
+        // Smart caching settings
+        _preCacheTrackCount = storedPlaybackState.preCacheTrackCount;
+        _wifiOnlyCaching = storedPlaybackState.wifiOnlyCaching;
 
         // Download settings
         _maxConcurrentDownloads = storedPlaybackState.maxConcurrentDownloads;
@@ -143,6 +155,26 @@ class UIStateProvider extends ChangeNotifier {
     _cacheTtlMinutes = minutes.clamp(1, 10080);
     unawaited(_playbackStateStore.saveUiState(
       cacheTtlMinutes: _cacheTtlMinutes,
+    ));
+    notifyListeners();
+  }
+
+  /// Set pre-cache track count (0 = off, 3, 5, or 10).
+  /// Pre-caches upcoming tracks for smoother playback.
+  void setPreCacheTrackCount(int count) {
+    _preCacheTrackCount = count;
+    unawaited(_playbackStateStore.saveUiState(
+      preCacheTrackCount: count,
+    ));
+    notifyListeners();
+  }
+
+  /// Set WiFi-only caching.
+  /// When enabled, only pre-caches tracks when connected to WiFi.
+  void setWifiOnlyCaching(bool value) {
+    _wifiOnlyCaching = value;
+    unawaited(_playbackStateStore.saveUiState(
+      wifiOnlyCaching: value,
     ));
     notifyListeners();
   }

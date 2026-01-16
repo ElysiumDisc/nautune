@@ -702,6 +702,24 @@ class NautuneAppState extends ChangeNotifier {
     ));
   }
 
+  /// Set pre-cache track count for smart caching
+  void setPreCacheTrackCount(int count) {
+    _audioPlayerService.setPreCacheTrackCount(count);
+    unawaited(_playbackStateStore.saveUiState(
+      preCacheTrackCount: count,
+    ));
+    debugPrint('📦 Pre-cache track count set to: $count');
+  }
+
+  /// Set WiFi-only caching
+  void setWifiOnlyCaching(bool value) {
+    _audioPlayerService.setWifiOnlyCaching(value);
+    unawaited(_playbackStateStore.saveUiState(
+      wifiOnlyCaching: value,
+    ));
+    debugPrint('📦 WiFi-only caching: $value');
+  }
+
   /// Initialize Low Power Mode listener (iOS only)
   void _initPowerModeListener() {
     _powerModeSub = PowerModeService.instance.lowPowerModeStream.listen((isLowPower) {
@@ -860,6 +878,9 @@ class NautuneAppState extends ChangeNotifier {
       _audioPlayerService.setInfiniteRadioEnabled(_infiniteRadioEnabled);
       _audioPlayerService.setGaplessPlaybackEnabled(_gaplessPlaybackEnabled);
       _audioPlayerService.setStreamingQuality(_streamingQuality);
+      _audioPlayerService.setPreCacheTrackCount(storedPlaybackState.preCacheTrackCount);
+      _audioPlayerService.setWifiOnlyCaching(storedPlaybackState.wifiOnlyCaching);
+      _audioPlayerService.setConnectivityService(_connectivityService);
       _jellyfinService.setCacheTtl(Duration(minutes: _cacheTtlMinutes));
       
       // Restore download settings

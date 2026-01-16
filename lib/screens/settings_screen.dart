@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
@@ -10,6 +11,7 @@ import '../providers/ui_state_provider.dart';
 import '../services/audio_cache_service.dart';
 import '../services/download_service.dart';
 import '../theme/nautune_theme.dart';
+import '../widgets/equalizer_widget.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -96,8 +98,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       builder: (context) => _ThemePickerSheet(
         currentPalette: themeProvider.palette,
-        onSelect: (palette) {
+        customPrimaryColor: themeProvider.customPrimaryColor,
+        customSecondaryColor: themeProvider.customSecondaryColor,
+        customIsLight: themeProvider.customIsLight,
+        onSelectPreset: (palette) {
           themeProvider.setPalette(palette);
+          Navigator.pop(context);
+        },
+        onSelectCustom: (primary, secondary, isLight) {
+          themeProvider.setCustomColors(
+            primary: primary,
+            secondary: secondary,
+            isLight: isLight,
+          );
           Navigator.pop(context);
         },
       ),
@@ -291,6 +304,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
             ),
+          const SizedBox(height: 16),
+          // Equalizer
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: EqualizerWidget(),
+          ),
           const Divider(),
           Padding(
             padding: const EdgeInsets.all(16),
@@ -329,19 +348,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 8),
           ListTile(
-            leading: Icon(Icons.cleaning_services, color: theme.colorScheme.primary),
-            title: const Text('Clear Audio Cache'),
-            subtitle: const Text('Clear pre-cached streaming audio'),
-            trailing: FilledButton.tonal(
-              onPressed: () async {
-                await AudioCacheService.instance.clearCache();
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Audio cache cleared')),
-                  );
+            leading: Icon(Icons.queue_music, color: theme.colorScheme.primary),
+            title: const Text('Smart Pre-Cache'),
+            subtitle: Text(
+              uiStateProvider.preCacheTrackCount == 0
+                  ? 'Disabled'
+                  : 'Pre-cache ${uiStateProvider.preCacheTrackCount} upcoming tracks'
+            ),
+            trailing: PopupMenuButton<int>(
+              initialValue: uiStateProvider.preCacheTrackCount,
+              onSelected: (int? value) {
+                if (value != null) {
+                  uiStateProvider.setPreCacheTrackCount(value);
+                  appState.setPreCacheTrackCount(value);
                 }
               },
-              child: const Text('Clear'),
+              itemBuilder: (context) => [
+                const PopupMenuItem<int>(value: 0, child: Text('Off')),
+                const PopupMenuItem<int>(value: 3, child: Text('3 tracks')),
+                const PopupMenuItem<int>(value: 5, child: Text('5 tracks')),
+                const PopupMenuItem<int>(value: 10, child: Text('10 tracks')),
+              ],
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      uiStateProvider.preCacheTrackCount == 0
+                          ? 'Off'
+                          : '${uiStateProvider.preCacheTrackCount}',
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(Icons.arrow_drop_down, color: theme.colorScheme.primary),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              'Pre-download upcoming tracks in queue for smoother playback. Works with albums, playlists, and favorites.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ),
+          ListTile(
+            leading: Icon(Icons.wifi, color: theme.colorScheme.primary),
+            title: const Text('WiFi-Only Pre-Cache'),
+            subtitle: const Text('Only pre-cache when connected to WiFi'),
+            trailing: Switch(
+              value: uiStateProvider.wifiOnlyCaching,
+              onChanged: (value) {
+                uiStateProvider.setWifiOnlyCaching(value);
+                appState.setWifiOnlyCaching(value);
+              },
             ),
           ),
           const Divider(),
@@ -402,74 +474,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                   ListTile(
-                    leading: Icon(Icons.storage, color: theme.colorScheme.primary),
-                    title: const Text('Storage Limit'),
-                    subtitle: Text(
-                      downloadService.storageLimitMB == 0
-                          ? 'Unlimited'
-                          : downloadService.storageLimitMB >= 1024
-                              ? '${(downloadService.storageLimitMB / 1024).toStringAsFixed(1)} GB'
-                              : '${downloadService.storageLimitMB} MB'
-                    ),
-                    trailing: SizedBox(
-                      width: 150,
-                      child: _StorageLimitSlider(
-                        currentMB: downloadService.storageLimitMB,
-                        onChanged: (mb) {
-                          downloadService.setStorageLimitMB(mb);
-                          uiStateProvider.setStorageLimitMB(mb);
-                        },
-                      ),
-                    ),
-                  ),
-                  ListTile(
-                    leading: Icon(Icons.auto_delete, color: theme.colorScheme.primary),
-                    title: const Text('Auto-Cleanup'),
-                    subtitle: Text(
-                      downloadService.autoCleanupEnabled
-                          ? 'Remove downloads older than ${downloadService.autoCleanupDays} days'
-                          : 'Keep all downloads'
-                    ),
-                    trailing: Switch(
-                      value: downloadService.autoCleanupEnabled,
-                      onChanged: (value) {
-                        downloadService.setAutoCleanup(enabled: value);
-                        uiStateProvider.setAutoCleanup(enabled: value);
-                      },
-                    ),
-                  ),
-                  if (downloadService.autoCleanupEnabled)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Row(
-                        children: [
-                          const Text('7d'),
-                          Expanded(
-                            child: Slider(
-                              value: downloadService.autoCleanupDays.toDouble(),
-                              min: 7,
-                              max: 90,
-                              divisions: 11,
-                              label: '${downloadService.autoCleanupDays} days',
-                              onChanged: (value) {
-                                final days = value.round();
-                                downloadService.setAutoCleanup(days: days);
-                                uiStateProvider.setAutoCleanup(days: days);
-                              },
-                            ),
-                          ),
-                          const Text('90d'),
-                        ],
-                      ),
-                    ),
-                  ListTile(
                     leading: Icon(Icons.folder_open, color: theme.colorScheme.primary),
                     title: const Text('Manage Storage'),
-                    subtitle: FutureBuilder<int>(
-                      future: downloadService.getTotalDownloadSize(),
+                    subtitle: FutureBuilder<StorageStats>(
+                      future: downloadService.getStorageStats(),
                       builder: (context, snapshot) {
                         if (snapshot.hasData) {
-                          return Text('${downloadService.completedCount} tracks using ${_formatBytes(snapshot.data!)}');
+                          final stats = snapshot.data!;
+                          final totalItems = stats.trackCount + stats.cacheFileCount;
+                          return Text('$totalItems items using ${stats.formattedCombined}');
                         }
                         return const Text('Calculating...');
                       },
@@ -618,6 +631,8 @@ class _StorageLimitSlider extends StatelessWidget {
   }
 }
 
+enum _StorageView { downloads, cache }
+
 class _StorageManagementScreen extends StatefulWidget {
   const _StorageManagementScreen();
 
@@ -626,6 +641,7 @@ class _StorageManagementScreen extends StatefulWidget {
 }
 
 class _StorageManagementScreenState extends State<_StorageManagementScreen> {
+  _StorageView _currentView = _StorageView.downloads;
   bool _showByAlbum = true;
 
   @override
@@ -633,6 +649,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
     final theme = Theme.of(context);
     final appState = Provider.of<NautuneAppState>(context);
     final downloadService = appState.downloadService;
+    final uiStateProvider = Provider.of<UIStateProvider>(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -696,14 +713,35 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceAround,
                             children: [
                               _StatItem(
-                                icon: Icons.storage,
-                                label: 'Total Size',
+                                icon: Icons.download,
+                                label: 'Downloads',
                                 value: stats.formattedTotal,
                               ),
                               _StatItem(
+                                icon: Icons.cached,
+                                label: 'Cache',
+                                value: stats.formattedCache,
+                              ),
+                              _StatItem(
+                                icon: Icons.storage,
+                                label: 'Total',
+                                value: stats.formattedCombined,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            children: [
+                              _StatItem(
                                 icon: Icons.music_note,
-                                label: 'Tracks',
-                                value: '${stats.trackCount}',
+                                label: 'Downloaded',
+                                value: '${stats.trackCount} tracks',
+                              ),
+                              _StatItem(
+                                icon: Icons.queue_music,
+                                label: 'Cached',
+                                value: '${stats.cacheFileCount} tracks',
                               ),
                               _StatItem(
                                 icon: Icons.album,
@@ -715,12 +753,12 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                           if (downloadService.storageLimitMB > 0) ...[
                             const SizedBox(height: 16),
                             LinearProgressIndicator(
-                              value: stats.totalBytes / (downloadService.storageLimitMB * 1024 * 1024),
+                              value: (stats.totalBytes + stats.cacheBytes) / (downloadService.storageLimitMB * 1024 * 1024),
                               backgroundColor: theme.colorScheme.surfaceContainerHighest,
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              '${_formatBytes(stats.totalBytes)} of ${_formatBytes(downloadService.storageLimitMB * 1024 * 1024)}',
+                              '${stats.formattedCombined} of ${_formatBytes(downloadService.storageLimitMB * 1024 * 1024)}',
                               style: theme.textTheme.bodySmall,
                             ),
                           ],
@@ -729,71 +767,230 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                     ),
                   ),
 
-                  // Quick actions
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
+                  // Storage settings
+                  Card(
+                    margin: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Column(
                       children: [
-                        Expanded(
-                          child: FilledButton.tonalIcon(
-                            onPressed: () async {
-                              final deleted = await downloadService.cleanupByAge(const Duration(days: 30));
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Removed $deleted old downloads')),
-                                );
+                        ListTile(
+                          leading: const Icon(Icons.storage),
+                          title: const Text('Storage Limit'),
+                          subtitle: Text(
+                            downloadService.storageLimitMB == 0
+                                ? 'Unlimited'
+                                : downloadService.storageLimitMB >= 1024
+                                    ? '${(downloadService.storageLimitMB / 1024).toStringAsFixed(1)} GB'
+                                    : '${downloadService.storageLimitMB} MB'
+                          ),
+                          trailing: SizedBox(
+                            width: 150,
+                            child: _StorageLimitSlider(
+                              currentMB: downloadService.storageLimitMB,
+                              onChanged: (mb) {
+                                downloadService.setStorageLimitMB(mb);
+                                uiStateProvider.setStorageLimitMB(mb);
                                 setState(() {});
-                              }
-                            },
-                            icon: const Icon(Icons.history),
-                            label: const Text('Clean Old'),
+                              },
+                            ),
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: FilledButton.tonalIcon(
-                            onPressed: () async {
-                              final deleted = await downloadService.cleanupToFreeSpace(500);
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Removed $deleted downloads to free 500MB')),
-                                );
-                                setState(() {});
-                              }
+                        ListTile(
+                          leading: const Icon(Icons.auto_delete),
+                          title: const Text('Auto-Cleanup'),
+                          subtitle: Text(
+                            downloadService.autoCleanupEnabled
+                                ? 'Remove downloads older than ${downloadService.autoCleanupDays} days'
+                                : 'Keep all downloads'
+                          ),
+                          trailing: Switch(
+                            value: downloadService.autoCleanupEnabled,
+                            onChanged: (value) {
+                              downloadService.setAutoCleanup(enabled: value);
+                              uiStateProvider.setAutoCleanup(enabled: value);
+                              setState(() {});
                             },
-                            icon: const Icon(Icons.cleaning_services),
-                            label: const Text('Free 500MB'),
                           ),
                         ),
+                        if (downloadService.autoCleanupEnabled)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 12),
+                            child: Row(
+                              children: [
+                                const Text('7d'),
+                                Expanded(
+                                  child: Slider(
+                                    value: downloadService.autoCleanupDays.toDouble(),
+                                    min: 7,
+                                    max: 90,
+                                    divisions: 11,
+                                    label: '${downloadService.autoCleanupDays} days',
+                                    onChanged: (value) {
+                                      final days = value.round();
+                                      downloadService.setAutoCleanup(days: days);
+                                      uiStateProvider.setAutoCleanup(days: days);
+                                      setState(() {});
+                                    },
+                                  ),
+                                ),
+                                const Text('90d'),
+                              ],
+                            ),
+                          ),
                       ],
                     ),
                   ),
 
                   const SizedBox(height: 16),
 
-                  // Toggle between album/artist view
+                  // Main view toggle: Downloads vs Cache
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: SegmentedButton<bool>(
+                    child: SegmentedButton<_StorageView>(
                       segments: const [
-                        ButtonSegment(value: true, label: Text('By Album'), icon: Icon(Icons.album)),
-                        ButtonSegment(value: false, label: Text('By Artist'), icon: Icon(Icons.person)),
+                        ButtonSegment(value: _StorageView.downloads, label: Text('Downloads'), icon: Icon(Icons.download)),
+                        ButtonSegment(value: _StorageView.cache, label: Text('Cache'), icon: Icon(Icons.cached)),
                       ],
-                      selected: {_showByAlbum},
+                      selected: {_currentView},
                       onSelectionChanged: (selection) {
-                        setState(() => _showByAlbum = selection.first);
+                        setState(() => _currentView = selection.first);
                       },
                     ),
                   ),
 
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
 
-                  // List of albums/artists with storage usage
-                  Expanded(
-                    child: _showByAlbum
-                        ? _buildAlbumList(stats, downloadService, theme)
-                        : _buildArtistList(stats, downloadService, theme),
-                  ),
+                  // View-specific content
+                  if (_currentView == _StorageView.downloads) ...[
+                    // Quick actions for downloads
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: FilledButton.tonalIcon(
+                              onPressed: () async {
+                                final deleted = await downloadService.cleanupByAge(const Duration(days: 30));
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Removed $deleted old downloads')),
+                                  );
+                                  setState(() {});
+                                }
+                              },
+                              icon: const Icon(Icons.history),
+                              label: const Text('Clean Old'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: FilledButton.tonalIcon(
+                              onPressed: () async {
+                                final deleted = await downloadService.cleanupToFreeSpace(500);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Removed $deleted downloads to free 500MB')),
+                                  );
+                                  setState(() {});
+                                }
+                              },
+                              icon: const Icon(Icons.cleaning_services),
+                              label: const Text('Free 500MB'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    // Toggle between album/artist view
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: SegmentedButton<bool>(
+                        segments: const [
+                          ButtonSegment(value: true, label: Text('By Album'), icon: Icon(Icons.album)),
+                          ButtonSegment(value: false, label: Text('By Artist'), icon: Icon(Icons.person)),
+                        ],
+                        selected: {_showByAlbum},
+                        onSelectionChanged: (selection) {
+                          setState(() => _showByAlbum = selection.first);
+                        },
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    // List of albums/artists with storage usage
+                    Expanded(
+                      child: _showByAlbum
+                          ? _buildAlbumList(stats, downloadService, theme)
+                          : _buildArtistList(stats, downloadService, theme),
+                    ),
+                  ] else ...[
+                    // Cache view
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: FilledButton.tonalIcon(
+                              onPressed: () async {
+                                final confirm = await showDialog<bool>(
+                                  context: context,
+                                  builder: (context) => AlertDialog(
+                                    title: const Text('Clear Cache?'),
+                                    content: const Text('This will remove all pre-cached tracks. Downloads will not be affected.'),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(context, false),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(context, true),
+                                        child: const Text('Clear'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                if (confirm == true) {
+                                  await AudioCacheService.instance.clearCache();
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Cache cleared')),
+                                    );
+                                    setState(() {});
+                                  }
+                                }
+                              },
+                              icon: const Icon(Icons.delete_sweep),
+                              label: const Text('Clear Cache'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    // Cache info note
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Text(
+                        'Cache auto-expires after 7 days. These are temporary files pre-loaded for smooth playback.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    // List of cached tracks
+                    Expanded(
+                      child: _buildCacheList(stats, theme),
+                    ),
+                  ],
                 ],
               );
             },
@@ -921,6 +1118,65 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
       },
     );
   }
+
+  Widget _buildCacheList(StorageStats stats, ThemeData theme) {
+    final cachedTrackIds = stats.cachedTrackIds;
+
+    if (cachedTrackIds.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.cached, size: 64, color: theme.colorScheme.outline),
+            const SizedBox(height: 16),
+            Text(
+              'No cached tracks',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Play music to start pre-caching upcoming tracks',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      itemCount: cachedTrackIds.length,
+      itemBuilder: (context, index) {
+        final trackId = cachedTrackIds[index];
+
+        return ListTile(
+          leading: CircleAvatar(
+            backgroundColor: theme.colorScheme.secondaryContainer,
+            child: Icon(Icons.music_note, color: theme.colorScheme.onSecondaryContainer),
+          ),
+          title: Text(
+            'Track ID: ${trackId.length > 20 ? '${trackId.substring(0, 20)}...' : trackId}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: const Text('Pre-cached for smooth playback'),
+          trailing: IconButton(
+            icon: const Icon(Icons.delete_outline),
+            onPressed: () async {
+              await AudioCacheService.instance.removeFromCache(trackId);
+              if (context.mounted) {
+                setState(() {});
+              }
+            },
+          ),
+        );
+      },
+    );
+  }
 }
 
 class _StatItem extends StatelessWidget {
@@ -948,14 +1204,41 @@ class _StatItem extends StatelessWidget {
   }
 }
 
-class _ThemePickerSheet extends StatelessWidget {
+class _ThemePickerSheet extends StatefulWidget {
   final NautuneColorPalette currentPalette;
-  final ValueChanged<NautuneColorPalette> onSelect;
+  final Color? customPrimaryColor;
+  final Color? customSecondaryColor;
+  final bool customIsLight;
+  final ValueChanged<NautuneColorPalette> onSelectPreset;
+  final void Function(Color primary, Color secondary, bool isLight) onSelectCustom;
 
   const _ThemePickerSheet({
     required this.currentPalette,
-    required this.onSelect,
+    required this.customPrimaryColor,
+    required this.customSecondaryColor,
+    required this.customIsLight,
+    required this.onSelectPreset,
+    required this.onSelectCustom,
   });
+
+  @override
+  State<_ThemePickerSheet> createState() => _ThemePickerSheetState();
+}
+
+class _ThemePickerSheetState extends State<_ThemePickerSheet> {
+  bool _showCustomPicker = false;
+  late Color _primaryColor;
+  late Color _secondaryColor;
+  late bool _isLightTheme;
+  bool _editingPrimary = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _primaryColor = widget.customPrimaryColor ?? const Color(0xFF6B21A8);
+    _secondaryColor = widget.customSecondaryColor ?? const Color(0xFF9333EA);
+    _isLightTheme = widget.customIsLight;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -983,43 +1266,345 @@ class _ThemePickerSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          Text(
-            'Choose Theme',
-            style: theme.textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.bold,
-            ),
+          Row(
+            children: [
+              if (_showCustomPicker)
+                IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => setState(() => _showCustomPicker = false),
+                ),
+              Expanded(
+                child: Text(
+                  _showCustomPicker ? 'Custom Theme' : 'Choose Theme',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           Text(
-            'Select a color palette for the app',
+            _showCustomPicker
+                ? 'Pick your own primary and secondary colors'
+                : 'Select a preset or create your own',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
             ),
           ),
           const SizedBox(height: 20),
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              childAspectRatio: 1.5,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-            ),
-            itemCount: NautunePalettes.all.length,
-            itemBuilder: (context, index) {
-              final palette = NautunePalettes.all[index];
-              final isSelected = palette.id == currentPalette.id;
+          if (_showCustomPicker) ...[
+            // Custom color picker UI
+            _buildCustomColorPicker(theme),
+          ] else ...[
+            // Preset grid
+            GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                childAspectRatio: 1.5,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+              ),
+              itemCount: NautunePalettes.presets.length + 1, // +1 for custom
+              itemBuilder: (context, index) {
+                if (index == NautunePalettes.presets.length) {
+                  // Custom theme card
+                  return _CustomThemeCard(
+                    isSelected: widget.currentPalette.id == 'custom',
+                    primaryColor: widget.customPrimaryColor ?? const Color(0xFF6B21A8),
+                    secondaryColor: widget.customSecondaryColor ?? const Color(0xFF9333EA),
+                    isLight: widget.customIsLight,
+                    onTap: () => setState(() => _showCustomPicker = true),
+                  );
+                }
+                final palette = NautunePalettes.presets[index];
+                final isSelected = palette.id == widget.currentPalette.id;
 
-              return _ThemePaletteCard(
-                palette: palette,
-                isSelected: isSelected,
-                onTap: () => onSelect(palette),
-              );
-            },
-          ),
+                return _ThemePaletteCard(
+                  palette: palette,
+                  isSelected: isSelected,
+                  onTap: () => widget.onSelectPreset(palette),
+                );
+              },
+            ),
+          ],
           const SizedBox(height: 16),
         ],
+      ),
+    );
+  }
+
+  Widget _buildCustomColorPicker(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Light/Dark mode toggle
+        Card(
+          child: SwitchListTile(
+            title: const Text('Light Theme'),
+            subtitle: Text(_isLightTheme ? 'Light background' : 'Dark background'),
+            value: _isLightTheme,
+            onChanged: (value) => setState(() => _isLightTheme = value),
+            secondary: Icon(_isLightTheme ? Icons.light_mode : Icons.dark_mode),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Color selection tabs
+        Row(
+          children: [
+            Expanded(
+              child: _ColorSelectionButton(
+                label: 'Primary',
+                color: _primaryColor,
+                isSelected: _editingPrimary,
+                onTap: () => setState(() => _editingPrimary = true),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _ColorSelectionButton(
+                label: 'Secondary',
+                color: _secondaryColor,
+                isSelected: !_editingPrimary,
+                onTap: () => setState(() => _editingPrimary = false),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // Color picker - using HueRingPicker for compact layout
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: HueRingPicker(
+              pickerColor: _editingPrimary ? _primaryColor : _secondaryColor,
+              onColorChanged: (color) {
+                setState(() {
+                  if (_editingPrimary) {
+                    _primaryColor = color;
+                  } else {
+                    _secondaryColor = color;
+                  }
+                });
+              },
+              enableAlpha: false,
+              displayThumbColor: true,
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Preview
+        Text('Preview', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Container(
+          height: 80,
+          decoration: BoxDecoration(
+            color: _isLightTheme
+                ? Color.lerp(Colors.white, _primaryColor, 0.03)
+                : HSLColor.fromColor(_primaryColor).withLightness(0.08).toColor(),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _primaryColor, width: 2),
+          ),
+          child: Row(
+            children: [
+              const SizedBox(width: 16),
+              _ColorCircle(color: _primaryColor, size: 32),
+              const SizedBox(width: 8),
+              _ColorCircle(color: _secondaryColor, size: 32),
+              const Spacer(),
+              Text(
+                'Your Theme',
+                style: TextStyle(
+                  color: _isLightTheme
+                      ? HSLColor.fromColor(_primaryColor).withLightness(0.25).toColor()
+                      : _secondaryColor,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(width: 16),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+
+        // Apply button
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: () {
+              widget.onSelectCustom(_primaryColor, _secondaryColor, _isLightTheme);
+            },
+            icon: const Icon(Icons.check),
+            label: const Text('Apply Custom Theme'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ColorSelectionButton extends StatelessWidget {
+  final String label;
+  final Color color;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _ColorSelectionButton({
+    required this.label,
+    required this.color,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isSelected ? color.withValues(alpha: 0.2) : theme.cardColor,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected ? color : theme.dividerColor,
+              width: isSelected ? 2 : 1,
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _ColorCircle(color: color, size: 24),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CustomThemeCard extends StatelessWidget {
+  final bool isSelected;
+  final Color primaryColor;
+  final Color secondaryColor;
+  final bool isLight;
+  final VoidCallback onTap;
+
+  const _CustomThemeCard({
+    required this.isSelected,
+    required this.primaryColor,
+    required this.secondaryColor,
+    required this.isLight,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final surface = isLight
+        ? Color.lerp(Colors.white, primaryColor, 0.03)!
+        : HSLColor.fromColor(primaryColor).withLightness(0.08).toColor();
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [primaryColor.withValues(alpha: 0.3), secondaryColor.withValues(alpha: 0.3)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isSelected ? primaryColor : primaryColor.withValues(alpha: 0.5),
+              width: isSelected ? 3 : 1,
+            ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: primaryColor.withValues(alpha: 0.3),
+                      blurRadius: 8,
+                      spreadRadius: 1,
+                    ),
+                  ]
+                : null,
+          ),
+          child: Stack(
+            children: [
+              // Color preview circles
+              Positioned(
+                top: 12,
+                left: 12,
+                child: Row(
+                  children: [
+                    _ColorCircle(color: primaryColor, size: 24),
+                    const SizedBox(width: 6),
+                    _ColorCircle(color: secondaryColor, size: 24),
+                    const SizedBox(width: 6),
+                    Icon(
+                      Icons.edit,
+                      size: 20,
+                      color: isLight ? Colors.black54 : Colors.white70,
+                    ),
+                  ],
+                ),
+              ),
+              // Theme name
+              Positioned(
+                bottom: 12,
+                left: 12,
+                right: 12,
+                child: Text(
+                  'Custom',
+                  style: TextStyle(
+                    color: isLight ? Colors.black87 : Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              // Selected indicator
+              if (isSelected)
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: primaryColor,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.check,
+                      size: 14,
+                      color: surface,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

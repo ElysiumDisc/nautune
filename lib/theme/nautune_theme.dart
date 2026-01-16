@@ -22,6 +22,42 @@ class NautuneColorPalette {
     this.isLight = false,
   });
 
+  /// Create a custom palette from user-selected primary and secondary colors
+  factory NautuneColorPalette.custom({
+    required Color primary,
+    required Color secondary,
+    required bool isLight,
+  }) {
+    // Generate complementary colors based on primary/secondary
+    final hsl = HSLColor.fromColor(primary);
+
+    if (isLight) {
+      // Light theme: light surface with dark text
+      return NautuneColorPalette(
+        id: 'custom',
+        name: 'Custom',
+        primary: primary,
+        secondary: secondary,
+        surface: Color.lerp(Colors.white, primary, 0.03)!,  // Very light tint of primary
+        textPrimary: HSLColor.fromColor(primary).withLightness(0.25).toColor(),  // Dark version of primary
+        textSecondary: Colors.grey.shade600,
+        isLight: true,
+      );
+    } else {
+      // Dark theme: dark surface with light text
+      return NautuneColorPalette(
+        id: 'custom',
+        name: 'Custom',
+        primary: primary,
+        secondary: secondary,
+        surface: HSLColor.fromColor(primary).withLightness(0.08).withSaturation(hsl.saturation * 0.3).toColor(),
+        textPrimary: secondary,  // Use secondary as text highlight
+        textSecondary: Color.lerp(Colors.grey, secondary, 0.2)!,
+        isLight: false,
+      );
+    }
+  }
+
   /// Build a ThemeData from this palette
   ThemeData buildTheme() {
     if (isLight) {
@@ -296,8 +332,19 @@ class NautunePalettes {
     isLight: true,
   );
 
-  /// List of all available palettes
-  static const List<NautuneColorPalette> all = [
+  /// Custom theme placeholder (actual colors set via ThemeProvider)
+  static const custom = NautuneColorPalette(
+    id: 'custom',
+    name: 'Custom',
+    primary: Color(0xFF6B21A8),  // Default purple (will be overridden)
+    secondary: Color(0xFF9333EA),
+    surface: Color(0xFF1A1A2E),
+    textPrimary: Color(0xFF409CFF),
+    textSecondary: Color(0xFF8B9DC3),
+  );
+
+  /// List of all preset palettes (excludes custom)
+  static const List<NautuneColorPalette> presets = [
     purpleOcean,
     lightLavender,
     oledPeach,
@@ -306,9 +353,21 @@ class NautunePalettes {
     emeraldRose,
   ];
 
+  /// List of all available palettes including custom
+  static const List<NautuneColorPalette> all = [
+    purpleOcean,
+    lightLavender,
+    oledPeach,
+    apricotGarden,
+    raspberrySunset,
+    emeraldRose,
+    custom,
+  ];
+
   /// Get a palette by its ID, returns default if not found
   static NautuneColorPalette getById(String id) {
-    return all.firstWhere(
+    if (id == 'custom') return custom;  // Custom is handled specially by ThemeProvider
+    return presets.firstWhere(
       (palette) => palette.id == id,
       orElse: () => purpleOcean,
     );

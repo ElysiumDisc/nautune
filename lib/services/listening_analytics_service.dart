@@ -129,6 +129,8 @@ enum IconType {
   artists,
   albums,
   tracks,
+  genres,
+  special,
 }
 
 /// Collection of all milestones with progress
@@ -555,12 +557,26 @@ class ListeningAnalyticsService {
     final uniqueArtists = <String>{};
     final uniqueAlbums = <String>{};
     final uniqueTracks = <String>{};
+    final uniqueGenres = <String>{};
+
+    // Count night owl (10pm-4am) and early bird (5am-8am) plays
+    int nightOwlPlays = 0;
+    int earlyBirdPlays = 0;
 
     for (final event in _events) {
       uniqueTracks.add(event.trackId);
       uniqueArtists.addAll(event.artists);
+      uniqueGenres.addAll(event.genres);
       if (event.albumId != null) {
         uniqueAlbums.add(event.albumId!);
+      }
+
+      // Check time of day
+      final hour = event.timestamp.hour;
+      if (hour >= 22 || hour < 4) {
+        nightOwlPlays++;
+      } else if (hour >= 5 && hour <= 8) {
+        earlyBirdPlays++;
       }
     }
 
@@ -606,6 +622,14 @@ class ListeningAnalyticsService {
         targetValue: 5000,
         currentValue: totalPlays,
       ),
+      ListeningMilestone(
+        id: 'plays_10000',
+        name: 'Grand Admiral',
+        description: 'Play 10,000 tracks',
+        iconType: IconType.plays,
+        targetValue: 10000,
+        currentValue: totalPlays,
+      ),
 
       // Hours milestones - Depth themed
       ListeningMilestone(
@@ -640,14 +664,46 @@ class ListeningAnalyticsService {
         targetValue: 100,
         currentValue: totalHoursValue.floor(),
       ),
+      ListeningMilestone(
+        id: 'hours_250',
+        name: 'Abyssal Explorer',
+        description: 'Listen for 250 hours',
+        iconType: IconType.hours,
+        targetValue: 250,
+        currentValue: totalHoursValue.floor(),
+      ),
+      ListeningMilestone(
+        id: 'hours_500',
+        name: 'Kraken\'s Domain',
+        description: 'Listen for 500 hours',
+        iconType: IconType.hours,
+        targetValue: 500,
+        currentValue: totalHoursValue.floor(),
+      ),
 
       // Streak milestones - Wind/Weather themed
+      ListeningMilestone(
+        id: 'streak_3',
+        name: 'Sea Breeze',
+        description: '3-day listening streak',
+        iconType: IconType.streak,
+        targetValue: 3,
+        currentValue: streak.longestStreak,
+      ),
       ListeningMilestone(
         id: 'streak_7',
         name: 'Trade Winds',
         description: '7-day listening streak',
         iconType: IconType.streak,
         targetValue: 7,
+        currentValue: streak.longestStreak,
+      ),
+      ListeningMilestone(
+        id: 'streak_14',
+        name: 'Monsoon Season',
+        description: '14-day listening streak',
+        iconType: IconType.streak,
+        targetValue: 14,
         currentValue: streak.longestStreak,
       ),
       ListeningMilestone(
@@ -659,11 +715,27 @@ class ListeningAnalyticsService {
         currentValue: streak.longestStreak,
       ),
       ListeningMilestone(
+        id: 'streak_60',
+        name: 'Tidal Force',
+        description: '60-day listening streak',
+        iconType: IconType.streak,
+        targetValue: 60,
+        currentValue: streak.longestStreak,
+      ),
+      ListeningMilestone(
         id: 'streak_100',
         name: 'Eternal Voyage',
         description: '100-day listening streak',
         iconType: IconType.streak,
         targetValue: 100,
+        currentValue: streak.longestStreak,
+      ),
+      ListeningMilestone(
+        id: 'streak_365',
+        name: 'Poseidon\'s Blessing',
+        description: '365-day listening streak',
+        iconType: IconType.streak,
+        targetValue: 365,
         currentValue: streak.longestStreak,
       ),
 
@@ -692,6 +764,14 @@ class ListeningAnalyticsService {
         targetValue: 100,
         currentValue: uniqueArtists.length,
       ),
+      ListeningMilestone(
+        id: 'artists_250',
+        name: 'Seven Seas Explorer',
+        description: 'Listen to 250 different artists',
+        iconType: IconType.artists,
+        targetValue: 250,
+        currentValue: uniqueArtists.length,
+      ),
 
       // Album milestones - Treasure themed
       ListeningMilestone(
@@ -708,6 +788,22 @@ class ListeningAnalyticsService {
         description: 'Listen to tracks from 50 albums',
         iconType: IconType.albums,
         targetValue: 50,
+        currentValue: uniqueAlbums.length,
+      ),
+      ListeningMilestone(
+        id: 'albums_100',
+        name: 'Sunken Treasure',
+        description: 'Listen to tracks from 100 albums',
+        iconType: IconType.albums,
+        targetValue: 100,
+        currentValue: uniqueAlbums.length,
+      ),
+      ListeningMilestone(
+        id: 'albums_200',
+        name: 'Golden Armada',
+        description: 'Listen to tracks from 200 albums',
+        iconType: IconType.albums,
+        targetValue: 200,
         currentValue: uniqueAlbums.length,
       ),
 
@@ -727,6 +823,82 @@ class ListeningAnalyticsService {
         iconType: IconType.tracks,
         targetValue: 200,
         currentValue: uniqueTracks.length,
+      ),
+      ListeningMilestone(
+        id: 'tracks_500',
+        name: 'Coral Reef',
+        description: 'Discover 500 unique tracks',
+        iconType: IconType.tracks,
+        targetValue: 500,
+        currentValue: uniqueTracks.length,
+      ),
+      ListeningMilestone(
+        id: 'tracks_1000',
+        name: 'Ocean\'s Symphony',
+        description: 'Discover 1,000 unique tracks',
+        iconType: IconType.tracks,
+        targetValue: 1000,
+        currentValue: uniqueTracks.length,
+      ),
+
+      // Genre milestones - Navigation themed
+      ListeningMilestone(
+        id: 'genres_5',
+        name: 'Compass Rose',
+        description: 'Explore 5 different genres',
+        iconType: IconType.genres,
+        targetValue: 5,
+        currentValue: uniqueGenres.length,
+      ),
+      ListeningMilestone(
+        id: 'genres_10',
+        name: 'Chart Master',
+        description: 'Explore 10 different genres',
+        iconType: IconType.genres,
+        targetValue: 10,
+        currentValue: uniqueGenres.length,
+      ),
+      ListeningMilestone(
+        id: 'genres_20',
+        name: 'Musical Navigator',
+        description: 'Explore 20 different genres',
+        iconType: IconType.genres,
+        targetValue: 20,
+        currentValue: uniqueGenres.length,
+      ),
+
+      // Special time-based milestones - Creature themed
+      ListeningMilestone(
+        id: 'night_owl_50',
+        name: 'Night Whale',
+        description: 'Play 50 tracks between 10pm-4am',
+        iconType: IconType.special,
+        targetValue: 50,
+        currentValue: nightOwlPlays,
+      ),
+      ListeningMilestone(
+        id: 'night_owl_200',
+        name: 'Midnight Kraken',
+        description: 'Play 200 tracks between 10pm-4am',
+        iconType: IconType.special,
+        targetValue: 200,
+        currentValue: nightOwlPlays,
+      ),
+      ListeningMilestone(
+        id: 'early_bird_50',
+        name: 'Dawn Dolphin',
+        description: 'Play 50 tracks between 5am-8am',
+        iconType: IconType.special,
+        targetValue: 50,
+        currentValue: earlyBirdPlays,
+      ),
+      ListeningMilestone(
+        id: 'early_bird_200',
+        name: 'Sunrise Siren',
+        description: 'Play 200 tracks between 5am-8am',
+        iconType: IconType.special,
+        targetValue: 200,
+        currentValue: earlyBirdPlays,
       ),
     ];
 

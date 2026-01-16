@@ -133,7 +133,12 @@ class PlaybackStateStore {
     int? autoCleanupDays,
     StreamingQuality? streamingQuality,
     String? themePaletteId,
+    int? customPrimaryColor,
+    int? customSecondaryColor,
+    bool? customThemeIsLight,
     bool? visualizerEnabled,
+    int? preCacheTrackCount,
+    bool? wifiOnlyCaching,
   }) async {
     await update((state) {
       final mergedOffsets = Map<String, double>.from(state.scrollOffsets);
@@ -156,7 +161,12 @@ class PlaybackStateStore {
         autoCleanupDays: autoCleanupDays ?? state.autoCleanupDays,
         streamingQuality: streamingQuality ?? state.streamingQuality,
         themePaletteId: themePaletteId ?? state.themePaletteId,
+        customPrimaryColor: customPrimaryColor ?? state.customPrimaryColor,
+        customSecondaryColor: customSecondaryColor ?? state.customSecondaryColor,
+        customThemeIsLight: customThemeIsLight ?? state.customThemeIsLight,
         visualizerEnabled: visualizerEnabled ?? state.visualizerEnabled,
+        preCacheTrackCount: preCacheTrackCount ?? state.preCacheTrackCount,
+        wifiOnlyCaching: wifiOnlyCaching ?? state.wifiOnlyCaching,
       );
     });
   }
