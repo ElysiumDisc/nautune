@@ -2,7 +2,7 @@ name: nautune
 description: "Nautune - Poseidon Music Player for Jellyfin"
 publish_to: 'none'
 
-version: 4.8.0+1
+version: 4.8.1+1
 
 environment:
   sdk: ^3.9.2
