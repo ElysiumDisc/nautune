@@ -837,7 +837,7 @@ class SyncPlayService extends ChangeNotifier {
       _currentSession = _currentSession!.copyWith(
         queue: [..._currentSession!.queue, newTrack],
       );
-      debugPrint('✅ Track added to queue: ${newTrack.track.title}');
+      debugPrint('✅ Track added to queue: ${newTrack.track.name}');
       _notifySessionChanged();
     }
   }
