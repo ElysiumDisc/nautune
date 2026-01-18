@@ -256,8 +256,14 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
     // Check for pending cold start join
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final pendingGroupId = DeepLinkService.instance.pendingJoinGroupId;
+      debugPrint('🔗 Post-frame callback: pendingGroupId=$pendingGroupId, session=${widget.sessionProvider.session != null}');
       if (pendingGroupId != null) {
-        _handleSyncPlayJoin(pendingGroupId);
+        // Add delay to ensure navigator context is ready after cold start
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (mounted) {
+            _handleSyncPlayJoin(pendingGroupId);
+          }
+        });
       }
     });
 
@@ -316,10 +322,12 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
   }
 
   void _onSessionChanged() {
+    debugPrint('🔗 _onSessionChanged: deferred=$_deferredSyncPlayGroupId, session=${widget.sessionProvider.session != null}');
     // Process deferred SyncPlay join when session becomes available
     if (_deferredSyncPlayGroupId != null && widget.sessionProvider.session != null) {
       final groupId = _deferredSyncPlayGroupId!;
       _deferredSyncPlayGroupId = null;
+      debugPrint('🔗 Processing deferred join for group: $groupId');
 
       // Small delay to ensure UI is ready
       Future.delayed(const Duration(milliseconds: 500), () {
@@ -330,9 +338,10 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
     }
   }
 
-  void _handleSyncPlayJoin(String groupId) {
+  void _handleSyncPlayJoin(String groupId, {int retryCount = 0}) {
+    debugPrint('🔗 _handleSyncPlayJoin: groupId=$groupId, session=${widget.sessionProvider.session != null}, retry=$retryCount');
     if (widget.sessionProvider.session == null) {
-      debugPrint('SyncPlay join deferred: Waiting for session');
+      debugPrint('🔗 SyncPlay join deferred: Waiting for session');
       _deferredSyncPlayGroupId = groupId;
       return;
     }
@@ -342,11 +351,22 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
 
     // Show join dialog
     final context = _navigatorKey.currentContext;
+    debugPrint('🔗 Showing join dialog: context=${context != null}');
     if (context != null) {
       showDialog(
         context: context,
         builder: (context) => JoinCollabDialog(groupId: groupId),
       );
+    } else if (retryCount < 3) {
+      // Context not ready yet, retry after delay
+      debugPrint('🔗 Context null, retrying in 500ms...');
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          _handleSyncPlayJoin(groupId, retryCount: retryCount + 1);
+        }
+      });
+    } else {
+      debugPrint('🔗 Failed to show join dialog after $retryCount retries');
     }
   }
 

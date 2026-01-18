@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/session_provider.dart';
 import '../providers/syncplay_provider.dart';
+import '../services/deep_link_service.dart';
 import '../widgets/collab_queue_item.dart';
 import '../widgets/collab_share_sheet.dart';
 import '../widgets/syncplay_user_avatar.dart';
@@ -57,6 +58,12 @@ class _CollabPlaylistScreenState extends State<CollabPlaylistScreen> {
                     onPressed: () => _showCreateDialog(context),
                     icon: const Icon(Icons.add),
                     label: const Text('Create Collaborative Playlist'),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: () => _showJoinDialog(context),
+                    icon: const Icon(Icons.link),
+                    label: const Text('Join via Link'),
                   ),
                 ],
               ),
@@ -311,6 +318,13 @@ class _CollabPlaylistScreenState extends State<CollabPlaylistScreen> {
     );
   }
 
+  void _showJoinDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => const JoinCollabDialog(),
+    );
+  }
+
   void _handleMenuAction(BuildContext context, String action) async {
     final provider = context.read<SyncPlayProvider>();
 
@@ -491,14 +505,14 @@ class _JoinCollabDialogState extends State<JoinCollabDialog> {
           TextField(
             controller: _groupIdController,
             decoration: const InputDecoration(
-              labelText: 'Session ID',
-              hintText: 'Enter the session ID or scan QR code',
+              labelText: 'Link or Session ID',
+              hintText: 'Paste link or enter session ID',
             ),
             autofocus: widget.groupId == null,
           ),
           const SizedBox(height: 16),
           Text(
-            'Get the session ID from the host or scan their QR code.',
+            'Paste a share link or enter the session ID directly.',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -525,8 +539,11 @@ class _JoinCollabDialogState extends State<JoinCollabDialog> {
   }
 
   Future<void> _joinPlaylist() async {
-    final groupId = _groupIdController.text.trim();
-    if (groupId.isEmpty) return;
+    final input = _groupIdController.text.trim();
+    if (input.isEmpty) return;
+
+    // Try to parse as a link first, fall back to raw group ID
+    final groupId = DeepLinkService.parseJoinLink(input) ?? input;
 
     setState(() => _isJoining = true);
 

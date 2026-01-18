@@ -66,6 +66,9 @@ class DeepLinkService {
 
     final groupId = _parseGroupId(uri);
     if (groupId != null) {
+      // Store as pending in case no listeners are attached yet (iOS cold start race)
+      // The stream listener might not be set up when this fires
+      _pendingJoinGroupId = groupId;
       _syncPlayJoinController.add(groupId);
       debugPrint('DeepLinkService: SyncPlay join request for group: $groupId');
       return;
@@ -96,16 +99,6 @@ class DeepLinkService {
     }
     
     return null;
-  }
-
-  void _handleNautuneLink(Uri uri) {
-    // Deprecated - logic moved to _parseGroupId
-    _handleUri(uri);
-  }
-
-  void _handleWebLink(Uri uri) {
-    // Deprecated - logic moved to _parseGroupId
-    _handleUri(uri);
   }
 
   /// Parse a SyncPlay join link and extract the group ID
