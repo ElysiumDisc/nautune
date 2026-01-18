@@ -143,6 +143,9 @@ class SyncPlayService extends ChangeNotifier {
       groupId: groupId,
     );
 
+    // Refresh groups to get current participants after joining
+    await refreshGroups();
+
     await _connectWebSocket();
 
     // Initialize session state
