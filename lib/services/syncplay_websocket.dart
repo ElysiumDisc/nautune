@@ -432,4 +432,35 @@ extension SyncPlayMessageExtensions on SyncPlayMessage {
   int? get playingItemIndex {
     return data['PlayingItemIndex'] as int?;
   }
+
+  /// Extract the play queue data from group state updates
+  /// Returns the queue items and playing index if present
+  Map<String, dynamic>? get playQueue {
+    // Check for PlayQueue in the data (Jellyfin sends this on join)
+    final playQueue = data['PlayQueue'] as Map<String, dynamic>?;
+    if (playQueue != null) return playQueue;
+
+    // Also check for PlayingQueue (alternative format)
+    final playingQueue = data['PlayingQueue'] as Map<String, dynamic>?;
+    if (playingQueue != null) return playingQueue;
+
+    return null;
+  }
+
+  /// Extract queue item IDs from PlayQueue
+  List<String>? get playQueueItemIds {
+    final queue = playQueue;
+    if (queue == null) return null;
+
+    final items = queue['Items'] as List<dynamic>?;
+    if (items == null) return null;
+
+    return items.map((item) {
+      if (item is String) return item;
+      if (item is Map) {
+        return (item['Id'] ?? item['ItemId'] ?? item['PlaylistItemId'])?.toString();
+      }
+      return null;
+    }).whereType<String>().toList();
+  }
 }

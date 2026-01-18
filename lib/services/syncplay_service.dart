@@ -661,6 +661,18 @@ class SyncPlayService extends ChangeNotifier {
         _handleGroupLeft(message);
         break;
 
+      case SyncPlayMessageType.playlistItemAdded:
+        _handlePlaylistItemAdded(message);
+        break;
+
+      case SyncPlayMessageType.playlistItemRemoved:
+        _handlePlaylistItemRemoved(message);
+        break;
+
+      case SyncPlayMessageType.playlistItemMoved:
+        _handlePlaylistItemMoved(message);
+        break;
+
       default:
         break;
     }
@@ -692,11 +704,34 @@ class SyncPlayService extends ChangeNotifier {
               ),
             ];
 
+      // Check if the message contains queue data (sent on join)
+      final playQueue = message.playQueue;
+      List<SyncPlayTrack>? updatedQueue;
+      int? updatedTrackIndex;
+
+      if (playQueue != null) {
+        final items = playQueue['Items'] as List<dynamic>?;
+        if (items != null && items.isNotEmpty) {
+          updatedQueue = items
+              .whereType<Map<String, dynamic>>()
+              .map((item) => SyncPlayTrack.fromJson(
+                    item,
+                    serverUrl: _serverUrl,
+                    token: _credentials.accessToken,
+                    userId: _userId,
+                  ))
+              .toList();
+          updatedTrackIndex = playQueue['PlayingItemIndex'] as int?;
+          debugPrint('✅ Synced ${updatedQueue.length} tracks from server queue');
+        }
+      }
+
       _currentSession = _currentSession!.copyWith(
         group: group.copyWith(participants: updatedParticipants),
         isPaused: message.isPaused,
         positionTicks: message.positionTicks ?? _currentSession!.positionTicks,
-        currentTrackIndex: message.playingItemIndex ?? _currentSession!.currentTrackIndex,
+        currentTrackIndex: updatedTrackIndex ?? message.playingItemIndex ?? _currentSession!.currentTrackIndex,
+        queue: updatedQueue ?? _currentSession!.queue,
         lastSyncTime: DateTime.now(),
       );
       _notifySessionChanged();
@@ -758,9 +793,91 @@ class SyncPlayService extends ChangeNotifier {
   }
 
   void _handleQueueUpdate(SyncPlayMessage message) {
-    // Queue updates come as full state - refresh from server would be ideal
-    // For now, rely on optimistic updates
+    if (_currentSession == null) return;
+
+    // Check if the message contains full queue data
+    final playQueue = message.playQueue;
+    if (playQueue != null) {
+      final items = playQueue['Items'] as List<dynamic>?;
+      if (items != null) {
+        final updatedQueue = items
+            .whereType<Map<String, dynamic>>()
+            .map((item) => SyncPlayTrack.fromJson(
+                  item,
+                  serverUrl: _serverUrl,
+                  token: _credentials.accessToken,
+                  userId: _userId,
+                ))
+            .toList();
+        final trackIndex = playQueue['PlayingItemIndex'] as int?;
+
+        _currentSession = _currentSession!.copyWith(
+          queue: updatedQueue,
+          currentTrackIndex: trackIndex ?? _currentSession!.currentTrackIndex,
+        );
+        debugPrint('✅ Queue updated with ${updatedQueue.length} tracks');
+      }
+    }
     _notifySessionChanged();
+  }
+
+  void _handlePlaylistItemAdded(SyncPlayMessage message) {
+    if (_currentSession == null) return;
+
+    // The message should contain the new item data
+    final itemData = message.data['Item'] as Map<String, dynamic>?;
+    if (itemData != null) {
+      final newTrack = SyncPlayTrack.fromJson(
+        itemData,
+        serverUrl: _serverUrl,
+        token: _credentials.accessToken,
+        userId: _userId,
+      );
+
+      _currentSession = _currentSession!.copyWith(
+        queue: [..._currentSession!.queue, newTrack],
+      );
+      debugPrint('✅ Track added to queue: ${newTrack.track.title}');
+      _notifySessionChanged();
+    }
+  }
+
+  void _handlePlaylistItemRemoved(SyncPlayMessage message) {
+    if (_currentSession == null) return;
+
+    final playlistItemIds = message.data['PlaylistItemIds'] as List<dynamic>?;
+    if (playlistItemIds != null && playlistItemIds.isNotEmpty) {
+      final idsToRemove = playlistItemIds.map((id) => id.toString()).toSet();
+
+      _currentSession = _currentSession!.copyWith(
+        queue: _currentSession!.queue
+            .where((t) => !idsToRemove.contains(t.playlistItemId))
+            .toList(),
+      );
+      debugPrint('✅ Removed ${idsToRemove.length} tracks from queue');
+      _notifySessionChanged();
+    }
+  }
+
+  void _handlePlaylistItemMoved(SyncPlayMessage message) {
+    if (_currentSession == null) return;
+
+    final playlistItemId = message.playlistItemId;
+    final newIndex = message.newIndex;
+
+    if (playlistItemId != null && newIndex != null) {
+      final queue = List<SyncPlayTrack>.from(_currentSession!.queue);
+      final oldIndex = queue.indexWhere((t) => t.playlistItemId == playlistItemId);
+
+      if (oldIndex >= 0 && newIndex >= 0 && newIndex < queue.length) {
+        final item = queue.removeAt(oldIndex);
+        queue.insert(newIndex, item);
+
+        _currentSession = _currentSession!.copyWith(queue: queue);
+        debugPrint('✅ Moved track from $oldIndex to $newIndex');
+        _notifySessionChanged();
+      }
+    }
   }
 
   void _handleSetPlaylistItem(SyncPlayMessage message) {
