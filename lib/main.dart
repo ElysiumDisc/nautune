@@ -252,6 +252,14 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
       _handleSyncPlayJoin(groupId);
     });
 
+    // Check for pending cold start join
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final pendingGroupId = DeepLinkService.instance.pendingJoinGroupId;
+      if (pendingGroupId != null) {
+        _handleSyncPlayJoin(pendingGroupId);
+      }
+    });
+
     // Listen to tray actions
     final trayService = widget.appState.trayService;
     if (trayService != null) {

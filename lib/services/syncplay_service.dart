@@ -210,7 +210,9 @@ class SyncPlayService extends ChangeNotifier {
   /// Refresh available groups
   Future<void> refreshGroups() async {
     try {
+      debugPrint('SyncPlayService: Fetching groups from client...');
       _availableGroups = await _client.getGroups(credentials: _credentials);
+      debugPrint('SyncPlayService: Client returned ${_availableGroups.length} groups');
       _groupsController.add(_availableGroups);
     } catch (e) {
       debugPrint('Failed to refresh SyncPlay groups: $e');

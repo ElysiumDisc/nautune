@@ -208,6 +208,9 @@ class _LibraryScreenState extends State<LibraryScreen>
         break;
       case 3: // Playlists
         await appState.refreshPlaylists();
+        if (mounted) {
+          context.read<SyncPlayProvider>().refreshGroups();
+        }
         break;
       case 4: // Search
         // Search doesn't have a "refresh"
@@ -1780,6 +1783,17 @@ class _PlaylistsTab extends StatefulWidget {
 class _PlaylistsTabState extends State<_PlaylistsTab> {
   Mood? _loadingMood;
 
+  @override
+  void initState() {
+    super.initState();
+    // Refresh available SyncPlay groups when entering the tab
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        context.read<SyncPlayProvider>().refreshGroups();
+      }
+    });
+  }
+
   // Convenience getters
   List<JellyfinPlaylist>? get playlists => widget.playlists;
   bool get isLoading => widget.isLoading;
@@ -1946,6 +1960,71 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                 },
               ),
             ),
+            // Available Collab Sessions (Empty State)
+            SliverToBoxAdapter(
+              child: Consumer<SyncPlayProvider>(
+                builder: (context, syncPlay, _) {
+                  if (syncPlay.isInSession || syncPlay.availableGroups.isEmpty || appState.isOfflineMode) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Join a Session',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        ...syncPlay.availableGroups.map((group) => Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: ListTile(
+                            leading: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.secondaryContainer,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                Icons.group_add,
+                                color: theme.colorScheme.onSecondaryContainer,
+                                size: 20,
+                              ),
+                            ),
+                            title: Text(group.groupName),
+                            subtitle: Text('${group.participantCount} active listeners'),
+                            trailing: FilledButton.tonal(
+                              onPressed: () async {
+                                try {
+                                  await syncPlay.joinCollabPlaylist(group.groupId);
+                                  if (context.mounted) {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (context) => const CollabPlaylistScreen(),
+                                      ),
+                                    );
+                                  }
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Failed to join: $e')),
+                                    );
+                                  }
+                                }
+                              },
+                              child: const Text('Join'),
+                            ),
+                          ),
+                        )),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
             // Empty state content
             SliverFillRemaining(
               hasScrollBody: false,
@@ -2067,6 +2146,71 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                     );
                   },
                 ),
+
+                // Available Collab Sessions
+                Consumer<SyncPlayProvider>(
+                  builder: (context, syncPlay, _) {
+                    if (syncPlay.isInSession || syncPlay.availableGroups.isEmpty || appState.isOfflineMode) {
+                      return const SizedBox.shrink();
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Text(
+                            'Join a Session',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        ...syncPlay.availableGroups.map((group) => Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: ListTile(
+                            leading: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.secondaryContainer,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                Icons.group_add,
+                                color: theme.colorScheme.onSecondaryContainer,
+                                size: 20,
+                              ),
+                            ),
+                            title: Text(group.groupName),
+                            subtitle: Text('${group.participantCount} active listeners'),
+                            trailing: FilledButton.tonal(
+                              onPressed: () async {
+                                try {
+                                  await syncPlay.joinCollabPlaylist(group.groupId);
+                                  if (context.mounted) {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (context) => const CollabPlaylistScreen(),
+                                      ),
+                                    );
+                                  }
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Failed to join: $e')),
+                                    );
+                                  }
+                                }
+                              },
+                              child: const Text('Join'),
+                            ),
+                          ),
+                        )),
+                        const SizedBox(height: 16),
+                      ],
+                    );
+                  },
+                ),
+
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: ElevatedButton.icon(

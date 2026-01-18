@@ -21,6 +21,16 @@ class DeepLinkService {
   final _syncPlayJoinController = StreamController<String>.broadcast();
   Stream<String> get syncPlayJoinStream => _syncPlayJoinController.stream;
 
+  // Store pending join request for cold start
+  String? _pendingJoinGroupId;
+
+  /// Get pending join group ID and clear it
+  String? get pendingJoinGroupId {
+    final groupId = _pendingJoinGroupId;
+    _pendingJoinGroupId = null;
+    return groupId;
+  }
+
   /// Initialize the deep link service
   Future<void> initialize() async {
     _appLinks = AppLinks();
@@ -37,7 +47,14 @@ class DeepLinkService {
     try {
       final initialUri = await _appLinks.getInitialLink();
       if (initialUri != null) {
-        _handleUri(initialUri);
+        // For initial link, we store it pending until UI is ready
+        final groupId = _parseGroupId(initialUri);
+        if (groupId != null) {
+          _pendingJoinGroupId = groupId;
+          debugPrint('DeepLinkService: Pending cold start join for group: $groupId');
+        } else {
+          _handleUri(initialUri);
+        }
       }
     } catch (e) {
       debugPrint('DeepLinkService: Failed to get initial link: $e');
@@ -47,51 +64,48 @@ class DeepLinkService {
   void _handleUri(Uri uri) {
     debugPrint('DeepLinkService: Received link: $uri');
 
-    // Handle nautune:// scheme
-    if (uri.scheme == 'nautune') {
-      _handleNautuneLink(uri);
-      return;
-    }
-
-    // Handle https://nautune.app links
-    if (uri.scheme == 'https' && uri.host == 'nautune.app') {
-      _handleWebLink(uri);
+    final groupId = _parseGroupId(uri);
+    if (groupId != null) {
+      _syncPlayJoinController.add(groupId);
+      debugPrint('DeepLinkService: SyncPlay join request for group: $groupId');
       return;
     }
 
     debugPrint('DeepLinkService: Unhandled link scheme: ${uri.scheme}');
   }
 
-  void _handleNautuneLink(Uri uri) {
+  String? _parseGroupId(Uri uri) {
     // nautune://syncplay/join/{groupId}
-    final pathSegments = uri.pathSegments;
-
-    if (pathSegments.length >= 2 && pathSegments[0] == 'syncplay') {
-      if (pathSegments[1] == 'join' && pathSegments.length >= 3) {
-        final groupId = pathSegments[2];
-        _syncPlayJoinController.add(groupId);
-        debugPrint('DeepLinkService: SyncPlay join request for group: $groupId');
-        return;
+    if (uri.scheme == 'nautune') {
+      final pathSegments = uri.pathSegments;
+      if (pathSegments.length >= 2 && pathSegments[0] == 'syncplay') {
+        if (pathSegments[1] == 'join' && pathSegments.length >= 3) {
+          return pathSegments[2];
+        }
       }
     }
 
-    debugPrint('DeepLinkService: Unhandled nautune link: $uri');
+    // https://nautune.app/syncplay/{groupId}
+    if (uri.scheme == 'https' && uri.host == 'nautune.app') {
+      final pathSegments = uri.pathSegments;
+      if (pathSegments.isNotEmpty && pathSegments[0] == 'syncplay') {
+        if (pathSegments.length >= 2) {
+          return pathSegments[1];
+        }
+      }
+    }
+    
+    return null;
+  }
+
+  void _handleNautuneLink(Uri uri) {
+    // Deprecated - logic moved to _parseGroupId
+    _handleUri(uri);
   }
 
   void _handleWebLink(Uri uri) {
-    // https://nautune.app/syncplay/{groupId}
-    final pathSegments = uri.pathSegments;
-
-    if (pathSegments.isNotEmpty && pathSegments[0] == 'syncplay') {
-      if (pathSegments.length >= 2) {
-        final groupId = pathSegments[1];
-        _syncPlayJoinController.add(groupId);
-        debugPrint('DeepLinkService: SyncPlay join request for group: $groupId');
-        return;
-      }
-    }
-
-    debugPrint('DeepLinkService: Unhandled web link: $uri');
+    // Deprecated - logic moved to _parseGroupId
+    _handleUri(uri);
   }
 
   /// Parse a SyncPlay join link and extract the group ID

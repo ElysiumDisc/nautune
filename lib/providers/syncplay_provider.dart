@@ -222,14 +222,22 @@ class SyncPlayProvider extends ChangeNotifier {
 
   /// Refresh available groups
   Future<void> refreshGroups() async {
-    if (_syncPlayService == null) return;
+    if (_syncPlayService == null) {
+      debugPrint('SyncPlayProvider: Cannot refresh groups, service is null');
+      return;
+    }
 
     try {
+      debugPrint('SyncPlayProvider: Refreshing groups...');
       await _syncPlayService!.refreshGroups();
       _availableGroups = _syncPlayService!.availableGroups;
+      debugPrint('SyncPlayProvider: Refreshed groups, found ${_availableGroups.length} groups');
+      for (final group in _availableGroups) {
+        debugPrint(' - Group: ${group.groupName} (${group.groupId})');
+      }
       notifyListeners();
     } catch (e) {
-      debugPrint('Failed to refresh groups: $e');
+      debugPrint('SyncPlayProvider: Failed to refresh groups: $e');
     }
   }
 
