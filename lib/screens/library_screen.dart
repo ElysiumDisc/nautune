@@ -2052,6 +2052,16 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                         icon: const Icon(Icons.group_add),
                         label: const Text('Create Collaborative Playlist'),
                       ),
+                    if (!appState.isOfflineMode)
+                      const SizedBox(height: 12),
+                    if (!appState.isOfflineMode)
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          _showJoinCollabPlaylistDialog(context);
+                        },
+                        icon: const Icon(Icons.link),
+                        label: const Text('Join via Link'),
+                      ),
                   ],
                 ),
               ),
@@ -2233,6 +2243,21 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                       },
                       icon: const Icon(Icons.group_add),
                       label: const Text('Create Collaborative Playlist'),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.all(16),
+                        side: BorderSide(color: theme.colorScheme.primary),
+                      ),
+                    ),
+                  ),
+                if (!appState.isOfflineMode)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        _showJoinCollabPlaylistDialog(context);
+                      },
+                      icon: const Icon(Icons.link),
+                      label: const Text('Join via Link'),
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.all(16),
                         side: BorderSide(color: theme.colorScheme.primary),
@@ -2488,6 +2513,13 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
     showDialog(
       context: context,
       builder: (context) => const CreateCollabDialog(),
+    );
+  }
+
+  void _showJoinCollabPlaylistDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => const JoinCollabDialog(),
     );
   }
 
