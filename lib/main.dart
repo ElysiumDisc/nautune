@@ -236,6 +236,7 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   StreamSubscription<String>? _traySubscription;
   StreamSubscription<String>? _deepLinkSubscription;
+  String? _deferredSyncPlayGroupId;
 
   @override
   void initState() {
@@ -259,6 +260,9 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
         _handleSyncPlayJoin(pendingGroupId);
       }
     });
+
+    // Add listener for session changes to handle deferred deep links
+    widget.sessionProvider.addListener(_onSessionChanged);
 
     // Listen to tray actions
     final trayService = widget.appState.trayService;
@@ -311,12 +315,30 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
     }
   }
 
+  void _onSessionChanged() {
+    // Process deferred SyncPlay join when session becomes available
+    if (_deferredSyncPlayGroupId != null && widget.sessionProvider.session != null) {
+      final groupId = _deferredSyncPlayGroupId!;
+      _deferredSyncPlayGroupId = null;
+
+      // Small delay to ensure UI is ready
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          _handleSyncPlayJoin(groupId);
+        }
+      });
+    }
+  }
+
   void _handleSyncPlayJoin(String groupId) {
-    // Only handle if we have an active session (user logged in)
     if (widget.sessionProvider.session == null) {
-      debugPrint('SyncPlay join ignored: No active session');
+      debugPrint('SyncPlay join deferred: Waiting for session');
+      _deferredSyncPlayGroupId = groupId;
       return;
     }
+
+    // Clear any deferred join since we're handling it now
+    _deferredSyncPlayGroupId = null;
 
     // Show join dialog
     final context = _navigatorKey.currentContext;
@@ -332,6 +354,7 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
   void dispose() {
     _traySubscription?.cancel();
     _deepLinkSubscription?.cancel();
+    widget.sessionProvider.removeListener(_onSessionChanged);
     WidgetsBinding.instance.removeObserver(this);
     if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
       windowManager.removeListener(this);
