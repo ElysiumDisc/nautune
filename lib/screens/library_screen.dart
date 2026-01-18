@@ -7,6 +7,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../providers/syncplay_provider.dart';
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_genre.dart';
@@ -26,12 +27,19 @@ import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
 import 'genre_detail_screen.dart';
 import 'offline_library_screen.dart';
+import 'collab_playlist_screen.dart';
 import 'playlist_detail_screen.dart';
 import 'profile_screen.dart';
 import 'settings_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key});
+  const LibraryScreen({
+    super.key,
+    this.collabBrowseMode = false,
+  });
+
+  /// When true, shows "Add to Collab" buttons instead of normal play buttons
+  final bool collabBrowseMode;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -1845,20 +1853,115 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
     }
     if (isLoading && (playlists == null || playlists!.isEmpty)) return const Center(child: CircularProgressIndicator());
     if (playlists == null || playlists!.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.playlist_play, size: 64, color: Colors.grey.shade600),
-            const SizedBox(height: 16),
-            const Text('No playlists found'),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: () async {
-                await _showCreatePlaylistDialog(context);
-              },
-              icon: const Icon(Icons.add),
-              label: const Text('Create Playlist'),
+      final theme = Theme.of(context);
+      return RefreshIndicator(
+        onRefresh: () async => onRefresh(),
+        child: CustomScrollView(
+          slivers: [
+            // Active Collab Session Card (if in session)
+            SliverToBoxAdapter(
+              child: Consumer<SyncPlayProvider>(
+                builder: (context, syncPlay, _) {
+                  if (!syncPlay.isInSession) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Card(
+                      color: theme.colorScheme.primaryContainer,
+                      child: InkWell(
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) => const CollabPlaylistScreen(),
+                            ),
+                          );
+                        },
+                        borderRadius: BorderRadius.circular(12),
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.primary,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Icon(
+                                  Icons.group,
+                                  color: theme.colorScheme.onPrimary,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Active Collab Session',
+                                      style: theme.textTheme.labelSmall?.copyWith(
+                                        color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      syncPlay.groupName ?? 'Collaborative Playlist',
+                                      style: theme.textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                        color: theme.colorScheme.onPrimaryContainer,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '${syncPlay.participants.length} listeners • ${syncPlay.queue.length} tracks',
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Icon(
+                                Icons.chevron_right,
+                                color: theme.colorScheme.onPrimaryContainer,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            // Empty state content
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.playlist_play, size: 64, color: Colors.grey.shade600),
+                    const SizedBox(height: 16),
+                    const Text('No playlists found'),
+                    const SizedBox(height: 24),
+                    ElevatedButton.icon(
+                      onPressed: () async {
+                        await _showCreatePlaylistDialog(context);
+                      },
+                      icon: const Icon(Icons.add),
+                      label: const Text('Create Playlist'),
+                    ),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        _showCreateCollabPlaylistDialog(context);
+                      },
+                      icon: const Icon(Icons.group_add),
+                      label: const Text('Create Collaborative Playlist'),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
         ),
@@ -1877,8 +1980,81 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Active Collab Session Card
+                Consumer<SyncPlayProvider>(
+                  builder: (context, syncPlay, _) {
+                    if (!syncPlay.isInSession) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Card(
+                        color: theme.colorScheme.primaryContainer,
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => const CollabPlaylistScreen(),
+                              ),
+                            );
+                          },
+                          borderRadius: BorderRadius.circular(12),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: theme.colorScheme.primary,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Icon(
+                                    Icons.group,
+                                    color: theme.colorScheme.onPrimary,
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Active Collab Session',
+                                        style: theme.textTheme.labelSmall?.copyWith(
+                                          color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        syncPlay.groupName ?? 'Collaborative Playlist',
+                                        style: theme.textTheme.titleMedium?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                          color: theme.colorScheme.onPrimaryContainer,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        '${syncPlay.participants.length} listeners • ${syncPlay.queue.length} tracks',
+                                        style: theme.textTheme.bodySmall?.copyWith(
+                                          color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Icon(
+                                  Icons.chevron_right,
+                                  color: theme.colorScheme.onPrimaryContainer,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.only(bottom: 12),
                   child: ElevatedButton.icon(
                     onPressed: () async {
                       await _showCreatePlaylistDialog(context);
@@ -1887,6 +2063,20 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                     label: const Text('Create New Playlist'),
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.all(16),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      _showCreateCollabPlaylistDialog(context);
+                    },
+                    icon: const Icon(Icons.group_add),
+                    label: const Text('Create Collaborative Playlist'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.all(16),
+                      side: BorderSide(color: theme.colorScheme.primary),
                     ),
                   ),
                 ),
@@ -2135,6 +2325,13 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
     }
   }
 
+  void _showCreateCollabPlaylistDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => const CreateCollabDialog(),
+    );
+  }
+
   void _showEditPlaylistDialog(BuildContext context, JellyfinPlaylist playlist) async {
     final nameController = TextEditingController(text: playlist.name);
     
@@ -2374,10 +2571,38 @@ class _FavoritesTab extends StatelessWidget {
                       final parentContext = context;
                       showModalBottomSheet(
                         context: parentContext,
-                        builder: (sheetContext) => SafeArea(
+                        builder: (sheetContext) {
+                          final syncPlay = context.read<SyncPlayProvider>();
+                          return SafeArea(
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
+                              // Add to Collab Playlist (if session active)
+                              if (syncPlay.isInSession)
+                                ListTile(
+                                  leading: Icon(Icons.group_add, color: Theme.of(sheetContext).colorScheme.primary),
+                                  title: Text(
+                                    'Add to ${syncPlay.groupName ?? "Collab Playlist"}',
+                                    style: TextStyle(color: Theme.of(sheetContext).colorScheme.primary),
+                                  ),
+                                  onTap: () async {
+                                    Navigator.pop(sheetContext);
+                                    try {
+                                      await syncPlay.addTrackToQueue(track);
+                                      if (parentContext.mounted) {
+                                        ScaffoldMessenger.of(parentContext).showSnackBar(
+                                          SnackBar(content: Text('${track.name} added to collab playlist')),
+                                        );
+                                      }
+                                    } catch (e) {
+                                      if (parentContext.mounted) {
+                                        ScaffoldMessenger.of(parentContext).showSnackBar(
+                                          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+                                        );
+                                      }
+                                    }
+                                  },
+                                ),
                               ListTile(
                                 leading: const Icon(Icons.play_arrow),
                                 title: const Text('Play Next'),
@@ -2613,7 +2838,8 @@ class _FavoritesTab extends StatelessWidget {
                               ),
                             ],
                           ),
-                        ),
+                        );
+                        },
                       );
                     },
                     padding: EdgeInsets.zero,

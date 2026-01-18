@@ -25,6 +25,7 @@ import 'local_cache_service.dart';
 import 'ios_fft_service.dart';
 import 'pulseaudio_fft_service.dart';
 import 'connectivity_service.dart';
+import 'waveform_service.dart';
 
 enum RepeatMode {
   off,      // No repeat
@@ -1032,6 +1033,11 @@ class AudioPlayerService {
       if (Platform.isLinux) {
         PulseAudioFFTService.instance.startCapture();
       }
+
+      // Waveform extraction: Cache streaming tracks for waveform visualization
+      if (!isLocalFile && WaveformService.instance.isAvailable) {
+        _cacheTrackForWaveform(track, activeUrl);
+      }
     } on PlatformException {
       // Fallback logic for streaming failure - try transcoded stream if direct failed
       if (!isLocalFile && isDirectStream) {
@@ -1282,6 +1288,32 @@ class AudioPlayerService {
       debugPrint('🎵 iOS FFT: Started and synced to ${currentPosMs}s');
     }).catchError((e) {
       debugPrint('⚠️ iOS FFT: Error caching for FFT: $e');
+    });
+  }
+
+  /// Cache streaming track for waveform extraction
+  void _cacheTrackForWaveform(JellyfinTrack track, String streamUrl) {
+    final trackId = track.id;
+
+    // Skip if waveform already exists
+    WaveformService.instance.hasWaveform(trackId).then((hasWaveform) async {
+      if (hasWaveform) {
+        debugPrint('🌊 Waveform: Already exists for ${track.name}');
+        return;
+      }
+
+      debugPrint('🌊 Waveform: Caching track for extraction: ${track.name}');
+
+      // Cache the track (this will trigger waveform extraction via audio_cache_service)
+      final cachedFile = await _audioCacheService.cacheTrack(track, streamUrl: streamUrl);
+      if (cachedFile == null) {
+        debugPrint('⚠️ Waveform: Cache failed for ${track.name}');
+        return;
+      }
+
+      debugPrint('🌊 Waveform: Cached, extraction triggered for ${track.name}');
+    }).catchError((e) {
+      debugPrint('⚠️ Waveform: Error caching for extraction: $e');
     });
   }
 

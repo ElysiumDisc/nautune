@@ -14,6 +14,7 @@ import '../models/download_item.dart';
 import 'audio_cache_service.dart';
 import 'connectivity_service.dart';
 import 'notification_service.dart';
+import 'waveform_service.dart';
 
 /// Storage statistics for downloads AND cache
 class StorageStats {
@@ -899,6 +900,14 @@ class DownloadService extends ChangeNotifier {
 
       // Download artwork after track completes
       await _downloadArtwork(updatedTrack);
+
+      // Extract waveform in background
+      if (WaveformService.instance.isAvailable) {
+        unawaited(WaveformService.instance.extractWaveformInBackground(
+          trackId,
+          correctPath,
+        ));
+      }
 
       notifyListeners();
       await _saveDownloads();

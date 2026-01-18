@@ -7,6 +7,7 @@ import 'package:path/path.dart' as path;
 
 import '../jellyfin/jellyfin_track.dart';
 import 'connectivity_service.dart';
+import 'waveform_service.dart';
 
 /// Service for pre-caching audio tracks for smoother playback.
 /// Uses flutter_cache_manager for efficient file caching with automatic eviction.
@@ -110,6 +111,18 @@ class AudioCacheService {
       debugPrint('📥 Caching track: ${track.name}');
       final file = await _cacheManager!.getSingleFile(url, key: trackId);
       debugPrint('✅ Cached track: ${track.name}');
+
+      // Extract waveform in background if not already exists
+      if (WaveformService.instance.isAvailable) {
+        final hasWaveform = await WaveformService.instance.hasWaveform(track.id);
+        if (!hasWaveform) {
+          unawaited(WaveformService.instance.extractWaveformInBackground(
+            track.id,
+            file.path,
+          ));
+        }
+      }
+
       completer.complete(file);
       return file;
     } catch (e) {

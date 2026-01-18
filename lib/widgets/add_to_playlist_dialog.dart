@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../providers/syncplay_provider.dart';
 
 /// Shows a dialog to add tracks/albums to playlists
 Future<void> showAddToPlaylistDialog({
@@ -12,14 +14,16 @@ Future<void> showAddToPlaylistDialog({
   List<JellyfinTrack>? tracks,
   JellyfinAlbum? album,
 }) async {
-  
+
   // If album provided, get its tracks
+  List<JellyfinTrack>? trackList = tracks;
   List<String>? itemIds;
   if (tracks != null) {
     itemIds = tracks.map((t) => t.id).toList();
   } else if (album != null) {
     // Get album tracks (need to implement in appState)
     final albumTracks = await appState.getAlbumTracks(album.id);
+    trackList = albumTracks;
     itemIds = albumTracks.map((t) => t.id).toList();
   }
 
@@ -35,22 +39,42 @@ Future<void> showAddToPlaylistDialog({
   if (!context.mounted) return;
 
   final playlists = appState.playlists ?? [];
+  final syncPlay = context.read<SyncPlayProvider>();
 
   await showDialog(
     context: context,
-    builder: (context) => AlertDialog(
+    builder: (dialogContext) => AlertDialog(
       title: const Text('Add to Playlist'),
       content: SizedBox(
         width: double.maxFinite,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // Active Collab Playlist (if in session)
+            if (syncPlay.isInSession) ...[
+              ListTile(
+                leading: Icon(Icons.group, color: Theme.of(dialogContext).colorScheme.primary),
+                title: Text(
+                  syncPlay.groupName ?? 'Collab Playlist',
+                  style: TextStyle(color: Theme.of(dialogContext).colorScheme.primary),
+                ),
+                subtitle: Text(
+                  '${syncPlay.queue.length} tracks • ${syncPlay.participants.length} listeners',
+                  style: TextStyle(color: Theme.of(dialogContext).colorScheme.primary.withValues(alpha: 0.7)),
+                ),
+                onTap: () async {
+                  Navigator.pop(dialogContext);
+                  await _addToCollabPlaylist(context, syncPlay, trackList!);
+                },
+              ),
+              const Divider(),
+            ],
             // Create new playlist option
             ListTile(
               leading: const Icon(Icons.add),
               title: const Text('Create New Playlist'),
               onTap: () async {
-                Navigator.pop(context);
+                Navigator.pop(dialogContext);
                 await _createPlaylistWithItems(context, appState, itemIds!);
               },
             ),
@@ -68,7 +92,7 @@ Future<void> showAddToPlaylistDialog({
                   title: Text(playlist.name),
                   subtitle: Text('${playlist.trackCount} tracks'),
                   onTap: () async {
-                    Navigator.pop(context);
+                    Navigator.pop(dialogContext);
                     await _addToExistingPlaylist(
                       context,
                       appState,
@@ -83,12 +107,39 @@ Future<void> showAddToPlaylistDialog({
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => Navigator.pop(dialogContext),
           child: const Text('Cancel'),
         ),
       ],
     ),
   );
+}
+
+Future<void> _addToCollabPlaylist(
+  BuildContext context,
+  SyncPlayProvider syncPlay,
+  List<JellyfinTrack> tracks,
+) async {
+  try {
+    await syncPlay.addToQueue(tracks);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Added ${tracks.length} tracks to "${syncPlay.groupName ?? "Collab Playlist"}"'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to add to collab playlist: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
 }
 
 Future<void> _createPlaylistWithItems(

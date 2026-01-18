@@ -4,6 +4,7 @@
 
 ## ✨ Key Features
 
+- **Collaborative Playlists**: Real-time SyncPlay sessions - listen together with friends via QR code or share link
 - **Custom Color Theme**: Create your own theme with primary/secondary color picker
 - **10-Band Equalizer**: Full graphic EQ with 12 presets (Rock, Pop, Jazz, Classical, and more)
 - **Real-Time FFT Visualizer**: True audio-reactive waves using PulseAudio (Linux) and MTAudioProcessingTap (iOS)
@@ -23,6 +24,16 @@
 ---
 
 ## 📋 Changelog
+
+### v5.0.0 - Collaborative Playlists
+- **SyncPlay Integration**: Create and join collaborative playlists using Jellyfin's SyncPlay
+- **Real-Time Sync**: Listen together with friends - playback stays synchronized
+- **QR Code Sharing**: Invite friends by scanning a QR code or share link
+- **Captain/Sailor Roles**: Captain outputs audio, all participants can control playback
+- **Jellyfin Profile Avatars**: Participant avatars show Jellyfin user profile pictures
+- **Active Session Card**: Quick access to rejoin session from Playlists tab (even in empty state)
+- **Auto-Reconnect**: Session automatically rejoins after WebSocket disconnection
+- **Full Visualizer Support**: Collab tracks pre-cached for waveform, FFT visualizer, and lyrics
 
 ### v4.9.0 - Settings UI Refresh
 - **Card-Based Settings Layout**: Reorganized settings into visually grouped cards for cleaner navigation

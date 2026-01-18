@@ -13,6 +13,7 @@ import '../app_state.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../services/audio_player_service.dart';
 import '../widgets/jellyfin_image.dart';
+import '../widgets/jellyfin_waveform.dart';
 
 /// Top-level function for compute() - extracts vibrant colors from image pixels in isolate
 Future<List<int>> _extractColorsInIsolate(Uint32List pixels) async {
@@ -389,16 +390,21 @@ class _MiniPlayerScreenState extends State<MiniPlayerScreen> with WindowListener
               if (track == null)
                 const Center(child: Text('Not Playing'))
               else
-                Row(
-                  children: [
-                    // Album Art - use same fallback logic as _extractColors
-                    AspectRatio(
-                      aspectRatio: 1,
-                      child: _buildAlbumArt(track),
-                    ),
-                    
-                    // Info & Controls
-                    Expanded(
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    // Album art should be square and fit within the window height
+                    final artSize = constraints.maxHeight.clamp(0.0, constraints.maxWidth * 0.4);
+                    return Row(
+                      children: [
+                        // Album Art - constrained to prevent overflow
+                        SizedBox(
+                          width: artSize,
+                          height: artSize,
+                          child: _buildAlbumArt(track),
+                        ),
+
+                        // Info & Controls
+                        Expanded(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                         child: Column(
@@ -486,23 +492,51 @@ class _MiniPlayerScreenState extends State<MiniPlayerScreen> with WindowListener
                             ),
                             
                             const Spacer(),
-                            
-                            // Progress Bar
-                            ProgressBar(
-                              progress: position,
-                              total: duration,
-                              onSeek: audioService.seek,
-                              barHeight: 3,
-                              thumbRadius: 0, // Hidden thumb until hover/interaction ideally
-                              baseBarColor: onSurfaceColor.withValues(alpha: 0.3),
-                              progressBarColor: primaryColor,
-                              timeLabelLocation: TimeLabelLocation.none,
+
+                            // Progress Bar with Waveform
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                final progress = duration.inMilliseconds > 0
+                                    ? position.inMilliseconds / duration.inMilliseconds
+                                    : 0.0;
+                                return Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    // Waveform layer
+                                    Positioned(
+                                      left: 0,
+                                      right: 0,
+                                      top: -12,
+                                      height: 30,
+                                      child: TrackWaveform(
+                                        trackId: track.id,
+                                        progress: progress.clamp(0.0, 1.0),
+                                        width: constraints.maxWidth,
+                                        height: 30,
+                                      ),
+                                    ),
+                                    // Progress bar on top
+                                    ProgressBar(
+                                      progress: position,
+                                      total: duration,
+                                      onSeek: audioService.seek,
+                                      barHeight: 3,
+                                      thumbRadius: 0,
+                                      baseBarColor: onSurfaceColor.withValues(alpha: 0.3),
+                                      progressBarColor: primaryColor,
+                                      timeLabelLocation: TimeLabelLocation.none,
+                                    ),
+                                  ],
+                                );
+                              },
                             ),
                           ],
                         ),
                       ),
                     ),
-                  ],
+                      ],
+                    );
+                  },
                 ),
 
               // Expand Button

@@ -13,11 +13,13 @@ import 'providers/demo_mode_provider.dart';
 import 'providers/library_data_provider.dart';
 import 'providers/session_provider.dart';
 import 'providers/sync_status_provider.dart';
+import 'providers/syncplay_provider.dart';
 import 'providers/theme_provider.dart';
 import 'providers/ui_state_provider.dart';
 import 'screens/library_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/mini_player_screen.dart';
+import 'screens/collab_playlist_screen.dart';
 import 'screens/queue_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/bootstrap_service.dart';
@@ -25,6 +27,7 @@ import 'services/connectivity_service.dart';
 import 'services/download_service.dart';
 import 'services/listening_analytics_service.dart';
 import 'services/local_cache_service.dart';
+import 'services/deep_link_service.dart';
 import 'services/notification_service.dart';
 import 'services/playback_state_store.dart';
 
@@ -161,6 +164,14 @@ Future<void> main() async {
     demoModeProvider: demoModeProvider,
     sessionProvider: sessionProvider,);
 
+  // Initialize SyncPlay provider for collaborative playlists
+  // Created after appState so we can access audioPlayerService
+  final syncPlayProvider = SyncPlayProvider(
+    sessionProvider: sessionProvider,
+    jellyfinService: jellyfinService,
+    audioPlayerService: appState.audioPlayerService,
+  );
+
   // Initialize providers and services in sequence
   await sessionProvider.initialize();
   await connectivityProvider.initialize();
@@ -170,6 +181,9 @@ Future<void> main() async {
 
   // Initialize legacy app state
   unawaited(appState.initialize());
+
+  // Initialize deep link service for SyncPlay join links
+  await DeepLinkService.instance.initialize();
 
   if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
     await windowManager.ensureInitialized();
@@ -184,6 +198,7 @@ Future<void> main() async {
       libraryDataProvider: libraryDataProvider,
       demoModeProvider: demoModeProvider,
       syncStatusProvider: syncStatusProvider,
+      syncPlayProvider: syncPlayProvider,
       themeProvider: themeProvider,
     ),
   );
@@ -199,6 +214,7 @@ class NautuneApp extends StatefulWidget {
     required this.libraryDataProvider,
     required this.demoModeProvider,
     required this.syncStatusProvider,
+    required this.syncPlayProvider,
     required this.themeProvider,
   });
 
@@ -209,6 +225,7 @@ class NautuneApp extends StatefulWidget {
   final LibraryDataProvider libraryDataProvider;
   final DemoModeProvider demoModeProvider;
   final SyncStatusProvider syncStatusProvider;
+  final SyncPlayProvider syncPlayProvider;
   final ThemeProvider themeProvider;
 
   @override
@@ -218,17 +235,23 @@ class NautuneApp extends StatefulWidget {
 class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, WindowListener {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   StreamSubscription<String>? _traySubscription;
+  StreamSubscription<String>? _deepLinkSubscription;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    
+
     if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
       windowManager.addListener(this);
       _initWindow();
     }
-    
+
+    // Listen to deep link SyncPlay join events
+    _deepLinkSubscription = DeepLinkService.instance.syncPlayJoinStream.listen((groupId) {
+      _handleSyncPlayJoin(groupId);
+    });
+
     // Listen to tray actions
     final trayService = widget.appState.trayService;
     if (trayService != null) {
@@ -280,9 +303,27 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
     }
   }
 
+  void _handleSyncPlayJoin(String groupId) {
+    // Only handle if we have an active session (user logged in)
+    if (widget.sessionProvider.session == null) {
+      debugPrint('SyncPlay join ignored: No active session');
+      return;
+    }
+
+    // Show join dialog
+    final context = _navigatorKey.currentContext;
+    if (context != null) {
+      showDialog(
+        context: context,
+        builder: (context) => JoinCollabDialog(groupId: groupId),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _traySubscription?.cancel();
+    _deepLinkSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
       windowManager.removeListener(this);
@@ -355,6 +396,7 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
         ChangeNotifierProvider.value(value: widget.libraryDataProvider),
         ChangeNotifierProvider.value(value: widget.demoModeProvider),
         ChangeNotifierProvider.value(value: widget.syncStatusProvider),
+        ChangeNotifierProvider.value(value: widget.syncPlayProvider),
         ChangeNotifierProvider.value(value: widget.themeProvider),
 
         // Legacy app state (will be phased out)
@@ -369,6 +411,7 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
           routes: {
             '/queue': (context) => const QueueScreen(),
             '/mini': (context) => const MiniPlayerScreen(),
+            '/collab': (context) => const CollabPlaylistScreen(),
           },
           home: Consumer2<SessionProvider, NautuneAppState>(
           builder: (context, session, app, _) {

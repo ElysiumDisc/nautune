@@ -574,9 +574,10 @@ class ListeningAnalyticsService {
     final uniqueTracks = <String>{};
     final uniqueGenres = <String>{};
 
-    // Count night owl (10pm-4am) and early bird (5am-8am) plays
+    // Count night owl (10pm-4am), early bird (5am-8am), and weekend plays
     int nightOwlPlays = 0;
     int earlyBirdPlays = 0;
+    int weekendPlays = 0;
 
     for (final event in _events) {
       uniqueTracks.add(event.trackId);
@@ -592,6 +593,44 @@ class ListeningAnalyticsService {
         nightOwlPlays++;
       } else if (hour >= 5 && hour <= 8) {
         earlyBirdPlays++;
+      }
+
+      // Check if weekend (Saturday = 6, Sunday = 7)
+      final weekday = event.timestamp.weekday;
+      if (weekday == DateTime.saturday || weekday == DateTime.sunday) {
+        weekendPlays++;
+      }
+    }
+
+    // Calculate marathon sessions (sessions over 2 hours)
+    int marathonSessions = 0;
+    if (_events.isNotEmpty) {
+      final sortedEvents = List<PlayEvent>.from(_events)
+        ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+      DateTime? lastEventTime;
+      int sessionDurationMs = 0;
+
+      for (final event in sortedEvents) {
+        if (lastEventTime == null) {
+          sessionDurationMs = event.durationMs;
+        } else {
+          final gap = event.timestamp.difference(lastEventTime);
+          if (gap.inMinutes > 30) {
+            // Session ended, check if it was a marathon (> 2 hours)
+            if (sessionDurationMs >= 2 * 60 * 60 * 1000) {
+              marathonSessions++;
+            }
+            sessionDurationMs = event.durationMs;
+          } else {
+            sessionDurationMs += event.durationMs;
+          }
+        }
+        lastEventTime = event.timestamp;
+      }
+      // Check the last session
+      if (sessionDurationMs >= 2 * 60 * 60 * 1000) {
+        marathonSessions++;
       }
     }
 
@@ -914,6 +953,26 @@ class ListeningAnalyticsService {
         iconType: IconType.special,
         targetValue: 200,
         currentValue: earlyBirdPlays,
+      ),
+
+      // Weekend milestones - Calendar themed
+      ListeningMilestone(
+        id: 'weekend_100',
+        name: 'Weekend Captain',
+        description: 'Play 100 tracks on weekends',
+        iconType: IconType.special,
+        targetValue: 100,
+        currentValue: weekendPlays,
+      ),
+
+      // Marathon milestones - Endurance themed
+      ListeningMilestone(
+        id: 'marathon_5',
+        name: 'Marathon Voyager',
+        description: 'Have 5 listening sessions over 2 hours',
+        iconType: IconType.special,
+        targetValue: 5,
+        currentValue: marathonSessions,
       ),
     ];
 
