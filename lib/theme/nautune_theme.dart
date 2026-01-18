@@ -22,10 +22,11 @@ class NautuneColorPalette {
     this.isLight = false,
   });
 
-  /// Create a custom palette from user-selected primary and secondary colors
+  /// Create a custom palette from user-selected primary, secondary, and accent colors
   factory NautuneColorPalette.custom({
     required Color primary,
     required Color secondary,
+    Color? accent,
     required bool isLight,
   }) {
     // Generate complementary colors based on primary/secondary
@@ -33,25 +34,29 @@ class NautuneColorPalette {
 
     if (isLight) {
       // Light theme: light surface with dark text
+      // Use user-selected accent or fall back to dark version of primary
+      final textPrimaryColor = accent ?? HSLColor.fromColor(primary).withLightness(0.25).toColor();
       return NautuneColorPalette(
         id: 'custom',
         name: 'Custom',
         primary: primary,
         secondary: secondary,
         surface: Color.lerp(Colors.white, primary, 0.03)!,  // Very light tint of primary
-        textPrimary: HSLColor.fromColor(primary).withLightness(0.25).toColor(),  // Dark version of primary
+        textPrimary: textPrimaryColor,
         textSecondary: Colors.grey.shade600,
         isLight: true,
       );
     } else {
       // Dark theme: dark surface with light text
+      // Use user-selected accent or fall back to secondary
+      final textPrimaryColor = accent ?? secondary;
       return NautuneColorPalette(
         id: 'custom',
         name: 'Custom',
         primary: primary,
         secondary: secondary,
         surface: HSLColor.fromColor(primary).withLightness(0.08).withSaturation(hsl.saturation * 0.3).toColor(),
-        textPrimary: secondary,  // Use secondary as text highlight
+        textPrimary: textPrimaryColor,
         textSecondary: Color.lerp(Colors.grey, secondary, 0.2)!,
         isLight: false,
       );

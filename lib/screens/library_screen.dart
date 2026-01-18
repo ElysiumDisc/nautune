@@ -1053,9 +1053,10 @@ class _AlbumsTab extends StatelessWidget {
                 items: albums!,
                 getItemName: (album) => (album as JellyfinAlbum).name,
                 scrollController: scrollController,
-                itemHeight: (constraints.maxWidth / crossAxisCount) * (1 / 0.75) + 16,
+                itemHeight: ((constraints.maxWidth - 32 - (crossAxisCount - 1) * 16) / crossAxisCount) / 0.75 + 16,
                 crossAxisCount: crossAxisCount,
                 sortOrder: appState.albumSortOrder,
+                sortBy: appState.albumSortBy,
               ),
             ],
           );
@@ -3231,9 +3232,10 @@ class _ArtistsTab extends StatelessWidget {
                 items: effectiveArtists,
                 getItemName: (artist) => (artist as JellyfinArtist).name,
                 scrollController: controller,
-                itemHeight: (constraints.maxWidth / crossAxisCount) * (1 / 0.75) + 12,
+                itemHeight: ((constraints.maxWidth - 32 - (crossAxisCount - 1) * 12) / crossAxisCount) / 0.75 + 12,
                 crossAxisCount: crossAxisCount,
                 sortOrder: artists != null ? SortOrder.ascending : appState.artistSortOrder,
+                sortBy: artists != null ? SortOption.name : appState.artistSortBy,
               ),
             ],
           );
@@ -3337,7 +3339,7 @@ class _GenresTabState extends State<_GenresTab> {
                 items: genres,
                 getItemName: (genre) => (genre as JellyfinGenre).name,
                 scrollController: _genresScrollController,
-                itemHeight: (constraints.maxWidth / crossAxisCount) * (1 / 1.5) + 12,
+                itemHeight: ((constraints.maxWidth - 32 - (crossAxisCount - 1) * 12) / crossAxisCount) / 1.5 + 12,
                 crossAxisCount: crossAxisCount,
               ),
             ],
@@ -4334,6 +4336,7 @@ class AlphabetScrollbar extends StatefulWidget {
     required this.itemHeight,
     required this.crossAxisCount,
     this.sortOrder = SortOrder.ascending,
+    this.sortBy,
   });
 
   final List items;
@@ -4342,6 +4345,7 @@ class AlphabetScrollbar extends StatefulWidget {
   final double itemHeight;
   final int crossAxisCount;
   final SortOrder sortOrder;
+  final SortOption? sortBy;
 
   @override
   State<AlphabetScrollbar> createState() => _AlphabetScrollbarState();
@@ -4377,6 +4381,7 @@ class _AlphabetScrollbarState extends State<AlphabetScrollbar> {
 
   void _scrollToLetter(String letter) {
     if (widget.items.isEmpty) return;
+    if (!widget.scrollController.hasClients) return;
 
     final letterIndex = _buildLetterIndex();
     int targetIndex = -1;
@@ -4458,12 +4463,13 @@ class _AlphabetScrollbarState extends State<AlphabetScrollbar> {
     }
   }
 
-  void _handleInput(Offset localPosition, double height) {
-    final double letterHeight = height / _alphabet.length;
-    final int index = (localPosition.dy / letterHeight)
-        .clamp(0, _alphabet.length - 1)
-        .toInt();
-    final String letter = _alphabet[index];
+  void _handleInput(Offset localPosition, double height, List<String> displayLetters) {
+    // Divide touch area into N equal zones
+    // Zone i covers y from i*H/N to (i+1)*H/N
+    final int index = (localPosition.dy * displayLetters.length / height)
+        .floor()
+        .clamp(0, displayLetters.length - 1);
+    final String letter = displayLetters[index];
 
     if (_activeLetter != letter) {
       setState(() {
@@ -4477,6 +4483,11 @@ class _AlphabetScrollbarState extends State<AlphabetScrollbar> {
 
   @override
   Widget build(BuildContext context) {
+    // Hide scrollbar when not sorting by name (letters don't match content)
+    if (widget.sortBy != null && widget.sortBy != SortOption.name) {
+      return const SizedBox.shrink();
+    }
+
     final theme = Theme.of(context);
 
     return Stack(
@@ -4506,16 +4517,15 @@ class _AlphabetScrollbarState extends State<AlphabetScrollbar> {
               
               return GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTapDown: (details) => _handleInput(details.localPosition, constraints.maxHeight),
-                onVerticalDragStart: (details) => _handleInput(details.localPosition, constraints.maxHeight),
-                onVerticalDragUpdate: (details) => _handleInput(details.localPosition, constraints.maxHeight),
+                onTapDown: (details) => _handleInput(details.localPosition, constraints.maxHeight, displayLetters),
+                onVerticalDragStart: (details) => _handleInput(details.localPosition, constraints.maxHeight, displayLetters),
+                onVerticalDragUpdate: (details) => _handleInput(details.localPosition, constraints.maxHeight, displayLetters),
                 onVerticalDragEnd: (_) => setState(() => _activeLetter = null),
                 onTapUp: (_) => setState(() => _activeLetter = null),
                 child: Container(
                   color: Colors.transparent,
                   child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: displayLetters.map((letter) {
                       final isActive = _activeLetter == letter;
                       return Flexible(

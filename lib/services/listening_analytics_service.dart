@@ -443,6 +443,21 @@ class ListeningAnalyticsService {
     );
   }
 
+  /// Compare this year vs last year
+  PeriodComparison getYearOverYearComparison() {
+    final now = DateTime.now();
+    final startOfThisYear = DateTime(now.year, 1, 1);
+    final startOfLastYear = DateTime(now.year - 1, 1, 1);
+    final endOfLastYear = DateTime(now.year, 1, 1);
+
+    return _comparePeriods(
+      currentStart: startOfThisYear,
+      currentEnd: now,
+      previousStart: startOfLastYear,
+      previousEnd: endOfLastYear,
+    );
+  }
+
   PeriodComparison _comparePeriods({
     required DateTime currentStart,
     required DateTime currentEnd,
@@ -903,6 +918,78 @@ class ListeningAnalyticsService {
     ];
 
     return ListeningMilestones(all: milestones);
+  }
+
+  /// Calculate average session length
+  /// Groups plays into sessions (gap > 30 min = new session)
+  Duration? getAverageSessionLength({DateTime? since}) {
+    final cutoff = since ?? DateTime.now().subtract(const Duration(days: 30));
+    final relevantEvents = _events
+        .where((e) => e.timestamp.isAfter(cutoff))
+        .toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp)); // Sort chronologically
+
+    if (relevantEvents.isEmpty) return null;
+
+    final sessions = <Duration>[];
+    DateTime? lastEventTime;
+    int sessionDurationMs = 0;
+
+    for (final event in relevantEvents) {
+      if (lastEventTime == null) {
+        // First event starts a new session
+        sessionDurationMs = event.durationMs;
+      } else {
+        final gap = event.timestamp.difference(lastEventTime);
+        if (gap.inMinutes > 30) {
+          // Gap > 30 minutes, end previous session and start new one
+          if (sessionDurationMs > 0) {
+            sessions.add(Duration(milliseconds: sessionDurationMs));
+          }
+          sessionDurationMs = event.durationMs;
+        } else {
+          // Continue current session
+          sessionDurationMs += event.durationMs;
+        }
+      }
+      lastEventTime = event.timestamp;
+    }
+
+    // Don't forget the last session
+    if (sessionDurationMs > 0) {
+      sessions.add(Duration(milliseconds: sessionDurationMs));
+    }
+
+    if (sessions.isEmpty) return null;
+
+    final totalMs = sessions.fold<int>(0, (sum, d) => sum + d.inMilliseconds);
+    return Duration(milliseconds: totalMs ~/ sessions.length);
+  }
+
+  /// Calculate discovery rate (unique tracks / total plays as percentage)
+  /// Higher percentage = more exploration, lower = more replay
+  double getDiscoveryRate({DateTime? since}) {
+    final cutoff = since ?? DateTime.now().subtract(const Duration(days: 30));
+    final relevantEvents = _events.where((e) => e.timestamp.isAfter(cutoff)).toList();
+
+    if (relevantEvents.isEmpty) return 0.0;
+
+    final uniqueTracks = <String>{};
+    for (final event in relevantEvents) {
+      uniqueTracks.add(event.trackId);
+    }
+
+    // Discovery rate = unique tracks / total plays * 100
+    return (uniqueTracks.length / relevantEvents.length) * 100;
+  }
+
+  /// Get discovery rate label based on percentage
+  String getDiscoveryLabel(double rate) {
+    if (rate >= 80) return 'Pioneer';
+    if (rate >= 60) return 'Explorer';
+    if (rate >= 40) return 'Adventurer';
+    if (rate >= 20) return 'Curator';
+    return 'Loyalist';
   }
 
   /// Clear all analytics data

@@ -269,6 +269,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   PeriodComparison? _weekComparison;
   ListeningMilestones? _milestones;
   int? _peakHour;
+  Duration? _avgSessionLength;
+  double _discoveryRate = 0.0;
+
+  // Top content tab controller
+  int _topContentTab = 0;
 
   @override
   void initState() {
@@ -288,6 +293,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _weekComparison = analytics.getWeekOverWeekComparison();
       _milestones = analytics.getMilestones();
       _peakHour = analytics.getPeakListeningHour();
+      _avgSessionLength = analytics.getAverageSessionLength();
+      _discoveryRate = analytics.getDiscoveryRate();
     });
   }
 
@@ -579,11 +586,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Quick stats cards
-                  _buildQuickStatsRow(theme),
+                  // 1. Hero Ring - Total hours with animated progress
+                  _buildHeroRing(theme),
                   const SizedBox(height: 24),
 
-                  // Listening Activity section (local analytics)
+                  // 2. Key Metrics - Plays, Artists, Albums (3 cards)
+                  _buildKeyMetricsRow(theme),
+                  const SizedBox(height: 24),
+
+                  // 3. Listening Patterns - Peak hour, Avg session, Discovery rate
+                  _buildSectionHeader(theme, 'Listening Patterns', Icons.auto_graph),
+                  const SizedBox(height: 12),
+                  _buildListeningPatterns(theme),
+                  const SizedBox(height: 24),
+
+                  // 4. Top Content Tabs - Tracks | Artists | Albums
+                  _buildSectionHeader(theme, 'Top Content', Icons.star),
+                  const SizedBox(height: 12),
+                  _buildTopContentTabs(theme),
+                  const SizedBox(height: 24),
+
+                  // 5. Listening Activity - Heatmap, Streaks, Week comparison
                   if (_heatmap != null || _streak != null) ...[
                     _buildSectionHeader(theme, 'Listening Activity', Icons.insights),
                     const SizedBox(height: 12),
@@ -591,48 +614,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     const SizedBox(height: 24),
                   ],
 
-                  // Milestones section
+                  // 6. Achievements - Milestones with enhanced badges
                   if (_milestones != null && _milestones!.all.isNotEmpty) ...[
-                    _buildSectionHeader(theme, 'Milestones', Icons.emoji_events),
+                    _buildSectionHeader(theme, 'Achievements', Icons.emoji_events),
                     const SizedBox(height: 12),
                     _buildMilestonesSection(theme),
                     const SizedBox(height: 24),
                   ],
 
-                  // Top Tracks section
-                  _buildSectionHeader(theme, 'Top Tracks', Icons.music_note),
-                  const SizedBox(height: 12),
-                  _buildTopTracksList(theme),
-                  const SizedBox(height: 24),
-
-                  // Top Artists section
-                  _buildSectionHeader(theme, 'Top Artists', Icons.person),
-                  const SizedBox(height: 12),
-                  _buildTopArtistsList(theme),
-                  const SizedBox(height: 24),
-
-                  // Top Albums section
-                  _buildSectionHeader(theme, 'Top Albums', Icons.album),
-                  const SizedBox(height: 12),
-                  _buildTopAlbumsList(theme),
-                  const SizedBox(height: 24),
-
-                  // Recently Played section
-                  _buildSectionHeader(theme, 'Recently Played', Icons.history),
-                  const SizedBox(height: 12),
-                  _buildRecentlyPlayedList(theme),
-                  const SizedBox(height: 24),
-
-                  // Listening Insights section
-                  _buildSectionHeader(theme, 'Listening Insights', Icons.insights),
+                  // 7. Deep Dive - Genre breakdown, detailed insights
+                  _buildSectionHeader(theme, 'Deep Dive', Icons.explore),
                   const SizedBox(height: 12),
                   _buildListeningInsights(theme),
-                  const SizedBox(height: 24),
-
-                  // Top Genres section
-                  _buildSectionHeader(theme, 'Top Genres', Icons.category),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 16),
                   _buildGenreBreakdown(theme),
+                  const SizedBox(height: 16),
+                  _buildMonthlyComparison(theme),
+                  const SizedBox(height: 16),
+                  _buildYearlyComparison(theme),
                   const SizedBox(height: 32),
                 ],
               ),
@@ -688,126 +687,230 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildQuickStatsRow(ThemeData theme) {
-    return Column(
+  Widget _buildHeroRing(ThemeData theme) {
+    const oceanBlue = Color(0xFF409CFF);
+    const deepPurple = Color(0xFF7A3DF1);
+
+    // Progress toward goal (e.g., 100 hours)
+    const goalHours = 100.0;
+    final progress = (_totalHours / goalHours).clamp(0.0, 1.0);
+
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            oceanBlue.withValues(alpha: 0.15),
+            deepPurple.withValues(alpha: 0.1),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: oceanBlue.withValues(alpha: 0.3),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: oceanBlue.withValues(alpha: 0.1),
+            blurRadius: 20,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          SizedBox(
+            width: 180,
+            height: 180,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // Background ring
+                SizedBox(
+                  width: 180,
+                  height: 180,
+                  child: CircularProgressIndicator(
+                    value: 1.0,
+                    strokeWidth: 12,
+                    backgroundColor: Colors.transparent,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                    ),
+                  ),
+                ),
+                // Progress ring with gradient effect
+                SizedBox(
+                  width: 180,
+                  height: 180,
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween(begin: 0, end: progress),
+                    duration: const Duration(milliseconds: 1500),
+                    curve: Curves.easeOutCubic,
+                    builder: (context, value, child) {
+                      return CircularProgressIndicator(
+                        value: value,
+                        strokeWidth: 12,
+                        strokeCap: StrokeCap.round,
+                        backgroundColor: Colors.transparent,
+                        valueColor: AlwaysStoppedAnimation<Color>(oceanBlue),
+                      );
+                    },
+                  ),
+                ),
+                // Inner glow
+                Container(
+                  width: 140,
+                  height: 140,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        oceanBlue.withValues(alpha: 0.1),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                ),
+                // Center content
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TweenAnimationBuilder<double>(
+                      tween: Tween(begin: 0, end: _totalHours),
+                      duration: const Duration(milliseconds: 1500),
+                      curve: Curves.easeOutCubic,
+                      builder: (context, value, child) {
+                        return Text(
+                          value.toStringAsFixed(1),
+                          style: theme.textTheme.displaySmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: oceanBlue,
+                            height: 1,
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'hours',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Total Listening Time',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: theme.colorScheme.onSurface,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${(progress * 100).toStringAsFixed(0)}% toward ${goalHours.toInt()}h goal',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildKeyMetricsRow(ThemeData theme) {
+    const oceanBlue = Color(0xFF409CFF);
+    const emeraldSea = Color(0xFF10B981);
+    const goldTreasure = Color(0xFFFFD700);
+
+    return Row(
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: _buildStatCard(
-                theme,
-                icon: Icons.play_circle_outline,
-                label: 'Total Plays',
-                value: _totalPlays > 0 ? _totalPlays.toString() : '-',
-                color: theme.colorScheme.primary,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _buildStatCard(
-                theme,
-                icon: Icons.timer_outlined,
-                label: 'Hours',
-                value: _totalHours > 0 ? _totalHours.toStringAsFixed(1) : '-',
-                color: theme.colorScheme.secondary,
-              ),
-            ),
-          ],
+        Expanded(
+          child: _buildMetricCard(
+            theme,
+            icon: Icons.play_circle_filled,
+            label: 'Total Plays',
+            value: _totalPlays > 0 ? _formatNumber(_totalPlays) : '-',
+            color: oceanBlue,
+          ),
         ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _buildStatCard(
-                theme,
-                icon: Icons.person_outline,
-                label: 'Top Artist',
-                value: _topArtists?.isNotEmpty == true ? _topArtists!.first.name : '-',
-                color: theme.colorScheme.tertiary,
-                isSmallValue: true,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _buildStatCard(
-                theme,
-                icon: Icons.album_outlined,
-                label: 'Top Album',
-                value: _topAlbums?.isNotEmpty == true ? _topAlbums!.first.name : '-',
-                color: theme.colorScheme.error,
-                isSmallValue: true,
-              ),
-            ),
-          ],
+        const SizedBox(width: 12),
+        Expanded(
+          child: _buildMetricCard(
+            theme,
+            icon: Icons.explore,
+            label: 'Artists Explored',
+            value: _uniqueArtistsPlayed > 0 ? _formatNumber(_uniqueArtistsPlayed) : '-',
+            color: emeraldSea,
+          ),
         ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _buildStatCard(
-                theme,
-                icon: Icons.people_outline,
-                label: 'Artists',
-                value: _uniqueArtistsPlayed > 0 ? _uniqueArtistsPlayed.toString() : '-',
-                color: Colors.purple,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _buildStatCard(
-                theme,
-                icon: Icons.library_music_outlined,
-                label: 'Albums',
-                value: _uniqueAlbumsPlayed > 0 ? _uniqueAlbumsPlayed.toString() : '-',
-                color: Colors.teal,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _buildStatCard(
-                theme,
-                icon: Icons.auto_awesome,
-                label: 'Diversity',
-                value: _diversityScore > 0 ? '${_diversityScore.toStringAsFixed(0)}%' : '-',
-                color: Colors.amber,
-              ),
-            ),
-          ],
+        const SizedBox(width: 12),
+        Expanded(
+          child: _buildMetricCard(
+            theme,
+            icon: Icons.diamond,
+            label: 'Albums Collected',
+            value: _uniqueAlbumsPlayed > 0 ? _formatNumber(_uniqueAlbumsPlayed) : '-',
+            color: goldTreasure,
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildStatCard(
+  Widget _buildMetricCard(
     ThemeData theme, {
     required IconData icon,
     required String label,
     required String value,
     required Color color,
-    bool isSmallValue = false,
   }) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            color.withValues(alpha: 0.15),
+            color.withValues(alpha: 0.05),
+          ],
+        ),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: color.withValues(alpha: 0.2),
+          color: color.withValues(alpha: 0.3),
         ),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.1),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         children: [
-          Icon(icon, color: color, size: 24),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.2),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: color, size: 20),
+          ),
           const SizedBox(height: 8),
           Text(
             value,
-            style: (isSmallValue ? theme.textTheme.titleMedium : theme.textTheme.headlineSmall)?.copyWith(
+            style: theme.textTheme.titleLarge?.copyWith(
               fontWeight: FontWeight.bold,
               color: color,
             ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
           ),
           const SizedBox(height: 2),
           Text(
@@ -816,10 +919,197 @@ class _ProfileScreenState extends State<ProfileScreen> {
               color: theme.colorScheme.onSurfaceVariant,
             ),
             textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
     );
+  }
+
+  String _formatNumber(int number) {
+    if (number >= 1000000) {
+      return '${(number / 1000000).toStringAsFixed(1)}M';
+    } else if (number >= 1000) {
+      return '${(number / 1000).toStringAsFixed(1)}K';
+    }
+    return number.toString();
+  }
+
+  Widget _buildListeningPatterns(ThemeData theme) {
+    final analytics = ListeningAnalyticsService();
+    final discoveryLabel = analytics.getDiscoveryLabel(_discoveryRate);
+
+    String formatSessionLength(Duration? d) {
+      if (d == null) return '-';
+      final mins = d.inMinutes;
+      if (mins < 60) return '${mins}m';
+      final hours = d.inHours;
+      final remainingMins = mins % 60;
+      return remainingMins > 0 ? '${hours}h ${remainingMins}m' : '${hours}h';
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildPatternItem(
+              theme,
+              icon: Icons.schedule,
+              label: 'Peak Hour',
+              value: _peakHour != null ? _formatHour(_peakHour!) : '-',
+              subtext: 'most active',
+              color: const Color(0xFF409CFF),
+            ),
+          ),
+          Container(
+            width: 1,
+            height: 60,
+            color: theme.colorScheme.outline.withValues(alpha: 0.2),
+          ),
+          Expanded(
+            child: _buildPatternItem(
+              theme,
+              icon: Icons.timelapse,
+              label: 'Avg Session',
+              value: formatSessionLength(_avgSessionLength),
+              subtext: 'per session',
+              color: const Color(0xFF7A3DF1),
+            ),
+          ),
+          Container(
+            width: 1,
+            height: 60,
+            color: theme.colorScheme.outline.withValues(alpha: 0.2),
+          ),
+          Expanded(
+            child: _buildPatternItem(
+              theme,
+              icon: Icons.explore,
+              label: 'Discovery',
+              value: '${_discoveryRate.toStringAsFixed(0)}%',
+              subtext: discoveryLabel,
+              color: const Color(0xFF10B981),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPatternItem(
+    ThemeData theme, {
+    required IconData icon,
+    required String label,
+    required String value,
+    required String subtext,
+    required Color color,
+  }) {
+    return Column(
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(height: 8),
+        Text(
+          value,
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        Text(
+          subtext,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            fontSize: 10,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTopContentTabs(ThemeData theme) {
+    return Column(
+      children: [
+        // Tab bar
+        Container(
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          padding: const EdgeInsets.all(4),
+          child: Row(
+            children: [
+              Expanded(
+                child: _buildTabButton(theme, 'Tracks', 0, Icons.music_note),
+              ),
+              Expanded(
+                child: _buildTabButton(theme, 'Artists', 1, Icons.person),
+              ),
+              Expanded(
+                child: _buildTabButton(theme, 'Albums', 2, Icons.album),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        // Tab content
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          child: _buildTabContent(theme),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTabButton(ThemeData theme, String label, int index, IconData icon) {
+    final isSelected = _topContentTab == index;
+    return GestureDetector(
+      onTap: () => setState(() => _topContentTab = index),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+        decoration: BoxDecoration(
+          color: isSelected ? theme.colorScheme.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: isSelected ? theme.colorScheme.onPrimary : theme.colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                color: isSelected ? theme.colorScheme.onPrimary : theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTabContent(ThemeData theme) {
+    switch (_topContentTab) {
+      case 0:
+        return _buildTopTracksList(theme);
+      case 1:
+        return _buildTopArtistsList(theme);
+      case 2:
+        return _buildTopAlbumsList(theme);
+      default:
+        return _buildTopTracksList(theme);
+    }
   }
 
   Widget _buildSectionHeader(ThemeData theme, String title, IconData icon) {
@@ -1097,6 +1387,266 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  Widget _buildMonthlyComparison(ThemeData theme) {
+    if (_statsLoading) {
+      return _buildLoadingCard(theme);
+    }
+
+    final analytics = ListeningAnalyticsService();
+    final comparison = analytics.getMonthOverMonthComparison();
+
+    // Format hours from duration
+    String formatHours(Duration d) {
+      final hours = d.inMinutes / 60;
+      return '${hours.toStringAsFixed(1)}h';
+    }
+
+    // Get this month and last month names
+    final now = DateTime.now();
+    final thisMonthName = _getMonthName(now.month);
+    final lastMonthName = _getMonthName(now.month == 1 ? 12 : now.month - 1);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.compare_arrows,
+                size: 20,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '$thisMonthName vs $lastMonthName',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _buildComparisonItem(
+                  theme,
+                  'Plays',
+                  comparison.previousPeriodPlays,
+                  comparison.currentPeriodPlays,
+                  comparison.playsChangePercent,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildComparisonItem(
+                  theme,
+                  'Time',
+                  null,
+                  null,
+                  comparison.timeChangePercent,
+                  previousLabel: formatHours(comparison.previousPeriodTime),
+                  currentLabel: formatHours(comparison.currentPeriodTime),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildComparisonItem(
+                  theme,
+                  'Tracks',
+                  comparison.previousPeriodUniqueTracks,
+                  comparison.currentPeriodUniqueTracks,
+                  _calculatePercentChange(
+                    comparison.previousPeriodUniqueTracks,
+                    comparison.currentPeriodUniqueTracks,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildYearlyComparison(ThemeData theme) {
+    if (_statsLoading) {
+      return _buildLoadingCard(theme);
+    }
+
+    final analytics = ListeningAnalyticsService();
+    final comparison = analytics.getYearOverYearComparison();
+
+    // Format hours from duration
+    String formatHours(Duration d) {
+      final hours = d.inMinutes / 60;
+      return '${hours.toStringAsFixed(1)}h';
+    }
+
+    // Get this year and last year
+    final now = DateTime.now();
+    final thisYear = now.year.toString();
+    final lastYear = (now.year - 1).toString();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.calendar_today,
+                size: 20,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '$thisYear vs $lastYear',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _buildComparisonItem(
+                  theme,
+                  'Plays',
+                  comparison.previousPeriodPlays,
+                  comparison.currentPeriodPlays,
+                  comparison.playsChangePercent,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildComparisonItem(
+                  theme,
+                  'Time',
+                  null,
+                  null,
+                  comparison.timeChangePercent,
+                  previousLabel: formatHours(comparison.previousPeriodTime),
+                  currentLabel: formatHours(comparison.currentPeriodTime),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildComparisonItem(
+                  theme,
+                  'Tracks',
+                  comparison.previousPeriodUniqueTracks,
+                  comparison.currentPeriodUniqueTracks,
+                  _calculatePercentChange(
+                    comparison.previousPeriodUniqueTracks,
+                    comparison.currentPeriodUniqueTracks,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getMonthName(int month) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return months[month - 1];
+  }
+
+  double _calculatePercentChange(int previous, int current) {
+    if (previous == 0) return current > 0 ? 100 : 0;
+    return ((current - previous) / previous) * 100;
+  }
+
+  Widget _buildComparisonItem(
+    ThemeData theme,
+    String label,
+    int? previousValue,
+    int? currentValue,
+    double percentChange, {
+    String? previousLabel,
+    String? currentLabel,
+  }) {
+    final isPositive = percentChange >= 0;
+    final changeColor = percentChange == 0
+        ? theme.colorScheme.onSurfaceVariant
+        : (isPositive ? Colors.green : Colors.red);
+
+    final prevDisplay = previousLabel ?? (previousValue?.toString() ?? '0');
+    final currDisplay = currentLabel ?? (currentValue?.toString() ?? '0');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Text(
+              prevDisplay,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Icon(
+                Icons.arrow_forward,
+                size: 12,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            Text(
+              currDisplay,
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 2),
+        Row(
+          children: [
+            Icon(
+              isPositive ? Icons.arrow_upward : Icons.arrow_downward,
+              size: 12,
+              color: changeColor,
+            ),
+            Text(
+              '${percentChange.abs().toStringAsFixed(0)}%',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: changeColor,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // ignore: unused_element
   Widget _buildRecentlyPlayedList(ThemeData theme) {
     if (_statsLoading) {
       return _buildLoadingCard(theme);
@@ -1243,6 +1793,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   label: 'Tracks Played',
                   value: _uniqueTracksPlayed > 0 ? _uniqueTracksPlayed.toString() : '-',
                   color: theme.colorScheme.secondary,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildInsightItem(
+                  theme,
+                  icon: Icons.auto_awesome,
+                  label: 'Diversity',
+                  value: _diversityScore > 0 ? '${_diversityScore.toStringAsFixed(0)}%' : '-',
+                  color: Colors.amber,
                 ),
               ),
             ],
@@ -2030,43 +2590,80 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final icon = _getMilestoneIcon(milestone.iconType);
     final color = _getMilestoneColor(milestone.iconType);
 
+    // Determine tier based on milestone target value
+    final tier = _getMilestoneTier(milestone);
+    final tierBorderColor = _getTierBorderColor(tier);
+
     return Tooltip(
       message: milestone.description,
       child: Container(
-        width: 72,
+        width: 80,
+        height: 80,
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              color.withValues(alpha: 0.2),
+              color.withValues(alpha: 0.25),
               color.withValues(alpha: 0.1),
             ],
           ),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: color.withValues(alpha: 0.4),
+            color: tierBorderColor,
+            width: 2,
           ),
           boxShadow: [
+            // Outer glow
             BoxShadow(
-              color: color.withValues(alpha: 0.2),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
+              color: color.withValues(alpha: 0.4),
+              blurRadius: 12,
+              spreadRadius: 1,
+            ),
+            // Inner highlight
+            BoxShadow(
+              color: Colors.white.withValues(alpha: 0.1),
+              blurRadius: 4,
+              offset: const Offset(-2, -2),
             ),
           ],
         ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.2),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, color: color, size: 20),
+            // Icon with shine effect
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    gradient: RadialGradient(
+                      colors: [
+                        color.withValues(alpha: 0.3),
+                        color.withValues(alpha: 0.1),
+                      ],
+                    ),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(icon, color: color, size: 22),
+                ),
+                // Shine highlight
+                Positioned(
+                  top: 4,
+                  left: 8,
+                  child: Container(
+                    width: 8,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.4),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 4),
             Text(
@@ -2083,6 +2680,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       ),
     );
+  }
+
+  String _getMilestoneTier(ListeningMilestone milestone) {
+    // Determine tier based on milestone ID pattern
+    final id = milestone.id;
+    if (id.contains('10000') || id.contains('500') && id.contains('hours') ||
+        id.contains('365') || id.contains('1000') && !id.contains('10000')) {
+      return 'gold';
+    } else if (id.contains('5000') || id.contains('250') || id.contains('100') ||
+        id.contains('60') || id.contains('200')) {
+      return 'silver';
+    }
+    return 'bronze';
+  }
+
+  Color _getTierBorderColor(String tier) {
+    switch (tier) {
+      case 'gold':
+        return const Color(0xFFFFD700); // Gold
+      case 'silver':
+        return const Color(0xFFC0C0C0); // Silver
+      default:
+        return const Color(0xFFCD7F32); // Bronze
+    }
   }
 
   IconData _getMilestoneIcon(IconType type) {

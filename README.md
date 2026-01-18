@@ -24,6 +24,12 @@
 
 ## 📋 Changelog
 
+### v4.9.0 - Settings UI Refresh
+- **Card-Based Settings Layout**: Reorganized settings into visually grouped cards for cleaner navigation
+- **Section Icons**: Each settings section now has a distinctive icon header (Server, Appearance, Audio, Performance, Downloads, About)
+- **Polished Spacing**: Improved padding and margins throughout the settings screen
+- **Alphabet Scrollbar Fix**: Fixed zone-based hit detection for library alphabet navigation
+
 ### v4.8.0 - Custom Themes & Storage Improvements
 - **Custom Color Theme**: Infinite personalization with color wheel picker
 - **40 Nautical Milestones**: Doubled from 20 with new categories (night owl, early bird, genre exploration)
@@ -123,8 +129,10 @@ flutter analyze
 | Feature | Platform | Status |
 |---------|----------|--------|
 | Desktop Remote Control | iOS → Linux | 🔜 Planned |
+| Additional Visualizers | All | 🔜 Planned |
 
-Control desktop playback from iOS device over local network.
+- **Desktop Remote Control**: Control desktop playback from iOS device over local network.
+- **Additional Visualizers**: More audio-reactive visualizer styles beyond bioluminescent waves (e.g., spectrum bars, particle effects, waveforms).
 
 ## 📄 License
 

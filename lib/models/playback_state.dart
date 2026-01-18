@@ -93,6 +93,7 @@ class PlaybackState {
     this.themePaletteId = 'purple_ocean',
     this.customPrimaryColor,  // Custom theme primary color (stored as int)
     this.customSecondaryColor,  // Custom theme secondary color (stored as int)
+    this.customAccentColor,  // Custom theme accent color (stored as int)
     this.customThemeIsLight = false,  // Whether custom theme is light mode
     // Visualizer
     this.visualizerEnabled = true,
@@ -133,6 +134,7 @@ class PlaybackState {
   final String themePaletteId;
   final int? customPrimaryColor;  // Custom theme primary (Color.value)
   final int? customSecondaryColor;  // Custom theme secondary (Color.value)
+  final int? customAccentColor;  // Custom theme accent (Color.value)
   final bool customThemeIsLight;  // Whether custom theme is light
   // Visualizer
   final bool visualizerEnabled;
@@ -172,6 +174,7 @@ class PlaybackState {
     String? themePaletteId,
     int? customPrimaryColor,
     int? customSecondaryColor,
+    int? customAccentColor,
     bool? customThemeIsLight,
     bool? visualizerEnabled,
     int? preCacheTrackCount,
@@ -207,6 +210,7 @@ class PlaybackState {
       themePaletteId: themePaletteId ?? this.themePaletteId,
       customPrimaryColor: customPrimaryColor ?? this.customPrimaryColor,
       customSecondaryColor: customSecondaryColor ?? this.customSecondaryColor,
+      customAccentColor: customAccentColor ?? this.customAccentColor,
       customThemeIsLight: customThemeIsLight ?? this.customThemeIsLight,
       visualizerEnabled: visualizerEnabled ?? this.visualizerEnabled,
       preCacheTrackCount: preCacheTrackCount ?? this.preCacheTrackCount,
@@ -245,6 +249,7 @@ class PlaybackState {
       'themePaletteId': themePaletteId,
       'customPrimaryColor': customPrimaryColor,
       'customSecondaryColor': customSecondaryColor,
+      'customAccentColor': customAccentColor,
       'customThemeIsLight': customThemeIsLight,
       'visualizerEnabled': visualizerEnabled,
       'preCacheTrackCount': preCacheTrackCount,
@@ -295,6 +300,7 @@ class PlaybackState {
       themePaletteId: json['themePaletteId'] as String? ?? 'purple_ocean',
       customPrimaryColor: (json['customPrimaryColor'] as num?)?.toInt(),
       customSecondaryColor: (json['customSecondaryColor'] as num?)?.toInt(),
+      customAccentColor: (json['customAccentColor'] as num?)?.toInt(),
       customThemeIsLight: json['customThemeIsLight'] as bool? ?? false,
       visualizerEnabled: json['visualizerEnabled'] as bool? ?? true,
       preCacheTrackCount: (json['preCacheTrackCount'] as num?)?.toInt() ?? 3,
@@ -336,6 +342,7 @@ class PlaybackState {
       themePaletteId: themePaletteId, // Preserve theme preference
       customPrimaryColor: customPrimaryColor, // Preserve custom theme colors
       customSecondaryColor: customSecondaryColor,
+      customAccentColor: customAccentColor,
       customThemeIsLight: customThemeIsLight,
       visualizerEnabled: visualizerEnabled, // Preserve visualizer preference
       preCacheTrackCount: preCacheTrackCount, // Preserve smart cache settings

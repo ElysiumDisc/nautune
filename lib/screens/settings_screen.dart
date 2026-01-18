@@ -50,36 +50,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(
-            'Appearance',
-            style: theme.textTheme.titleMedium?.copyWith(
-              color: theme.colorScheme.primary,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-        ListTile(
-          leading: Icon(Icons.palette, color: theme.colorScheme.primary),
-          title: const Text('Color Theme'),
-          subtitle: Text(themeProvider.palette.name),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => _showThemePicker(context),
-        ),
-        ListTile(
-          leading: Icon(Icons.waves, color: theme.colorScheme.primary),
-          title: const Text('Animated Visualizer'),
-          subtitle: Text(
-            appState.visualizerEnabled
-                ? 'Bioluminescent waves enabled'
-                : 'Disabled for battery savings'
-          ),
-          trailing: Switch(
-            value: appState.visualizerEnabled,
-            onChanged: (value) {
-              appState.setVisualizerEnabled(value);
-            },
+        const _SectionHeader(icon: Icons.palette, title: 'Appearance'),
+        Card(
+          margin: const EdgeInsets.only(bottom: 16),
+          child: Column(
+            children: [
+              ListTile(
+                leading: Icon(Icons.color_lens, color: theme.colorScheme.primary),
+                title: const Text('Color Theme'),
+                subtitle: Text(themeProvider.palette.name),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _showThemePicker(context),
+              ),
+              ListTile(
+                leading: Icon(Icons.waves, color: theme.colorScheme.primary),
+                title: const Text('Animated Visualizer'),
+                subtitle: Text(
+                  appState.visualizerEnabled
+                      ? 'Bioluminescent waves enabled'
+                      : 'Disabled for battery savings'
+                ),
+                trailing: Switch(
+                  value: appState.visualizerEnabled,
+                  onChanged: (value) {
+                    appState.setVisualizerEnabled(value);
+                  },
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -100,15 +98,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
         currentPalette: themeProvider.palette,
         customPrimaryColor: themeProvider.customPrimaryColor,
         customSecondaryColor: themeProvider.customSecondaryColor,
+        customAccentColor: themeProvider.customAccentColor,
         customIsLight: themeProvider.customIsLight,
         onSelectPreset: (palette) {
           themeProvider.setPalette(palette);
           Navigator.pop(context);
         },
-        onSelectCustom: (primary, secondary, isLight) {
+        onSelectCustom: (primary, secondary, accent, isLight) {
           themeProvider.setCustomColors(
             primary: primary,
             secondary: secondary,
+            accent: accent,
             isLight: isLight,
           );
           Navigator.pop(context);
@@ -129,407 +129,390 @@ class _SettingsScreenState extends State<SettingsScreen> {
         title: const Text('Settings'),
       ),
       body: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'Server',
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          ListTile(
-            title: const Text('Server URL'),
-            subtitle: Text(sessionProvider.session?.serverUrl ?? 'Not connected'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              // TODO: Allow changing server
-            },
-          ),
-          ListTile(
-            title: const Text('Username'),
-            subtitle: Text(sessionProvider.session?.username ?? 'Not logged in'),
-          ),
-          ListTile(
-            title: const Text('Library'),
-            subtitle: Text(sessionProvider.session?.selectedLibraryName ?? 'None selected'),
-          ),
-          const Divider(),
-          _buildAppearanceSection(context),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'Audio Options',
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          ListTile(
-            leading: Icon(Icons.high_quality, color: theme.colorScheme.primary),
-            title: const Text('Streaming Quality'),
-            subtitle: Text(
-              appState.streamingQuality == StreamingQuality.original
-                  ? 'Streams original quality (FLAC, lossless)'
-                  : appState.streamingQuality == StreamingQuality.auto
-                      ? 'Original on WiFi, Normal on cellular'
-                      : 'Transcodes to MP3 at selected bitrate',
-              style: theme.textTheme.bodySmall,
-            ),
-            trailing: PopupMenuButton<StreamingQuality>(
-              initialValue: appState.streamingQuality,
-              onSelected: (StreamingQuality? value) {
-                if (value != null) {
-                  appState.setStreamingQuality(value);
-                }
-              },
-              itemBuilder: (context) => StreamingQuality.values.map((quality) {
-                return PopupMenuItem<StreamingQuality>(
-                  value: quality,
-                  child: Text(quality.label),
-                );
-              }).toList(),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
-                  borderRadius: BorderRadius.circular(8),
+          const _SectionHeader(icon: Icons.dns, title: 'Server'),
+          Card(
+            margin: const EdgeInsets.only(bottom: 16),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: Icon(Icons.cloud, color: theme.colorScheme.primary),
+                  title: const Text('Server URL'),
+                  subtitle: Text(sessionProvider.session?.serverUrl ?? 'Not connected'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    // TODO: Allow changing server
+                  },
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      appState.streamingQuality.label,
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: theme.colorScheme.primary,
-                        fontWeight: FontWeight.bold,
+                ListTile(
+                  leading: Icon(Icons.person, color: theme.colorScheme.primary),
+                  title: const Text('Username'),
+                  subtitle: Text(sessionProvider.session?.username ?? 'Not logged in'),
+                ),
+                ListTile(
+                  leading: Icon(Icons.library_music, color: theme.colorScheme.primary),
+                  title: const Text('Library'),
+                  subtitle: Text(sessionProvider.session?.selectedLibraryName ?? 'None selected'),
+                ),
+              ],
+            ),
+          ),
+          _buildAppearanceSection(context),
+          const _SectionHeader(icon: Icons.audiotrack, title: 'Audio Options'),
+          Card(
+            margin: const EdgeInsets.only(bottom: 16),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: Icon(Icons.high_quality, color: theme.colorScheme.primary),
+                  title: const Text('Streaming Quality'),
+                  subtitle: Text(
+                    appState.streamingQuality == StreamingQuality.original
+                        ? 'Streams original quality (FLAC, lossless)'
+                        : appState.streamingQuality == StreamingQuality.auto
+                            ? 'Original on WiFi, Normal on cellular'
+                            : 'Transcodes to MP3 at selected bitrate',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  trailing: PopupMenuButton<StreamingQuality>(
+                    initialValue: appState.streamingQuality,
+                    onSelected: (StreamingQuality? value) {
+                      if (value != null) {
+                        appState.setStreamingQuality(value);
+                      }
+                    },
+                    itemBuilder: (context) => StreamingQuality.values.map((quality) {
+                      return PopupMenuItem<StreamingQuality>(
+                        value: quality,
+                        child: Text(quality.label),
+                      );
+                    }).toList(),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            appState.streamingQuality.label,
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(Icons.arrow_drop_down, color: theme.colorScheme.primary),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 4),
-                    Icon(Icons.arrow_drop_down, color: theme.colorScheme.primary),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          ListTile(
-            leading: Icon(Icons.tune, color: theme.colorScheme.primary),
-            title: const Text('Crossfade'),
-            subtitle: Text(
-              appState.crossfadeEnabled
-                ? 'Enabled (${appState.crossfadeDurationSeconds}s)'
-                : 'Smooth transitions between tracks'
-            ),
-            trailing: Switch(
-              value: appState.crossfadeEnabled,
-              onChanged: (value) {
-                appState.toggleCrossfade(value);
-              },
-            ),
-          ),
-          if (appState.crossfadeEnabled)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Duration: ${appState.crossfadeDurationSeconds} seconds',
-                    style: theme.textTheme.bodyMedium,
                   ),
-                  Slider(
-                    value: appState.crossfadeDurationSeconds.toDouble(),
-                    min: 0,
-                    max: 10,
-                    divisions: 10,
-                    label: '${appState.crossfadeDurationSeconds}s',
+                ),
+                ListTile(
+                  leading: Icon(Icons.tune, color: theme.colorScheme.primary),
+                  title: const Text('Crossfade'),
+                  subtitle: Text(
+                    appState.crossfadeEnabled
+                      ? 'Enabled (${appState.crossfadeDurationSeconds}s)'
+                      : 'Smooth transitions between tracks'
+                  ),
+                  trailing: Switch(
+                    value: appState.crossfadeEnabled,
                     onChanged: (value) {
-                      appState.setCrossfadeDuration(value.round());
+                      appState.toggleCrossfade(value);
                     },
                   ),
-                  Text(
-                    'Automatically skips crossfade within same album',
+                ),
+                if (appState.crossfadeEnabled)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Duration: ${appState.crossfadeDurationSeconds} seconds',
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                        Slider(
+                          value: appState.crossfadeDurationSeconds.toDouble(),
+                          min: 0,
+                          max: 10,
+                          divisions: 10,
+                          label: '${appState.crossfadeDurationSeconds}s',
+                          onChanged: (value) {
+                            appState.setCrossfadeDuration(value.round());
+                          },
+                        ),
+                        Text(
+                          'Automatically skips crossfade within same album',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                    ),
+                  ),
+                ListTile(
+                  leading: Icon(Icons.music_note, color: theme.colorScheme.primary),
+                  title: const Text('Gapless Playback'),
+                  subtitle: Text(
+                    appState.gaplessPlaybackEnabled
+                      ? 'Seamless transitions enabled'
+                      : 'Standard playback'
+                  ),
+                  trailing: Switch(
+                    value: appState.gaplessPlaybackEnabled,
+                    onChanged: (value) {
+                      appState.toggleGaplessPlayback(value);
+                    },
+                  ),
+                ),
+                ListTile(
+                  leading: Icon(Icons.all_inclusive, color: theme.colorScheme.primary),
+                  title: const Text('Infinite Radio'),
+                  subtitle: Text(
+                    uiStateProvider.infiniteRadioEnabled
+                      ? 'Auto-generates similar tracks when queue is low'
+                      : 'Endless playback based on current track'
+                  ),
+                  trailing: Switch(
+                    value: uiStateProvider.infiniteRadioEnabled,
+                    onChanged: (value) {
+                      uiStateProvider.toggleInfiniteRadio(value);
+                    },
+                  ),
+                ),
+                if (uiStateProvider.infiniteRadioEnabled)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: Text(
+                      'Uses Jellyfin\'s Instant Mix to find similar tracks. Requires internet connection.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
+                const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: EqualizerWidget(),
+                ),
+              ],
+            ),
+          ),
+          const _SectionHeader(icon: Icons.speed, title: 'Performance'),
+          Card(
+            margin: const EdgeInsets.only(bottom: 16),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: Icon(Icons.cached, color: theme.colorScheme.primary),
+                  title: const Text('Cache Duration'),
+                  subtitle: Text(_formatDuration(uiStateProvider.cacheTtlMinutes)),
+                  trailing: SizedBox(
+                    width: 150,
+                    child: _CacheTtlSlider(
+                      currentMinutes: uiStateProvider.cacheTtlMinutes,
+                      onChanged: (minutes) {
+                        uiStateProvider.setCacheTtl(minutes);
+                        appState.setCacheTtl(minutes);
+                      },
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Text(
+                    'How long to keep album/artist data before refreshing from server. Lower = fresher data, higher = faster browsing.',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                       fontStyle: FontStyle.italic,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                ],
-              ),
-            ),
-          ListTile(
-            leading: Icon(Icons.music_note, color: theme.colorScheme.primary),
-            title: const Text('Gapless Playback'),
-            subtitle: Text(
-              appState.gaplessPlaybackEnabled
-                ? 'Seamless transitions enabled'
-                : 'Standard playback'
-            ),
-            trailing: Switch(
-              value: appState.gaplessPlaybackEnabled,
-              onChanged: (value) {
-                appState.toggleGaplessPlayback(value);
-              },
-            ),
-          ),
-          ListTile(
-            leading: Icon(Icons.all_inclusive, color: theme.colorScheme.primary),
-            title: const Text('Infinite Radio'),
-            subtitle: Text(
-              uiStateProvider.infiniteRadioEnabled
-                ? 'Auto-generates similar tracks when queue is low'
-                : 'Endless playback based on current track'
-            ),
-            trailing: Switch(
-              value: uiStateProvider.infiniteRadioEnabled,
-              onChanged: (value) {
-                uiStateProvider.toggleInfiniteRadio(value);
-              },
-            ),
-          ),
-          if (uiStateProvider.infiniteRadioEnabled)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                'Uses Jellyfin\'s Instant Mix to find similar tracks. Requires internet connection.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                  fontStyle: FontStyle.italic,
                 ),
-              ),
-            ),
-          const SizedBox(height: 16),
-          // Equalizer
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: EqualizerWidget(),
-          ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'Performance',
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          ListTile(
-            leading: Icon(Icons.cached, color: theme.colorScheme.primary),
-            title: const Text('Cache Duration'),
-            subtitle: Text(_formatDuration(uiStateProvider.cacheTtlMinutes)),
-            trailing: SizedBox(
-              width: 150,
-              child: _CacheTtlSlider(
-                currentMinutes: uiStateProvider.cacheTtlMinutes,
-                onChanged: (minutes) {
-                  uiStateProvider.setCacheTtl(minutes);
-                  appState.setCacheTtl(minutes);
-                },
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              'How long to keep album/artist data before refreshing from server. Lower = fresher data, higher = faster browsing.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          ListTile(
-            leading: Icon(Icons.queue_music, color: theme.colorScheme.primary),
-            title: const Text('Smart Pre-Cache'),
-            subtitle: Text(
-              uiStateProvider.preCacheTrackCount == 0
-                  ? 'Disabled'
-                  : 'Pre-cache ${uiStateProvider.preCacheTrackCount} upcoming tracks'
-            ),
-            trailing: PopupMenuButton<int>(
-              initialValue: uiStateProvider.preCacheTrackCount,
-              onSelected: (int? value) {
-                if (value != null) {
-                  uiStateProvider.setPreCacheTrackCount(value);
-                  appState.setPreCacheTrackCount(value);
-                }
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem<int>(value: 0, child: Text('Off')),
-                const PopupMenuItem<int>(value: 3, child: Text('3 tracks')),
-                const PopupMenuItem<int>(value: 5, child: Text('5 tracks')),
-                const PopupMenuItem<int>(value: 10, child: Text('10 tracks')),
-              ],
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      uiStateProvider.preCacheTrackCount == 0
-                          ? 'Off'
-                          : '${uiStateProvider.preCacheTrackCount}',
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: theme.colorScheme.primary,
-                        fontWeight: FontWeight.bold,
+                ListTile(
+                  leading: Icon(Icons.queue_music, color: theme.colorScheme.primary),
+                  title: const Text('Smart Pre-Cache'),
+                  subtitle: Text(
+                    uiStateProvider.preCacheTrackCount == 0
+                        ? 'Disabled'
+                        : 'Pre-cache ${uiStateProvider.preCacheTrackCount} upcoming tracks'
+                  ),
+                  trailing: PopupMenuButton<int>(
+                    initialValue: uiStateProvider.preCacheTrackCount,
+                    onSelected: (int? value) {
+                      if (value != null) {
+                        uiStateProvider.setPreCacheTrackCount(value);
+                        appState.setPreCacheTrackCount(value);
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem<int>(value: 0, child: Text('Off')),
+                      const PopupMenuItem<int>(value: 3, child: Text('3 tracks')),
+                      const PopupMenuItem<int>(value: 5, child: Text('5 tracks')),
+                      const PopupMenuItem<int>(value: 10, child: Text('10 tracks')),
+                    ],
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            uiStateProvider.preCacheTrackCount == 0
+                                ? 'Off'
+                                : '${uiStateProvider.preCacheTrackCount}',
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(Icons.arrow_drop_down, color: theme.colorScheme.primary),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 4),
-                    Icon(Icons.arrow_drop_down, color: theme.colorScheme.primary),
-                  ],
+                  ),
                 ),
-              ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Text(
+                    'Pre-download upcoming tracks in queue for smoother playback. Works with albums, playlists, and favorites.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: Icon(Icons.wifi, color: theme.colorScheme.primary),
+                  title: const Text('WiFi-Only Pre-Cache'),
+                  subtitle: const Text('Only pre-cache when connected to WiFi'),
+                  trailing: Switch(
+                    value: uiStateProvider.wifiOnlyCaching,
+                    onChanged: (value) {
+                      uiStateProvider.setWifiOnlyCaching(value);
+                      appState.setWifiOnlyCaching(value);
+                    },
+                  ),
+                ),
+              ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              'Pre-download upcoming tracks in queue for smoother playback. Works with albums, playlists, and favorites.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-          ),
-          ListTile(
-            leading: Icon(Icons.wifi, color: theme.colorScheme.primary),
-            title: const Text('WiFi-Only Pre-Cache'),
-            subtitle: const Text('Only pre-cache when connected to WiFi'),
-            trailing: Switch(
-              value: uiStateProvider.wifiOnlyCaching,
-              onChanged: (value) {
-                uiStateProvider.setWifiOnlyCaching(value);
-                appState.setWifiOnlyCaching(value);
-              },
-            ),
-          ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'Downloads',
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
+          const _SectionHeader(icon: Icons.download, title: 'Downloads'),
           ListenableBuilder(
             listenable: appState.downloadService,
             builder: (context, _) {
               final downloadService = appState.downloadService;
-              return Column(
-                children: [
-                  ListTile(
-                    leading: Icon(Icons.download, color: theme.colorScheme.primary),
-                    title: const Text('Concurrent Downloads'),
-                    subtitle: Text('${downloadService.maxConcurrentDownloads} simultaneous downloads'),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      children: [
-                        const Text('1'),
-                        Expanded(
-                          child: Slider(
-                            value: downloadService.maxConcurrentDownloads.toDouble(),
-                            min: 1,
-                            max: 10,
-                            divisions: 9,
-                            label: '${downloadService.maxConcurrentDownloads}',
-                            onChanged: (value) {
-                              final newValue = value.round();
-                              downloadService.setMaxConcurrentDownloads(newValue);
-                              uiStateProvider.setMaxConcurrentDownloads(newValue);
-                            },
+              return Card(
+                margin: const EdgeInsets.only(bottom: 16),
+                child: Column(
+                  children: [
+                    ListTile(
+                      leading: Icon(Icons.sync, color: theme.colorScheme.primary),
+                      title: const Text('Concurrent Downloads'),
+                      subtitle: Text('${downloadService.maxConcurrentDownloads} simultaneous downloads'),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        children: [
+                          const Text('1'),
+                          Expanded(
+                            child: Slider(
+                              value: downloadService.maxConcurrentDownloads.toDouble(),
+                              min: 1,
+                              max: 10,
+                              divisions: 9,
+                              label: '${downloadService.maxConcurrentDownloads}',
+                              onChanged: (value) {
+                                final newValue = value.round();
+                                downloadService.setMaxConcurrentDownloads(newValue);
+                                uiStateProvider.setMaxConcurrentDownloads(newValue);
+                              },
+                            ),
                           ),
-                        ),
-                        const Text('10'),
-                      ],
+                          const Text('10'),
+                        ],
+                      ),
                     ),
-                  ),
-                  ListTile(
-                    leading: Icon(Icons.wifi, color: theme.colorScheme.primary),
-                    title: const Text('WiFi-Only Downloads'),
-                    subtitle: const Text('Only download when connected to WiFi'),
-                    trailing: Switch(
-                      value: downloadService.wifiOnlyDownloads,
-                      onChanged: (value) {
-                        downloadService.setWifiOnlyDownloads(value);
-                        uiStateProvider.setWifiOnlyDownloads(value);
+                    ListTile(
+                      leading: Icon(Icons.wifi, color: theme.colorScheme.primary),
+                      title: const Text('WiFi-Only Downloads'),
+                      subtitle: const Text('Only download when connected to WiFi'),
+                      trailing: Switch(
+                        value: downloadService.wifiOnlyDownloads,
+                        onChanged: (value) {
+                          downloadService.setWifiOnlyDownloads(value);
+                          uiStateProvider.setWifiOnlyDownloads(value);
+                        },
+                      ),
+                    ),
+                    ListTile(
+                      leading: Icon(Icons.folder_open, color: theme.colorScheme.primary),
+                      title: const Text('Manage Storage'),
+                      subtitle: FutureBuilder<StorageStats>(
+                        future: downloadService.getStorageStats(),
+                        builder: (context, snapshot) {
+                          if (snapshot.hasData) {
+                            final stats = snapshot.data!;
+                            final totalItems = stats.trackCount + stats.cacheFileCount;
+                            return Text('$totalItems items using ${stats.formattedCombined}');
+                          }
+                          return const Text('Calculating...');
+                        },
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const _StorageManagementScreen(),
+                          ),
+                        );
                       },
                     ),
-                  ),
-                  ListTile(
-                    leading: Icon(Icons.folder_open, color: theme.colorScheme.primary),
-                    title: const Text('Manage Storage'),
-                    subtitle: FutureBuilder<StorageStats>(
-                      future: downloadService.getStorageStats(),
-                      builder: (context, snapshot) {
-                        if (snapshot.hasData) {
-                          final stats = snapshot.data!;
-                          final totalItems = stats.trackCount + stats.cacheFileCount;
-                          return Text('$totalItems items using ${stats.formattedCombined}');
-                        }
-                        return const Text('Calculating...');
-                      },
-                    ),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const _StorageManagementScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                ],
+                  ],
+                ),
               );
             },
           ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'About',
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.bold,
-              ),
+          const _SectionHeader(icon: Icons.info_outline, title: 'About'),
+          Card(
+            margin: const EdgeInsets.only(bottom: 16),
+            child: Column(
+              children: [
+                FutureBuilder<String>(
+                  future: _packageVersion(),
+                  builder: (context, snapshot) {
+                    final version = snapshot.data ?? '…';
+                    return ListTile(
+                      leading: Icon(Icons.anchor, color: theme.colorScheme.primary),
+                      title: const Text('Nautune'),
+                      subtitle: Text('Version $version'),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: Icon(Icons.gavel, color: theme.colorScheme.primary),
+                  title: const Text('Open Source Licenses'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    showLicensePage(context: context);
+                  },
+                ),
+              ],
             ),
           ),
-          FutureBuilder<String>(
-            future: _packageVersion(),
-            builder: (context, snapshot) {
-              final version = snapshot.data ?? '…';
-              return ListTile(
-                title: const Text('Nautune'),
-                subtitle: Text('Version $version'),
-              );
-            },
-          ),
-          ListTile(
-            title: const Text('Open Source Licenses'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              showLicensePage(context: context);
-            },
-          ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
           Center(
             child: Text(
               'Made with 💜 by ElysiumDisc',
@@ -538,7 +521,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 24),
         ],
       ),
     );
@@ -1208,14 +1191,16 @@ class _ThemePickerSheet extends StatefulWidget {
   final NautuneColorPalette currentPalette;
   final Color? customPrimaryColor;
   final Color? customSecondaryColor;
+  final Color? customAccentColor;
   final bool customIsLight;
   final ValueChanged<NautuneColorPalette> onSelectPreset;
-  final void Function(Color primary, Color secondary, bool isLight) onSelectCustom;
+  final void Function(Color primary, Color secondary, Color accent, bool isLight) onSelectCustom;
 
   const _ThemePickerSheet({
     required this.currentPalette,
     required this.customPrimaryColor,
     required this.customSecondaryColor,
+    required this.customAccentColor,
     required this.customIsLight,
     required this.onSelectPreset,
     required this.onSelectCustom,
@@ -1229,14 +1214,16 @@ class _ThemePickerSheetState extends State<_ThemePickerSheet> {
   bool _showCustomPicker = false;
   late Color _primaryColor;
   late Color _secondaryColor;
+  late Color _accentColor;
   late bool _isLightTheme;
-  bool _editingPrimary = true;
+  int _editingColor = 0;  // 0=primary, 1=secondary, 2=accent
 
   @override
   void initState() {
     super.initState();
     _primaryColor = widget.customPrimaryColor ?? const Color(0xFF6B21A8);
     _secondaryColor = widget.customSecondaryColor ?? const Color(0xFF9333EA);
+    _accentColor = widget.customAccentColor ?? const Color(0xFF409CFF);
     _isLightTheme = widget.customIsLight;
   }
 
@@ -1315,6 +1302,7 @@ class _ThemePickerSheetState extends State<_ThemePickerSheet> {
                     isSelected: widget.currentPalette.id == 'custom',
                     primaryColor: widget.customPrimaryColor ?? const Color(0xFF6B21A8),
                     secondaryColor: widget.customSecondaryColor ?? const Color(0xFF9333EA),
+                    accentColor: widget.customAccentColor ?? const Color(0xFF409CFF),
                     isLight: widget.customIsLight,
                     onTap: () => setState(() => _showCustomPicker = true),
                   );
@@ -1359,17 +1347,26 @@ class _ThemePickerSheetState extends State<_ThemePickerSheet> {
               child: _ColorSelectionButton(
                 label: 'Primary',
                 color: _primaryColor,
-                isSelected: _editingPrimary,
-                onTap: () => setState(() => _editingPrimary = true),
+                isSelected: _editingColor == 0,
+                onTap: () => setState(() => _editingColor = 0),
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 8),
             Expanded(
               child: _ColorSelectionButton(
                 label: 'Secondary',
                 color: _secondaryColor,
-                isSelected: !_editingPrimary,
-                onTap: () => setState(() => _editingPrimary = false),
+                isSelected: _editingColor == 1,
+                onTap: () => setState(() => _editingColor = 1),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _ColorSelectionButton(
+                label: 'Accent',
+                color: _accentColor,
+                isSelected: _editingColor == 2,
+                onTap: () => setState(() => _editingColor = 2),
               ),
             ),
           ],
@@ -1381,13 +1378,15 @@ class _ThemePickerSheetState extends State<_ThemePickerSheet> {
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: HueRingPicker(
-              pickerColor: _editingPrimary ? _primaryColor : _secondaryColor,
+              pickerColor: _editingColor == 0 ? _primaryColor : (_editingColor == 1 ? _secondaryColor : _accentColor),
               onColorChanged: (color) {
                 setState(() {
-                  if (_editingPrimary) {
+                  if (_editingColor == 0) {
                     _primaryColor = color;
-                  } else {
+                  } else if (_editingColor == 1) {
                     _secondaryColor = color;
+                  } else {
+                    _accentColor = color;
                   }
                 });
               },
@@ -1416,13 +1415,15 @@ class _ThemePickerSheetState extends State<_ThemePickerSheet> {
               _ColorCircle(color: _primaryColor, size: 32),
               const SizedBox(width: 8),
               _ColorCircle(color: _secondaryColor, size: 32),
+              const SizedBox(width: 8),
+              _ColorCircle(color: _accentColor, size: 32),
               const Spacer(),
               Text(
                 'Your Theme',
                 style: TextStyle(
                   color: _isLightTheme
                       ? HSLColor.fromColor(_primaryColor).withLightness(0.25).toColor()
-                      : _secondaryColor,
+                      : _accentColor,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -1437,7 +1438,7 @@ class _ThemePickerSheetState extends State<_ThemePickerSheet> {
           width: double.infinity,
           child: FilledButton.icon(
             onPressed: () {
-              widget.onSelectCustom(_primaryColor, _secondaryColor, _isLightTheme);
+              widget.onSelectCustom(_primaryColor, _secondaryColor, _accentColor, _isLightTheme);
             },
             icon: const Icon(Icons.check),
             label: const Text('Apply Custom Theme'),
@@ -1503,6 +1504,7 @@ class _CustomThemeCard extends StatelessWidget {
   final bool isSelected;
   final Color primaryColor;
   final Color secondaryColor;
+  final Color accentColor;
   final bool isLight;
   final VoidCallback onTap;
 
@@ -1510,6 +1512,7 @@ class _CustomThemeCard extends StatelessWidget {
     required this.isSelected,
     required this.primaryColor,
     required this.secondaryColor,
+    required this.accentColor,
     required this.isLight,
     required this.onTap,
   });
@@ -1560,11 +1563,7 @@ class _CustomThemeCard extends StatelessWidget {
                     const SizedBox(width: 6),
                     _ColorCircle(color: secondaryColor, size: 24),
                     const SizedBox(width: 6),
-                    Icon(
-                      Icons.edit,
-                      size: 20,
-                      color: isLight ? Colors.black54 : Colors.white70,
-                    ),
+                    _ColorCircle(color: accentColor, size: 24),
                   ],
                 ),
               ),
@@ -1726,6 +1725,41 @@ class _ColorCircle extends StatelessWidget {
           color: Colors.white.withValues(alpha: 0.2),
           width: 1,
         ),
+      ),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  final IconData icon;
+  final String title;
+
+  const _SectionHeader({
+    required this.icon,
+    required this.title,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            size: 20,
+            color: theme.colorScheme.primary,
+          ),
+          const SizedBox(width: 10),
+          Text(
+            title,
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: theme.colorScheme.primary,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
       ),
     );
   }
