@@ -205,7 +205,7 @@ class NautuneAppState extends ChangeNotifier {
   bool _isLoadingRecommendations = false;
   List<JellyfinTrack>? _recommendationTracks;
   String? _recommendationSeedTrackName; // Name of track used for recommendations
-  bool _isOfflineMode = false;  // Toggle between online and offline library
+  bool _userWantsOffline = false;  // User's explicit offline preference (persisted)
   bool _networkAvailable = true;  // Track network connectivity
   bool _handlingUnauthorizedSession = false;
 
@@ -385,12 +385,16 @@ class NautuneAppState extends ChangeNotifier {
   bool get isLoadingRecommendations => _isLoadingRecommendations;
   List<JellyfinTrack>? get recommendationTracks => _recommendationTracks;
   String? get recommendationSeedTrackName => _recommendationSeedTrackName;
-  bool get isOfflineMode => _isOfflineMode;
+  /// Offline mode is active if user explicitly chose it OR network is unavailable
+  bool get isOfflineMode => _userWantsOffline || !_networkAvailable;
+
+  /// Whether user explicitly wants offline mode (persisted setting)
+  bool get userWantsOffline => _userWantsOffline;
 
   /// Get the appropriate repository based on offline mode.
   /// Returns OfflineRepository when offline, OnlineRepository when online.
   MusicRepository get repository => RepositoryFactory.create(
-        isOfflineMode: _isOfflineMode,
+        isOfflineMode: _userWantsOffline,
         jellyfinService: _jellyfinService,
         downloadService: _downloadService,
       );
@@ -555,7 +559,7 @@ class NautuneAppState extends ChangeNotifier {
     _demoFavoriteTrackIds = content.favoriteTrackIds.toSet();
     _demoPlaylistCounter = content.playlists.length;
     _networkAvailable = true;
-    _isOfflineMode = false;
+    _userWantsOffline = false;
 
     _session = JellyfinSession(
       serverUrl: 'demo://nautune',
@@ -781,15 +785,11 @@ class NautuneAppState extends ChangeNotifier {
     try {
       final isOnline = await _connectivityService.hasNetworkConnection();
       _networkAvailable = isOnline;
-      if (!isOnline && !_isOfflineMode && !_isDemoMode) {
-        _isOfflineMode = true;
-      }
+      // Note: isOfflineMode getter now returns true when !_networkAvailable
+      // so we don't need to set _userWantsOffline here
     } catch (error) {
       debugPrint('Connectivity probe failed: $error');
       _networkAvailable = false;
-      if (!_isOfflineMode && !_isDemoMode) {
-        _isOfflineMode = true;
-      }
     }
 
     _connectivitySubscription =
@@ -801,11 +801,10 @@ class NautuneAppState extends ChangeNotifier {
     final wasOnline = _networkAvailable;
     _networkAvailable = isOnline;
 
-    // Update offline mode based on connectivity
-    // Going offline is immediate - user needs to know right away
-    if (!isOnline && !_isOfflineMode && !_isDemoMode) {
-      _isOfflineMode = true;
-      debugPrint('📴 Going offline: Network lost');
+    // When network is lost, isOfflineMode getter automatically returns true
+    // We don't change _userWantsOffline - that's the user's explicit choice
+    if (!isOnline && wasOnline) {
+      debugPrint('📴 Network lost - app is now effectively offline');
       notifyListeners();
       return;
     }
@@ -831,23 +830,61 @@ class NautuneAppState extends ChangeNotifier {
   Future<void> _refreshAfterReconnect() async {
     // Small delay to let connection stabilize
     await Future.delayed(const Duration(milliseconds: 500));
-    
+
     // Check if still online before refreshing
     if (!_networkAvailable) return;
-    
+
     try {
       await refreshLibraries();
       debugPrint('✅ Background refresh after reconnect complete');
-      
-      // If refresh succeeded, we can safely switch back to online mode
-      if (_isOfflineMode && _networkAvailable && !_isDemoMode) {
-        _isOfflineMode = false;
-        debugPrint('📶 Switching back to online mode');
-        notifyListeners();
-      }
+      // Note: We don't auto-change _userWantsOffline here
+      // If user explicitly chose offline mode, they stay offline until they toggle it
+      // If they were offline due to no network, isOfflineMode getter now returns false
+      notifyListeners();
+
+      // Sync analytics in background (don't await - fire and forget)
+      unawaited(_syncAnalyticsToServer());
     } catch (error) {
       debugPrint('⚠️ Refresh after reconnect failed: $error');
-      // Keep in offline mode if refresh fails
+    }
+  }
+
+  /// Sync local listening analytics to the Jellyfin server
+  /// This pushes unsynced plays that were recorded offline
+  Future<void> _syncAnalyticsToServer() async {
+    final session = _session;
+    final client = _jellyfinService.jellyfinClient;
+
+    if (session == null || client == null || _isDemoMode) {
+      return;
+    }
+
+    try {
+      final analyticsService = ListeningAnalyticsService();
+      if (!analyticsService.isInitialized) {
+        await analyticsService.initialize();
+      }
+
+      final unsyncedCount = analyticsService.unsyncedCount;
+      if (unsyncedCount == 0) {
+        debugPrint('📊 Analytics: No unsynced plays to push');
+        return;
+      }
+
+      debugPrint('📊 Analytics: Syncing $unsyncedCount plays to server...');
+
+      final result = await analyticsService.syncToServer(
+        client: client,
+        credentials: session.credentials,
+      );
+
+      if (result.success) {
+        debugPrint('📊 Analytics: Sync complete - ${result.syncedCount} plays synced');
+      } else {
+        debugPrint('⚠️ Analytics sync failed: ${result.error ?? result.errors?.join(', ')}');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Analytics sync error: $e');
     }
   }
 
@@ -891,6 +928,9 @@ class NautuneAppState extends ChangeNotifier {
         autoCleanupEnabled: storedPlaybackState.autoCleanupEnabled,
         autoCleanupDays: storedPlaybackState.autoCleanupDays,
       );
+
+      // Restore offline mode preference
+      _userWantsOffline = storedPlaybackState.isOfflineMode;
     }
 
     try {
@@ -925,6 +965,8 @@ class NautuneAppState extends ChangeNotifier {
         await _applyBootstrapSnapshot(snapshot);
         if (_networkAvailable) {
           _startBootstrapSync(storedSession);
+          // Sync analytics in background on startup
+          unawaited(_syncAnalyticsToServer());
         } else {
           debugPrint('Skipping bootstrap sync: offline at startup');
         }
@@ -943,7 +985,7 @@ class NautuneAppState extends ChangeNotifier {
     } finally {
       _initialized = true;
       notifyListeners();
-      debugPrint('Nautune initialization finished (session restored: ${_session != null}, offline: $_isOfflineMode)');
+      debugPrint('Nautune initialization finished (session restored: ${_session != null}, offline: $_userWantsOffline)');
       
       // CarPlay is now initialized early in constructor, no need to init here
       // Just refresh content if connected
@@ -1087,9 +1129,7 @@ class NautuneAppState extends ChangeNotifier {
   void _handleNetworkDrop(Object error) {
     if (_networkAvailable) {
       _networkAvailable = false;
-      if (!_isOfflineMode && (_libraries == null || _libraries!.isEmpty)) {
-        _isOfflineMode = true;
-      }
+      // Note: isOfflineMode getter automatically returns true when !_networkAvailable
       debugPrint('Network lost while syncing: $error');
       notifyListeners();
     }
@@ -1187,7 +1227,7 @@ class NautuneAppState extends ChangeNotifier {
       return playlist;
     }
 
-    if (!_networkAvailable || _isOfflineMode) {
+    if (isOfflineMode) {
       await _syncQueue.add(PendingPlaylistAction(
         type: 'create',
         payload: {
@@ -1228,7 +1268,7 @@ class NautuneAppState extends ChangeNotifier {
       return;
     }
 
-    if (!_networkAvailable || _isOfflineMode) {
+    if (isOfflineMode) {
       await _syncQueue.add(PendingPlaylistAction(
         type: 'update',
         payload: {
@@ -1259,7 +1299,7 @@ class NautuneAppState extends ChangeNotifier {
       return;
     }
 
-    if (!_networkAvailable || _isOfflineMode) {
+    if (isOfflineMode) {
       await _syncQueue.add(PendingPlaylistAction(
         type: 'delete',
         payload: {
@@ -1298,7 +1338,7 @@ class NautuneAppState extends ChangeNotifier {
       return;
     }
 
-    if (!_networkAvailable || _isOfflineMode) {
+    if (isOfflineMode) {
       await _syncQueue.add(PendingPlaylistAction(
         type: 'add',
         payload: {
@@ -1360,7 +1400,7 @@ class NautuneAppState extends ChangeNotifier {
       return;
     }
 
-    if (!_networkAvailable || _isOfflineMode) {
+    if (isOfflineMode) {
       await _syncQueue.add(PendingPlaylistAction(
         type: 'favorite',
         payload: {
@@ -2325,8 +2365,12 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   void toggleOfflineMode() {
-    _isOfflineMode = !_isOfflineMode;
-    debugPrint('🔄 Toggled offline mode: $_isOfflineMode (Demo mode: $isDemoMode)');
+    _userWantsOffline = !_userWantsOffline;
+    debugPrint('🔄 Toggled offline mode: $_userWantsOffline (Demo mode: $isDemoMode)');
+
+    // Persist the user's offline preference
+    unawaited(_playbackStateStore.saveUiState(isOfflineMode: _userWantsOffline));
+
     notifyListeners();
 
     // In demo mode, offline toggle just switches between demo content and offline library view
@@ -2336,13 +2380,14 @@ class NautuneAppState extends ChangeNotifier {
       return;
     }
 
-    // If switching to online mode and we have a session, try to refresh data
-    if (!_isOfflineMode && _session != null && _networkAvailable) {
+    // If switching to online mode and we have a session and network, try to refresh data
+    if (!_userWantsOffline && _session != null && _networkAvailable) {
       debugPrint('📶 Switching to online mode - refreshing libraries');
       refreshLibraries().catchError((error) {
         debugPrint('Failed to refresh libraries when going online: $error');
-        _isOfflineMode = true;
-        _networkAvailable = false;
+        // Revert to offline if refresh fails
+        _userWantsOffline = true;
+        unawaited(_playbackStateStore.saveUiState(isOfflineMode: true));
         notifyListeners();
       });
 

@@ -100,6 +100,8 @@ class PlaybackState {
     // Smart caching
     this.preCacheTrackCount = 3,  // 0 = off, 3, 5, or 10
     this.wifiOnlyCaching = false,
+    // Offline mode
+    this.isOfflineMode = false,
   });
 
   final String? currentTrackId;
@@ -141,6 +143,8 @@ class PlaybackState {
   // Smart caching
   final int preCacheTrackCount;  // 0 = off, 3, 5, or 10
   final bool wifiOnlyCaching;
+  // Offline mode
+  final bool isOfflineMode;
 
   bool get hasTrack => currentTrackId != null;
 
@@ -179,6 +183,7 @@ class PlaybackState {
     bool? visualizerEnabled,
     int? preCacheTrackCount,
     bool? wifiOnlyCaching,
+    bool? isOfflineMode,
   }) {
     return PlaybackState(
       currentTrackId: currentTrackId ?? this.currentTrackId,
@@ -215,6 +220,7 @@ class PlaybackState {
       visualizerEnabled: visualizerEnabled ?? this.visualizerEnabled,
       preCacheTrackCount: preCacheTrackCount ?? this.preCacheTrackCount,
       wifiOnlyCaching: wifiOnlyCaching ?? this.wifiOnlyCaching,
+      isOfflineMode: isOfflineMode ?? this.isOfflineMode,
     );
   }
 
@@ -254,6 +260,7 @@ class PlaybackState {
       'visualizerEnabled': visualizerEnabled,
       'preCacheTrackCount': preCacheTrackCount,
       'wifiOnlyCaching': wifiOnlyCaching,
+      'isOfflineMode': isOfflineMode,
     };
   }
 
@@ -305,6 +312,7 @@ class PlaybackState {
       visualizerEnabled: json['visualizerEnabled'] as bool? ?? true,
       preCacheTrackCount: (json['preCacheTrackCount'] as num?)?.toInt() ?? 3,
       wifiOnlyCaching: json['wifiOnlyCaching'] as bool? ?? false,
+      isOfflineMode: json['isOfflineMode'] as bool? ?? false,
     );
   }
 

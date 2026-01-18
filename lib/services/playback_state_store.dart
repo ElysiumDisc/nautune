@@ -140,6 +140,7 @@ class PlaybackStateStore {
     bool? visualizerEnabled,
     int? preCacheTrackCount,
     bool? wifiOnlyCaching,
+    bool? isOfflineMode,
   }) async {
     await update((state) {
       final mergedOffsets = Map<String, double>.from(state.scrollOffsets);
@@ -169,6 +170,7 @@ class PlaybackStateStore {
         visualizerEnabled: visualizerEnabled ?? state.visualizerEnabled,
         preCacheTrackCount: preCacheTrackCount ?? state.preCacheTrackCount,
         wifiOnlyCaching: wifiOnlyCaching ?? state.wifiOnlyCaching,
+        isOfflineMode: isOfflineMode ?? state.isOfflineMode,
       );
     });
   }

@@ -1128,11 +1128,148 @@ class JellyfinClient {
     }
   }
   
+  // ============ User Play Data API ============
+
+  /// Mark an item as played with optional date
+  /// Uses: POST /UserPlayedItems/{itemId}?datePlayed={timestamp}
+  /// Returns UserItemDataDto with updated PlayCount/LastPlayedDate
+  Future<Map<String, dynamic>?> markPlayed({
+    required JellyfinCredentials credentials,
+    required String itemId,
+    DateTime? datePlayed,
+  }) async {
+    final queryParams = <String, String>{};
+    if (datePlayed != null) {
+      queryParams['datePlayed'] = datePlayed.toUtc().toIso8601String();
+    }
+
+    final uri = _buildUri('/UserPlayedItems/$itemId', queryParams);
+
+    try {
+      final response = await _robustClient.post(
+        uri,
+        headers: _defaultHeaders(credentials),
+      );
+
+      if (response.statusCode == 200) {
+        debugPrint('✅ Marked item $itemId as played');
+        return jsonDecode(response.body) as Map<String, dynamic>?;
+      } else {
+        debugPrint('⚠️ Failed to mark played: ${response.statusCode}');
+        return null;
+      }
+    } catch (e) {
+      debugPrint('❌ Error marking played: $e');
+      return null;
+    }
+  }
+
+  /// Mark an item as unplayed
+  /// Uses: DELETE /UserPlayedItems/{itemId}
+  Future<bool> markUnplayed({
+    required JellyfinCredentials credentials,
+    required String itemId,
+  }) async {
+    final uri = _buildUri('/UserPlayedItems/$itemId');
+
+    try {
+      final response = await _robustClient.delete(
+        uri,
+        headers: _defaultHeaders(credentials),
+      );
+
+      if (response.statusCode == 200) {
+        debugPrint('✅ Marked item $itemId as unplayed');
+        return true;
+      } else {
+        debugPrint('⚠️ Failed to mark unplayed: ${response.statusCode}');
+        return false;
+      }
+    } catch (e) {
+      debugPrint('❌ Error marking unplayed: $e');
+      return false;
+    }
+  }
+
+  /// Get user data for a specific item (PlayCount, LastPlayedDate, IsFavorite, etc.)
+  /// Uses: GET /UserItems/{itemId}/UserData
+  Future<Map<String, dynamic>?> getUserItemData({
+    required JellyfinCredentials credentials,
+    required String itemId,
+  }) async {
+    final uri = _buildUri('/UserItems/$itemId/UserData');
+
+    try {
+      final response = await _robustClient.get(
+        uri,
+        headers: _defaultHeaders(credentials),
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>?;
+      } else if (response.statusCode == 404) {
+        return null; // Item not found
+      } else {
+        debugPrint('⚠️ Failed to get user item data: ${response.statusCode}');
+        return null;
+      }
+    } catch (e) {
+      debugPrint('❌ Error getting user item data: $e');
+      return null;
+    }
+  }
+
+  /// Get user data for multiple items at once (batch)
+  /// Uses: GET /Users/{userId}/Items with EnableUserData=true
+  /// Returns map of itemId -> UserItemData
+  Future<Map<String, Map<String, dynamic>>> getBatchUserItemData({
+    required JellyfinCredentials credentials,
+    required List<String> itemIds,
+  }) async {
+    if (itemIds.isEmpty) return {};
+
+    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+      'Ids': itemIds.join(','),
+      'EnableUserData': 'true',
+      'Fields': 'UserData',
+    });
+
+    try {
+      final response = await _robustClient.get(
+        uri,
+        headers: _defaultHeaders(credentials),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>?;
+        final items = data?['Items'] as List<dynamic>? ?? [];
+
+        final result = <String, Map<String, dynamic>>{};
+        for (final item in items) {
+          if (item is Map<String, dynamic>) {
+            final id = item['Id'] as String?;
+            final userData = item['UserData'] as Map<String, dynamic>?;
+            if (id != null && userData != null) {
+              result[id] = userData;
+            }
+          }
+        }
+        return result;
+      } else {
+        debugPrint('⚠️ Failed to get batch user data: ${response.statusCode}');
+        return {};
+      }
+    } catch (e) {
+      debugPrint('❌ Error getting batch user data: $e');
+      return {};
+    }
+  }
+
   /// Clear the HTTP cache (ETag/Last-Modified)
   void clearHttpCache() {
     _robustClient.clearCache();
   }
-  
+
   /// Close the HTTP client
   void close() {
     _robustClient.close();

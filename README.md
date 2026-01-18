@@ -16,7 +16,7 @@
 - **Storage Management**: Separate views for downloads vs cache with accurate stats
 - **Listening Analytics**: Heatmaps, streaks, and weekly comparisons
 - **Global Search**: Unified search across your entire library with instant results
-- **Smart Offline Mode**: Full support for downloaded content with seamless transition
+- **Smart Offline Mode**: Persistent offline preference, auto-detects airplane mode, seamless downloaded content playback
 - **High-Fidelity Playback**: Native backends for Linux and iOS ensuring bit-perfect audio
 - **CarPlay Support**: Take your Jellyfin library on the road with CarPlay interface
 - **Personalized Home**: Discover, On This Day, and For You recommendation shelves
@@ -25,7 +25,14 @@
 
 ## 📋 Changelog
 
-### v5.0.0 - Collaborative Playlists
+### v5.1.0 - Analytics Sync & Server Integration
+- **Two-Way Analytics Sync**: Play history syncs bidirectionally with your Jellyfin server
+- **Timestamped Play Reports**: Plays recorded with actual timestamps, even when offline
+- **Offline Queue**: Plays made offline are queued and synced when network returns
+- **Server Reconciliation**: Catch up on plays made from other devices automatically
+- **Background Sync**: Automatic sync on app startup and network reconnection
+
+### v5.0.0 - Collaborative Playlists & Smart Offline
 - **SyncPlay Integration**: Create and join collaborative playlists using Jellyfin's SyncPlay
 - **Real-Time Sync**: Listen together with friends - playback stays synchronized
 - **QR Code Sharing**: Invite friends by scanning a QR code or share link
@@ -34,6 +41,10 @@
 - **Active Session Card**: Quick access to rejoin session from Playlists tab (even in empty state)
 - **Auto-Reconnect**: Session automatically rejoins after WebSocket disconnection
 - **Full Visualizer Support**: Collab tracks pre-cached for waveform, FFT visualizer, and lyrics
+- **Persistent Offline Mode**: Offline preference now saved across app restarts
+- **Smart Airplane Mode**: Auto-switches to offline when network lost, auto-recovers when network returns
+- **Offline-Aware Collab**: Collaborative playlist features hidden when offline (requires network)
+- **Library Tab Persistence**: Library remembers your last tab when navigating away and back
 
 ### v4.9.0 - Settings UI Refresh
 - **Card-Based Settings Layout**: Reorganized settings into visually grouped cards for cleaner navigation

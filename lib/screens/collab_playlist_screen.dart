@@ -100,8 +100,6 @@ class _CollabPlaylistScreenState extends State<CollabPlaylistScreen> {
                   child: CollabNowPlayingItem(
                     track: provider.currentTrack!,
                     serverUrl: serverUrl,
-                    position: provider.position,
-                    duration: provider.currentTrack?.track.duration,
                     isPlaying: provider.isPlaying,
                     onPlayPause: provider.togglePlayPause,
                   ),

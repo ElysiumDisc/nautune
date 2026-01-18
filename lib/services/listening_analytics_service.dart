@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
+import '../jellyfin/jellyfin_client.dart';
+import '../jellyfin/jellyfin_credentials.dart';
 import '../jellyfin/jellyfin_track.dart';
 
 /// Represents a single play event recorded locally
@@ -16,6 +18,8 @@ class PlayEvent {
   final List<String> genres;
   final DateTime timestamp;
   final int durationMs;
+  final bool synced; // Whether this play has been synced to server
+  final String? eventId; // Unique ID for deduplication
 
   PlayEvent({
     required this.trackId,
@@ -26,7 +30,23 @@ class PlayEvent {
     required this.genres,
     required this.timestamp,
     required this.durationMs,
-  });
+    this.synced = false,
+    String? eventId,
+  }) : eventId = eventId ?? '${trackId}_${timestamp.millisecondsSinceEpoch}';
+
+  /// Create a copy with updated sync status
+  PlayEvent copyWith({bool? synced}) => PlayEvent(
+    trackId: trackId,
+    trackName: trackName,
+    albumId: albumId,
+    albumName: albumName,
+    artists: artists,
+    genres: genres,
+    timestamp: timestamp,
+    durationMs: durationMs,
+    synced: synced ?? this.synced,
+    eventId: eventId,
+  );
 
   Map<String, dynamic> toJson() => {
     'trackId': trackId,
@@ -37,6 +57,8 @@ class PlayEvent {
     'genres': genres,
     'timestamp': timestamp.toIso8601String(),
     'durationMs': durationMs,
+    'synced': synced,
+    'eventId': eventId,
   };
 
   factory PlayEvent.fromJson(Map<String, dynamic> json) => PlayEvent(
@@ -48,6 +70,8 @@ class PlayEvent {
     genres: (json['genres'] as List<dynamic>?)?.cast<String>() ?? [],
     timestamp: DateTime.parse(json['timestamp'] as String),
     durationMs: json['durationMs'] as int? ?? 0,
+    synced: json['synced'] as bool? ?? false,
+    eventId: json['eventId'] as String?,
   );
 }
 
@@ -1057,5 +1081,223 @@ class ListeningAnalyticsService {
     await _box?.delete(_eventsKey);
     await _box?.delete(_streakKey);
     debugPrint('ListeningAnalyticsService: Cleared all data');
+  }
+
+  // ============ Server Sync Methods ============
+
+  /// Get all unsynced play events
+  List<PlayEvent> getUnsyncedEvents() {
+    return _events.where((e) => !e.synced).toList();
+  }
+
+  /// Get count of unsynced events
+  int get unsyncedCount => _events.where((e) => !e.synced).length;
+
+  /// Sync unsynced plays to server
+  /// This marks plays on the server with their actual timestamps
+  Future<SyncResult> syncToServer({
+    required JellyfinClient client,
+    required JellyfinCredentials credentials,
+  }) async {
+    if (!_initialized) {
+      return SyncResult(success: false, error: 'Service not initialized');
+    }
+
+    final unsynced = getUnsyncedEvents();
+    if (unsynced.isEmpty) {
+      debugPrint('📊 Sync: No unsynced events to push');
+      return SyncResult(success: true, syncedCount: 0);
+    }
+
+    debugPrint('📊 Sync: Pushing ${unsynced.length} unsynced plays to server...');
+
+    int syncedCount = 0;
+    int failedCount = 0;
+    final errors = <String>[];
+
+    for (final event in unsynced) {
+      try {
+        final result = await client.markPlayed(
+          credentials: credentials,
+          itemId: event.trackId,
+          datePlayed: event.timestamp,
+        );
+
+        if (result != null) {
+          // Mark as synced locally
+          final index = _events.indexWhere((e) => e.eventId == event.eventId);
+          if (index != -1) {
+            _events[index] = event.copyWith(synced: true);
+          }
+          syncedCount++;
+        } else {
+          failedCount++;
+          errors.add('Failed to sync ${event.trackName}');
+        }
+      } catch (e) {
+        failedCount++;
+        errors.add('Error syncing ${event.trackName}: $e');
+      }
+    }
+
+    // Save updated sync status
+    await _saveEvents();
+
+    debugPrint('📊 Sync complete: $syncedCount synced, $failedCount failed');
+
+    return SyncResult(
+      success: failedCount == 0,
+      syncedCount: syncedCount,
+      failedCount: failedCount,
+      errors: errors.isNotEmpty ? errors : null,
+    );
+  }
+
+  /// Sync play data FROM server to reconcile counts
+  /// This fetches PlayCount from server and creates "catch-up" events if needed
+  Future<SyncResult> syncFromServer({
+    required JellyfinClient client,
+    required JellyfinCredentials credentials,
+    required List<String> trackIds,
+  }) async {
+    if (!_initialized) {
+      return SyncResult(success: false, error: 'Service not initialized');
+    }
+
+    if (trackIds.isEmpty) {
+      return SyncResult(success: true, syncedCount: 0);
+    }
+
+    debugPrint('📊 Sync: Fetching play data for ${trackIds.length} tracks from server...');
+
+    try {
+      // Get server play counts in batches
+      final serverData = await client.getBatchUserItemData(
+        credentials: credentials,
+        itemIds: trackIds,
+      );
+
+      int addedCount = 0;
+
+      for (final trackId in trackIds) {
+        final userData = serverData[trackId];
+        if (userData == null) continue;
+
+        final serverPlayCount = userData['PlayCount'] as int? ?? 0;
+        final lastPlayedStr = userData['LastPlayedDate'] as String?;
+
+        // Count local plays for this track
+        final localPlayCount = _events.where((e) => e.trackId == trackId).length;
+
+        // If server has more plays than we have locally, we're missing data
+        if (serverPlayCount > localPlayCount) {
+          final missingCount = serverPlayCount - localPlayCount;
+          debugPrint('📊 Track $trackId: server=$serverPlayCount, local=$localPlayCount, missing=$missingCount');
+
+          // Create catch-up events marked as synced (they came from server)
+          final lastPlayed = lastPlayedStr != null
+              ? DateTime.tryParse(lastPlayedStr)
+              : DateTime.now();
+
+          for (int i = 0; i < missingCount; i++) {
+            final catchUpEvent = PlayEvent(
+              trackId: trackId,
+              trackName: 'Synced from server', // We don't have the name
+              artists: [],
+              genres: [],
+              timestamp: lastPlayed ?? DateTime.now(),
+              durationMs: 0,
+              synced: true, // Already on server
+            );
+            _events.add(catchUpEvent);
+            addedCount++;
+          }
+        }
+      }
+
+      if (addedCount > 0) {
+        // Sort events by timestamp
+        _events.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+        await _saveEvents();
+        debugPrint('📊 Sync: Added $addedCount catch-up events from server');
+      }
+
+      return SyncResult(success: true, syncedCount: addedCount);
+    } catch (e) {
+      debugPrint('❌ Sync from server failed: $e');
+      return SyncResult(success: false, error: e.toString());
+    }
+  }
+
+  /// Full bidirectional sync
+  /// 1. Push unsynced local plays to server
+  /// 2. Pull server data to catch up any missing plays
+  Future<SyncResult> fullSync({
+    required JellyfinClient client,
+    required JellyfinCredentials credentials,
+    List<String>? trackIdsToSync,
+  }) async {
+    debugPrint('📊 Starting full bidirectional sync...');
+
+    // Step 1: Push local plays to server
+    final pushResult = await syncToServer(
+      client: client,
+      credentials: credentials,
+    );
+
+    if (!pushResult.success && pushResult.error != null) {
+      return pushResult;
+    }
+
+    // Step 2: If we have track IDs, pull server data
+    if (trackIdsToSync != null && trackIdsToSync.isNotEmpty) {
+      final pullResult = await syncFromServer(
+        client: client,
+        credentials: credentials,
+        trackIds: trackIdsToSync,
+      );
+
+      return SyncResult(
+        success: pushResult.success && pullResult.success,
+        syncedCount: pushResult.syncedCount + pullResult.syncedCount,
+        failedCount: pushResult.failedCount,
+        errors: [...?pushResult.errors, ...?pullResult.errors],
+      );
+    }
+
+    return pushResult;
+  }
+
+  /// Mark all current events as synced (use after initial sync from server)
+  Future<void> markAllSynced() async {
+    _events = _events.map((e) => e.copyWith(synced: true)).toList();
+    await _saveEvents();
+    debugPrint('📊 Marked all ${_events.length} events as synced');
+  }
+}
+
+/// Result of a sync operation
+class SyncResult {
+  final bool success;
+  final int syncedCount;
+  final int failedCount;
+  final String? error;
+  final List<String>? errors;
+
+  SyncResult({
+    required this.success,
+    this.syncedCount = 0,
+    this.failedCount = 0,
+    this.error,
+    this.errors,
+  });
+
+  @override
+  String toString() {
+    if (success) {
+      return 'SyncResult: $syncedCount synced';
+    } else {
+      return 'SyncResult: FAILED - ${error ?? errors?.join(', ')}';
+    }
   }
 }

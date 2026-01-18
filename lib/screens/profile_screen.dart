@@ -271,6 +271,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int? _peakHour;
   Duration? _avgSessionLength;
   double _discoveryRate = 0.0;
+  int _unsyncedPlays = 0; // Plays pending server sync
 
   // Top content tab controller
   int _topContentTab = 0;
@@ -295,6 +296,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _peakHour = analytics.getPeakListeningHour();
       _avgSessionLength = analytics.getAverageSessionLength();
       _discoveryRate = analytics.getDiscoveryRate();
+      _unsyncedPlays = analytics.unsyncedCount;
     });
   }
 
@@ -592,7 +594,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                   // 2. Key Metrics - Plays, Artists, Albums (3 cards)
                   _buildKeyMetricsRow(theme),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 12),
+
+                  // 2b. Sync Status Banner (only if unsynced plays exist)
+                  if (_unsyncedPlays > 0) ...[
+                    _buildSyncStatusBanner(theme),
+                    const SizedBox(height: 12),
+                  ],
+                  const SizedBox(height: 12),
 
                   // 3. Listening Patterns - Peak hour, Avg session, Discovery rate
                   _buildSectionHeader(theme, 'Listening Patterns', Icons.auto_graph),
@@ -861,6 +870,56 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildSyncStatusBanner(ThemeData theme) {
+    final appState = Provider.of<NautuneAppState>(context, listen: false);
+    final isOnline = appState.networkAvailable && !appState.isOfflineMode;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: isOnline
+            ? const Color(0xFF10B981).withValues(alpha: 0.1)
+            : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isOnline
+              ? const Color(0xFF10B981).withValues(alpha: 0.3)
+              : theme.colorScheme.outline.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isOnline ? Icons.cloud_upload : Icons.cloud_off,
+            size: 18,
+            color: isOnline
+                ? const Color(0xFF10B981)
+                : theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              isOnline
+                  ? '$_unsyncedPlays ${_unsyncedPlays == 1 ? 'play' : 'plays'} syncing to server...'
+                  : '$_unsyncedPlays ${_unsyncedPlays == 1 ? 'play' : 'plays'} pending sync',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: isOnline
+                    ? const Color(0xFF10B981)
+                    : theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          if (!isOnline)
+            Icon(
+              Icons.wifi_off,
+              size: 14,
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+            ),
+        ],
+      ),
     );
   }
 
@@ -2631,14 +2690,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           children: [
             // Icon with shine effect
             Stack(
               alignment: Alignment.center,
               children: [
                 Container(
-                  width: 40,
-                  height: 40,
+                  width: 36,
+                  height: 36,
                   decoration: BoxDecoration(
                     gradient: RadialGradient(
                       colors: [
@@ -2648,7 +2708,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(icon, color: color, size: 22),
+                  child: Icon(icon, color: color, size: 20),
                 ),
                 // Shine highlight
                 Positioned(
@@ -2665,15 +2725,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
               ],
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 2),
             Text(
               milestone.name,
-              maxLines: 2,
+              maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
               style: theme.textTheme.labelSmall?.copyWith(
                 fontWeight: FontWeight.bold,
-                fontSize: 9,
+                fontSize: 8,
               ),
             ),
           ],

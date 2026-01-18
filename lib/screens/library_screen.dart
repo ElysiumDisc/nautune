@@ -89,6 +89,17 @@ class _LibraryScreenState extends State<LibraryScreen>
       _previousOfflineMode = currentAppState.isOfflineMode;
       _previousNetworkAvailable = currentAppState.networkAvailable;
       _hasInitialized = true;
+
+      // Restore saved tab index after build completes
+      final savedTabIndex = currentAppState.initialLibraryTabIndex;
+      if (savedTabIndex != _homeTabIndex && savedTabIndex < 5) {
+        _currentTabIndex = savedTabIndex;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _tabController.index = savedTabIndex;
+          }
+        });
+      }
     } else {
       _appState = currentAppState;
       final currentOfflineMode = currentAppState.isOfflineMode;
@@ -133,6 +144,8 @@ class _LibraryScreenState extends State<LibraryScreen>
     setState(() {
       _currentTabIndex = _tabController.index;
     });
+    // Persist tab selection
+    _appState?.updateLibraryTabIndex(_currentTabIndex);
     // Refresh favorites when switching to favorites tab (tab index 1)
     if (_currentTabIndex == 1) {
       _appState?.refreshFavorites();
@@ -1858,11 +1871,11 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
         onRefresh: () async => onRefresh(),
         child: CustomScrollView(
           slivers: [
-            // Active Collab Session Card (if in session)
+            // Active Collab Session Card (if in session and online)
             SliverToBoxAdapter(
               child: Consumer<SyncPlayProvider>(
                 builder: (context, syncPlay, _) {
-                  if (!syncPlay.isInSession) return const SizedBox.shrink();
+                  if (!syncPlay.isInSession || appState.isOfflineMode) return const SizedBox.shrink();
                   return Padding(
                     padding: const EdgeInsets.all(16),
                     child: Card(
@@ -1952,13 +1965,14 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                       label: const Text('Create Playlist'),
                     ),
                     const SizedBox(height: 12),
-                    OutlinedButton.icon(
-                      onPressed: () {
-                        _showCreateCollabPlaylistDialog(context);
-                      },
-                      icon: const Icon(Icons.group_add),
-                      label: const Text('Create Collaborative Playlist'),
-                    ),
+                    if (!appState.isOfflineMode)
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          _showCreateCollabPlaylistDialog(context);
+                        },
+                        icon: const Icon(Icons.group_add),
+                        label: const Text('Create Collaborative Playlist'),
+                      ),
                   ],
                 ),
               ),
@@ -1980,10 +1994,10 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Active Collab Session Card
+                // Active Collab Session Card (hidden in offline mode)
                 Consumer<SyncPlayProvider>(
                   builder: (context, syncPlay, _) {
-                    if (!syncPlay.isInSession) return const SizedBox.shrink();
+                    if (!syncPlay.isInSession || appState.isOfflineMode) return const SizedBox.shrink();
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 16),
                       child: Card(
@@ -2066,20 +2080,21 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                     ),
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      _showCreateCollabPlaylistDialog(context);
-                    },
-                    icon: const Icon(Icons.group_add),
-                    label: const Text('Create Collaborative Playlist'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.all(16),
-                      side: BorderSide(color: theme.colorScheme.primary),
+                if (!appState.isOfflineMode)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        _showCreateCollabPlaylistDialog(context);
+                      },
+                      icon: const Icon(Icons.group_add),
+                      label: const Text('Create Collaborative Playlist'),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.all(16),
+                        side: BorderSide(color: theme.colorScheme.primary),
+                      ),
                     ),
                   ),
-                ),
                 // Smart Mix Section
                 const Divider(),
                 Padding(

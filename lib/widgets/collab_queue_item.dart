@@ -221,23 +221,21 @@ class CollabNowPlayingItem extends StatelessWidget {
     super.key,
     required this.track,
     this.serverUrl,
-    this.position = Duration.zero,
-    this.duration,
     this.isPlaying = false,
     this.onPlayPause,
   });
 
   final SyncPlayTrack track;
   final String? serverUrl;
-  final Duration position;
-  final Duration? duration;
   final bool isPlaying;
   final VoidCallback? onPlayPause;
+
+  /// Get track duration from the track itself
+  Duration? get duration => track.track.duration;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final trackDuration = duration ?? track.track.duration ?? Duration.zero;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -308,50 +306,17 @@ class CollabNowPlayingItem extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 16),
-
-          // Progress bar
-          Column(
-            children: [
-              SliderTheme(
-                data: SliderThemeData(
-                  trackHeight: 4,
-                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-                  activeTrackColor: theme.colorScheme.primary,
-                  inactiveTrackColor: theme.colorScheme.surfaceContainerHighest,
-                  thumbColor: theme.colorScheme.primary,
-                ),
-                child: Slider(
-                  value: position.inMilliseconds.toDouble(),
-                  max: trackDuration.inMilliseconds.toDouble().clamp(1, double.infinity),
-                  onChanged: (value) {
-                    // Seek functionality handled by parent
-                  },
+          // Show track duration only (not live position)
+          if (duration != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                _formatDuration(duration!),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      _formatDuration(position),
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    Text(
-                      _formatDuration(trackDuration),
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+            ),
         ],
       ),
     );
