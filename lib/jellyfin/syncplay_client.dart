@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import '../models/syncplay_models.dart';
 import 'jellyfin_credentials.dart';
 import 'jellyfin_exceptions.dart';
+import 'jellyfin_track.dart';
 import 'robust_http_client.dart';
 
 /// Jellyfin SyncPlay API client
@@ -544,6 +545,58 @@ class SyncPlayClient {
     }
 
     debugPrint('✅ SyncPlay repeat mode: $mode');
+  }
+
+  // ============ Item Fetching ============
+
+  /// Get a single item by ID
+  /// GET /Users/{userId}/Items/{itemId}
+  Future<JellyfinTrack?> getItem({
+    required JellyfinCredentials credentials,
+    required String itemId,
+  }) async {
+    final uri = _buildUri('/Users/${credentials.userId}/Items/$itemId');
+    try {
+      final response = await _robustClient.get(
+        uri,
+        headers: _defaultHeaders(credentials),
+      );
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        return JellyfinTrack.fromJson(
+          json,
+          serverUrl: serverUrl,
+          token: credentials.accessToken,
+          userId: credentials.userId,
+        );
+      }
+    } catch (e) {
+      debugPrint('Failed to fetch item $itemId: $e');
+    }
+    return null;
+  }
+
+  /// Get public user info by user ID
+  /// GET /Users/{userId}
+  Future<Map<String, dynamic>?> getUserInfo({
+    required JellyfinCredentials credentials,
+    required String userId,
+  }) async {
+    final uri = _buildUri('/Users/$userId');
+    try {
+      final response = await _robustClient.get(
+        uri,
+        headers: _defaultHeaders(credentials),
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      debugPrint('Failed to fetch user info for $userId: $e');
+    }
+    return null;
   }
 
   // ============ Helpers ============

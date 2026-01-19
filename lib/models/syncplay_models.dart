@@ -19,13 +19,29 @@ class SyncPlayGroup {
   factory SyncPlayGroup.fromJson(Map<String, dynamic> json) {
     final participantsJson = json['Participants'] as List<dynamic>? ?? [];
 
+    // Handle both formats:
+    // 1. Array of strings (user IDs) - from /SyncPlay/List REST API
+    // 2. Array of objects - from WebSocket messages or internal use
+    final participants = <SyncPlayParticipant>[];
+    for (final item in participantsJson) {
+      if (item is String) {
+        // Just a user ID - create minimal participant
+        participants.add(SyncPlayParticipant(
+          oderId: '',
+          userId: item,
+          username: item, // Will be updated when we fetch user details
+          isGroupLeader: false,
+        ));
+      } else if (item is Map<String, dynamic>) {
+        // Full participant data
+        participants.add(SyncPlayParticipant.fromJson(item));
+      }
+    }
+
     return SyncPlayGroup(
       groupId: json['GroupId'] as String? ?? '',
       groupName: json['GroupName'] as String? ?? 'Collaborative Playlist',
-      participants: participantsJson
-          .whereType<Map<String, dynamic>>()
-          .map(SyncPlayParticipant.fromJson)
-          .toList(),
+      participants: participants,
       state: SyncPlayState.fromString(json['State'] as String?),
       lastUpdatedAt: json['LastUpdatedAt'] != null
           ? DateTime.tryParse(json['LastUpdatedAt'] as String)

@@ -252,10 +252,67 @@ class SyncPlayService extends ChangeNotifier {
       debugPrint('SyncPlayService: Fetching groups from client...');
       _availableGroups = await _client.getGroups(credentials: _credentials);
       debugPrint('SyncPlayService: Client returned ${_availableGroups.length} groups');
+
+      // Enrich participant data with user details
+      for (int i = 0; i < _availableGroups.length; i++) {
+        final group = _availableGroups[i];
+        final enrichedParticipants = await _enrichParticipants(group.participants);
+        _availableGroups[i] = group.copyWith(participants: enrichedParticipants);
+      }
+
+      // Debug: log participant details
+      for (final group in _availableGroups) {
+        debugPrint('SyncPlay Group ${group.groupName}: ${group.participants.length} participants');
+        for (final p in group.participants) {
+          debugPrint('  - ${p.username} (${p.userId}) imageTag: ${p.userImageTag}, device: ${p.oderId}');
+        }
+      }
+
       _groupsController.add(_availableGroups);
     } catch (e) {
       debugPrint('Failed to refresh SyncPlay groups: $e');
     }
+  }
+
+  /// Enrich participants with full user details (username, imageTag)
+  ///
+  /// Note: Jellyfin's /SyncPlay/List returns participant usernames (not UUIDs),
+  /// so we can't directly fetch user info. We handle this by:
+  /// 1. For current user: use our known _userId and _userImageTag
+  /// 2. For other users: the username is already correct, imageTag may be unavailable
+  Future<List<SyncPlayParticipant>> _enrichParticipants(List<SyncPlayParticipant> participants) async {
+    final enriched = <SyncPlayParticipant>[];
+
+    debugPrint('SyncPlay: Enriching ${participants.length} participants');
+    debugPrint('SyncPlay: Current user - username: $_username, userId: $_userId, imageTag: $_userImageTag');
+
+    for (final p in participants) {
+      debugPrint('SyncPlay: Checking participant - username: ${p.username}, userId: ${p.userId}');
+
+      // Check if this is the current user (by matching username)
+      // Jellyfin returns usernames, not user IDs, in the participants list
+      final isCurrentUser = p.username == _username ||
+                            p.userId == _username ||
+                            p.userId == _userId;
+
+      debugPrint('SyncPlay: Is current user? $isCurrentUser (p.username=${p.username} == _username=$_username ? ${p.username == _username})');
+
+      if (isCurrentUser) {
+        enriched.add(SyncPlayParticipant(
+          oderId: _deviceId,
+          userId: _userId,
+          username: _username,
+          userImageTag: _userImageTag,
+          isGroupLeader: p.isGroupLeader,
+        ));
+        continue;
+      }
+
+      // For other users, keep as-is (username is correct from API, imageTag unavailable)
+      enriched.add(p);
+    }
+
+    return enriched;
   }
 
   // ============ Queue Management ============
@@ -811,19 +868,31 @@ class SyncPlayService extends ChangeNotifier {
     int? updatedTrackIndex;
 
     if (playQueue != null) {
-      final items = playQueue['Items'] as List<dynamic>?;
-      if (items != null && items.isNotEmpty) {
-        updatedQueue = items
-            .whereType<Map<String, dynamic>>()
-            .map((item) => SyncPlayTrack.fromJson(
-                  item,
-                  serverUrl: _serverUrl,
-                  token: _credentials.accessToken,
-                  userId: _userId,
-                ))
-            .toList();
+      // Try both 'Playlist' (per OpenAPI spec) and 'Items' (legacy/alternate)
+      final playlist = playQueue['Playlist'] as List<dynamic>? ??
+                       playQueue['Items'] as List<dynamic>?;
+      if (playlist != null && playlist.isNotEmpty) {
         updatedTrackIndex = playQueue['PlayingItemIndex'] as int?;
-        debugPrint('✅ Synced ${updatedQueue.length} tracks from server queue');
+
+        // Check if items have full track data or just IDs
+        final firstItem = playlist.first;
+        if (firstItem is Map && firstItem.containsKey('Item')) {
+          // Full track data available
+          updatedQueue = playlist
+              .whereType<Map<String, dynamic>>()
+              .map((item) => SyncPlayTrack.fromJson(
+                    item,
+                    serverUrl: _serverUrl,
+                    token: _credentials.accessToken,
+                    userId: _userId,
+                  ))
+              .toList();
+          debugPrint('✅ Synced ${updatedQueue.length} full tracks from state update');
+        } else {
+          // Only IDs - use async fetch
+          debugPrint('SyncPlay StateUpdate - got item IDs only, will fetch full data');
+          _updateQueueFromIds(playlist, updatedTrackIndex);
+        }
       }
     }
 
@@ -1041,30 +1110,166 @@ class SyncPlayService extends ChangeNotifier {
   void _handleQueueUpdate(SyncPlayMessage message) {
     if (_currentSession == null) return;
 
+    // Debug: log the raw message structure
+    debugPrint('SyncPlay Queue Update - raw data keys: ${message.data.keys.toList()}');
+    final nestedData = message.nestedData;
+    debugPrint('SyncPlay Queue Update - nestedData keys: ${nestedData?.keys.toList()}');
+
     // Check if the message contains full queue data
     final playQueue = message.playQueue;
+    debugPrint('SyncPlay Queue Update - playQueue keys: ${playQueue?.keys.toList()}');
+
     if (playQueue != null) {
-      final items = playQueue['Items'] as List<dynamic>?;
-      if (items != null) {
-        final updatedQueue = items
-            .whereType<Map<String, dynamic>>()
-            .map((item) => SyncPlayTrack.fromJson(
-                  item,
-                  serverUrl: _serverUrl,
-                  token: _credentials.accessToken,
-                  userId: _userId,
-                ))
-            .toList();
+      // Try both 'Playlist' (per OpenAPI spec) and 'Items' (legacy/alternate)
+      final playlist = playQueue['Playlist'] as List<dynamic>? ??
+                       playQueue['Items'] as List<dynamic>?;
+      debugPrint('SyncPlay Queue Update - playlist count: ${playlist?.length}');
+
+      if (playlist != null && playlist.isNotEmpty) {
+        debugPrint('SyncPlay Queue Update - first item: ${playlist.first}');
         final trackIndex = playQueue['PlayingItemIndex'] as int?;
 
+        // Check if items have full track data or just IDs
+        final firstItem = playlist.first;
+        if (firstItem is Map && firstItem.containsKey('Item')) {
+          // Full track data available
+          final updatedQueue = playlist
+              .whereType<Map<String, dynamic>>()
+              .map((item) => SyncPlayTrack.fromJson(
+                    item,
+                    serverUrl: _serverUrl,
+                    token: _credentials.accessToken,
+                    userId: _userId,
+                  ))
+              .toList();
+
+          _currentSession = _currentSession!.copyWith(
+            queue: updatedQueue,
+            currentTrackIndex: trackIndex ?? _currentSession!.currentTrackIndex,
+          );
+          debugPrint('✅ Queue updated with ${updatedQueue.length} full tracks (index: $trackIndex)');
+        } else {
+          // Only IDs - need to fetch track details or merge with existing queue
+          debugPrint('SyncPlay Queue Update - got item IDs only, fetching full data...');
+          _updateQueueFromIds(playlist, trackIndex);
+        }
+      } else {
+        // Empty playlist - clear the queue
+        debugPrint('SyncPlay Queue Update - playlist is empty, clearing queue');
         _currentSession = _currentSession!.copyWith(
-          queue: updatedQueue,
-          currentTrackIndex: trackIndex ?? _currentSession!.currentTrackIndex,
+          queue: [],
+          currentTrackIndex: -1,
         );
-        debugPrint('✅ Queue updated with ${updatedQueue.length} tracks');
       }
+    } else {
+      debugPrint('⚠️ playQueue is null');
     }
     _notifySessionChanged();
+  }
+
+  /// Update queue when we only receive item IDs (not full track data)
+  Future<void> _updateQueueFromIds(List<dynamic> playlist, int? trackIndex) async {
+    // Extract item IDs and playlist item IDs
+    final queueItems = <_QueueItemRef>[];
+    for (final item in playlist) {
+      if (item is Map) {
+        final itemId = item['ItemId'] as String?;
+        final playlistItemId = item['PlaylistItemId'] as String?;
+        if (itemId != null && playlistItemId != null) {
+          queueItems.add(_QueueItemRef(itemId: itemId, playlistItemId: playlistItemId));
+        }
+      }
+    }
+
+    if (queueItems.isEmpty) {
+      debugPrint('SyncPlay: No valid queue items found');
+      return;
+    }
+
+    // Try to reuse existing track data from current queue
+    final existingTracks = <String, SyncPlayTrack>{};
+    for (final track in _currentSession?.queue ?? <SyncPlayTrack>[]) {
+      existingTracks[track.track.id] = track;
+    }
+
+    // Build new queue, reusing existing track data where possible
+    final newQueue = <SyncPlayTrack>[];
+    final missingIds = <String>[];
+
+    for (final queueItem in queueItems) {
+      final existing = existingTracks[queueItem.itemId];
+      if (existing != null) {
+        // Reuse existing track data but update playlistItemId
+        newQueue.add(SyncPlayTrack(
+          track: existing.track,
+          addedByUserId: existing.addedByUserId,
+          addedByUsername: existing.addedByUsername,
+          addedByImageTag: existing.addedByImageTag,
+          playlistItemId: queueItem.playlistItemId,
+        ));
+      } else {
+        missingIds.add(queueItem.itemId);
+        // Add placeholder that will be updated
+        newQueue.add(SyncPlayTrack(
+          track: JellyfinTrack(
+            id: queueItem.itemId,
+            name: 'Loading...',
+            artists: const [],
+            album: '',
+            runTimeTicks: 0,
+          ),
+          addedByUserId: '',
+          addedByUsername: '',
+          playlistItemId: queueItem.playlistItemId,
+        ));
+      }
+    }
+
+    // Update session with what we have
+    _currentSession = _currentSession!.copyWith(
+      queue: newQueue,
+      currentTrackIndex: trackIndex ?? _currentSession!.currentTrackIndex,
+    );
+    _notifySessionChanged();
+    debugPrint('✅ Queue updated with ${newQueue.length} items (${missingIds.length} need fetching)');
+
+    // Fetch missing track data if any
+    if (missingIds.isNotEmpty) {
+      _fetchMissingTrackData(missingIds);
+    }
+  }
+
+  /// Fetch full track data for items we don't have cached
+  Future<void> _fetchMissingTrackData(List<String> itemIds) async {
+    try {
+      for (final itemId in itemIds) {
+        final track = await _client.getItem(
+          credentials: _credentials,
+          itemId: itemId,
+        );
+        if (track != null && _currentSession != null) {
+          // Update the queue with fetched track data
+          final updatedQueue = _currentSession!.queue.map((t) {
+            if (t.track.id == itemId) {
+              return SyncPlayTrack(
+                track: track,
+                addedByUserId: t.addedByUserId,
+                addedByUsername: t.addedByUsername,
+                addedByImageTag: t.addedByImageTag,
+                playlistItemId: t.playlistItemId,
+              );
+            }
+            return t;
+          }).toList();
+
+          _currentSession = _currentSession!.copyWith(queue: updatedQueue);
+          _notifySessionChanged();
+        }
+      }
+      debugPrint('✅ Fetched ${itemIds.length} missing track(s)');
+    } catch (e) {
+      debugPrint('Failed to fetch track data: $e');
+    }
   }
 
   void _handleGroupLeft(SyncPlayMessage message) {
@@ -1124,25 +1329,37 @@ class SyncPlayService extends ChangeNotifier {
     // Check if the message contains queue data
     final playQueue = message.playQueue;
     if (playQueue != null && _currentSession != null) {
-      final items = playQueue['Items'] as List<dynamic>?;
-      if (items != null && items.isNotEmpty) {
-        final updatedQueue = items
-            .whereType<Map<String, dynamic>>()
-            .map((item) => SyncPlayTrack.fromJson(
-                  item,
-                  serverUrl: _serverUrl,
-                  token: _credentials.accessToken,
-                  userId: _userId,
-                ))
-            .toList();
+      // Try both 'Playlist' (per OpenAPI spec) and 'Items' (legacy/alternate)
+      final playlist = playQueue['Playlist'] as List<dynamic>? ??
+                       playQueue['Items'] as List<dynamic>?;
+      if (playlist != null && playlist.isNotEmpty) {
         final trackIndex = playQueue['PlayingItemIndex'] as int?;
 
-        _currentSession = _currentSession!.copyWith(
-          queue: updatedQueue,
-          currentTrackIndex: trackIndex ?? _currentSession!.currentTrackIndex,
-        );
-        _notifySessionChanged();
-        debugPrint('✅ Synced ${updatedQueue.length} tracks from groupJoined message');
+        // Check if items have full track data or just IDs
+        final firstItem = playlist.first;
+        if (firstItem is Map && firstItem.containsKey('Item')) {
+          // Full track data available
+          final updatedQueue = playlist
+              .whereType<Map<String, dynamic>>()
+              .map((item) => SyncPlayTrack.fromJson(
+                    item,
+                    serverUrl: _serverUrl,
+                    token: _credentials.accessToken,
+                    userId: _userId,
+                  ))
+              .toList();
+
+          _currentSession = _currentSession!.copyWith(
+            queue: updatedQueue,
+            currentTrackIndex: trackIndex ?? _currentSession!.currentTrackIndex,
+          );
+          debugPrint('✅ Synced ${updatedQueue.length} full tracks from groupJoined');
+          _notifySessionChanged();
+        } else {
+          // Only IDs - fetch full data
+          debugPrint('SyncPlay GroupJoined - got item IDs only, fetching full data...');
+          _updateQueueFromIds(playlist, trackIndex);
+        }
       }
     }
   }
@@ -1253,4 +1470,15 @@ class _UserAttribution {
   final String userId;
   final String username;
   final String? imageTag;
+}
+
+/// Internal class to hold queue item references (itemId + playlistItemId)
+class _QueueItemRef {
+  const _QueueItemRef({
+    required this.itemId,
+    required this.playlistItemId,
+  });
+
+  final String itemId;
+  final String playlistItemId;
 }

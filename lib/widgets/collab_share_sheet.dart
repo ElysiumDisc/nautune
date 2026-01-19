@@ -1,17 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 import '../providers/syncplay_provider.dart';
 
 /// A bottom sheet for sharing a collaborative playlist session.
 ///
-/// Features:
-/// - QR code for easy scanning
-/// - Share link button (copies to clipboard / native share)
-/// - Session code display
-/// - Instructions for joining
+/// Shows the session ID that can be copied and shared with friends.
 class CollabShareSheet extends StatelessWidget {
   const CollabShareSheet({super.key});
 
@@ -31,7 +26,6 @@ class CollabShareSheet extends StatelessWidget {
 
     return Consumer<SyncPlayProvider>(
       builder: (context, provider, _) {
-        final shareLink = provider.shareLink;
         final groupId = provider.groupId;
         final groupName = provider.groupName ?? 'Collaborative Playlist';
 
@@ -98,26 +92,6 @@ class CollabShareSheet extends StatelessWidget {
               ),
               const SizedBox(height: 24),
 
-              // QR Code
-              if (shareLink != null)
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: QrImageView(
-                    data: shareLink,
-                    version: QrVersions.auto,
-                    size: 200,
-                    backgroundColor: Colors.white,
-                    errorStateBuilder: (ctx, err) => const Center(
-                      child: Text('Error generating QR code'),
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 24),
-
               // Instructions
               Container(
                 padding: const EdgeInsets.all(12),
@@ -135,7 +109,7 @@ class CollabShareSheet extends StatelessWidget {
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        'Friends must have Nautune installed and be logged into the same Jellyfin server.',
+                        'Share this ID with friends. They can join via the Collaborative Playlists screen.',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -146,69 +120,75 @@ class CollabShareSheet extends StatelessWidget {
               ),
               const SizedBox(height: 16),
 
-              // Session code
+              // Session ID with copy button
               if (groupId != null)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: BoxDecoration(
-                    border: Border.all(
-                      color: theme.colorScheme.outline.withValues(alpha: 0.3),
-                    ),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      Text(
-                        'Session ID:',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
+                InkWell(
+                  onTap: () => _copyToClipboard(context, groupId),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: theme.colorScheme.outline.withValues(alpha: 0.3),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _formatSessionId(groupId),
+                    ),
+                    child: Column(
+                      children: [
+                        Text(
+                          'Session ID',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        SelectableText(
+                          groupId,
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontFamily: 'monospace',
                             fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5,
                           ),
+                          textAlign: TextAlign.center,
                         ),
-                      ),
-                      IconButton(
-                        onPressed: () => _copyToClipboard(context, groupId),
-                        icon: const Icon(Icons.copy, size: 20),
-                        tooltip: 'Copy session ID',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                    ],
+                        const SizedBox(height: 12),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.copy,
+                              size: 16,
+                              color: theme.colorScheme.primary,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Tap to copy',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               const SizedBox(height: 24),
 
-              // Action buttons - use shareLink (nautune:// scheme) which works on iOS
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: shareLink != null
-                          ? () => _copyToClipboard(context, shareLink)
-                          : null,
-                      icon: const Icon(Icons.link),
-                      label: const Text('Copy Link'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: shareLink != null
-                          ? () => _shareLink(context, shareLink, groupName)
-                          : null,
-                      icon: const Icon(Icons.share),
-                      label: const Text('Share'),
-                    ),
-                  ),
-                ],
+              // Copy button
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: groupId != null
+                      ? () {
+                          _copyToClipboard(context, groupId);
+                          Navigator.of(context).pop();
+                        }
+                      : null,
+                  icon: const Icon(Icons.copy),
+                  label: const Text('Copy Session ID'),
+                ),
               ),
             ],
           ),
@@ -217,36 +197,14 @@ class CollabShareSheet extends StatelessWidget {
     );
   }
 
-  String _formatSessionId(String id) {
-    // Show first and last 4 characters with ... in between
-    if (id.length <= 12) return id;
-    return '${id.substring(0, 6)}...${id.substring(id.length - 6)}';
-  }
-
   void _copyToClipboard(BuildContext context, String text) {
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Copied to clipboard'),
+        content: Text('Session ID copied to clipboard'),
         duration: Duration(seconds: 2),
       ),
     );
-  }
-
-  Future<void> _shareLink(BuildContext context, String url, String name) async {
-    // Use platform share if available
-    // For now, just copy to clipboard
-    final text = 'Join my collaborative playlist "$name" on Nautune!\n$url';
-    Clipboard.setData(ClipboardData(text: text));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Share link copied to clipboard'),
-        duration: Duration(seconds: 2),
-      ),
-    );
-    if (context.mounted) {
-      Navigator.of(context).pop();
-    }
   }
 }
 
