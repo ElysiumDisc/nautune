@@ -85,6 +85,9 @@ class SyncPlayService extends ChangeNotifier {
   bool _wasCaption = false;
   bool _isRejoining = false;
 
+  // Pass-the-baton: track when WE initiated a play command
+  bool _pendingPlayFromUs = false;
+
   // Track attribution map (playlistItemId -> user info)
   final Map<String, _UserAttribution> _trackAttributions = {};
 
@@ -466,15 +469,25 @@ class SyncPlayService extends ChangeNotifier {
 
   // ============ Playback Control ============
 
-  /// Play / Unpause
+  /// Play / Unpause - "Pass the Baton" architecture
+  /// When user presses play, they become captain and take over playback
   Future<void> play() async {
     if (_currentSession == null) return;
 
     try {
-      await _client.unpause(credentials: _credentials);
-      _currentSession = _currentSession!.copyWith(isPaused: false);
+      // Mark that WE are initiating this play (pass the baton)
+      _pendingPlayFromUs = true;
+
+      // When user presses play, they become captain
+      _currentSession = _currentSession!.copyWith(
+        role: SyncPlayRole.captain,
+        isPaused: false,
+      );
       _notifySessionChanged();
+
+      await _client.unpause(credentials: _credentials);
     } catch (e) {
+      _pendingPlayFromUs = false;
       debugPrint('Failed to play: $e');
       rethrow;
     }
@@ -1014,10 +1027,12 @@ class SyncPlayService extends ChangeNotifier {
     }
   }
 
+  /// Handle unpause with "Pass the Baton" architecture
+  /// - If WE initiated the play, we're captain → start playing
+  /// - If SOMEONE ELSE initiated, they're captain → we become sailor and stop
   void _handleUnpause(SyncPlayMessage message) {
     if (_currentSession == null) return;
 
-    debugPrint('SyncPlay: Unpause command received');
     final positionTicks = message.positionTicks ?? _currentSession!.positionTicks;
     final playlistItemId = message.playlistItemId;
 
@@ -1027,27 +1042,52 @@ class SyncPlayService extends ChangeNotifier {
       final idx = _currentSession!.queue.indexWhere(
         (t) => t.playlistItemId == playlistItemId,
       );
-      if (idx >= 0) {
-        trackIndex = idx;
-        debugPrint('SyncPlay: Unpause for track index $idx (playlistItemId: $playlistItemId)');
-      }
+      if (idx >= 0) trackIndex = idx;
     }
 
-    _currentSession = _currentSession!.copyWith(
-      isPaused: false,
-      positionTicks: positionTicks,
-      currentTrackIndex: trackIndex,
-      lastSyncTime: DateTime.now(),
-    );
-    _notifySessionChanged();
+    // Check if WE initiated this play (pass the baton logic)
+    final weInitiated = _pendingPlayFromUs;
+    _pendingPlayFromUs = false; // Reset flag
 
-    // Emit playback command for audio player to react
-    _playbackCommandController.add(SyncPlayCommand(
-      type: SyncPlayCommandType.play,
-      positionTicks: positionTicks,
-      trackIndex: trackIndex,
-      playlistItemId: playlistItemId,
-    ));
+    if (weInitiated) {
+      // We pressed play - we're captain, start playing
+      debugPrint('🎵 SyncPlay: WE initiated play - becoming captain, starting playback');
+      _currentSession = _currentSession!.copyWith(
+        isPaused: false,
+        positionTicks: positionTicks,
+        currentTrackIndex: trackIndex,
+        lastSyncTime: DateTime.now(),
+      );
+      _notifySessionChanged();
+
+      _playbackCommandController.add(SyncPlayCommand(
+        type: SyncPlayCommandType.play,
+        positionTicks: positionTicks,
+        trackIndex: trackIndex,
+        playlistItemId: playlistItemId,
+      ));
+    } else {
+      // Someone ELSE pressed play - they're captain, we become sailor
+      final wasCaptain = isCaptain;
+      debugPrint('🎵 SyncPlay: SOMEONE ELSE initiated play - yielding captaincy (was captain: $wasCaptain)');
+
+      _currentSession = _currentSession!.copyWith(
+        role: SyncPlayRole.sailor, // Yield captaincy
+        isPaused: false,
+        positionTicks: positionTicks,
+        currentTrackIndex: trackIndex,
+        lastSyncTime: DateTime.now(),
+      );
+      _notifySessionChanged();
+
+      // If we were playing, stop our playback
+      if (wasCaptain) {
+        debugPrint('🎵 SyncPlay: Stopping our playback - baton passed to another device');
+        _playbackCommandController.add(const SyncPlayCommand(
+          type: SyncPlayCommandType.stop,
+        ));
+      }
+    }
   }
 
   void _handlePause(SyncPlayMessage message) {
@@ -1241,13 +1281,16 @@ class SyncPlayService extends ChangeNotifier {
 
   /// Fetch full track data for items we don't have cached
   Future<void> _fetchMissingTrackData(List<String> itemIds) async {
+    debugPrint('🔍 SyncPlay: Fetching ${itemIds.length} missing track(s): $itemIds');
     try {
       for (final itemId in itemIds) {
+        debugPrint('🔍 SyncPlay: Fetching track $itemId...');
         final track = await _client.getItem(
           credentials: _credentials,
           itemId: itemId,
         );
         if (track != null && _currentSession != null) {
+          debugPrint('✅ SyncPlay: Fetched track $itemId: ${track.name} by ${track.artists.join(", ")}');
           // Update the queue with fetched track data
           final updatedQueue = _currentSession!.queue.map((t) {
             if (t.track.id == itemId) {
@@ -1264,11 +1307,15 @@ class SyncPlayService extends ChangeNotifier {
 
           _currentSession = _currentSession!.copyWith(queue: updatedQueue);
           _notifySessionChanged();
+          debugPrint('✅ SyncPlay: Queue updated with track $itemId');
+        } else {
+          debugPrint('❌ SyncPlay: Failed to fetch track $itemId - track is null or session ended');
         }
       }
-      debugPrint('✅ Fetched ${itemIds.length} missing track(s)');
-    } catch (e) {
-      debugPrint('Failed to fetch track data: $e');
+      debugPrint('✅ SyncPlay: Finished fetching ${itemIds.length} missing track(s)');
+    } catch (e, stackTrace) {
+      debugPrint('❌ SyncPlay: Failed to fetch track data: $e');
+      debugPrint('Stack trace: $stackTrace');
     }
   }
 
