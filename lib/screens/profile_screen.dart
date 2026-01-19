@@ -268,6 +268,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   ListeningStreak? _streak;
   PeriodComparison? _weekComparison;
   ListeningMilestones? _milestones;
+  RelaxModeStats? _relaxModeStats;
   int? _peakHour;
   Duration? _avgSessionLength;
   double _discoveryRate = 0.0;
@@ -293,6 +294,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _streak = analytics.getStreakInfo();
       _weekComparison = analytics.getWeekOverWeekComparison();
       _milestones = analytics.getMilestones();
+      _relaxModeStats = analytics.getRelaxModeStats();
       _peakHour = analytics.getPeakListeningHour();
       _avgSessionLength = analytics.getAverageSessionLength();
       _discoveryRate = analytics.getDiscoveryRate();
@@ -2083,6 +2085,142 @@ class _ProfileScreenState extends State<ProfileScreen> {
         // Listening Heatmap
         if (_heatmap != null)
           _buildListeningHeatmap(theme),
+
+        // Relax Mode Stats (only show if discovered)
+        if (_relaxModeStats != null && _relaxModeStats!.discovered) ...[
+          const SizedBox(height: 16),
+          _buildRelaxModeStatsCard(theme),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildRelaxModeStatsCard(ThemeData theme) {
+    final stats = _relaxModeStats!;
+    final totalMinutes = stats.totalTime.inMinutes;
+    final hasUsage = stats.rainUsageMs > 0 || stats.thunderUsageMs > 0 || stats.campfireUsageMs > 0;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            theme.colorScheme.primary.withValues(alpha: 0.15),
+            theme.colorScheme.secondary.withValues(alpha: 0.1),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: theme.colorScheme.primary.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.spa, color: theme.colorScheme.primary, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Relax Mode',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // Total time
+          Row(
+            children: [
+              Icon(Icons.timer_outlined, size: 16, color: theme.colorScheme.onSurfaceVariant),
+              const SizedBox(width: 8),
+              Text(
+                totalMinutes >= 60
+                    ? '${totalMinutes ~/ 60}h ${totalMinutes % 60}m total'
+                    : '${totalMinutes}m total',
+                style: theme.textTheme.bodyMedium,
+              ),
+            ],
+          ),
+          if (hasUsage) ...[
+            const SizedBox(height: 12),
+            // Sound usage breakdown
+            _buildSoundUsageBar(
+              theme: theme,
+              icon: Icons.water_drop,
+              label: 'Rain',
+              percent: stats.rainPercent,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(height: 6),
+            _buildSoundUsageBar(
+              theme: theme,
+              icon: Icons.thunderstorm,
+              label: 'Thunder',
+              percent: stats.thunderPercent,
+              color: theme.colorScheme.secondary,
+            ),
+            const SizedBox(height: 6),
+            _buildSoundUsageBar(
+              theme: theme,
+              icon: Icons.local_fire_department,
+              label: 'Campfire',
+              percent: stats.campfirePercent,
+              color: theme.colorScheme.tertiary,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSoundUsageBar({
+    required ThemeData theme,
+    required IconData icon,
+    required String label,
+    required double percent,
+    required Color color,
+  }) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 60,
+          child: Text(
+            label,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: percent / 100,
+              backgroundColor: color.withValues(alpha: 0.15),
+              valueColor: AlwaysStoppedAnimation(color),
+              minHeight: 6,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 36,
+          child: Text(
+            '${percent.round()}%',
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+            textAlign: TextAlign.right,
+          ),
+        ),
       ],
     );
   }

@@ -11,7 +11,7 @@
 - **Bioluminescent Waves**: Track-reactive animation that adapts to loudness and genre
 - **Smart Pre-Cache**: Configurable pre-caching of upcoming tracks (3, 5, or 10) with WiFi-only option
 - **Smart Lyrics**: Multi-source lyrics with sync, caching, and pre-fetching
-- **40 Nautical Milestones**: Earn achievements as you listen
+- **41 Nautical Milestones**: Earn achievements as you listen
 - **Track Sharing**: Share downloaded audio files via AirDrop (iOS) or file manager (Linux)
 - **Storage Management**: Separate views for downloads vs cache with accurate stats
 - **Listening Analytics**: Heatmaps, streaks, and weekly comparisons
@@ -24,6 +24,14 @@
 ---
 
 ## 📋 Changelog
+
+### v5.3.1 - Relax Mode
+- **Ambient Sound Mixer**: Mix rain, thunder, and campfire sounds with vertical sliders
+- **Looping Audio**: Seamless ambient loops for focus or relaxation
+- **Easter Egg Access**: Search "relax" in the library to discover the feature (works in offline & demo mode too)
+- **"Calm Waters" Milestone**: Unlock a special badge for discovering Relax Mode
+- **Relax Mode Stats**: Track total time spent and sound usage breakdown (Rain/Thunder/Campfire %)
+- Inspired by [ebithril/relax-player](https://github.com/ebithril/relax-player)
 
 ### v5.1.0 - Analytics Sync & Server Integration
 - **Two-Way Analytics Sync**: Play history syncs bidirectionally with your Jellyfin server
@@ -54,7 +62,7 @@
 
 ### v4.8.0 - Custom Themes & Storage Improvements
 - **Custom Color Theme**: Infinite personalization with color wheel picker
-- **40 Nautical Milestones**: Doubled from 20 with new categories (night owl, early bird, genre exploration)
+- **Nautical Milestones Expanded**: Doubled from 20 with new categories (night owl, early bird, genre exploration)
 - **Storage Management Overhaul**: Separate downloads vs cache views, accurate stats, one-tap cache clearing
 - **Storage Settings Moved**: Storage limit and auto-cleanup now in Storage Management screen
 - **Download System Fixes**: Fixed album art duplication (now stored per-album), proper owner-based deletion, index updates

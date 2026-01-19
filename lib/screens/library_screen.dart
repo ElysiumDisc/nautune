@@ -28,6 +28,7 @@ import 'artist_detail_screen.dart';
 import 'genre_detail_screen.dart';
 import 'offline_library_screen.dart';
 import 'collab_playlist_screen.dart';
+import 'relax_mode_screen.dart';
 import 'playlist_detail_screen.dart';
 import 'profile_screen.dart';
 import 'settings_screen.dart';
@@ -3852,6 +3853,7 @@ class _SearchTabState extends State<_SearchTab> {
   List<String> _recentQueries = [];
   String _lastQuery = '';
   bool _isLoading = false;
+  bool _showRelaxEasterEgg = false;
   List<JellyfinAlbum> _albumResults = const [];
   List<JellyfinArtist> _artistResults = const [];
   List<JellyfinTrack> _trackResults = const [];
@@ -3935,11 +3937,16 @@ class _SearchTabState extends State<_SearchTab> {
         _artistResults = const [];
         _trackResults = const [];
         _isLoading = false;
+        _showRelaxEasterEgg = false;
       });
       return;
     }
 
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      // Easter egg: show Relax Mode card when searching "relax"
+      _showRelaxEasterEgg = lowerQuery.contains('relax');
+    });
     unawaited(_rememberQuery(trimmed));
 
     // Demo mode: search bundled showcase data (all types)
@@ -4089,7 +4096,8 @@ class _SearchTabState extends State<_SearchTab> {
     final theme = Theme.of(context);
     final libraryId = widget.appState.session?.selectedLibraryId;
 
-    if (libraryId == null) {
+    // Allow search in demo mode and offline mode even without a library
+    if (libraryId == null && !widget.appState.isDemoMode && !widget.appState.isOfflineMode) {
       return Center(
         child: Text(
           'Choose a library to enable search.',
@@ -4209,7 +4217,8 @@ class _SearchTabState extends State<_SearchTab> {
 
     final hasResults = _albumResults.isNotEmpty ||
                       _artistResults.isNotEmpty ||
-                      _trackResults.isNotEmpty;
+                      _trackResults.isNotEmpty ||
+                      _showRelaxEasterEgg;
 
     if (!hasResults) {
       return Center(
@@ -4224,6 +4233,9 @@ class _SearchTabState extends State<_SearchTab> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
       children: [
+        // Easter egg: Relax Mode card
+        if (_showRelaxEasterEgg)
+          _buildRelaxModeCard(theme),
         // Artists section
         if (_artistResults.isNotEmpty) ...[
           _buildSectionHeader(theme, 'Artists', Icons.person, _artistResults.length),
@@ -4254,6 +4266,21 @@ class _SearchTabState extends State<_SearchTab> {
           ),
         ],
       ],
+    );
+  }
+
+  Widget _buildRelaxModeCard(ThemeData theme) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: ListTile(
+        leading: Icon(Icons.spa, color: theme.colorScheme.primary),
+        title: const Text('Relax Mode'),
+        subtitle: const Text('Ambient sound mixer'),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (context) => const RelaxModeScreen()),
+        ),
+      ),
     );
   }
 

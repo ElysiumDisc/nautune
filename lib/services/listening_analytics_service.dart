@@ -196,14 +196,92 @@ class ListeningHeatmap {
   }
 }
 
+/// Relax Mode usage statistics
+class RelaxModeStats {
+  final int totalSessionsMs;
+  final int rainUsageMs;
+  final int thunderUsageMs;
+  final int campfireUsageMs;
+  final bool discovered;
+
+  RelaxModeStats({
+    this.totalSessionsMs = 0,
+    this.rainUsageMs = 0,
+    this.thunderUsageMs = 0,
+    this.campfireUsageMs = 0,
+    this.discovered = false,
+  });
+
+  Duration get totalTime => Duration(milliseconds: totalSessionsMs);
+
+  /// Get percentage of usage for each sound (0-100)
+  double get rainPercent {
+    final total = rainUsageMs + thunderUsageMs + campfireUsageMs;
+    if (total == 0) return 0;
+    return (rainUsageMs / total) * 100;
+  }
+
+  double get thunderPercent {
+    final total = rainUsageMs + thunderUsageMs + campfireUsageMs;
+    if (total == 0) return 0;
+    return (thunderUsageMs / total) * 100;
+  }
+
+  double get campfirePercent {
+    final total = rainUsageMs + thunderUsageMs + campfireUsageMs;
+    if (total == 0) return 0;
+    return (campfireUsageMs / total) * 100;
+  }
+
+  /// Get the favorite sound name
+  String? get favoriteSoundName {
+    if (rainUsageMs == 0 && thunderUsageMs == 0 && campfireUsageMs == 0) return null;
+    if (rainUsageMs >= thunderUsageMs && rainUsageMs >= campfireUsageMs) return 'Rain';
+    if (thunderUsageMs >= rainUsageMs && thunderUsageMs >= campfireUsageMs) return 'Thunder';
+    return 'Campfire';
+  }
+
+  Map<String, dynamic> toJson() => {
+    'totalSessionsMs': totalSessionsMs,
+    'rainUsageMs': rainUsageMs,
+    'thunderUsageMs': thunderUsageMs,
+    'campfireUsageMs': campfireUsageMs,
+    'discovered': discovered,
+  };
+
+  factory RelaxModeStats.fromJson(Map<String, dynamic> json) => RelaxModeStats(
+    totalSessionsMs: json['totalSessionsMs'] as int? ?? 0,
+    rainUsageMs: json['rainUsageMs'] as int? ?? 0,
+    thunderUsageMs: json['thunderUsageMs'] as int? ?? 0,
+    campfireUsageMs: json['campfireUsageMs'] as int? ?? 0,
+    discovered: json['discovered'] as bool? ?? false,
+  );
+
+  RelaxModeStats copyWith({
+    int? totalSessionsMs,
+    int? rainUsageMs,
+    int? thunderUsageMs,
+    int? campfireUsageMs,
+    bool? discovered,
+  }) => RelaxModeStats(
+    totalSessionsMs: totalSessionsMs ?? this.totalSessionsMs,
+    rainUsageMs: rainUsageMs ?? this.rainUsageMs,
+    thunderUsageMs: thunderUsageMs ?? this.thunderUsageMs,
+    campfireUsageMs: campfireUsageMs ?? this.campfireUsageMs,
+    discovered: discovered ?? this.discovered,
+  );
+}
+
 /// Service for recording and querying local listening analytics
 class ListeningAnalyticsService {
   static const _boxName = 'nautune_analytics';
   static const _eventsKey = 'play_events';
   static const _streakKey = 'streak_data';
+  static const _relaxModeKey = 'relax_mode_stats';
 
   Box? _box;
   List<PlayEvent> _events = [];
+  RelaxModeStats _relaxModeStats = RelaxModeStats();
   bool _initialized = false;
 
   /// Singleton instance
@@ -220,11 +298,70 @@ class ListeningAnalyticsService {
     try {
       _box = await Hive.openBox(_boxName);
       await _loadEvents();
+      await _loadRelaxModeStats();
       _initialized = true;
       debugPrint('ListeningAnalyticsService: Initialized with ${_events.length} events');
     } catch (e) {
       debugPrint('ListeningAnalyticsService: Failed to initialize: $e');
     }
+  }
+
+  Future<void> _loadRelaxModeStats() async {
+    final raw = _box?.get(_relaxModeKey);
+    if (raw == null) {
+      _relaxModeStats = RelaxModeStats();
+      return;
+    }
+    try {
+      if (raw is String) {
+        _relaxModeStats = RelaxModeStats.fromJson(
+          Map<String, dynamic>.from(jsonDecode(raw) as Map),
+        );
+      } else if (raw is Map) {
+        _relaxModeStats = RelaxModeStats.fromJson(Map<String, dynamic>.from(raw));
+      }
+    } catch (e) {
+      debugPrint('ListeningAnalyticsService: Error loading relax mode stats: $e');
+      _relaxModeStats = RelaxModeStats();
+    }
+  }
+
+  Future<void> _saveRelaxModeStats() async {
+    if (_box == null) return;
+    await _box!.put(_relaxModeKey, jsonEncode(_relaxModeStats.toJson()));
+  }
+
+  /// Get Relax Mode statistics
+  RelaxModeStats getRelaxModeStats() => _relaxModeStats;
+
+  /// Mark Relax Mode as discovered (for milestone)
+  Future<void> markRelaxModeDiscovered() async {
+    if (_relaxModeStats.discovered) return;
+    _relaxModeStats = _relaxModeStats.copyWith(discovered: true);
+    await _saveRelaxModeStats();
+    debugPrint('ListeningAnalyticsService: Relax Mode discovered!');
+  }
+
+  /// Record Relax Mode session usage
+  /// Call this when exiting Relax Mode with the duration and slider usage
+  Future<void> recordRelaxModeSession({
+    required Duration sessionDuration,
+    required Duration rainUsage,
+    required Duration thunderUsage,
+    required Duration campfireUsage,
+  }) async {
+    if (!_initialized) return;
+
+    _relaxModeStats = RelaxModeStats(
+      totalSessionsMs: _relaxModeStats.totalSessionsMs + sessionDuration.inMilliseconds,
+      rainUsageMs: _relaxModeStats.rainUsageMs + rainUsage.inMilliseconds,
+      thunderUsageMs: _relaxModeStats.thunderUsageMs + thunderUsage.inMilliseconds,
+      campfireUsageMs: _relaxModeStats.campfireUsageMs + campfireUsage.inMilliseconds,
+      discovered: true,
+    );
+
+    await _saveRelaxModeStats();
+    debugPrint('ListeningAnalyticsService: Recorded Relax Mode session (${sessionDuration.inMinutes}m)');
   }
 
   Future<void> _loadEvents() async {
@@ -997,6 +1134,16 @@ class ListeningAnalyticsService {
         iconType: IconType.special,
         targetValue: 5,
         currentValue: marathonSessions,
+      ),
+
+      // Relax Mode milestone - Hidden feature discovery
+      ListeningMilestone(
+        id: 'relax_mode',
+        name: 'Calm Waters',
+        description: 'Discover the hidden Relax Mode',
+        iconType: IconType.special,
+        targetValue: 1,
+        currentValue: _relaxModeStats.discovered ? 1 : 0,
       ),
     ];
 
