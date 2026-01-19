@@ -110,9 +110,19 @@ class DeepLinkService {
   static String? parseJoinLink(String link) {
     try {
       final uri = Uri.parse(link);
+      debugPrint('🔗 parseJoinLink: scheme=${uri.scheme}, host=${uri.host}, pathSegments=${uri.pathSegments}');
 
       // nautune://syncplay/join/{groupId}
+      // Note: For custom schemes, 'syncplay' becomes the host, not a path segment
+      // pathSegments = ['join', 'groupId']
       if (uri.scheme == 'nautune') {
+        if (uri.host == 'syncplay') {
+          final pathSegments = uri.pathSegments;
+          if (pathSegments.length >= 2 && pathSegments[0] == 'join') {
+            return pathSegments[1];
+          }
+        }
+        // Also handle nautune:///syncplay/join/{groupId} (with empty host)
         final pathSegments = uri.pathSegments;
         if (pathSegments.length >= 3 &&
             pathSegments[0] == 'syncplay' &&
@@ -131,6 +141,7 @@ class DeepLinkService {
 
       return null;
     } catch (e) {
+      debugPrint('🔗 parseJoinLink error: $e');
       return null;
     }
   }

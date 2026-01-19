@@ -39,6 +39,7 @@ class SyncPlayProvider extends ChangeNotifier {
   SyncPlayService? _syncPlayService;
   StreamSubscription<SyncPlaySession?>? _sessionSubscription;
   StreamSubscription<List<SyncPlayParticipant>>? _participantsSubscription;
+  StreamSubscription<SyncPlayCommand>? _playbackCommandSubscription;
 
   // State
   SyncPlaySession? _currentSession;
@@ -138,10 +139,99 @@ class SyncPlayProvider extends ChangeNotifier {
       notifyListeners();
     });
 
+    // Listen to playback commands from server (for sailors to sync with captain)
+    _playbackCommandSubscription = _syncPlayService!.playbackCommandStream.listen(_onPlaybackCommand);
+
     // Listen to service loading state
     _syncPlayService!.addListener(_onServiceChanged);
 
     _isInitializing = false;
+  }
+
+  /// Handle playback commands from SyncPlay server
+  /// Only sailors react to these - captain already controls playback directly
+  void _onPlaybackCommand(SyncPlayCommand command) {
+    debugPrint('🎵 SyncPlay command: ${command.type} (isCaptain: $isCaptain)');
+
+    // Captain controls playback directly via play()/pause()/seek() methods
+    // Sailors react to WebSocket commands from server
+    if (isCaptain) {
+      debugPrint('🎵 Captain ignoring playback command (already controlling locally)');
+      return;
+    }
+
+    switch (command.type) {
+      case SyncPlayCommandType.play:
+        _handlePlayCommand(command);
+        break;
+      case SyncPlayCommandType.pause:
+        _audioPlayerService.pause();
+        break;
+      case SyncPlayCommandType.stop:
+        _audioPlayerService.stop();
+        break;
+      case SyncPlayCommandType.seek:
+        if (command.position != null) {
+          _audioPlayerService.seek(command.position!);
+        }
+        break;
+    }
+  }
+
+  /// Handle play command - ensure track is loaded and playing
+  Future<void> _handlePlayCommand(SyncPlayCommand command) async {
+    final session = _currentSession;
+    if (session == null) return;
+
+    // Find the track to play - prefer playlistItemId, fall back to trackIndex
+    int trackIndex = command.trackIndex ?? session.currentTrackIndex;
+
+    // If server sent a specific playlist item ID, find its index
+    if (command.playlistItemId != null) {
+      final idx = session.queue.indexWhere(
+        (t) => t.playlistItemId == command.playlistItemId,
+      );
+      if (idx >= 0) {
+        trackIndex = idx;
+        debugPrint('🎵 SyncPlay: Found track at index $idx via playlistItemId');
+      }
+    }
+
+    if (trackIndex < 0 || trackIndex >= session.queue.length) {
+      debugPrint('🎵 SyncPlay: Invalid track index $trackIndex');
+      return;
+    }
+
+    final syncTrack = session.queue[trackIndex];
+    final track = syncTrack.track;
+
+    // Check if we need to load the track (different from currently playing)
+    final currentTrack = _audioPlayerService.currentTrack;
+    if (currentTrack?.id != track.id) {
+      debugPrint('🎵 SyncPlay: Loading track ${track.name}');
+
+      // Play the track (AudioPlayerService gets URL internally)
+      await _audioPlayerService.playTrack(track);
+
+      // Seek to position if specified
+      if (command.position != null) {
+        await _audioPlayerService.seek(command.position!);
+      }
+    } else {
+      // Same track - just resume playback
+      await _audioPlayerService.resume();
+
+      // Seek to position if specified and different
+      if (command.position != null) {
+        // Get current position
+        final currentPos = _audioPlayerService.currentPosition;
+        final diff = (currentPos.inMilliseconds - command.position!.inMilliseconds).abs();
+        if (diff > 1000) {
+          // More than 1 second difference - sync position
+          await _audioPlayerService.seek(command.position!);
+        }
+      }
+    }
   }
 
   void _onServiceChanged() {
@@ -156,6 +246,8 @@ class SyncPlayProvider extends ChangeNotifier {
     _sessionSubscription = null;
     _participantsSubscription?.cancel();
     _participantsSubscription = null;
+    _playbackCommandSubscription?.cancel();
+    _playbackCommandSubscription = null;
     _syncPlayService?.removeListener(_onServiceChanged);
     _syncPlayService?.dispose();
     _syncPlayService = null;

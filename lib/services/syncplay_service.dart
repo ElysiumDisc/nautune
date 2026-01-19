@@ -8,6 +8,32 @@ import '../jellyfin/syncplay_client.dart';
 import '../models/syncplay_models.dart';
 import 'syncplay_websocket.dart';
 
+/// Playback command from server to sync playback across devices
+class SyncPlayCommand {
+  const SyncPlayCommand({
+    required this.type,
+    this.positionTicks,
+    this.trackIndex,
+    this.playlistItemId,
+  });
+
+  final SyncPlayCommandType type;
+  final int? positionTicks;
+  final int? trackIndex;
+  final String? playlistItemId; // Which specific track to play
+
+  Duration? get position => positionTicks != null
+      ? Duration(microseconds: positionTicks! ~/ 10)
+      : null;
+}
+
+enum SyncPlayCommandType {
+  play,    // Unpause - start/resume playback
+  pause,   // Pause playback
+  stop,    // Stop playback
+  seek,    // Seek to position
+}
+
 /// Core SyncPlay service that manages collaborative playlist functionality.
 ///
 /// Responsibilities:
@@ -79,6 +105,10 @@ class SyncPlayService extends ChangeNotifier {
   Stream<List<SyncPlayGroup>> get groupsStream => _groupsController.stream;
 
   final _participantsController = StreamController<List<SyncPlayParticipant>>.broadcast();
+
+  // Stream for playback commands (unpause, pause, seek, stop) from server
+  final _playbackCommandController = StreamController<SyncPlayCommand>.broadcast();
+  Stream<SyncPlayCommand> get playbackCommandStream => _playbackCommandController.stream;
   Stream<List<SyncPlayParticipant>> get participantsStream => _participantsController.stream;
 
   // ============ Group Management ============
@@ -575,39 +605,48 @@ class SyncPlayService extends ChangeNotifier {
 
   /// Attempt to rejoin the last group after WebSocket reconnection
   Future<void> _attemptAutoRejoin() async {
-    if (_isRejoining || _lastGroupId == null) return;
+    final groupIdToRejoin = _lastGroupId;
+    final wasCaptain = _wasCaption;
+
+    if (_isRejoining || groupIdToRejoin == null) return;
 
     _isRejoining = true;
     try {
-      debugPrint('Auto-rejoining group: $_lastGroupId (captain: $_wasCaption) attempt ${_rejoinAttempts + 1}');
+      debugPrint('Auto-rejoining group: $groupIdToRejoin (captain: $wasCaptain) attempt ${_rejoinAttempts + 1}');
 
       // Try to rejoin the group
       await _client.joinGroup(
         credentials: _credentials,
-        groupId: _lastGroupId!,
+        groupId: groupIdToRejoin,
       );
+
+      // Check if we were cancelled during the await
+      if (_lastGroupId == null) {
+        debugPrint('Auto-rejoin cancelled - lastGroupId cleared');
+        return;
+      }
 
       // Restore session state with stored captain status
       if (_currentSession == null) {
         _currentSession = SyncPlaySession(
           group: SyncPlayGroup(
-            groupId: _lastGroupId!,
-            groupName: _currentSession?.group.groupName ?? 'Collaborative Playlist',
+            groupId: groupIdToRejoin,
+            groupName: 'Collaborative Playlist',
             participants: [
               SyncPlayParticipant(
                 oderId: _deviceId,
                 userId: _userId,
                 username: _username,
                 userImageTag: _userImageTag,
-                isGroupLeader: _wasCaption,
+                isGroupLeader: wasCaptain,
               ),
             ],
             state: SyncPlayState.idle,
           ),
-          queue: _currentSession?.queue ?? [],
-          currentTrackIndex: _currentSession?.currentTrackIndex ?? -1,
-          positionTicks: _currentSession?.positionTicks ?? 0,
-          role: _wasCaption ? SyncPlayRole.captain : SyncPlayRole.sailor,
+          queue: [],
+          currentTrackIndex: -1,
+          positionTicks: 0,
+          role: wasCaptain ? SyncPlayRole.captain : SyncPlayRole.sailor,
         );
         _notifySessionChanged();
       }
@@ -618,7 +657,7 @@ class SyncPlayService extends ChangeNotifier {
       debugPrint('Failed to auto-rejoin SyncPlay group: $e');
       _rejoinAttempts++;
 
-      if (_rejoinAttempts < _maxRejoinAttempts) {
+      if (_rejoinAttempts < _maxRejoinAttempts && _lastGroupId != null) {
         // Retry with exponential backoff
         final delay = Duration(seconds: 1 << _rejoinAttempts);
         debugPrint('Will retry rejoin in ${delay.inSeconds}s (attempt ${_rejoinAttempts + 1}/$_maxRejoinAttempts)');
@@ -630,8 +669,8 @@ class SyncPlayService extends ChangeNotifier {
         });
         return;
       } else {
-        // Max attempts reached - group likely no longer exists
-        debugPrint('Max rejoin attempts reached, group may no longer exist');
+        // Max attempts reached or group cleared - group likely no longer exists
+        debugPrint('Max rejoin attempts reached or group cleared, giving up');
         _lastGroupId = null;
         _wasCaption = false;
         _rejoinAttempts = 0;
@@ -865,24 +904,55 @@ class SyncPlayService extends ChangeNotifier {
     if (_currentSession == null) return;
 
     debugPrint('SyncPlay: Unpause command received');
+    final positionTicks = message.positionTicks ?? _currentSession!.positionTicks;
+    final playlistItemId = message.playlistItemId;
+
+    // If server sent a playlist item ID, update our current track index
+    int trackIndex = _currentSession!.currentTrackIndex;
+    if (playlistItemId != null) {
+      final idx = _currentSession!.queue.indexWhere(
+        (t) => t.playlistItemId == playlistItemId,
+      );
+      if (idx >= 0) {
+        trackIndex = idx;
+        debugPrint('SyncPlay: Unpause for track index $idx (playlistItemId: $playlistItemId)');
+      }
+    }
+
     _currentSession = _currentSession!.copyWith(
       isPaused: false,
-      positionTicks: message.positionTicks ?? _currentSession!.positionTicks,
+      positionTicks: positionTicks,
+      currentTrackIndex: trackIndex,
       lastSyncTime: DateTime.now(),
     );
     _notifySessionChanged();
+
+    // Emit playback command for audio player to react
+    _playbackCommandController.add(SyncPlayCommand(
+      type: SyncPlayCommandType.play,
+      positionTicks: positionTicks,
+      trackIndex: trackIndex,
+      playlistItemId: playlistItemId,
+    ));
   }
 
   void _handlePause(SyncPlayMessage message) {
     if (_currentSession == null) return;
 
     debugPrint('SyncPlay: Pause command received');
+    final positionTicks = message.positionTicks ?? _currentSession!.positionTicks;
     _currentSession = _currentSession!.copyWith(
       isPaused: true,
-      positionTicks: message.positionTicks ?? _currentSession!.positionTicks,
+      positionTicks: positionTicks,
       lastSyncTime: DateTime.now(),
     );
     _notifySessionChanged();
+
+    // Emit playback command for audio player to react
+    _playbackCommandController.add(SyncPlayCommand(
+      type: SyncPlayCommandType.pause,
+      positionTicks: positionTicks,
+    ));
   }
 
   void _handleStop(SyncPlayMessage message) {
@@ -896,6 +966,11 @@ class SyncPlayService extends ChangeNotifier {
       lastSyncTime: DateTime.now(),
     );
     _notifySessionChanged();
+
+    // Emit playback command for audio player to react
+    _playbackCommandController.add(const SyncPlayCommand(
+      type: SyncPlayCommandType.stop,
+    ));
   }
 
   void _handleSeek(SyncPlayMessage message) {
@@ -909,6 +984,12 @@ class SyncPlayService extends ChangeNotifier {
         lastSyncTime: DateTime.now(),
       );
       _notifySessionChanged();
+
+      // Emit playback command for audio player to react
+      _playbackCommandController.add(SyncPlayCommand(
+        type: SyncPlayCommandType.seek,
+        positionTicks: positionTicks,
+      ));
     }
   }
 
@@ -1110,6 +1191,7 @@ class SyncPlayService extends ChangeNotifier {
     _sessionController.close();
     _groupsController.close();
     _participantsController.close();
+    _playbackCommandController.close();
     _client.close();
     super.dispose();
   }
