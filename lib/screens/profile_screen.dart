@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:hive_flutter/hive_flutter.dart' as hive;
 import 'package:material_color_utilities/material_color_utilities.dart';
 import 'package:provider/provider.dart';
 
@@ -12,9 +14,71 @@ import '../app_state.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../jellyfin/jellyfin_user.dart';
 import '../providers/session_provider.dart';
+import '../services/listenbrainz_service.dart';
 import '../services/listening_analytics_service.dart';
 import '../services/rewind_service.dart';
 import 'rewind_screen.dart';
+
+/// Cache for profile stats to avoid recomputing on every visit
+class _ProfileStatsCache {
+  static const _boxName = 'profile_stats_cache';
+  static const _cacheKey = 'stats';
+  static const _cacheValidityMinutes = 5; // Refresh after 5 minutes
+
+  static hive.Box? _box;
+  static Map<String, dynamic>? _cachedStats;
+  static DateTime? _cacheTime;
+
+  static Future<void> _ensureBox() async {
+    _box ??= await hive.Hive.openBox(_boxName);
+  }
+
+  static Future<Map<String, dynamic>?> load() async {
+    await _ensureBox();
+
+    // Return memory cache if fresh
+    if (_cachedStats != null && _cacheTime != null) {
+      if (DateTime.now().difference(_cacheTime!).inMinutes < _cacheValidityMinutes) {
+        return _cachedStats;
+      }
+    }
+
+    // Load from disk
+    final raw = _box?.get(_cacheKey);
+    if (raw == null) return null;
+
+    try {
+      final data = raw is String ? jsonDecode(raw) as Map<String, dynamic> : Map<String, dynamic>.from(raw as Map);
+      final savedTime = data['_cacheTime'] as int?;
+
+      if (savedTime != null) {
+        _cacheTime = DateTime.fromMillisecondsSinceEpoch(savedTime);
+        // Check if disk cache is still valid
+        if (DateTime.now().difference(_cacheTime!).inMinutes < _cacheValidityMinutes) {
+          _cachedStats = data;
+          return data;
+        }
+      }
+      return null; // Cache expired
+    } catch (e) {
+      debugPrint('ProfileStatsCache: Error loading cache: $e');
+      return null;
+    }
+  }
+
+  static Future<void> save(Map<String, dynamic> stats) async {
+    await _ensureBox();
+    stats['_cacheTime'] = DateTime.now().millisecondsSinceEpoch;
+    _cachedStats = stats;
+    _cacheTime = DateTime.now();
+    await _box?.put(_cacheKey, jsonEncode(stats));
+  }
+
+  static bool get isFresh {
+    if (_cacheTime == null) return false;
+    return DateTime.now().difference(_cacheTime!).inMinutes < _cacheValidityMinutes;
+  }
+}
 
 /// Computed artist stats from track play history
 class _ComputedArtistStats {
@@ -328,9 +392,84 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return;
     }
 
+    // Try to load cached stats first for instant display
+    final cachedStats = await _ProfileStatsCache.load();
+    if (cachedStats != null && mounted) {
+      _applyCachedStats(cachedStats);
+      // If cache is still fresh, don't refresh from network
+      if (_ProfileStatsCache.isFresh) {
+        // Still load recent tracks (they change often)
+        _loadRecentTracks(appState, libraryId);
+        return;
+      }
+    }
+
+    // Refresh stats from network
+    await _refreshStatsFromNetwork(appState, libraryId);
+  }
+
+  void _applyCachedStats(Map<String, dynamic> cached) {
+    setState(() {
+      _totalPlays = cached['totalPlays'] as int? ?? 0;
+      _totalHours = (cached['totalHours'] as num?)?.toDouble() ?? 0.0;
+      _uniqueArtistsPlayed = cached['uniqueArtists'] as int? ?? 0;
+      _uniqueAlbumsPlayed = cached['uniqueAlbums'] as int? ?? 0;
+      _uniqueTracksPlayed = cached['uniqueTracks'] as int? ?? 0;
+      _diversityScore = (cached['diversityScore'] as num?)?.toDouble() ?? 0.0;
+
+      final cachedGenres = cached['genrePlayCounts'] as Map<String, dynamic>?;
+      if (cachedGenres != null) {
+        _genrePlayCounts = cachedGenres.map((k, v) => MapEntry(k, v as int));
+      }
+
+      final cachedArtists = cached['topArtists'] as List<dynamic>?;
+      if (cachedArtists != null) {
+        _topArtists = cachedArtists.map((a) => _ComputedArtistStats(
+          name: a['name'] as String,
+          playCount: a['playCount'] as int,
+          id: a['id'] as String?,
+          imageTag: a['imageTag'] as String?,
+        )).toList();
+      }
+
+      final cachedAlbums = cached['topAlbums'] as List<dynamic>?;
+      if (cachedAlbums != null) {
+        _topAlbums = cachedAlbums.map((a) => _ComputedAlbumStats(
+          albumId: a['albumId'] as String?,
+          name: a['name'] as String,
+          artistName: a['artistName'] as String,
+          playCount: a['playCount'] as int,
+          imageTag: a['imageTag'] as String?,
+        )).toList();
+      }
+
+      final cachedColors = cached['paletteColors'] as List<dynamic>?;
+      if (cachedColors != null) {
+        _paletteColors = cachedColors.map((c) => Color(c as int)).toList();
+      }
+
+      _statsLoading = false;
+    });
+  }
+
+  Future<void> _loadRecentTracks(NautuneAppState appState, String libraryId) async {
     try {
-      // Fetch ALL tracks for accurate stats calculation (high limit to get everything)
-      final tracksFuture = appState.jellyfinService.getMostPlayedTracks(libraryId: libraryId, limit: 10000);
+      final recent = await appState.jellyfinService.getRecentlyPlayedTracks(
+        libraryId: libraryId,
+        limit: 10,
+      );
+      if (mounted) {
+        setState(() => _recentTracks = recent);
+      }
+    } catch (e) {
+      debugPrint('Error loading recent tracks: $e');
+    }
+  }
+
+  Future<void> _refreshStatsFromNetwork(NautuneAppState appState, String libraryId) async {
+    try {
+      // Reduced limit from 10000 to 1000 - still accurate but much faster
+      final tracksFuture = appState.jellyfinService.getMostPlayedTracks(libraryId: libraryId, limit: 1000);
       final recentFuture = appState.jellyfinService.getRecentlyPlayedTracks(libraryId: libraryId, limit: 10);
       final results = await Future.wait([tracksFuture, recentFuture]);
 
@@ -413,9 +552,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _statsLoading = false;
         });
 
-        // Extract colors from top track
+        // Extract colors from top track and then save to cache
         if (tracks.isNotEmpty) {
-          _extractColors(tracks.first);
+          _extractColors(tracks.first).then((_) => _saveStatsToCache(
+            statsResult,
+            computedTopArtists,
+            computedTopAlbums,
+          ));
+        } else {
+          _saveStatsToCache(statsResult, computedTopArtists, computedTopAlbums);
         }
       }
     } catch (e) {
@@ -426,6 +571,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
         });
       }
     }
+  }
+
+  Future<void> _saveStatsToCache(
+    _StatsResult statsResult,
+    List<_ComputedArtistStats> topArtists,
+    List<_ComputedAlbumStats> topAlbums,
+  ) async {
+    final cacheData = <String, dynamic>{
+      'totalPlays': statsResult.totalPlays,
+      'totalHours': statsResult.totalHours,
+      'uniqueArtists': statsResult.uniqueArtistsCount,
+      'uniqueAlbums': statsResult.uniqueAlbumsCount,
+      'uniqueTracks': statsResult.uniqueTracksCount,
+      'diversityScore': statsResult.diversityScore,
+      'genrePlayCounts': statsResult.genrePlayCounts,
+      'topArtists': topArtists.map((a) => {
+        'name': a.name,
+        'playCount': a.playCount,
+        'id': a.id,
+        'imageTag': a.imageTag,
+      }).toList(),
+      'topAlbums': topAlbums.map((a) => {
+        'albumId': a.albumId,
+        'name': a.name,
+        'artistName': a.artistName,
+        'playCount': a.playCount,
+        'imageTag': a.imageTag,
+      }).toList(),
+      // ignore: deprecated_member_use
+      'paletteColors': _paletteColors?.map((c) => c.value).toList(),
+    };
+    await _ProfileStatsCache.save(cacheData);
+    debugPrint('ProfileScreen: Stats cached');
   }
 
   Future<void> _extractColors(JellyfinTrack track) async {
@@ -570,7 +748,38 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                                     ),
                                                   ],
                                                 ),
-                                              ),                        const SizedBox(height: 4),
+                                              ),
+                                              // ListenBrainz badge
+                                              if (ListenBrainzService().isConfigured)
+                                                Padding(
+                                                  padding: const EdgeInsets.only(top: 8),
+                                                  child: Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                                    decoration: BoxDecoration(
+                                                      color: const Color(0xFFEB743B).withValues(alpha: 0.9),
+                                                      borderRadius: BorderRadius.circular(12),
+                                                    ),
+                                                    child: Row(
+                                                      mainAxisSize: MainAxisSize.min,
+                                                      children: [
+                                                        const Icon(
+                                                          Icons.podcasts,
+                                                          size: 14,
+                                                          color: Colors.white,
+                                                        ),
+                                                        const SizedBox(width: 4),
+                                                        Text(
+                                                          'ListenBrainz',
+                                                          style: theme.textTheme.labelSmall?.copyWith(
+                                                            color: Colors.white,
+                                                            fontWeight: FontWeight.w600,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              const SizedBox(height: 4),
                         // Server URL
                         Text(
                           session?.serverUrl ?? '',
@@ -606,6 +815,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   // 2b. Sync Status Banner (only if unsynced plays exist)
                   if (_unsyncedPlays > 0) ...[
                     _buildSyncStatusBanner(theme),
+                    const SizedBox(height: 12),
+                  ],
+
+                  // 2c. ListenBrainz Stats (if connected)
+                  if (ListenBrainzService().isConfigured) ...[
+                    _buildListenBrainzStatsRow(theme),
                     const SizedBox(height: 12),
                   ],
                   const SizedBox(height: 12),
@@ -969,6 +1184,80 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildListenBrainzStatsRow(ThemeData theme) {
+    final listenBrainz = ListenBrainzService();
+    final config = listenBrainz.config;
+    const listenBrainzOrange = Color(0xFFEB743B);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: listenBrainzOrange.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: listenBrainzOrange.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: listenBrainzOrange.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.podcasts,
+              color: listenBrainzOrange,
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'ListenBrainz Scrobbles',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: listenBrainzOrange,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  config?.username ?? 'Connected',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                _formatNumber(config?.totalScrobbles ?? 0),
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  color: listenBrainzOrange,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              if (listenBrainz.pendingScrobblesCount > 0)
+                Text(
+                  '+${listenBrainz.pendingScrobblesCount} pending',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 

@@ -393,6 +393,35 @@ class _ListenBrainzSettingsScreenState extends State<ListenBrainzSettingsScreen>
     );
   }
 
+  Future<void> _syncCount() async {
+    setState(() => _isLoading = true);
+
+    final localBefore = _service.config?.totalScrobbles ?? 0;
+    final serverCount = await _service.syncScrobbleCount();
+    final localAfter = _service.config?.totalScrobbles ?? 0;
+
+    if (mounted) {
+      setState(() => _isLoading = false);
+
+      String message;
+      if (serverCount < 0) {
+        message = 'Failed to sync with server';
+      } else if (serverCount < localBefore) {
+        // Server count is lower (cached/delayed)
+        message = 'Server reports $serverCount (may be delayed). Keeping local count: $localAfter';
+      } else {
+        message = 'Synced! Total scrobbles: $serverCount';
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   Widget _buildStatsCard(BuildContext context, dynamic config) {
     final theme = Theme.of(context);
     final lastScrobble = config.lastScrobbleTime;
@@ -403,11 +432,21 @@ class _ListenBrainzSettingsScreenState extends State<ListenBrainzSettingsScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Statistics',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
+            Row(
+              children: [
+                Text(
+                  'Statistics',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: _syncCount,
+                  icon: const Icon(Icons.sync, size: 18),
+                  label: const Text('Sync'),
+                ),
+              ],
             ),
             const SizedBox(height: 16),
             Row(

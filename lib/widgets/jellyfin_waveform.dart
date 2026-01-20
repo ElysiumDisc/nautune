@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/waveform_data.dart';
@@ -27,11 +29,19 @@ class _TrackWaveformState extends State<TrackWaveform> {
   WaveformData? _waveformData;
   bool _isLoading = false;
   static final Map<String, WaveformData> _cache = {};
+  StreamSubscription<String>? _waveformSubscription;
 
   @override
   void initState() {
     super.initState();
     _loadWaveform();
+    _listenForWaveformExtraction();
+  }
+
+  @override
+  void dispose() {
+    _waveformSubscription?.cancel();
+    super.dispose();
   }
 
   @override
@@ -40,6 +50,15 @@ class _TrackWaveformState extends State<TrackWaveform> {
     if (oldWidget.trackId != widget.trackId) {
       _loadWaveform();
     }
+  }
+
+  void _listenForWaveformExtraction() {
+    _waveformSubscription = WaveformService.instance.onWaveformExtracted.listen((trackId) {
+      // Reload if this is our track and we don't have data yet
+      if (trackId == widget.trackId && _waveformData == null) {
+        _loadWaveform();
+      }
+    });
   }
 
   Future<void> _loadWaveform() async {

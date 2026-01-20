@@ -26,6 +26,12 @@ class WaveformService {
   // Extraction in progress tracking
   final Map<String, Completer<WaveformData?>> _extractionCompleters = {};
 
+  // Stream controller to notify when waveforms are extracted
+  final _waveformExtractedController = StreamController<String>.broadcast();
+
+  /// Stream that emits track IDs when their waveforms are successfully extracted
+  Stream<String> get onWaveformExtracted => _waveformExtractedController.stream;
+
   bool _initialized = false;
 
   /// Check if waveform extraction is available on this platform
@@ -163,6 +169,11 @@ class WaveformService {
       // Load the extracted waveform into cache
       final data = await getWaveform(trackId);
       completer.complete(data);
+
+      // Notify listeners that waveform is now available
+      if (data != null && data.amplitudes.isNotEmpty) {
+        _waveformExtractedController.add(trackId);
+      }
 
       debugPrint('WaveformService: Extraction complete for $trackId');
     } catch (e) {

@@ -35,6 +35,86 @@ class ListenBrainzService {
   String? get username => _config?.username;
   int get pendingScrobblesCount => _pendingScrobbles.length;
 
+  /// Reset the local scrobble count (use when count is out of sync)
+  Future<void> resetScrobbleCount(int newCount) async {
+    if (_config == null) return;
+    _config = _config!.copyWith(totalScrobbles: newCount);
+    await _saveConfig();
+    debugPrint('ListenBrainzService: Reset scrobble count to $newCount');
+  }
+
+  /// Sync local scrobble count with ListenBrainz server
+  /// Returns the synced count, or -1 on error
+  /// Note: Only updates if server count is higher (server count can be delayed/cached)
+  Future<int> syncScrobbleCount() async {
+    if (!_initialized || _config == null) return -1;
+
+    try {
+      final response = await http.get(
+        Uri.parse('$_baseUrl/user/${_config!.username}/listen-count'),
+        headers: {
+          'Authorization': 'Token ${_config!.token}',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final payload = data['payload'] as Map<String, dynamic>?;
+        final serverCount = payload?['count'] as int? ?? 0;
+        final localCount = _config!.totalScrobbles;
+
+        // Only update if server count is higher or equal
+        // (server count API can be cached/delayed, don't lose recent local scrobbles)
+        if (serverCount >= localCount) {
+          _config = _config!.copyWith(totalScrobbles: serverCount);
+          await _saveConfig();
+          debugPrint('ListenBrainzService: Synced scrobble count from server: $serverCount');
+        } else {
+          debugPrint('ListenBrainzService: Server count ($serverCount) is less than local ($localCount) - keeping local (server may be cached)');
+        }
+
+        return serverCount;
+      }
+      debugPrint('ListenBrainzService: Failed to sync count: ${response.statusCode}');
+      return -1;
+    } catch (e) {
+      debugPrint('ListenBrainzService: Error syncing count: $e');
+      return -1;
+    }
+  }
+
+  /// Force sync count from server, even if lower than local
+  /// Use this only when you're sure local count is wrong
+  Future<int> forceSyncScrobbleCount() async {
+    if (!_initialized || _config == null) return -1;
+
+    try {
+      final response = await http.get(
+        Uri.parse('$_baseUrl/user/${_config!.username}/listen-count'),
+        headers: {
+          'Authorization': 'Token ${_config!.token}',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final payload = data['payload'] as Map<String, dynamic>?;
+        final count = payload?['count'] as int? ?? 0;
+
+        _config = _config!.copyWith(totalScrobbles: count);
+        await _saveConfig();
+
+        debugPrint('ListenBrainzService: Force synced scrobble count from server: $count');
+        return count;
+      }
+      debugPrint('ListenBrainzService: Failed to force sync count: ${response.statusCode}');
+      return -1;
+    } catch (e) {
+      debugPrint('ListenBrainzService: Error force syncing count: $e');
+      return -1;
+    }
+  }
+
   /// Initialize the service
   Future<void> initialize() async {
     if (_initialized) return;
@@ -157,10 +237,24 @@ class ListenBrainzService {
   /// Submit a listen (scrobble) to ListenBrainz
   Future<bool> submitListen(JellyfinTrack track, DateTime listenedAt) async {
     if (!_initialized || _config == null || !_config!.scrobblingEnabled) {
+      debugPrint('ListenBrainzService: Scrobble skipped - not initialized or disabled');
+      return false;
+    }
+
+    // Validate required fields
+    if (track.name.isEmpty || track.displayArtist.isEmpty) {
+      debugPrint('ListenBrainzService: Scrobble skipped - missing track name or artist');
       return false;
     }
 
     final payload = _buildListenPayload(track, listenedAt);
+    final requestBody = jsonEncode({
+      'listen_type': 'single',
+      'payload': [payload],
+    });
+
+    debugPrint('ListenBrainzService: Submitting scrobble for "${track.name}" by ${track.displayArtist}');
+    debugPrint('ListenBrainzService: Timestamp: ${listenedAt.toIso8601String()} (${listenedAt.millisecondsSinceEpoch ~/ 1000})');
 
     try {
       final response = await http.post(
@@ -169,31 +263,52 @@ class ListenBrainzService {
           'Authorization': 'Token ${_config!.token}',
           'Content-Type': 'application/json',
         },
-        body: jsonEncode({
-          'listen_type': 'single',
-          'payload': [payload],
-        }),
-      );
+        body: requestBody,
+      ).timeout(const Duration(seconds: 30));
+
+      debugPrint('ListenBrainzService: Response ${response.statusCode}: ${response.body}');
 
       if (response.statusCode == 200) {
-        // Update stats
+        // Verify response body indicates success
+        try {
+          final responseData = jsonDecode(response.body);
+          final status = responseData['status'] as String?;
+
+          if (status != 'ok') {
+            debugPrint('ListenBrainzService: Unexpected response status: $status');
+            // Don't increment count if status isn't "ok"
+            _queuePendingScrobble(payload);
+            return false;
+          }
+        } catch (e) {
+          debugPrint('ListenBrainzService: Could not parse response body: $e');
+          // Response might be valid but unparseable, cautiously accept
+        }
+
+        // Update stats only after confirmed success
         _config = _config!.copyWith(
           lastScrobbleTime: DateTime.now(),
           totalScrobbles: _config!.totalScrobbles + 1,
         );
         await _saveConfig();
 
-        debugPrint('ListenBrainzService: Scrobbled "${track.name}"');
+        debugPrint('ListenBrainzService: Scrobbled "${track.name}" successfully');
         return true;
       } else {
         debugPrint('ListenBrainzService: Scrobble failed: ${response.statusCode} - ${response.body}');
 
-        // Queue for retry if it's a temporary error
-        if (response.statusCode >= 500) {
+        // Queue for retry on server errors or rate limiting
+        if (response.statusCode >= 500 || response.statusCode == 429) {
           _queuePendingScrobble(payload);
         }
+        // 400/401/403 errors are likely permanent (bad data, auth issues)
+        // Don't queue these as they'll keep failing
         return false;
       }
+    } on TimeoutException {
+      debugPrint('ListenBrainzService: Scrobble timeout - queuing for retry');
+      _queuePendingScrobble(payload);
+      return false;
     } catch (e) {
       debugPrint('ListenBrainzService: Scrobble error: $e');
       // Queue for offline retry
@@ -208,7 +323,8 @@ class ListenBrainzService {
       return false;
     }
 
-    final payload = _buildListenPayload(track, DateTime.now());
+    // playing_now must NOT include listened_at per ListenBrainz API spec
+    final payload = _buildListenPayload(track, null);
 
     try {
       final response = await http.post(
@@ -227,6 +343,7 @@ class ListenBrainzService {
         debugPrint('ListenBrainzService: Now playing "${track.name}"');
         return true;
       }
+      debugPrint('ListenBrainzService: Now playing failed: ${response.statusCode} - ${response.body}');
       return false;
     } catch (e) {
       debugPrint('ListenBrainzService: Now playing error: $e');
@@ -234,7 +351,9 @@ class ListenBrainzService {
     }
   }
 
-  Map<String, dynamic> _buildListenPayload(JellyfinTrack track, DateTime listenedAt) {
+  /// Build payload for ListenBrainz API
+  /// [listenedAt] should be null for playing_now submissions
+  Map<String, dynamic> _buildListenPayload(JellyfinTrack track, DateTime? listenedAt) {
     final metadata = <String, dynamic>{
       'artist_name': track.displayArtist,
       'track_name': track.name,
@@ -268,10 +387,16 @@ class ListenBrainzService {
       metadata['additional_info'] = additionalInfo;
     }
 
-    return {
-      'listened_at': listenedAt.millisecondsSinceEpoch ~/ 1000,
+    final payload = <String, dynamic>{
       'track_metadata': metadata,
     };
+
+    // Only include listened_at for actual scrobbles (not playing_now)
+    if (listenedAt != null) {
+      payload['listened_at'] = listenedAt.millisecondsSinceEpoch ~/ 1000;
+    }
+
+    return payload;
   }
 
   void _queuePendingScrobble(Map<String, dynamic> payload) {
@@ -286,8 +411,11 @@ class ListenBrainzService {
       return 0;
     }
 
+    debugPrint('ListenBrainzService: Retrying ${_pendingScrobbles.length} pending scrobbles');
+
     int successCount = 0;
     final failedScrobbles = <Map<String, dynamic>>[];
+    final permanentFailures = <Map<String, dynamic>>[];
 
     for (final payload in _pendingScrobbles) {
       try {
@@ -301,18 +429,38 @@ class ListenBrainzService {
             'listen_type': 'single',
             'payload': [payload],
           }),
-        );
+        ).timeout(const Duration(seconds: 30));
 
         if (response.statusCode == 200) {
-          successCount++;
+          // Verify response body
+          try {
+            final responseData = jsonDecode(response.body);
+            if (responseData['status'] == 'ok') {
+              successCount++;
+              continue;
+            }
+          } catch (_) {
+            // Accept if we got 200 but couldn't parse
+            successCount++;
+            continue;
+          }
+          failedScrobbles.add(payload);
+        } else if (response.statusCode >= 400 && response.statusCode < 500 && response.statusCode != 429) {
+          // Permanent failure (bad request, auth error) - don't retry
+          debugPrint('ListenBrainzService: Permanent failure for pending scrobble: ${response.statusCode}');
+          permanentFailures.add(payload);
         } else {
+          // Temporary failure - retry later
           failedScrobbles.add(payload);
         }
+      } on TimeoutException {
+        failedScrobbles.add(payload);
       } catch (e) {
         failedScrobbles.add(payload);
       }
     }
 
+    // Only keep scrobbles that can be retried (not permanent failures)
     _pendingScrobbles = failedScrobbles;
     await _savePendingScrobbles();
 
