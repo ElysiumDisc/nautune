@@ -79,8 +79,10 @@ class RewindService {
         playCount: t.playCount,
       )).toList();
 
-      // Get top 10 tracks
-      final topTracks = allTracks.take(10).toList();
+      // Get top 10 tracks by play count
+      final topTracks = (allTracks.toList()
+        ..sort((a, b) => b.playCount.compareTo(a.playCount)))
+        .take(10).toList();
 
       // Aggregate play counts by artist from track data
       final artistPlayCounts = <String, int>{};
