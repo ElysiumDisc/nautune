@@ -667,6 +667,9 @@ class AudioPlayerService {
   }
   
   Future<void> _gaplessTransition() async {
+    // Record actual listening time for the completed track
+    _recordActualListeningTime();
+
     // Check track-based sleep timer FIRST
     if (_isSleepTimerByTracks && _sleepTracksRemaining > 0) {
       _sleepTracksRemaining--;
@@ -968,8 +971,8 @@ class AudioPlayerService {
     _playStats.incrementPlayCount(track.id);
     unawaited(_savePlayStats());
 
-    // Record to listening analytics for time-based stats
-    unawaited(ListeningAnalyticsService().recordPlay(track));
+    // Record actual listening time for the PREVIOUS track (if any) before starting new one
+    _recordActualListeningTime();
 
     // Reset ListenBrainz scrobble state and submit "now playing"
     _hasScrobbled = false;
@@ -1304,6 +1307,8 @@ class AudioPlayerService {
   
   Future<void> skipToNext() async {
     HapticService.mediumTap();
+    // Record actual listening time before skipping
+    _recordActualListeningTime();
     try {
       if (_currentIndex < _queue.length - 1) {
         _currentIndex++;
@@ -1328,6 +1333,8 @@ class AudioPlayerService {
 
   Future<void> skipToPrevious() async {
     HapticService.mediumTap();
+    // Record actual listening time before skipping
+    _recordActualListeningTime();
     try {
       if (_currentIndex > 0) {
         _currentIndex--;
@@ -1425,6 +1432,9 @@ class AudioPlayerService {
   }
 
   Future<void> stop() async {
+    // Record actual listening time before stopping
+    _recordActualListeningTime();
+
     // 1. Stop audio immediately
     await _player.stop();
 
@@ -1848,9 +1858,45 @@ class AudioPlayerService {
     _positionSaveTimer?.cancel();
   }
   
+  /// Track being recorded (to avoid double-recording)
+  JellyfinTrack? _trackBeingRecorded;
+
+  /// Record actual listening time for the current track to analytics.
+  /// Call this when: track ends, user skips, user stops, new track starts.
+  void _recordActualListeningTime() {
+    final track = _currentTrack;
+    final startTime = _trackStartTime;
+
+    // Only record if we have a valid track and start time
+    if (track == null || startTime == null) return;
+
+    // Prevent double-recording the same track instance
+    if (_trackBeingRecorded?.id == track.id && _trackBeingRecorded == track) {
+      return;
+    }
+    _trackBeingRecorded = track;
+
+    // Calculate actual listening time
+    final now = DateTime.now();
+    final actualDurationMs = now.difference(startTime).inMilliseconds;
+
+    // Record to analytics with actual duration
+    unawaited(ListeningAnalyticsService().recordPlay(
+      track,
+      actualDurationMs: actualDurationMs,
+      playStartTime: startTime,
+    ));
+
+    debugPrint('🎵 Recorded actual listen time: ${actualDurationMs ~/ 1000}s for "${track.name}"');
+
+    // Clear start time to prevent duplicate recording
+    _trackStartTime = null;
+    _trackBeingRecorded = null;
+  }
+
   Future<void> _saveCurrentPosition() async {
     if (_currentTrack == null) return;
-    
+
     final position = await _player.getCurrentPosition();
     if (position != null) {
       // Track listen time

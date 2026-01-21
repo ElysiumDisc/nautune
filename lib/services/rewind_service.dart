@@ -53,9 +53,11 @@ class RewindService {
         limit: 10000, // Fetch all tracks for accurate all-time stats
       );
 
-      // Parse track data with album image tags and runtime
+      // Parse track data with album image tags, runtime, and genres
       final trackDataList = serverTracks.map((t) {
         final userData = t['UserData'] as Map<String, dynamic>?;
+        final rawGenres = t['Genres'] as List<dynamic>?;
+        final genres = rawGenres?.whereType<String>().toList() ?? <String>[];
         return _TrackData(
           trackId: t['Id'] as String,
           name: t['Name'] as String? ?? 'Unknown',
@@ -66,6 +68,7 @@ class RewindService {
           albumImageTag: t['AlbumPrimaryImageTag'] as String?,
           playCount: userData?['PlayCount'] as int? ?? 0,
           runTimeTicks: t['RunTimeTicks'] as int?,
+          genres: genres,
         );
       }).toList();
 
@@ -165,9 +168,27 @@ class RewindService {
       }
       final totalTime = Duration(microseconds: totalTicks ~/ 10); // Convert ticks to microseconds
 
-      // Get local analytics for patterns (server doesn't track these)
-      final genres = _analytics.getGenresForYear(year);
-      final topGenre = _analytics.getTopGenreForYear(year);
+      // Aggregate genres from server data (weighted by play count) for all-time
+      // This is more accurate than local analytics for all-time stats
+      final serverGenreCounts = <String, int>{};
+      for (final track in trackDataList) {
+        for (final genre in track.genres) {
+          serverGenreCounts[genre] = (serverGenreCounts[genre] ?? 0) + track.playCount;
+        }
+      }
+
+      // Use server genre data if available, otherwise fall back to local analytics
+      final genres = serverGenreCounts.isNotEmpty
+          ? serverGenreCounts
+          : _analytics.getGenresForYear(year);
+
+      // Get top genre from computed genres
+      String? topGenre;
+      if (genres.isNotEmpty) {
+        final sortedGenres = genres.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
+        topGenre = sortedGenres.first.key;
+      }
       final playsByHour = _analytics.getPlaysByHourForYear(year);
       final playsByDayOfWeek = _analytics.getPlaysByDayOfWeekForYear(year);
       final peakMonth = year != null ? _analytics.getPeakMonthForYear(year) : null;
@@ -182,6 +203,12 @@ class RewindService {
         totalPlays: totalPlays,
       );
 
+      // Calculate unique counts from server data (more accurate for all-time)
+      // Only count tracks/artists/albums that have been played (playCount > 0)
+      final serverUniqueArtists = artistPlayCounts.length;
+      final serverUniqueAlbums = albumPlayCounts.length;
+      final serverUniqueTracks = allTracks.where((t) => t.playCount > 0).length;
+
       return RewindData(
         year: year,
         totalPlays: totalPlays > 0 ? totalPlays : _analytics.getTotalPlaysForYear(year),
@@ -193,9 +220,9 @@ class RewindService {
         genres: genres,
         peakMonth: peakMonth,
         longestStreak: longestStreak,
-        uniqueArtists: _analytics.getUniqueArtistsForYear(year),
-        uniqueTracks: _analytics.getUniqueTracksForYear(year),
-        uniqueAlbums: _analytics.getUniqueAlbumsForYear(year),
+        uniqueArtists: serverUniqueArtists > 0 ? serverUniqueArtists : _analytics.getUniqueArtistsForYear(year),
+        uniqueTracks: serverUniqueTracks > 0 ? serverUniqueTracks : _analytics.getUniqueTracksForYear(year),
+        uniqueAlbums: serverUniqueAlbums > 0 ? serverUniqueAlbums : _analytics.getUniqueAlbumsForYear(year),
         discoveryRate: discoveryRate,
         personality: personality,
         playsByHour: playsByHour,
@@ -410,6 +437,7 @@ class _TrackData {
   final String? albumImageTag;
   final int playCount;
   final int? runTimeTicks;
+  final List<String> genres;
 
   _TrackData({
     required this.trackId,
@@ -420,6 +448,7 @@ class _TrackData {
     this.albumImageTag,
     required this.playCount,
     this.runTimeTicks,
+    this.genres = const [],
   });
 }
 

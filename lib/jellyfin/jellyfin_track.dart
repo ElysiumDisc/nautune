@@ -6,6 +6,7 @@ class JellyfinTrack {
     required this.name,
     required this.album,
     required this.artists,
+    this.artistIds = const <String>[],
     this.runTimeTicks,
     this.primaryImageTag,
     this.serverUrl,
@@ -35,6 +36,7 @@ class JellyfinTrack {
   final String name;
   final String? album;
   final List<String> artists;
+  final List<String> artistIds;
   final int? runTimeTicks;
   final String? primaryImageTag;
   final String? serverUrl;
@@ -64,6 +66,17 @@ class JellyfinTrack {
   factory JellyfinTrack.fromJson(Map<String, dynamic> json, {String? serverUrl, String? token, String? userId}) {
     final rawArtists = json['Artists'];
     final artistsList = (rawArtists is List) ? rawArtists.whereType<String>().toList() : <String>[];
+
+    // Parse artist IDs from ArtistItems (similar to how albums do it)
+    final rawArtistItems = json['ArtistItems'];
+    final artistIdsList = <String>[];
+    if (rawArtistItems is List) {
+      for (final item in rawArtistItems) {
+        if (item is Map && item['Id'] is String) {
+          artistIdsList.add(item['Id'] as String);
+        }
+      }
+    }
 
     final imageTags = json['ImageTags'];
     final primaryImageTag = imageTags is Map ? (imageTags['Primary'] is String ? imageTags['Primary'] as String : null) : null;
@@ -158,6 +171,7 @@ class JellyfinTrack {
       name: json['Name'] is String ? json['Name'] as String : '',
       album: json['Album'] is String ? json['Album'] as String : null,
       artists: artistsList,
+      artistIds: artistIdsList,
       runTimeTicks: runTimeTicks,
       primaryImageTag: primaryImageTag,
       serverUrl: serverUrl,
@@ -189,6 +203,7 @@ class JellyfinTrack {
     String? name,
     String? album,
     List<String>? artists,
+    List<String>? artistIds,
     int? runTimeTicks,
     String? primaryImageTag,
     String? serverUrl,
@@ -218,6 +233,7 @@ class JellyfinTrack {
       name: name ?? this.name,
       album: album ?? this.album,
       artists: artists ?? this.artists,
+      artistIds: artistIds ?? this.artistIds,
       runTimeTicks: runTimeTicks ?? this.runTimeTicks,
       primaryImageTag: primaryImageTag ?? this.primaryImageTag,
       serverUrl: serverUrl ?? this.serverUrl,

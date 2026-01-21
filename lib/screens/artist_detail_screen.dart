@@ -85,6 +85,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         child: JellyfinImage(
           itemId: artist.id,
           imageTag: tag,
+          artistId: artist.id, // Enable offline artist image support
           maxWidth: 800,
           boxFit: BoxFit.cover,
           errorBuilder: (context, url, error) => _DefaultArtistArtwork(),

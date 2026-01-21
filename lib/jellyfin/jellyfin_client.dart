@@ -1265,6 +1265,52 @@ class JellyfinClient {
     }
   }
 
+  /// Get full item data for multiple items at once (batch) - includes track metadata
+  /// Uses: GET /Users/{userId}/Items with all fields needed for analytics
+  /// Returns map of itemId -> Full item data (name, artists, genres, duration, userData, etc.)
+  Future<Map<String, Map<String, dynamic>>> getBatchItemsWithFullData({
+    required JellyfinCredentials credentials,
+    required List<String> itemIds,
+  }) async {
+    if (itemIds.isEmpty) return {};
+
+    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+      'Ids': itemIds.join(','),
+      'EnableUserData': 'true',
+      'Fields': 'UserData,Artists,Genres,RunTimeTicks,Album,AlbumId',
+    });
+
+    try {
+      final response = await _robustClient.get(
+        uri,
+        headers: _defaultHeaders(credentials),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>?;
+        final items = data?['Items'] as List<dynamic>? ?? [];
+
+        final result = <String, Map<String, dynamic>>{};
+        for (final item in items) {
+          if (item is Map<String, dynamic>) {
+            final id = item['Id'] as String?;
+            if (id != null) {
+              // Return the full item data, not just userData
+              result[id] = item;
+            }
+          }
+        }
+        return result;
+      } else {
+        debugPrint('⚠️ Failed to get batch user data: ${response.statusCode}');
+        return {};
+      }
+    } catch (e) {
+      debugPrint('❌ Error getting batch user data: $e');
+      return {};
+    }
+  }
+
   /// Clear the HTTP cache (ETag/Last-Modified)
   void clearHttpCache() {
     _robustClient.clearCache();

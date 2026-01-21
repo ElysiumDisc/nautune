@@ -27,6 +27,18 @@
 
 ## 📋 Changelog
 
+### v5.4.6 - Stats Accuracy, Offline & Rewind UI
+- **Rewind UI Refresh**: Fresh, modern card designs with nautical wave decorations and theme-aware gradients
+- **Album Color Matching**: Top Album card now extracts colors from album artwork for dynamic gradients
+- **All-Time Genre Stats**: Fixed "no genre data" for All-Time Rewind by parsing genres from Jellyfin server
+- **Accurate Listening Time**: Fixed bug where full track duration was recorded instead of actual listening time
+- **Periodic Analytics Sync**: Play stats now sync to server every 10 minutes when online
+- **CarPlay Offline Mode**: CarPlay now works properly in offline mode, showing downloaded content
+- **Artist Image Caching**: Artist profile pictures are now downloaded alongside album art for offline viewing
+- **2-Year Stats Retention**: Extended listening history from 180 days to 730 days for accurate yearly Rewind stats
+- **Period Comparison Fix**: Month-over-month and year-over-year comparisons now use inclusive date ranges
+- **Offline Artist Browsing**: Artist images and albums now display correctly when browsing downloaded content offline
+
 ### v5.4.5 - Performance Optimizations
 - **LRU Cache Eviction**: Memory-bounded caches for images, HTTP ETags, and API responses prevent memory bloat in long sessions
 - **List Virtualization**: Added `cacheExtent` to all scrollable lists for smoother 60fps scrolling with 1000+ items

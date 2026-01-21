@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_carplay/flutter_carplay.dart';
 import '../app_state.dart';
+import '../jellyfin/jellyfin_album.dart';
+import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_track.dart';
 
 class CarPlayService {
@@ -290,18 +292,25 @@ class CarPlayService {
 
   Future<void> _showAlbums({int offset = 0}) async {
     try {
-      // If we don't have data and aren't loading, trigger load
-      if (appState.albums == null && !appState.isLoadingAlbums) {
-        // Trigger load without awaiting (to start the process)
-        appState.refreshAlbums();
-      }
+      List<JellyfinAlbum> allAlbums;
 
-      // If loading, wait for it to finish
-      if (appState.isLoadingAlbums) {
-        await _waitFor(() => !appState.isLoadingAlbums);
-      }
+      // In offline mode, get albums from downloaded content
+      if (appState.isOfflineMode) {
+        allAlbums = await appState.repository.getAlbums(
+          libraryId: 'offline_downloads',
+          limit: 1000,
+        );
+      } else {
+        // If we don't have data and aren't loading, trigger load and wait
+        if (appState.albums == null && !appState.isLoadingAlbums) {
+          await appState.refreshAlbums();
+        } else if (appState.isLoadingAlbums) {
+          // If already loading, wait for it to finish
+          await _waitFor(() => !appState.isLoadingAlbums);
+        }
 
-      final allAlbums = appState.albums ?? [];
+        allAlbums = appState.albums ?? [];
+      }
 
       if (allAlbums.isEmpty) {
         await _showEmptyState('Albums', 'No albums available');
@@ -363,15 +372,25 @@ class CarPlayService {
 
   Future<void> _showArtists({int offset = 0}) async {
     try {
-      if (appState.artists == null && !appState.isLoadingArtists) {
-        appState.refreshArtists();
-      }
+      List<JellyfinArtist> allArtists;
 
-      if (appState.isLoadingArtists) {
-        await _waitFor(() => !appState.isLoadingArtists);
-      }
+      // In offline mode, get artists from downloaded content
+      if (appState.isOfflineMode) {
+        allArtists = await appState.repository.getArtists(
+          libraryId: 'offline_downloads',
+          limit: 1000,
+        );
+      } else {
+        // If we don't have data and aren't loading, trigger load and wait
+        if (appState.artists == null && !appState.isLoadingArtists) {
+          await appState.refreshArtists();
+        } else if (appState.isLoadingArtists) {
+          // If already loading, wait for it to finish
+          await _waitFor(() => !appState.isLoadingArtists);
+        }
 
-      final allArtists = appState.artists ?? [];
+        allArtists = appState.artists ?? [];
+      }
 
       if (allArtists.isEmpty) {
         await _showEmptyState('Artists', 'No artists available');
@@ -432,11 +451,17 @@ class CarPlayService {
 
   Future<void> _showPlaylists({int offset = 0}) async {
     try {
-      if (appState.playlists == null && !appState.isLoadingPlaylists) {
-        appState.refreshPlaylists();
+      // In offline mode, playlists are not supported yet
+      if (appState.isOfflineMode) {
+        await _showEmptyState('Playlists', 'Playlists not available offline');
+        return;
       }
 
-      if (appState.isLoadingPlaylists) {
+      // If we don't have data and aren't loading, trigger load and wait
+      if (appState.playlists == null && !appState.isLoadingPlaylists) {
+        await appState.refreshPlaylists();
+      } else if (appState.isLoadingPlaylists) {
+        // If already loading, wait for it to finish
         await _waitFor(() => !appState.isLoadingPlaylists);
       }
 
@@ -541,21 +566,36 @@ class CarPlayService {
 
   Future<void> _showArtistAlbums(String artistId, String artistName) async {
     try {
-      if (appState.albums == null && !appState.isLoadingAlbums) {
-        appState.refreshAlbums();
-      }
-      
-      if (appState.isLoadingAlbums) {
-        await _waitFor(() => !appState.isLoadingAlbums);
-      }
+      List<JellyfinAlbum> albums;
 
-      final albumsList = appState.albums ?? [];
-      final albums = albumsList.where((album) {
-        if (album.artistIds.contains(artistId)) {
-          return true;
+      // In offline mode, get artist albums from downloaded content
+      if (appState.isOfflineMode) {
+        albums = await appState.repository.getArtistAlbums(artistId);
+        // Also check by name for offline repository
+        if (albums.isEmpty) {
+          final allAlbums = await appState.repository.getAlbums(
+            libraryId: 'offline_downloads',
+            limit: 1000,
+          );
+          albums = allAlbums.where((album) => album.artists.contains(artistName)).toList();
         }
-        return album.artists.contains(artistName);
-      }).toList();
+      } else {
+        // If we don't have data and aren't loading, trigger load and wait
+        if (appState.albums == null && !appState.isLoadingAlbums) {
+          await appState.refreshAlbums();
+        } else if (appState.isLoadingAlbums) {
+          // If already loading, wait for it to finish
+          await _waitFor(() => !appState.isLoadingAlbums);
+        }
+
+        final albumsList = appState.albums ?? [];
+        albums = albumsList.where((album) {
+          if (album.artistIds.contains(artistId)) {
+            return true;
+          }
+          return album.artists.contains(artistName);
+        }).toList();
+      }
 
       if (albums.isEmpty) {
         await _showEmptyState(artistName, 'No albums from this artist');
@@ -627,15 +667,22 @@ class CarPlayService {
 
   Future<void> _showFavorites({int offset = 0}) async {
     try {
-      if (appState.favoriteTracks == null && !appState.isLoadingFavorites) {
-        appState.refreshFavorites();
-      }
+      List<JellyfinTrack> allFavorites;
 
-      if (appState.isLoadingFavorites) {
-        await _waitFor(() => !appState.isLoadingFavorites);
-      }
+      // In offline mode, get favorites from downloaded content
+      if (appState.isOfflineMode) {
+        allFavorites = await appState.repository.getFavoriteTracks();
+      } else {
+        // If we don't have data and aren't loading, trigger load and wait
+        if (appState.favoriteTracks == null && !appState.isLoadingFavorites) {
+          await appState.refreshFavorites();
+        } else if (appState.isLoadingFavorites) {
+          // If already loading, wait for it to finish
+          await _waitFor(() => !appState.isLoadingFavorites);
+        }
 
-      final allFavorites = appState.favoriteTracks ?? [];
+        allFavorites = appState.favoriteTracks ?? [];
+      }
 
       if (allFavorites.isEmpty) {
         await _showEmptyState('Favorites', 'No favorite tracks yet');
@@ -698,11 +745,17 @@ class CarPlayService {
 
   Future<void> _showRecentlyPlayed({int offset = 0}) async {
     try {
-      if (appState.recentlyPlayedTracks == null && !appState.isLoadingRecentlyPlayed) {
-        appState.refreshRecent();
+      // In offline mode, recently played is not available
+      if (appState.isOfflineMode) {
+        await _showEmptyState('Recently Played', 'Not available offline');
+        return;
       }
 
-      if (appState.isLoadingRecentlyPlayed) {
+      // If we don't have data and aren't loading, trigger load and wait
+      if (appState.recentlyPlayedTracks == null && !appState.isLoadingRecentlyPlayed) {
+        await appState.refreshRecent();
+      } else if (appState.isLoadingRecentlyPlayed) {
+        // If already loading, wait for it to finish
         await _waitFor(() => !appState.isLoadingRecentlyPlayed);
       }
 

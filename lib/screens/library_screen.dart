@@ -4503,12 +4503,18 @@ class _SearchTabState extends State<_SearchTab> {
     return Card(
       child: ListTile(
         leading: artist.primaryImageTag != null
-            ? CircleAvatar(
-                backgroundImage: NetworkImage(
-                  widget.appState.jellyfinService.buildImageUrl(
+            ? ClipOval(
+                child: SizedBox(
+                  width: 40,
+                  height: 40,
+                  child: JellyfinImage(
                     itemId: artist.id,
-                    tag: artist.primaryImageTag!,
+                    imageTag: artist.primaryImageTag!,
+                    artistId: artist.id, // Enable offline artist image support
                     maxWidth: 100,
+                    boxFit: BoxFit.cover,
+                    errorBuilder: (context, url, error) =>
+                        const CircleAvatar(child: Icon(Icons.person_outline)),
                   ),
                 ),
               )
@@ -4608,17 +4614,14 @@ class _ArtistCard extends StatelessWidget {
     Widget artwork;
     final tag = artist.primaryImageTag;
     if (tag != null && tag.isNotEmpty) {
-      final imageUrl = appState.jellyfinService.buildImageUrl(
-        itemId: artist.id,
-        tag: tag,
-        maxWidth: 400,
-      );
       artwork = ClipOval(
-        child: Image.network(
-          imageUrl,
-          fit: BoxFit.cover,
-          headers: appState.jellyfinService.imageHeaders(),
-          errorBuilder: (context, error, stackTrace) => ClipOval(
+        child: JellyfinImage(
+          itemId: artist.id,
+          imageTag: tag,
+          artistId: artist.id, // Enable offline artist image support
+          maxWidth: 400,
+          boxFit: BoxFit.cover,
+          errorBuilder: (context, url, error) => ClipOval(
             child: Image.asset(
               'assets/no_artist_art.png',
               fit: BoxFit.cover,

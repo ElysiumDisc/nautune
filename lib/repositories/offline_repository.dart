@@ -83,17 +83,20 @@ class OfflineRepository implements MusicRepository {
     final downloads = _downloadService.completedDownloads;
     final artists = <String, JellyfinArtist>{};
 
-    // Group tracks by artist
+    // Group tracks by artist - use actual artist IDs when available
     for (final download in downloads) {
       final track = download.track;
       final artistName = track.displayArtist;
-      final artistId = track.artists.isNotEmpty ? track.artists.first : artistName;
+      // Use actual artist ID if available, otherwise fall back to artist name
+      final artistId = track.artistIds.isNotEmpty
+          ? track.artistIds.first
+          : (track.artists.isNotEmpty ? track.artists.first : artistName);
 
       if (!artists.containsKey(artistId)) {
         artists[artistId] = JellyfinArtist(
           id: artistId,
           name: artistName,
-          primaryImageTag: null, // Not available from track metadata
+          primaryImageTag: 'offline', // Marker that offline image may be available
         );
       }
     }

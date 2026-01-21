@@ -412,18 +412,35 @@ class ListeningAnalyticsService {
   Future<void> _saveEvents() async {
     if (_box == null) return;
 
-    // Keep only last 180 days (6 months) of events to prevent unbounded growth
-    final cutoff = DateTime.now().subtract(const Duration(days: 180));
+    // Keep last 730 days (2 years) of events to allow viewing previous year's Rewind
+    // This ensures you can always access last year's stats throughout the current year
+    final cutoff = DateTime.now().subtract(const Duration(days: 730));
     _events.removeWhere((e) => e.timestamp.isBefore(cutoff));
 
     final jsonList = _events.map((e) => e.toJson()).toList();
     await _box!.put(_eventsKey, jsonEncode(jsonList));
   }
 
-  /// Record a play event for a track
-  Future<void> recordPlay(JellyfinTrack track) async {
+  /// Record a play event for a track with actual listening duration
+  /// [actualDurationMs] - The actual time listened in milliseconds (not full track length)
+  /// [playStartTime] - When the track started playing (for accurate timestamp)
+  Future<void> recordPlay(
+    JellyfinTrack track, {
+    int? actualDurationMs,
+    DateTime? playStartTime,
+  }) async {
     if (!_initialized) {
       debugPrint('ListeningAnalyticsService: Not initialized, skipping record');
+      return;
+    }
+
+    // Use actual duration if provided, otherwise fall back to track duration
+    final durationMs = actualDurationMs ??
+        (track.runTimeTicks != null ? track.runTimeTicks! ~/ 10000 : 0);
+
+    // Don't record plays shorter than 10 seconds (likely accidental skips)
+    if (durationMs < 10000) {
+      debugPrint('ListeningAnalyticsService: Skipping short play (<10s) for "${track.name}"');
       return;
     }
 
@@ -434,8 +451,8 @@ class ListeningAnalyticsService {
       albumName: track.album,
       artists: track.artists,
       genres: track.genres ?? [],
-      timestamp: DateTime.now(),
-      durationMs: track.runTimeTicks != null ? track.runTimeTicks! ~/ 10000 : 0,
+      timestamp: playStartTime ?? DateTime.now(),
+      durationMs: durationMs,
     );
 
     _events.insert(0, event); // Add to front (most recent)
@@ -443,7 +460,9 @@ class ListeningAnalyticsService {
     // Save asynchronously
     unawaited(_saveEvents());
 
-    debugPrint('ListeningAnalyticsService: Recorded play for "${track.name}"');
+    final minutes = durationMs ~/ 60000;
+    final seconds = (durationMs % 60000) ~/ 1000;
+    debugPrint('ListeningAnalyticsService: Recorded ${minutes}m ${seconds}s for "${track.name}"');
   }
 
   /// Get play counts by hour of day (0-23) for the given date range
@@ -648,11 +667,15 @@ class ListeningAnalyticsService {
     final previousTracks = <String>{};
 
     for (final event in _events) {
-      if (event.timestamp.isAfter(currentStart) && event.timestamp.isBefore(currentEnd)) {
+      final ts = event.timestamp;
+      // Use inclusive comparison: start <= timestamp <= end
+      // This ensures events at exactly midnight or exactly now are counted
+      if (!ts.isBefore(currentStart) && !ts.isAfter(currentEnd)) {
         currentPlays++;
         currentTimeMs += event.durationMs;
         currentTracks.add(event.trackId);
-      } else if (event.timestamp.isAfter(previousStart) && event.timestamp.isBefore(previousEnd)) {
+      } else if (!ts.isBefore(previousStart) && ts.isBefore(previousEnd)) {
+        // Previous period: start <= timestamp < end (exclusive end to avoid overlap)
         previousPlays++;
         previousTimeMs += event.durationMs;
         previousTracks.add(event.trackId);
@@ -1600,6 +1623,7 @@ class ListeningAnalyticsService {
 
   /// Sync play data FROM server to reconcile counts
   /// This fetches PlayCount from server and creates "catch-up" events if needed
+  /// Now includes full track metadata (name, artists, genres, duration) for accurate stats
   Future<SyncResult> syncFromServer({
     required JellyfinClient client,
     required JellyfinCredentials credentials,
@@ -1616,8 +1640,8 @@ class ListeningAnalyticsService {
     debugPrint('📊 Sync: Fetching play data for ${trackIds.length} tracks from server...');
 
     try {
-      // Get server play counts in batches
-      final serverData = await client.getBatchUserItemData(
+      // Get server data with full item metadata (name, artists, genres, duration)
+      final serverData = await client.getBatchItemsWithFullData(
         credentials: credentials,
         itemIds: trackIds,
       );
@@ -1625,11 +1649,25 @@ class ListeningAnalyticsService {
       int addedCount = 0;
 
       for (final trackId in trackIds) {
-        final userData = serverData[trackId];
+        final itemData = serverData[trackId];
+        if (itemData == null) continue;
+
+        final userData = itemData['UserData'] as Map<String, dynamic>?;
         if (userData == null) continue;
 
         final serverPlayCount = userData['PlayCount'] as int? ?? 0;
         final lastPlayedStr = userData['LastPlayedDate'] as String?;
+
+        // Extract track metadata from server response
+        final trackName = itemData['Name'] as String? ?? 'Unknown Track';
+        final rawArtists = itemData['Artists'] as List<dynamic>?;
+        final artists = rawArtists?.whereType<String>().toList() ?? <String>[];
+        final rawGenres = itemData['Genres'] as List<dynamic>?;
+        final genres = rawGenres?.whereType<String>().toList() ?? <String>[];
+        final albumId = itemData['AlbumId'] as String?;
+        final albumName = itemData['Album'] as String?;
+        final runTimeTicks = itemData['RunTimeTicks'] as int?;
+        final durationMs = runTimeTicks != null ? runTimeTicks ~/ 10000 : 0;
 
         // Count local plays for this track
         final localPlayCount = _events.where((e) => e.trackId == trackId).length;
@@ -1637,21 +1675,33 @@ class ListeningAnalyticsService {
         // If server has more plays than we have locally, we're missing data
         if (serverPlayCount > localPlayCount) {
           final missingCount = serverPlayCount - localPlayCount;
-          debugPrint('📊 Track $trackId: server=$serverPlayCount, local=$localPlayCount, missing=$missingCount');
+          debugPrint('📊 Track $trackId ($trackName): server=$serverPlayCount, local=$localPlayCount, missing=$missingCount');
 
-          // Create catch-up events marked as synced (they came from server)
+          // Get last played date from server
           final lastPlayed = lastPlayedStr != null
               ? DateTime.tryParse(lastPlayedStr)
               : DateTime.now();
+          final baseTime = lastPlayed ?? DateTime.now();
 
+          // Distribute catch-up events across time for more realistic stats
+          // Spread plays evenly over the past 30 days leading up to lastPlayed
           for (int i = 0; i < missingCount; i++) {
+            // Calculate a spread timestamp - distribute events over 30 days
+            final daysAgo = (i * 30) ~/ missingCount;
+            final hoursOffset = (i * 24) % 24; // Vary the hour for better distribution
+            final spreadTimestamp = baseTime
+                .subtract(Duration(days: daysAgo))
+                .subtract(Duration(hours: hoursOffset));
+
             final catchUpEvent = PlayEvent(
               trackId: trackId,
-              trackName: 'Synced from server', // We don't have the name
-              artists: [],
-              genres: [],
-              timestamp: lastPlayed ?? DateTime.now(),
-              durationMs: 0,
+              trackName: trackName,
+              albumId: albumId,
+              albumName: albumName,
+              artists: artists,
+              genres: genres,
+              timestamp: spreadTimestamp,
+              durationMs: durationMs,
               synced: true, // Already on server
             );
             _events.add(catchUpEvent);
@@ -1664,7 +1714,7 @@ class ListeningAnalyticsService {
         // Sort events by timestamp
         _events.sort((a, b) => b.timestamp.compareTo(a.timestamp));
         await _saveEvents();
-        debugPrint('📊 Sync: Added $addedCount catch-up events from server');
+        debugPrint('📊 Sync: Added $addedCount catch-up events from server with full metadata');
       }
 
       return SyncResult(success: true, syncedCount: addedCount);

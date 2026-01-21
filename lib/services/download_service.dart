@@ -412,11 +412,20 @@ class DownloadService extends ChangeNotifier {
             runTimeTicks = val;
           }
 
+          // Parse artist IDs from saved data
+          final rawArtistIds = itemData['trackArtistIds'];
+          final artistIds = (rawArtistIds is List)
+              ? rawArtistIds.whereType<String>().toList()
+              : <String>[];
+
           final track = JellyfinTrack(
             id: trackId,
             name: itemData['trackName'] as String,
             artists: [itemData['trackArtist'] as String],
+            artistIds: artistIds,
             album: itemData['trackAlbum'] as String?,
+            albumId: itemData['trackAlbumId'] as String?,
+            albumPrimaryImageTag: itemData['trackAlbumPrimaryImageTag'] as String?,
             runTimeTicks: runTimeTicks,
             container: itemData['trackContainer'] as String?,
             codec: itemData['trackCodec'] as String?,
@@ -626,6 +635,72 @@ class DownloadService extends ChangeNotifier {
     }
   }
 
+  /// Get artist image path - stores artist images by artist ID
+  Future<String> _getArtistImagePath(String artistId) async {
+    final docsDir = await getApplicationDocumentsDirectory();
+    final Directory artistImageDir;
+
+    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+      artistImageDir = Directory(
+        '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads${Platform.pathSeparator}artists',
+      );
+    } else {
+      artistImageDir = Directory('${docsDir.path}/downloads/artists');
+    }
+
+    if (!await artistImageDir.exists()) {
+      await artistImageDir.create(recursive: true);
+    }
+
+    return File('${artistImageDir.path}/$artistId.jpg').absolute.path;
+  }
+
+  /// Download artist image for offline use
+  Future<void> _downloadArtistImage(String artistId) async {
+    try {
+      final artistImagePath = await _getArtistImagePath(artistId);
+      final file = File(artistImagePath);
+
+      if (await file.exists()) {
+        return; // Already cached for this artist
+      }
+
+      // Build artist image URL using Jellyfin service
+      final imageUrl = jellyfinService.buildImageUrl(
+        itemId: artistId,
+        maxWidth: 400,
+      );
+
+      final response = await http.get(
+        Uri.parse(imageUrl),
+        headers: jellyfinService.imageHeaders(),
+      );
+      if (response.statusCode == 200) {
+        await file.writeAsBytes(response.bodyBytes);
+        debugPrint('Artist image cached for: $artistId');
+      }
+    } catch (e) {
+      debugPrint('Failed to cache artist image for $artistId: $e');
+    }
+  }
+
+  /// Download all artist images for a track
+  Future<void> _downloadArtistImages(JellyfinTrack track) async {
+    for (final artistId in track.artistIds) {
+      await _downloadArtistImage(artistId);
+    }
+  }
+
+  /// Get artist image file for offline display
+  Future<File?> getArtistImageFile(String artistId) async {
+    final path = await _getArtistImagePath(artistId);
+    final file = File(path);
+    if (await file.exists()) {
+      return file;
+    }
+    return null;
+  }
+
   /// Extract actual duration from downloaded audio file
   Future<Duration?> _extractAudioDuration(String filePath) async {
     AudioPlayer? player;
@@ -666,7 +741,12 @@ class DownloadService extends ChangeNotifier {
   }
 
   Future<File?> getArtworkFile(String trackId) async {
-    final path = await _getArtworkPath(trackId);
+    // Look up the track to get its albumId (artwork is stored by album, not track)
+    final item = _downloads[trackId];
+    if (item == null) return null;
+
+    final albumId = item.track.albumId ?? item.track.id;
+    final path = await _getArtworkPath(albumId);
     final file = File(path);
     if (await file.exists()) {
       return file;
@@ -900,6 +980,9 @@ class DownloadService extends ChangeNotifier {
 
       // Download artwork after track completes
       await _downloadArtwork(updatedTrack);
+
+      // Download artist images for offline use
+      await _downloadArtistImages(updatedTrack);
 
       // Extract waveform in background
       if (WaveformService.instance.isAvailable) {

@@ -126,6 +126,7 @@ class NautuneAppState extends ChangeNotifier {
   StreamSubscription<bool>? _connectivitySubscription;
   StreamSubscription<JellyfinTrack?>? _trayTrackSubscription;
   StreamSubscription<bool>? _trayPlayingSubscription;
+  Timer? _periodicSyncTimer; // Syncs analytics every 10 minutes
   bool _connectivityMonitorInitialized = false;
   Map<String, double> _libraryScrollOffsets = {};
   int _restoredLibraryTabIndex = 0;
@@ -326,12 +327,16 @@ class NautuneAppState extends ChangeNotifier {
         );
         _audioPlayerService.setReportingService(reportingService);
 
+        // Start periodic analytics sync for the new session
+        _startPeriodicSyncTimer();
+
         _loadLibraries();
         if (session.selectedLibraryId != null) {
           _loadLibraryDependentContent(forceRefresh: true);
         }
       } else if (_session == null) {
-        // Session cleared
+        // Session cleared - stop periodic sync
+        _stopPeriodicSyncTimer();
         _clearLibraryCaches();
       }
     }
@@ -849,6 +854,26 @@ class NautuneAppState extends ChangeNotifier {
     }
   }
 
+  /// Start periodic analytics sync timer (every 10 minutes)
+  /// This ensures local plays are regularly pushed to server
+  void _startPeriodicSyncTimer() {
+    _periodicSyncTimer?.cancel();
+    _periodicSyncTimer = Timer.periodic(const Duration(minutes: 10), (_) {
+      if (_session != null && _networkAvailable && !_isDemoMode) {
+        debugPrint('📊 Periodic sync triggered (every 10 min)');
+        unawaited(_syncAnalyticsToServer());
+      }
+    });
+    debugPrint('📊 Started periodic analytics sync timer (10 min interval)');
+  }
+
+  /// Stop the periodic sync timer
+  void _stopPeriodicSyncTimer() {
+    _periodicSyncTimer?.cancel();
+    _periodicSyncTimer = null;
+    debugPrint('📊 Stopped periodic analytics sync timer');
+  }
+
   /// Sync local listening analytics to the Jellyfin server
   /// This pushes unsynced plays that were recorded offline
   Future<void> _syncAnalyticsToServer() async {
@@ -963,6 +988,9 @@ class NautuneAppState extends ChangeNotifier {
           session: storedSession,
         );
         await _applyBootstrapSnapshot(snapshot);
+        // Start periodic analytics sync timer (runs every 10 min)
+        _startPeriodicSyncTimer();
+
         if (_networkAvailable) {
           _startBootstrapSync(storedSession);
           // Sync analytics in background on startup
@@ -1365,6 +1393,11 @@ class NautuneAppState extends ChangeNotifier {
       final ids = _demoPlaylistTrackMap[playlistId] ?? const <String>[];
       return _demoTracksFromIds(ids);
     }
+    // When offline, playlists are not fully supported yet
+    // Return empty list instead of making network request
+    if (isOfflineMode) {
+      return await repository.getPlaylistTracks(playlistId);
+    }
     return await _jellyfinService.getPlaylistItems(playlistId);
   }
 
@@ -1375,6 +1408,10 @@ class NautuneAppState extends ChangeNotifier {
       }
       final ids = _demoAlbumTrackMap[albumId] ?? const <String>[];
       return _demoTracksFromIds(ids);
+    }
+    // When offline, use downloaded tracks from the download service
+    if (isOfflineMode) {
+      return await repository.getAlbumTracks(albumId);
     }
     return await _jellyfinService.getAlbumTracks(albumId);
   }
@@ -2458,6 +2495,7 @@ class NautuneAppState extends ChangeNotifier {
     _trayTrackSubscription?.cancel();
     _trayPlayingSubscription?.cancel();
     _powerModeSub?.cancel();
+    _periodicSyncTimer?.cancel();
     _demoModeProvider?.removeListener(_onDemoModeChanged);
     _sessionProvider?.removeListener(_onSessionChanged);
     super.dispose();
