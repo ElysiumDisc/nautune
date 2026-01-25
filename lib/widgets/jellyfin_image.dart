@@ -44,6 +44,7 @@ class JellyfinImage extends StatelessWidget {
 
     // If artistId is provided, try to load downloaded artist image first
     if (artistId != null) {
+      final isOfflineMarker = imageTag == 'offline';
       return FutureBuilder<File?>(
         future: appState.downloadService.getArtistImageFile(artistId!),
         builder: (context, snapshot) {
@@ -54,10 +55,24 @@ class JellyfinImage extends StatelessWidget {
               width: width,
               height: height,
               fit: boxFit,
-              errorBuilder: (context, error, stackTrace) => _buildNetworkImage(context, appState),
+              errorBuilder: (context, error, stackTrace) {
+                if (isOfflineMarker) {
+                  if (errorBuilder != null) {
+                    return errorBuilder!(context, '', error);
+                  }
+                  return _buildError(context, error);
+                }
+                return _buildNetworkImage(context, appState);
+              },
             );
           }
-          // No offline artist image - fall back to network image
+          // No offline artist image - fall back to network image (unless offline marker)
+          if (isOfflineMarker) {
+            if (errorBuilder != null) {
+              return errorBuilder!(context, '', 'No offline image available');
+            }
+            return _buildError(context, 'No offline image available');
+          }
           return _buildNetworkImage(context, appState);
         },
       );

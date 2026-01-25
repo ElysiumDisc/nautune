@@ -171,6 +171,16 @@ class AudioPlayerService {
     _reportingService?.attachPositionProvider(() => _lastPosition);
   }
 
+  /// Gets the offline artwork URI for a track if available.
+  /// Returns a file:// URI for local artwork, or null if not available.
+  Future<Uri?> _getOfflineArtworkUri(String trackId) async {
+    final artworkPath = await _downloadService?.getArtworkPathForTrack(trackId);
+    if (artworkPath != null && File(artworkPath).existsSync()) {
+      return Uri.file(artworkPath);
+    }
+    return null;
+  }
+
   void setCrossfadeEnabled(bool enabled) {
     _crossfadeEnabled = enabled;
     if (!enabled) {
@@ -733,7 +743,8 @@ class AudioPlayerService {
           // 3. IMPORTANT: Update AudioHandler to listen to the NEW player (which is playing)
           // BEFORE stopping the old one. This prevents the OS from seeing a "Stop" state.
           _audioHandler?.updatePlayer(_nextPlayer);
-          _audioHandler?.updateNautuneMediaItem(nextTrack);
+          final offlineArtUri = await _getOfflineArtworkUri(nextTrack.id);
+          _audioHandler?.updateNautuneMediaItem(nextTrack, offlineArtUri: offlineArtUri);
 
           // 3.5 Brief yield to ensure OS media controls are fully updated
           // This prevents audio glitch from racing between handler update and player stop
@@ -1019,7 +1030,8 @@ class AudioPlayerService {
 
     // Update audio handler with current track metadata immediately
     // This is critical for Lock Screen to update BEFORE audio starts
-    _audioHandler?.updateNautuneMediaItem(track);
+    final offlineArtUri = await _getOfflineArtworkUri(track.id);
+    _audioHandler?.updateNautuneMediaItem(track, offlineArtUri: offlineArtUri);
     _audioHandler?.updateNautuneQueue(_queue);
     
     // Generate a session ID to link the stream and the reporting

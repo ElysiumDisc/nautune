@@ -87,14 +87,18 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
     ));
   }
 
-  void updateNautuneMediaItem(JellyfinTrack track) {
+  void updateNautuneMediaItem(JellyfinTrack track, {Uri? offlineArtUri}) {
+    // Use network artwork URL if available, otherwise fall back to offline artwork
+    final networkArtUrl = track.artworkUrl();
+    final artUri = networkArtUrl != null ? Uri.parse(networkArtUrl) : offlineArtUri;
+
     final item = audio_service.MediaItem(
       id: track.id,
       album: track.album,
       title: track.name,
       artist: track.displayArtist,
       duration: track.duration,
-      artUri: track.artworkUrl() != null ? Uri.parse(track.artworkUrl()!) : null,
+      artUri: artUri,
     );
     mediaItem.add(item);
   }
