@@ -817,19 +817,26 @@ class _LibraryTabState extends State<_LibraryTab> {
         appState: widget.appState,
       );
     } else {
-      final Map<String, List<dynamic>> artistsMap = {};
+      final Map<String, JellyfinArtist> artistsMap = {};
       for (final download in downloads) {
-        final artistName = download.track.displayArtist;
-        artistsMap.putIfAbsent(artistName, () => []).add(download);
+        final track = download.track;
+        final artistName = track.displayArtist;
+        // Use actual artist ID if available, otherwise fall back to artist name
+        final artistId = track.artistIds.isNotEmpty
+            ? track.artistIds.first
+            : artistName;
+
+        if (!artistsMap.containsKey(artistId)) {
+          artistsMap[artistId] = JellyfinArtist(
+            id: artistId,
+            name: artistName,
+            primaryImageTag: 'offline', // Marker for offline image availability
+          );
+        }
       }
 
-      final offlineArtists = artistsMap.keys.map((name) {
-        return JellyfinArtist(
-          id: 'offline_$name',
-          name: name,
-        );
-      }).toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
+      final offlineArtists = artistsMap.values.toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
 
       return _ArtistsTab(
         appState: widget.appState,

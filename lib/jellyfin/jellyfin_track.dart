@@ -541,6 +541,7 @@ class JellyfinTrack {
       'name': name,
       'album': album,
       'artists': artists,
+      'artistIds': artistIds,
       'runTimeTicks': runTimeTicks,
       'primaryImageTag': primaryImageTag,
       'serverUrl': serverUrl,
@@ -570,6 +571,9 @@ class JellyfinTrack {
     final rawArtists = json['artists'];
     final artistsList = (rawArtists is List) ? rawArtists.whereType<String>().toList() : <String>[];
 
+    final rawArtistIds = json['artistIds'];
+    final artistIdsList = (rawArtistIds is List) ? rawArtistIds.whereType<String>().toList() : <String>[];
+
     final runTimeTicksVal = json['runTimeTicks'];
     final runTimeTicks = runTimeTicksVal is int ? runTimeTicksVal : (runTimeTicksVal is num ? runTimeTicksVal.toInt() : null);
 
@@ -584,6 +588,7 @@ class JellyfinTrack {
       name: json['name'] is String ? json['name'] as String : '',
       album: json['album'] is String ? json['album'] as String : null,
       artists: artistsList,
+      artistIds: artistIdsList,
       runTimeTicks: runTimeTicks,
       primaryImageTag: json['primaryImageTag'] is String ? json['primaryImageTag'] as String : null,
       serverUrl: json['serverUrl'] is String ? json['serverUrl'] as String : null,
