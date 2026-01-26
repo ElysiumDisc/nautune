@@ -27,6 +27,10 @@
 
 ## 📋 Changelog
 
+### v5.4.9 - Offline Artist Images Fix
+- **Offline Artist Images**: Fixed bug where artist images showed default art instead of cached images when browsing offline
+- **Artist ID Resolution**: Offline artists now use actual Jellyfin UUIDs from track metadata instead of synthetic IDs, ensuring cached artwork loads correctly
+
 ### v5.4.7 - CarPlay Navigation Fix
 - **CarPlay Browsing Fix**: Fixed bug where browsing lists (albums, favorites, recently played) stopped loading after playing a track or using the phone app
 - **Navigation Stack Protection**: Root template refresh now uses flutter_carplay's `templateHistory` to detect navigation depth, preventing stack corruption while browsing
