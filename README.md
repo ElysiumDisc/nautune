@@ -172,9 +172,7 @@
 
 ## 📻 The Network (Easter Egg)
 
-<img src="screenshots/network.png" width="300" alt="The Network Radio">
-
-A hidden radio feature paying homage to [other-people.network](https://www.other-people.network) - Nicolas Jaar's experimental radio project.
+A hidden radio feature [other-people.network](https://www.other-people.network) - Nicolas Jaar's experimental radio project.
 
 ### How to Access
 
