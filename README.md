@@ -27,6 +27,17 @@
 
 ## 📋 Changelog
 
+### v5.5.5 - TUI Mode (Linux)
+- **Terminal UI Mode**: Launch Nautune with a jellyfin-tui inspired terminal interface using `--tui` flag
+- **Vim-Style Navigation**: Browse albums, artists, and queue with `j/k/h/l` keys
+- **Multi-Key Sequences**: `gg` to go top, `G` to go bottom, just like Vim
+- **Playback Controls**: `Space` pause, `n/p` next/prev, `+/-` volume, `S` stop, `c` clear queue
+- **Search Mode**: Press `/` to search your library
+- **Pane Navigation**: Sidebar and content pane with `h/l` to switch focus
+- **ASCII Progress Bar**: Classic `[=========>          ]` style progress display
+- **Box-Drawing Borders**: Authentic TUI aesthetic with `│ ─ ┌ ┐ └ ┘` characters
+- **Linux Only**: TUI mode is exclusive to the Linux build
+
 ### v5.5.3 - View Modes & Download Cleanup
 - **List Mode**: Toggle between grid view and compact list view for albums and artists
 - **Grid Size Options**: Customize grid density with 2-6 columns per row in Settings > Appearance
@@ -208,6 +219,103 @@ Stats persist across sessions and work for both online streaming and offline pla
 ### "Signal Found" Milestone
 
 Discovering The Network unlocks a special nautical milestone badge.
+
+---
+
+## 🖥️ TUI Mode (Linux)
+
+<img src="screenshots/tui.png" width="600" alt="Nautune TUI Mode">
+
+A terminal-inspired interface for keyboard-driven music browsing, inspired by [jellyfin-tui](https://github.com/dhonus/jellyfin-tui).
+
+### Launching TUI Mode
+
+#### AppImage
+```bash
+./Nautune-x86_64.AppImage --tui
+```
+
+#### Deb Package
+```bash
+nautune --tui
+```
+
+#### Environment Variable (Alternative)
+```bash
+NAUTUNE_TUI_MODE=1 nautune
+```
+
+#### Development
+```bash
+flutter run -d linux --dart-define=TUI_MODE=true
+```
+
+### Keyboard Bindings
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Move selection down/up |
+| `h` / `l` | Navigate back/forward (switch panes) |
+| `gg` | Go to top of list |
+| `G` | Go to bottom of list |
+| `Enter` | Play/Select item |
+| `Space` | Toggle play/pause |
+| `n` / `p` | Next/Previous track |
+| `+` / `-` | Volume up/down |
+| `m` | Toggle mute |
+| `s` | Shuffle queue |
+| `r` | Cycle repeat mode |
+| `S` | Stop playback |
+| `c` | Clear queue |
+| `x` / `d` | Delete item from queue |
+| `/` | Enter search mode |
+| `Esc` | Exit search / Go back |
+| `q` | Quit |
+
+### Features
+
+- **Sidebar Navigation**: Browse Albums, Artists, Queue, or Search
+- **Vim-Style Movement**: Familiar keybindings for keyboard users
+- **Multi-Key Sequences**: 500ms timeout for sequences like `gg`
+- **ASCII Progress Bar**: `[=========>          ] 2:34 / 4:12`
+- **Volume Indicator**: `Vol: [████████░░] 80%`
+- **Now Playing Bar**: Track info, progress, and controls hint
+- **Box-Drawing Borders**: Classic TUI aesthetic
+- **JetBrains Mono Font**: Crisp monospace rendering
+
+### Desktop Shortcut with TUI Option (KDE/GNOME)
+
+Add a right-click menu option to launch TUI mode from your desktop shortcut.
+
+Edit your `.desktop` file (e.g., `~/.local/share/applications/nautune.desktop`):
+
+```ini
+[Desktop Entry]
+Actions=tui;
+Comment=
+Exec=/path/to/Nautune-x86_64.AppImage
+GenericName=Jellyfin Music Player
+Icon=/path/to/icon.png
+Name=Nautune
+NoDisplay=false
+StartupNotify=true
+Terminal=false
+Type=Application
+
+[Desktop Action tui]
+Exec=/path/to/Nautune-x86_64.AppImage --tui
+Icon=/path/to/icon.png
+Name=Launch TUI Mode
+```
+
+Now you can:
+- **Left-click** → Launch normal GUI
+- **Right-click** → Choose "Launch TUI Mode"
+
+### Requirements
+
+- Linux only (TUI mode is not available on iOS/macOS/Windows)
+- Must be logged in via GUI mode first (session persists)
 
 ---
 

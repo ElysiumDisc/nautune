@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
+import 'tui/tui_app.dart';
 import 'jellyfin/jellyfin_service.dart';
 import 'jellyfin/jellyfin_session_store.dart';
 import 'providers/connectivity_provider.dart';
@@ -99,8 +100,14 @@ Future<void> _migrateHiveFiles() async {
   }
 }
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Detect TUI mode from command line, environment, or dart-define
+  const tuiModeDefine = bool.fromEnvironment('TUI_MODE', defaultValue: false);
+  final isTuiMode = tuiModeDefine ||
+      Platform.environment['NAUTUNE_TUI_MODE'] == '1' ||
+      args.contains('--tui');
 
   // Migrate old Hive files to nautune subfolder (one-time migration)
   await _migrateHiveFiles();
@@ -190,21 +197,46 @@ Future<void> main() async {
 
   if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
     await windowManager.ensureInitialized();
+
+    // Configure window for TUI mode (Linux only)
+    if (isTuiMode && Platform.isLinux) {
+      await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+      await windowManager.setBackgroundColor(Colors.black);
+      await windowManager.setSize(const Size(1000, 600));
+      await windowManager.setMinimumSize(const Size(800, 400));
+    }
   }
 
-  runApp(
-    NautuneApp(
-      appState: appState,
-      sessionProvider: sessionProvider,
-      connectivityProvider: connectivityProvider,
-      uiStateProvider: uiStateProvider,
-      libraryDataProvider: libraryDataProvider,
-      demoModeProvider: demoModeProvider,
-      syncStatusProvider: syncStatusProvider,
-      syncPlayProvider: syncPlayProvider,
-      themeProvider: themeProvider,
-    ),
-  );
+  // Launch TUI or GUI mode
+  if (isTuiMode && Platform.isLinux) {
+    runApp(
+      TuiNautuneApp(
+        appState: appState,
+        sessionProvider: sessionProvider,
+        connectivityProvider: connectivityProvider,
+        uiStateProvider: uiStateProvider,
+        libraryDataProvider: libraryDataProvider,
+        demoModeProvider: demoModeProvider,
+        syncStatusProvider: syncStatusProvider,
+        syncPlayProvider: syncPlayProvider,
+        themeProvider: themeProvider,
+      ),
+    );
+  } else {
+    runApp(
+      NautuneApp(
+        appState: appState,
+        sessionProvider: sessionProvider,
+        connectivityProvider: connectivityProvider,
+        uiStateProvider: uiStateProvider,
+        libraryDataProvider: libraryDataProvider,
+        demoModeProvider: demoModeProvider,
+        syncStatusProvider: syncStatusProvider,
+        syncPlayProvider: syncPlayProvider,
+        themeProvider: themeProvider,
+      ),
+    );
+  }
 }
 
 class NautuneApp extends StatefulWidget {
