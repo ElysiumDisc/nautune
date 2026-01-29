@@ -69,6 +69,10 @@ class FrequencyBands {
 class AudioPlayerService {
   static const int _visualizerBarCount = 24;
 
+  // Pre-allocated arrays for visualizer to avoid per-frame allocations
+  final List<double> _visualizerBars = List<double>.filled(_visualizerBarCount, 0.0);
+  final List<double> _frequencyBands = List<double>.filled(3, 0.0); // bass, mid, treble
+
   AudioPlayer _player = AudioPlayer();
   AudioPlayer _nextPlayer = AudioPlayer();
   final PlaybackStateStore _stateStore = PlaybackStateStore();
@@ -414,7 +418,10 @@ class AudioPlayerService {
   final BehaviorSubject<Duration> _positionController = BehaviorSubject<Duration>.seeded(Duration.zero);
   final BehaviorSubject<Duration> _bufferedPositionController = BehaviorSubject<Duration>.seeded(Duration.zero);
   final BehaviorSubject<Duration?> _durationController = BehaviorSubject<Duration?>.seeded(null);
-  
+
+  // Cached duration to avoid repeated async getDuration() calls in position update handlers
+  Duration? _cachedDuration;
+
   final StreamController<List<JellyfinTrack>> _queueController = BehaviorSubject<List<JellyfinTrack>>.seeded([]);
   final StreamController<RepeatMode> _repeatModeController = BehaviorSubject<RepeatMode>.seeded(RepeatMode.off);
   
@@ -631,11 +638,14 @@ class AudioPlayerService {
       // For streams, player might report 0 or very small duration.
       // If we have track metadata, prefer that unless player reports something reasonable.
       if (duration.inSeconds > 0) {
+        _cachedDuration = duration;
         _durationController.add(duration);
       } else if (_currentTrack != null) {
         // Fallback to metadata duration
+        _cachedDuration = _currentTrack!.duration;
         _durationController.add(_currentTrack!.duration);
       } else {
+        _cachedDuration = duration;
         _durationController.add(duration);
       }
     });
@@ -975,6 +985,7 @@ class AudioPlayerService {
 
     _currentTrack = track;
     _currentTrackController.add(track);
+    _cachedDuration = track.duration; // Initialize cached duration from track metadata
     _lyricsPrefetched = false; // Reset lyrics prefetch flag for new track
     _analyzeTrackForVisualizer(track); // Configure visualizer for track
 
@@ -1820,7 +1831,8 @@ class AudioPlayerService {
     final baseAmplitude = 0.15 + (_trackIntensity * 0.35);
     final volumeMultiplier = baseAmplitude + (_volume * 0.5) + (_volumePulse * 0.2);
 
-    final bars = List<double>.generate(_visualizerBarCount, (index) {
+    // Reuse pre-allocated array instead of List.generate() to avoid per-frame allocations
+    for (int index = 0; index < _visualizerBarCount; index++) {
       // Different frequencies for bass/mid/treble regions
       final freq = index < 8 ? 0.3 : (index < 16 ? 0.7 : 1.2);
       final wave = (sin(t * freq + index * 0.45) + 1) * 0.5;
@@ -1829,23 +1841,36 @@ class AudioPlayerService {
       // Bass region (0-7) gets genre-based emphasis
       final bassBoost = index < 8 ? _bassEmphasis * 0.4 : 0.0;
       final value = ((wave * 0.7) + (ripple * 0.3) + bassBoost) * volumeMultiplier;
-      return value.clamp(0.0, 1.0);
-    });
-
-    if (hasVisualizerListeners) {
-      _visualizerController.add(bars);
+      _visualizerBars[index] = value.clamp(0.0, 1.0);
     }
 
-    // Extract frequency bands with genre emphasis
+    if (hasVisualizerListeners) {
+      // Pass a copy of the list to avoid mutation issues in stream listeners
+      _visualizerController.add(List<double>.from(_visualizerBars));
+    }
+
+    // Extract frequency bands with genre emphasis using pre-allocated array
     if (hasFrequencyListeners) {
-      final rawBass = bars.sublist(0, 8).reduce((a, b) => a + b) / 8;
+      // Calculate bass (indices 0-7)
+      double bassSum = 0.0;
+      for (int i = 0; i < 8; i++) bassSum += _visualizerBars[i];
+      final rawBass = bassSum / 8;
       final bass = (rawBass + _bassEmphasis * 0.2).clamp(0.0, 1.0);
-      final mid = bars.sublist(8, 16).reduce((a, b) => a + b) / 8;
-      final treble = bars.sublist(16, 24).reduce((a, b) => a + b) / 8;
+
+      // Calculate mid (indices 8-15)
+      double midSum = 0.0;
+      for (int i = 8; i < 16; i++) midSum += _visualizerBars[i];
+      final mid = (midSum / 8).clamp(0.0, 1.0);
+
+      // Calculate treble (indices 16-23)
+      double trebleSum = 0.0;
+      for (int i = 16; i < 24; i++) trebleSum += _visualizerBars[i];
+      final treble = (trebleSum / 8).clamp(0.0, 1.0);
+
       _frequencyBandsController.add(FrequencyBands(
         bass: bass,
-        mid: mid.clamp(0.0, 1.0),
-        treble: treble.clamp(0.0, 1.0),
+        mid: mid,
+        treble: treble,
       ));
     }
   }
@@ -1965,7 +1990,8 @@ class AudioPlayerService {
       return;
     }
 
-    final duration = await _player.getDuration();
+    // Use cached duration to avoid async getDuration() call on every position update
+    final duration = _cachedDuration;
     if (duration == null || _currentTrack == null) return;
 
     // Calculate trigger point (crossfade duration before track ends)
@@ -2118,7 +2144,8 @@ class AudioPlayerService {
     if (!_gaplessPlaybackEnabled) return;
     if (_isPreloading || _currentTrack == null) return;
 
-    final duration = await _player.getDuration();
+    // Use cached duration to avoid async getDuration() call on every position update
+    final duration = _cachedDuration;
     if (duration == null || duration.inMilliseconds == 0) return;
 
     // Pre-load when we're 70% through the current track
@@ -2140,7 +2167,8 @@ class AudioPlayerService {
   void _checkLyricsPrefetch(Duration position) async {
     if (_lyricsPrefetched || _currentTrack == null || _lyricsService == null) return;
 
-    final duration = await _player.getDuration();
+    // Use cached duration to avoid async getDuration() call on every position update
+    final duration = _cachedDuration;
     if (duration == null || duration.inMilliseconds == 0) return;
 
     // Pre-fetch lyrics at 50% playback
@@ -2164,7 +2192,8 @@ class AudioPlayerService {
     final listenBrainz = ListenBrainzService();
     if (!listenBrainz.isScrobblingEnabled) return;
 
-    final duration = _currentTrack!.duration ?? await _player.getDuration();
+    // Use cached duration to avoid async getDuration() call on every position update
+    final duration = _currentTrack!.duration ?? _cachedDuration;
     if (duration == null || duration.inMilliseconds == 0) return;
 
     // Scrobble threshold: 50% of track OR 4 minutes, whichever is less

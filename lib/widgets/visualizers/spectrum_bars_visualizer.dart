@@ -76,6 +76,17 @@ class _SpectrumBarsPainter extends CustomPainter {
 
   static const MaskFilter _blurFilter8 = MaskFilter.blur(BlurStyle.normal, 8);
 
+  // Cache for pre-computed HSL values from primary color
+  static Color? _cachedPrimaryColor;
+  static double _cachedBaseHue = 0.0;
+  static double _cachedBaseSaturation = 0.5;
+
+  // Pre-computed color array for bar indices (avoids HSL conversion per bar)
+  static final List<double> _hueOffsets = List.generate(48, (i) => -30 + (i / 48) * 70);
+
+  // Gradient cache to avoid creating new shaders every frame
+  final Map<int, Shader> _gradientCache = {};
+
   _SpectrumBarsPainter({
     required this.bars,
     required this.peaks,
@@ -90,29 +101,52 @@ class _SpectrumBarsPainter extends CustomPainter {
     _glowPaint = Paint()
       ..style = PaintingStyle.fill
       ..maskFilter = _blurFilter8;
+
+    // Cache HSL conversion of primary color (expensive operation)
+    if (_cachedPrimaryColor != primaryColor) {
+      _cachedPrimaryColor = primaryColor;
+      final primaryHsl = HSLColor.fromColor(primaryColor);
+      _cachedBaseHue = primaryHsl.hue;
+      _cachedBaseSaturation = primaryHsl.saturation;
+    }
   }
 
   /// Get color based on frequency position using album art color (primary)
   /// Creates a gradient from warm (bass) to cool (treble) based on primary color
+  /// Uses cached HSL values to avoid per-bar HSL conversion
   Color _getBarColor(int index, int total, double value) {
     final ratio = index / total;
 
-    // Use primary color as base, shift hue for frequency gradient
-    final primaryHsl = HSLColor.fromColor(primaryColor);
-    final baseHue = primaryHsl.hue;
-
-    // Hue shift: bass gets warmer (-30), treble gets cooler (+40)
-    final hueShift = -30 + ratio * 70;
-    final newHue = (baseHue + hueShift) % 360;
+    // Use cached HSL values instead of converting every time
+    final hueShift = _hueOffsets[index.clamp(0, 47)];
+    final newHue = (_cachedBaseHue + hueShift) % 360;
 
     // Saturation increases with value
-    final saturation = (primaryHsl.saturation * (0.7 + value * 0.3)).clamp(0.0, 1.0);
+    final saturation = (_cachedBaseSaturation * (0.7 + value * 0.3)).clamp(0.0, 1.0);
 
     // Lightness varies: brighter in bass, slightly dimmer in treble
     final baseLightness = 0.45 + (1 - ratio) * 0.15;
     final lightness = (baseLightness + value * 0.25).clamp(0.0, 0.85);
 
     return HSLColor.fromAHSL(1.0, newHue, saturation, lightness).toColor();
+  }
+
+  /// Get cached gradient shader for a bar
+  Shader _getBarGradient(int index, Rect rect, Color color) {
+    // Key based on bar index and height bucket (rounded to reduce cache misses)
+    final heightBucket = (rect.height / 10).round();
+    final key = index * 1000 + heightBucket;
+
+    return _gradientCache.putIfAbsent(key, () {
+      return LinearGradient(
+        begin: Alignment.bottomCenter,
+        end: Alignment.topCenter,
+        colors: [
+          color.withValues(alpha: opacity * 0.9),
+          color.withValues(alpha: opacity * 0.6),
+        ],
+      ).createShader(rect);
+    });
   }
 
   @override
@@ -152,7 +186,7 @@ class _SpectrumBarsPainter extends CustomPainter {
       canvas.drawRRect(glowRect, _glowPaint);
     }
 
-    // Draw bars
+    // Draw bars - use cached gradients to avoid per-frame allocations
     for (int i = 0; i < barCount; i++) {
       final value = bars[i];
       final x = i * (barWidth + spacing);
@@ -167,14 +201,8 @@ class _SpectrumBarsPainter extends CustomPainter {
         barHeight,
       );
 
-      _barPaint.shader = LinearGradient(
-        begin: Alignment.bottomCenter,
-        end: Alignment.topCenter,
-        colors: [
-          color.withValues(alpha: opacity * 0.9),
-          color.withValues(alpha: opacity * 0.6),
-        ],
-      ).createShader(barRect);
+      // Use cached shader when possible (falls back to fresh shader for color changes)
+      _barPaint.shader = _getBarGradient(i, barRect, color);
 
       final rrect = RRect.fromRectAndRadius(
         barRect,

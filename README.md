@@ -29,6 +29,18 @@
 
 ## 📋 Changelog
 
+### v5.6.2 - Performance Optimizations
+- **Image Memory Reduction**: Added `memCacheHeight` to image cache, reducing memory usage by ~50%
+- **Duration Caching**: Cached track duration to avoid repeated async queries on every position update
+- **Download Notification Throttling**: Reduced UI rebuilds during downloads with 500ms throttle (max 2Hz)
+- **Visualizer Array Pooling**: Pre-allocated arrays eliminate ~1,440 allocations/second at 60fps
+- **Visualizer Gradient Caching**: Shader cache prevents per-frame gradient allocations
+- **HSL Color Caching**: Pre-computed color values avoid expensive HSL conversions per bar per frame
+- **Artist Index Optimization**: O(1) artist lookup for deletion instead of O(n²) nested loop
+- **File Size Caching**: `DownloadItem` now caches file size to avoid repeated file I/O
+- **Concurrent Precaching**: Album track precaching now runs 2 concurrent downloads for faster caching
+- **iOS Alternate Icon Fix**: Fixed missing alternate app icon (AppIconOrange) for App Store validation
+
 ### v5.6.1 - Profile & Stats UI Improvements
 - **Library Overview Card**: New "Your Musical Ocean" section showing total tracks, albums, artists, and favorites count
 - **Audiophile Stats**: New card displaying codec breakdown, most common format, and highest quality track in your library

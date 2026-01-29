@@ -21,6 +21,7 @@ class DownloadItem {
   final String? errorMessage;
   final bool isDemoAsset;
   final Set<String> owners;
+  final int? fileSizeBytes; // Cached file size to avoid repeated file I/O
 
   DownloadItem({
     required this.track,
@@ -34,6 +35,7 @@ class DownloadItem {
     this.errorMessage,
     this.isDemoAsset = false,
     required this.owners,
+    this.fileSizeBytes,
   });
 
   DownloadItem copyWith({
@@ -48,6 +50,7 @@ class DownloadItem {
     String? errorMessage,
     bool? isDemoAsset,
     Set<String>? owners,
+    int? fileSizeBytes,
   }) {
     return DownloadItem(
       track: track ?? this.track,
@@ -61,6 +64,7 @@ class DownloadItem {
       errorMessage: errorMessage ?? this.errorMessage,
       isDemoAsset: isDemoAsset ?? this.isDemoAsset,
       owners: owners ?? this.owners,
+      fileSizeBytes: fileSizeBytes ?? this.fileSizeBytes,
     );
   }
 
@@ -90,6 +94,7 @@ class DownloadItem {
       'errorMessage': errorMessage,
       'isDemoAsset': isDemoAsset,
       'owners': owners.toList(),
+      'fileSizeBytes': fileSizeBytes,
     };
   }
 
@@ -112,6 +117,7 @@ class DownloadItem {
         errorMessage: json['errorMessage'] as String?,
         isDemoAsset: json['isDemoAsset'] as bool? ?? false,
         owners: HashSet<String>.from(json['owners'] as List? ?? []),
+        fileSizeBytes: json['fileSizeBytes'] as int?,
       );
     } catch (e) {
       return null;

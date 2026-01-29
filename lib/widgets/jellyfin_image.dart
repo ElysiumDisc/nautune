@@ -132,6 +132,7 @@ class JellyfinImage extends StatelessWidget {
           ? (context, url, error) => errorBuilder!(context, url, error)
           : (context, url, error) => _buildError(context, error),
       memCacheWidth: requestWidth,
+      memCacheHeight: requestHeight,
       // Disk cache is handled automatically by cached_network_image
     );
   }

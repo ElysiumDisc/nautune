@@ -137,6 +137,7 @@ class AudioCacheService {
   
   /// Pre-cache multiple tracks in the background (e.g., album tracks)
   /// Caches tracks in order, starting from the specified index
+  /// Uses a semaphore to allow 2 concurrent downloads for better performance
   Future<void> cacheAlbumTracks(
     List<JellyfinTrack> tracks, {
     int startIndex = 0,
@@ -148,15 +149,36 @@ class AudioCacheService {
         ? (startIndex + maxTracks).clamp(0, tracks.length)
         : tracks.length;
 
-    debugPrint('🎵 Pre-caching ${endIndex - startIndex} tracks starting from index $startIndex');
+    final trackCount = endIndex - startIndex;
+    debugPrint('🎵 Pre-caching $trackCount tracks starting from index $startIndex');
 
-    // Cache tracks sequentially to avoid overwhelming the network
-    for (int i = startIndex; i < endIndex; i++) {
-      // Don't await - let it cache in background
-      unawaited(_cacheTrackSilently(tracks[i]));
-      // Small delay between requests to be gentle on the server
-      await Future.delayed(const Duration(milliseconds: 100));
+    // Allow 2 concurrent precache operations for better performance
+    const maxConcurrent = 2;
+    int activeCount = 0;
+    int nextIndex = startIndex;
+    final allDone = Completer<void>();
+
+    void startNext() {
+      while (activeCount < maxConcurrent && nextIndex < endIndex) {
+        final trackIndex = nextIndex++;
+        activeCount++;
+        _cacheTrackSilently(tracks[trackIndex]).whenComplete(() {
+          activeCount--;
+          if (nextIndex < endIndex) {
+            startNext();
+          } else if (activeCount == 0) {
+            if (!allDone.isCompleted) allDone.complete();
+          }
+        });
+      }
     }
+
+    startNext();
+
+    // If no tracks to cache, complete immediately
+    if (trackCount == 0) return;
+
+    await allDone.future;
   }
 
   /// Smart pre-cache upcoming tracks based on user settings.

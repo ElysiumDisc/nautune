@@ -76,6 +76,11 @@ class DownloadService extends ChangeNotifier {
   // Secondary indexes for O(1) album/artist lookups instead of O(n) scans
   final Map<String, Set<String>> _albumIndex = {}; // albumId -> Set<trackId>
   final Map<String, Set<String>> _artistIndex = {}; // artistName -> Set<trackId>
+  final Map<String, Set<String>> _artistIdIndex = {}; // artistId -> Set<trackId>
+
+  // Notification throttling to reduce UI rebuilds during downloads (max 2Hz)
+  Timer? _notifyThrottle;
+  bool _pendingNotification = false;
 
   static const _boxName = 'nautune_downloads';
   static const _downloadsKey = 'downloads';
@@ -108,6 +113,7 @@ class DownloadService extends ChangeNotifier {
   void _rebuildIndexes() {
     _albumIndex.clear();
     _artistIndex.clear();
+    _artistIdIndex.clear();
     for (final item in _downloads.values) {
       if (item.isCompleted) {
         _addToIndexes(item.track);
@@ -122,6 +128,11 @@ class DownloadService extends ChangeNotifier {
 
     final artistName = track.displayArtist;
     _artistIndex.putIfAbsent(artistName, () => {}).add(track.id);
+
+    // Also index by artist IDs for efficient artist image cleanup
+    for (final artistId in track.artistIds) {
+      _artistIdIndex.putIfAbsent(artistId, () => {}).add(track.id);
+    }
   }
 
   /// Remove a track from the secondary indexes
@@ -136,6 +147,14 @@ class DownloadService extends ChangeNotifier {
     _artistIndex[artistName]?.remove(track.id);
     if (_artistIndex[artistName]?.isEmpty ?? false) {
       _artistIndex.remove(artistName);
+    }
+
+    // Remove from artist ID index
+    for (final artistId in track.artistIds) {
+      _artistIdIndex[artistId]?.remove(track.id);
+      if (_artistIdIndex[artistId]?.isEmpty ?? false) {
+        _artistIdIndex.remove(artistId);
+      }
     }
   }
 
@@ -267,10 +286,23 @@ class DownloadService extends ChangeNotifier {
     return true;
   }
 
+  /// Throttled notification to reduce UI rebuilds during downloads (max 2Hz).
+  /// Call this instead of notifyListeners() during download progress updates.
+  void _throttledNotify() {
+    _pendingNotification = true;
+    _notifyThrottle ??= Timer(const Duration(milliseconds: 500), () {
+      if (_pendingNotification) {
+        notifyListeners();
+        _pendingNotification = false;
+      }
+      _notifyThrottle = null;
+    });
+  }
+
   void _updateNotification() {
     final notificationService = _notificationService;
     if (notificationService == null) return;
-    
+
     if (_activeDownloads == 0) {
        // Handled in _processQueue or finally block for completion
        return;
@@ -954,8 +986,12 @@ class DownloadService extends ChangeNotifier {
           downloadedBytes: downloadedBytes,
         );
         
-        if (downloadedBytes % (500 * 1024) == 0 || progress == 1.0) {
+        // Use throttled notify for progress updates (max 2Hz), immediate notify on completion
+        if (progress == 1.0) {
           notifyListeners();
+          _updateNotification();
+        } else if (downloadedBytes % (500 * 1024) == 0) {
+          _throttledNotify();
           _updateNotification();
         }
       }
@@ -971,11 +1007,15 @@ class DownloadService extends ChangeNotifier {
         debugPrint('Updated duration for ${item.track.name}: ${actualDuration.inSeconds}s (was ${item.track.duration?.inSeconds ?? 0}s)');
       }
 
+      // Get file size and cache it to avoid repeated file I/O in getTotalDownloadSize
+      final fileSize = await File(correctPath).length();
+
       _downloads[trackId] = _downloads[trackId]!.copyWith(
         track: updatedTrack,
         status: DownloadStatus.completed,
         progress: 1.0,
         completedAt: DateTime.now(),
+        fileSizeBytes: fileSize,
       );
 
       // Download artwork after track completes
@@ -1127,16 +1167,12 @@ class DownloadService extends ChangeNotifier {
       }
 
       // Only delete artist images if no other downloaded tracks share these artists
+      // Use _artistIdIndex for O(1) lookup instead of O(n) iteration
       for (final artistId in item.track.artistIds) {
-        // Check if any other downloaded tracks have this artist
-        bool artistHasOtherTracks = false;
-        for (final otherItem in _downloads.values) {
-          if (otherItem.track.id != trackId &&
-              otherItem.track.artistIds.contains(artistId)) {
-            artistHasOtherTracks = true;
-            break;
-          }
-        }
+        // Check using artist ID index - O(1) instead of O(n)
+        final artistTracks = _artistIdIndex[artistId];
+        final artistHasOtherTracks = artistTracks != null &&
+            artistTracks.any((id) => id != trackId);
 
         if (!artistHasOtherTracks) {
           // No other tracks from this artist - safe to delete artist image
@@ -1182,6 +1218,7 @@ class DownloadService extends ChangeNotifier {
     _demoDownloadIds.clear();
     _albumIndex.clear();
     _artistIndex.clear();
+    _artistIdIndex.clear();
 
     // Delete entire artwork folder to handle any orphaned/corrupted artwork
     try {
@@ -1288,13 +1325,18 @@ class DownloadService extends ChangeNotifier {
   Future<int> getTotalDownloadSize() async {
     int totalSize = 0;
     for (final item in completedDownloads) {
-      try {
-        final file = File(item.localPath);
-        if (await file.exists()) {
-          totalSize += await file.length();
+      // Use cached file size if available, otherwise fall back to file I/O
+      if (item.fileSizeBytes != null) {
+        totalSize += item.fileSizeBytes!;
+      } else {
+        try {
+          final file = File(item.localPath);
+          if (await file.exists()) {
+            totalSize += await file.length();
+          }
+        } catch (e) {
+          debugPrint('Error getting file size: $e');
         }
-      } catch (e) {
-        debugPrint('Error getting file size: $e');
       }
     }
     return totalSize;
@@ -1309,25 +1351,35 @@ class DownloadService extends ChangeNotifier {
     final albumNames = <String, String>{};
 
     for (final item in completedDownloads) {
-      try {
-        final file = File(item.localPath);
-        if (await file.exists()) {
-          final fileSize = await file.length();
-          totalBytes += fileSize;
-          trackCount++;
-
-          // Group by album
-          final albumId = item.track.albumId ?? 'unknown';
-          byAlbum[albumId] = (byAlbum[albumId] ?? 0) + fileSize;
-          albumNames[albumId] = item.track.album ?? 'Unknown Album';
-
-          // Group by artist
-          final artistName = item.track.displayArtist;
-          byArtist[artistName] = (byArtist[artistName] ?? 0) + fileSize;
+      // Use cached file size if available, otherwise fall back to file I/O
+      int fileSize;
+      if (item.fileSizeBytes != null) {
+        fileSize = item.fileSizeBytes!;
+      } else {
+        try {
+          final file = File(item.localPath);
+          if (await file.exists()) {
+            fileSize = await file.length();
+          } else {
+            continue;
+          }
+        } catch (e) {
+          debugPrint('Error getting file size for ${item.track.name}: $e');
+          continue;
         }
-      } catch (e) {
-        debugPrint('Error getting file size for ${item.track.name}: $e');
       }
+
+      totalBytes += fileSize;
+      trackCount++;
+
+      // Group by album
+      final albumId = item.track.albumId ?? 'unknown';
+      byAlbum[albumId] = (byAlbum[albumId] ?? 0) + fileSize;
+      albumNames[albumId] = item.track.album ?? 'Unknown Album';
+
+      // Group by artist
+      final artistName = item.track.displayArtist;
+      byArtist[artistName] = (byArtist[artistName] ?? 0) + fileSize;
     }
 
     // Get cache stats from AudioCacheService
