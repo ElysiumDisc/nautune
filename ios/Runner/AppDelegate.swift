@@ -18,6 +18,9 @@ let flutterEngine = FlutterEngine(name: "SharedEngine", project: nil, allowHeadl
     // Register Share plugin for native file sharing (AirDrop, etc.)
     SharePlugin.register(with: flutterEngine.registrar(forPlugin: "SharePlugin")!)
 
+    // Register App Icon plugin for alternate icon support
+    AppIconPlugin.register(with: flutterEngine.registrar(forPlugin: "AppIconPlugin")!)
+
     // Return true directly for CarPlay compatibility
     // super.application() can interfere with CarPlay initialization
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:tray_manager/tray_manager.dart';
 
 import '../jellyfin/jellyfin_track.dart';
+import 'app_icon_service.dart';
 import 'audio_player_service.dart';
 
 /// System tray service for desktop platforms (Linux, Windows, macOS).
@@ -183,14 +184,25 @@ class TrayService with TrayListener {
   }
 
   String _getTrayIconPath() {
-    // Use the app icon for tray
+    // Use the selected app icon for tray
+    final iconService = AppIconService();
     if (Platform.isWindows) {
+      // Windows uses .ico format - for now use default
       return 'assets/icon.ico';
-    } else if (Platform.isMacOS) {
-      return 'assets/icon.png';
     } else {
-      // Linux
-      return 'assets/icon.png';
+      // macOS and Linux use PNG
+      return iconService.trayIconPath;
+    }
+  }
+
+  /// Update tray icon when app icon preference changes
+  Future<void> updateTrayIcon() async {
+    if (!_isInitialized) return;
+    try {
+      await trayManager.setIcon(_getTrayIconPath());
+      debugPrint('🔲 TrayService: Icon updated to ${_getTrayIconPath()}');
+    } catch (e) {
+      debugPrint('🔲 TrayService: Failed to update icon: $e');
     }
   }
 

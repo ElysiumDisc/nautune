@@ -27,6 +27,7 @@ import 'services/local_cache_service.dart';
 import 'services/playback_reporting_service.dart';
 import 'services/playback_state_store.dart';
 import 'services/playlist_sync_queue.dart';
+import 'services/app_icon_service.dart';
 import 'services/power_mode_service.dart';
 import 'services/tray_service.dart';
 
@@ -934,6 +935,14 @@ class NautuneAppState extends ChangeNotifier {
     // Initialize iOS Low Power Mode detection
     await PowerModeService.instance.initialize();
     _initPowerModeListener();
+
+    // Initialize app icon service (for alternate icon support)
+    await AppIconService().initialize();
+    // Sync iOS icon to match stored preference
+    await AppIconService().syncIOSIcon();
+    // Update tray icon to match saved preference (tray may have initialized with default)
+    _trayService?.updateTrayIcon();
+
     final storedPlaybackState = await _playbackStateStore.load();
     if (storedPlaybackState != null) {
       _showVolumeBar = storedPlaybackState.showVolumeBar;

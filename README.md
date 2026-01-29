@@ -8,6 +8,7 @@
 - **ListenBrainz Integration**: Scrobble your plays and get personalized music recommendations
 - **Collaborative Playlists**: Real-time SyncPlay sessions - listen together with friends via QR code or share link
 - **Custom Color Theme**: Create your own theme with primary/secondary color picker
+- **Alternate App Icons**: Choose between Classic (purple) and Sunset (orange) icons across all platforms
 - **10-Band Equalizer** (Linux): Full graphic EQ with 12 presets (Rock, Pop, Jazz, Classical, and more)
 - **5 Audio Visualizers**: Ocean Waves, Spectrum Bars, Mirror Bars, Radial, and Psychedelic styles
 - **Real-Time FFT**: True audio-reactive visualization using PulseAudio (Linux) and MTAudioProcessingTap (iOS)
@@ -29,6 +30,8 @@
 ## 📋 Changelog
 
 ### v5.6.0 - Enhanced TUI Mode
+- **Alternate App Icons**: Switch between Classic (purple) and Sunset (orange) icons in Settings > Appearance
+- **Cross-Platform Icons**: Icon choice applies to iOS home screen, Linux/macOS system tray, and app window
 - **10 Built-in Themes**: Dark, Gruvbox Dark/Light, Nord Dark/Light, Catppuccin Mocha/Latte, Light, Dracula, Solarized Dark
 - **Persistent Theme Selection**: TUI theme choice saved and restored between app restarts
 - **Album Art Color Extraction**: Primary color dynamically extracted from album artwork with smooth transitions

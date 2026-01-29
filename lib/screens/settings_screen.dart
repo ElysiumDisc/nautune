@@ -17,6 +17,7 @@ import '../models/visualizer_type.dart';
 import '../providers/session_provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/ui_state_provider.dart';
+import '../services/app_icon_service.dart';
 import '../services/audio_cache_service.dart';
 import '../services/download_service.dart';
 import '../services/listenbrainz_service.dart';
@@ -81,6 +82,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: Text(themeProvider.palette.name),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _showThemePicker(context),
+              ),
+              ListenableBuilder(
+                listenable: AppIconService(),
+                builder: (context, _) {
+                  final iconService = AppIconService();
+                  return ListTile(
+                    leading: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.asset(
+                        iconService.iconAssetPath,
+                        width: 24,
+                        height: 24,
+                      ),
+                    ),
+                    title: const Text('App Icon'),
+                    subtitle: Text(iconService.iconDisplayName),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => _showIconPicker(context),
+                  );
+                },
               ),
               ListTile(
                 leading: Icon(
@@ -518,6 +539,100 @@ class _SettingsScreenState extends State<SettingsScreen> {
           );
           Navigator.pop(context);
         },
+      ),
+    );
+  }
+
+  void _showIconPicker(BuildContext context) {
+    final theme = Theme.of(context);
+    final iconService = AppIconService();
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: theme.scaffoldBackgroundColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'App Icon',
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Choose your preferred app icon style',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _IconOption(
+                    assetPath: 'assets/icon.png',
+                    label: 'Classic',
+                    isSelected: iconService.currentIcon == 'default',
+                    onTap: () async {
+                      await iconService.setIcon('default');
+                      // Update tray icon on Linux
+                      if (Platform.isLinux || Platform.isMacOS) {
+                        final appState = Provider.of<NautuneAppState>(context, listen: false);
+                        appState.trayService?.updateTrayIcon();
+                      }
+                      if (context.mounted) Navigator.pop(context);
+                    },
+                  ),
+                  _IconOption(
+                    assetPath: 'assets/iconorange.png',
+                    label: 'Sunset',
+                    isSelected: iconService.currentIcon == 'orange',
+                    onTap: () async {
+                      await iconService.setIcon('orange');
+                      // Update tray icon on Linux
+                      if (Platform.isLinux || Platform.isMacOS) {
+                        final appState = Provider.of<NautuneAppState>(context, listen: false);
+                        appState.trayService?.updateTrayIcon();
+                      }
+                      if (context.mounted) Navigator.pop(context);
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              if (Platform.isIOS)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    'iOS home screen icon will update after closing this sheet.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2189,6 +2304,82 @@ class _SectionHeader extends StatelessWidget {
               color: theme.colorScheme.primary,
               fontWeight: FontWeight.bold,
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Icon option for the app icon picker
+class _IconOption extends StatelessWidget {
+  final String assetPath;
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _IconOption({
+    required this.assetPath,
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: isSelected
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.outline.withValues(alpha: 0.3),
+                width: isSelected ? 3 : 1,
+              ),
+              color: isSelected
+                  ? theme.colorScheme.primary.withValues(alpha: 0.1)
+                  : Colors.transparent,
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Image.asset(
+                assetPath,
+                width: 80,
+                height: 80,
+                fit: BoxFit.cover,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isSelected)
+                Icon(
+                  Icons.check_circle,
+                  size: 16,
+                  color: theme.colorScheme.primary,
+                ),
+              if (isSelected) const SizedBox(width: 4),
+              Text(
+                label,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  color: isSelected
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.onSurface,
+                ),
+              ),
+            ],
           ),
         ],
       ),
