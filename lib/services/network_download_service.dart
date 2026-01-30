@@ -536,9 +536,8 @@ class NetworkDownloadService extends ChangeNotifier {
       _downloadQueue.isNotEmpty ||
       _downloads.values.any((d) => d.status == NetworkDownloadStatus.downloading);
 
-  /// Get count of channels currently downloading.
+  /// Get count of channels currently downloading or queued.
   int get downloadingCount =>
-      _downloadQueue.length +
       _downloads.values.where((d) => d.status == NetworkDownloadStatus.downloading).length;
 
   /// Get download progress for a channel (0.0 to 1.0).
