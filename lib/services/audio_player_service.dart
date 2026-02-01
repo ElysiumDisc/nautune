@@ -104,10 +104,14 @@ class AudioPlayerService {
   bool _hasRestored = false;
   PlaybackState? _pendingState;
 
+  // Track if current playback is from local file (download or cache)
+  bool _isCurrentTrackLocal = false;
+
   // Pre-loading support for gapless playback
   JellyfinTrack? _preloadedTrack;
   bool _isPreloading = false;
   bool _gaplessPlaybackEnabled = true;
+  bool _preloadedTrackIsLocal = false; // Track if preloaded track is from local storage
 
   // Audio cache service for pre-caching album tracks
   final AudioCacheService _audioCacheService = AudioCacheService.instance;
@@ -783,6 +787,7 @@ class AudioPlayerService {
           _currentIndex++;
           _currentTrack = nextTrack;
           _currentTrackController.add(_currentTrack);
+          _isCurrentTrackLocal = _preloadedTrackIsLocal; // Update for A-B loop support
           _analyzeTrackForVisualizer(nextTrack); // Configure visualizer for track
 
           // 7. Explicitly emit playing state since the listener may not fire
@@ -1130,7 +1135,21 @@ class AudioPlayerService {
         message: 'Unable to play ${track.name}. File may be unavailable.',
       );
     }
-    
+
+    // Store whether this track is playing from local storage (for A-B loop support)
+    _isCurrentTrackLocal = isLocalFile;
+
+    // Cache the currently playing track in background if streaming (not already local/cached)
+    // This enables A-B loop and offline replay after the track finishes caching
+    if (!isLocalFile && _preCacheTrackCount > 0 && streamUrl != null) {
+      unawaited(_audioCacheService.cacheTrack(track, streamUrl: streamUrl).then((cachedFile) {
+        // Update local flag if caching succeeded and this track is still playing
+        if (cachedFile != null && _currentTrack?.id == track.id) {
+          _isCurrentTrackLocal = true;
+        }
+      }));
+    }
+
     // NOW we touch the player.
     // We don't explicitly call stop() because setSource will handle it, 
     // and we want to minimize the gap.
@@ -1516,6 +1535,7 @@ class AudioPlayerService {
     _currentIndex = 0;
     _lastPosition = Duration.zero;
     _isShuffleEnabled = false;
+    _isCurrentTrackLocal = false;
     _shuffleController.add(false);
     
     _emitIdleVisualizer();
@@ -1691,8 +1711,8 @@ class AudioPlayerService {
   /// Check if the current track supports looping (is local or cached)
   bool get isLoopAvailable {
     if (_currentTrack == null) return false;
-    final localPath = _downloadService?.getLocalPath(_currentTrack!.id);
-    return localPath != null;
+    // Use the flag set during playback - covers both downloads and cache
+    return _isCurrentTrackLocal;
   }
 
   /// Set the loop start marker (A) at the current position
@@ -2373,6 +2393,7 @@ class AudioPlayerService {
       }
 
       bool loaded = false;
+      bool isLocal = false;
 
       // Try local file first (downloaded)
       final localPath = _downloadService?.getLocalPath(track.id);
@@ -2381,17 +2402,19 @@ class AudioPlayerService {
         if (await file.exists()) {
           if (await trySetSource(localPath, isFile: true)) {
             loaded = true;
+            isLocal = true;
             debugPrint('✅ Pre-loaded from local file: ${track.name}');
           }
         }
       }
-      
+
       // Try cached file (pre-cached during album playback)
       if (!loaded) {
         final cachedFile = await _audioCacheService.getCachedFile(track.id);
         if (cachedFile != null && await cachedFile.exists()) {
           if (await trySetSource(cachedFile.path, isFile: true)) {
             loaded = true;
+            isLocal = true;
             debugPrint('✅ Pre-loaded from cache: ${track.name}');
           }
         }
@@ -2403,6 +2426,7 @@ class AudioPlayerService {
 
         if (await trySetSource(streamUrl)) {
           loaded = true;
+          isLocal = false;
           if (isDirectStream) {
             debugPrint('✅ Pre-loaded from stream (original): ${track.name}');
           } else {
@@ -2410,17 +2434,20 @@ class AudioPlayerService {
           }
         } else if (await trySetAssetSource(track.assetPathOverride)) {
           loaded = true;
+          isLocal = true; // Asset files are local
           debugPrint('✅ Pre-loaded from asset: ${track.name}');
         }
       }
 
       if (loaded) {
         _preloadedTrack = track;
+        _preloadedTrackIsLocal = isLocal;
         // Set to ready but don't play yet
         await _nextPlayer.setVolume(0.0); // Silent until we swap
       } else {
         debugPrint('⚠️ Failed to pre-load: ${track.name}');
         _preloadedTrack = null;
+        _preloadedTrackIsLocal = false;
       }
     } catch (e) {
       debugPrint('⚠️ Error pre-loading track: $e');
@@ -2457,6 +2484,7 @@ class AudioPlayerService {
   /// Clear pre-loaded track (called when queue changes)
   void _clearPreload() {
     _preloadedTrack = null;
+    _preloadedTrackIsLocal = false;
     _nextPlayer.stop();
   }
   

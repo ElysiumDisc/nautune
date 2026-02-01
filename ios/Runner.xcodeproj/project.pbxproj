@@ -22,6 +22,14 @@
 		AICOBF60X60_3X /* AppIconOrange60x60@3x.png in Resources */ = {isa = PBXBuildFile; fileRef = AICO60X60_3X /* AppIconOrange60x60@3x.png */; };
 		AICOBF76X76_2X /* AppIconOrange76x76@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = AICO76X76_2X /* AppIconOrange76x76@2x.png */; };
 		AICOBF83X83_2X /* AppIconOrange83.5x83.5@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = AICO83X83_2X /* AppIconOrange83.5x83.5@2x.png */; };
+		AICRBF60X60_2X /* AppIconRed60x60@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = AICR60X60_2X /* AppIconRed60x60@2x.png */; };
+		AICRBF60X60_3X /* AppIconRed60x60@3x.png in Resources */ = {isa = PBXBuildFile; fileRef = AICR60X60_3X /* AppIconRed60x60@3x.png */; };
+		AICRBF76X76_2X /* AppIconRed76x76@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = AICR76X76_2X /* AppIconRed76x76@2x.png */; };
+		AICRBF83X83_2X /* AppIconRed83.5x83.5@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = AICR83X83_2X /* AppIconRed83.5x83.5@2x.png */; };
+		AICGBF60X60_2X /* AppIconGreen60x60@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = AICG60X60_2X /* AppIconGreen60x60@2x.png */; };
+		AICGBF60X60_3X /* AppIconGreen60x60@3x.png in Resources */ = {isa = PBXBuildFile; fileRef = AICG60X60_3X /* AppIconGreen60x60@3x.png */; };
+		AICGBF76X76_2X /* AppIconGreen76x76@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = AICG76X76_2X /* AppIconGreen76x76@2x.png */; };
+		AICGBF83X83_2X /* AppIconGreen83.5x83.5@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = AICG83X83_2X /* AppIconGreen83.5x83.5@2x.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -71,6 +79,14 @@
 		AICO60X60_3X /* AppIconOrange60x60@3x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIconOrange60x60@3x.png"; sourceTree = "<group>"; };
 		AICO76X76_2X /* AppIconOrange76x76@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIconOrange76x76@2x.png"; sourceTree = "<group>"; };
 		AICO83X83_2X /* AppIconOrange83.5x83.5@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIconOrange83.5x83.5@2x.png"; sourceTree = "<group>"; };
+		AICR60X60_2X /* AppIconRed60x60@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIconRed60x60@2x.png"; sourceTree = "<group>"; };
+		AICR60X60_3X /* AppIconRed60x60@3x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIconRed60x60@3x.png"; sourceTree = "<group>"; };
+		AICR76X76_2X /* AppIconRed76x76@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIconRed76x76@2x.png"; sourceTree = "<group>"; };
+		AICR83X83_2X /* AppIconRed83.5x83.5@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIconRed83.5x83.5@2x.png"; sourceTree = "<group>"; };
+		AICG60X60_2X /* AppIconGreen60x60@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIconGreen60x60@2x.png"; sourceTree = "<group>"; };
+		AICG60X60_3X /* AppIconGreen60x60@3x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIconGreen60x60@3x.png"; sourceTree = "<group>"; };
+		AICG76X76_2X /* AppIconGreen76x76@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIconGreen76x76@2x.png"; sourceTree = "<group>"; };
+		AICG83X83_2X /* AppIconGreen83.5x83.5@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIconGreen83.5x83.5@2x.png"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -141,6 +157,14 @@
 				AICO60X60_3X /* AppIconOrange60x60@3x.png */,
 				AICO76X76_2X /* AppIconOrange76x76@2x.png */,
 				AICO83X83_2X /* AppIconOrange83.5x83.5@2x.png */,
+				AICR60X60_2X /* AppIconRed60x60@2x.png */,
+				AICR60X60_3X /* AppIconRed60x60@3x.png */,
+				AICR76X76_2X /* AppIconRed76x76@2x.png */,
+				AICR83X83_2X /* AppIconRed83.5x83.5@2x.png */,
+				AICG60X60_2X /* AppIconGreen60x60@2x.png */,
+				AICG60X60_3X /* AppIconGreen60x60@3x.png */,
+				AICG76X76_2X /* AppIconGreen76x76@2x.png */,
+				AICG83X83_2X /* AppIconGreen83.5x83.5@2x.png */,
 			);
 			path = Runner;
 			sourceTree = "<group>";
@@ -244,6 +268,14 @@
 				AICOBF60X60_3X /* AppIconOrange60x60@3x.png in Resources */,
 				AICOBF76X76_2X /* AppIconOrange76x76@2x.png in Resources */,
 				AICOBF83X83_2X /* AppIconOrange83.5x83.5@2x.png in Resources */,
+				AICRBF60X60_2X /* AppIconRed60x60@2x.png in Resources */,
+				AICRBF60X60_3X /* AppIconRed60x60@3x.png in Resources */,
+				AICRBF76X76_2X /* AppIconRed76x76@2x.png in Resources */,
+				AICRBF83X83_2X /* AppIconRed83.5x83.5@2x.png in Resources */,
+				AICGBF60X60_2X /* AppIconGreen60x60@2x.png in Resources */,
+				AICGBF60X60_3X /* AppIconGreen60x60@3x.png in Resources */,
+				AICGBF76X76_2X /* AppIconGreen76x76@2x.png in Resources */,
+				AICGBF83X83_2X /* AppIconGreen83.5x83.5@2x.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

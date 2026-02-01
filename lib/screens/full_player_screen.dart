@@ -20,6 +20,8 @@ import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../services/audio_player_service.dart';
+import '../services/haptic_service.dart';
+import '../services/saved_loops_service.dart';
 import '../services/share_service.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/visualizers/visualizer_factory.dart';
@@ -126,6 +128,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   // A-B loop controls state
   StreamSubscription? _loopSub;
   bool _showLoopControls = false;
+  bool _showLoopButton = true; // Toggle visibility of A-B Loop button
 
   @override
   void initState() {
@@ -591,9 +594,177 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
 
   void _toggleLoopControls() {
     if (!_audioService.isLoopAvailable) return;
+    HapticService.mediumTap(); // Haptic feedback on iOS
     setState(() {
       _showLoopControls = !_showLoopControls;
     });
+  }
+
+  void _showLoopOptionsSheet(BuildContext context, JellyfinTrack track) {
+    HapticService.mediumTap();
+    final theme = Theme.of(context);
+    final loopState = _audioService.loopState;
+    final savedLoopsService = SavedLoopsService();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Current loop info header
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.repeat_one, color: theme.colorScheme.primary),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Current Loop',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          '${loopState.formattedStart} - ${loopState.formattedEnd}',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+
+              // Save loop option
+              ListTile(
+                leading: const Icon(Icons.bookmark_add),
+                title: const Text('Save Loop'),
+                subtitle: Text(
+                  'Save as ${track.name} (${loopState.formattedStart} - ${loopState.formattedEnd})',
+                  style: theme.textTheme.bodySmall,
+                ),
+                onTap: () async {
+                  Navigator.pop(sheetContext);
+                  await savedLoopsService.saveLoop(
+                    trackId: track.id,
+                    trackName: track.name,
+                    start: loopState.start!,
+                    end: loopState.end!,
+                  );
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Loop saved'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                },
+              ),
+
+              // Edit loop option
+              ListTile(
+                leading: const Icon(Icons.edit),
+                title: const Text('Edit Loop'),
+                subtitle: const Text('Adjust A-B markers'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _toggleLoopControls();
+                },
+              ),
+
+              // Clear loop option
+              ListTile(
+                leading: Icon(Icons.clear, color: theme.colorScheme.error),
+                title: Text(
+                  'Clear Loop',
+                  style: TextStyle(color: theme.colorScheme.error),
+                ),
+                subtitle: const Text('Stop repeating this section'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _audioService.clearLoop();
+                  setState(() {
+                    _showLoopControls = false;
+                  });
+                },
+              ),
+
+              // Show saved loops for this track if any
+              FutureBuilder(
+                future: savedLoopsService.initialize().then((_) => savedLoopsService.getLoopsForTrack(track.id)),
+                builder: (context, snapshot) {
+                  final savedLoops = snapshot.data ?? [];
+                  if (savedLoops.isEmpty) return const SizedBox.shrink();
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Divider(height: 1),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                        child: Text(
+                          'Saved Loops for This Track',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ),
+                      ...savedLoops.map((loop) => ListTile(
+                            leading: const Icon(Icons.bookmark),
+                            title: Text(loop.displayName),
+                            subtitle: Text(
+                              'Saved ${_formatDate(loop.createdAt)}',
+                              style: theme.textTheme.bodySmall,
+                            ),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.play_arrow),
+                              onPressed: () {
+                                Navigator.pop(sheetContext);
+                                _audioService.setLoopMarkers(loop.startDuration, loop.endDuration);
+                              },
+                            ),
+                            onLongPress: () async {
+                              Navigator.pop(sheetContext);
+                              await savedLoopsService.deleteLoop(track.id, loop.id);
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Loop deleted'),
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+                              }
+                            },
+                          )),
+                    ],
+                  );
+                },
+              ),
+
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _formatDate(DateTime date) {
+    final now = DateTime.now();
+    final diff = now.difference(date);
+    if (diff.inDays == 0) return 'today';
+    if (diff.inDays == 1) return 'yesterday';
+    if (diff.inDays < 7) return '${diff.inDays} days ago';
+    return '${date.day}/${date.month}/${date.year}';
   }
 
   void _handleKeyEvent(KeyEvent event) {
@@ -1107,10 +1278,12 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                 final parentContext = context;
                                 showModalBottomSheet(
                                   context: parentContext,
+                                  isScrollControlled: true,
                                   builder: (sheetContext) => SafeArea(
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
+                                    child: SingleChildScrollView(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
                                         ListTile(
                                           leading: const Icon(Icons.play_arrow),
                                           title: const Text('Play Next'),
@@ -1449,8 +1622,26 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                             );
                                           },
                                         ),
+                                        if (_audioService.isLoopAvailable)
+                                          StatefulBuilder(
+                                            builder: (context, setMenuState) {
+                                              return SwitchListTile(
+                                                secondary: const Icon(Icons.repeat),
+                                                title: const Text('Show A-B Loop'),
+                                                subtitle: const Text('Repeat section controls'),
+                                                value: _showLoopButton,
+                                                onChanged: (value) {
+                                                  setMenuState(() {
+                                                    _showLoopButton = value;
+                                                  });
+                                                  setState(() {});
+                                                },
+                                              );
+                                            },
+                                          ),
                                       ],
                                     ),
+                                  ),
                                   ),
                                 );
                               },
@@ -1990,8 +2181,10 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                     ),
                                   ),
                                 // Progress bar with loop visualization
+                                // Long-press (touch) or right-click (mouse) to show A-B loop controls
                                 GestureDetector(
                                   onLongPress: isLoopAvailable ? _toggleLoopControls : null,
+                                  onSecondaryTap: isLoopAvailable ? _toggleLoopControls : null,
                                   behavior: HitTestBehavior.translucent,
                                   child: LayoutBuilder(
                                     builder: (context, constraints) {
@@ -2114,12 +2307,39 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                         },
                       ),
 
-                      // Loop indicator when active
+                      // A-B Loop button (when enabled in menu and loop available but not active)
+                      if (_showLoopButton && _audioService.isLoopAvailable && !_audioService.loopState.isActive)
+                        TextButton.icon(
+                          onPressed: _toggleLoopControls,
+                          icon: Icon(
+                            Icons.repeat,
+                            size: 14,
+                            color: _showLoopControls
+                                ? theme.colorScheme.primary
+                                : theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                          ),
+                          label: Text(
+                            'A-B Loop',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: _showLoopControls
+                                  ? theme.colorScheme.primary
+                                  : theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                            ),
+                          ),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
+
+                      // Loop indicator when active (clickable to show options)
                       if (_audioService.loopState.isActive)
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8.0),
                           child: GestureDetector(
-                            onTap: _toggleLoopControls,
+                            onTap: () => _showLoopOptionsSheet(context, track),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 12,
@@ -2148,6 +2368,12 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                       color: theme.colorScheme.primary,
                                       fontWeight: FontWeight.w500,
                                     ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Icon(
+                                    Icons.bookmark_add_outlined,
+                                    size: 14,
+                                    color: theme.colorScheme.primary,
                                   ),
                                 ],
                               ),

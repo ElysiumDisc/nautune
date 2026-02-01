@@ -22,6 +22,7 @@ import '../services/audio_cache_service.dart';
 import '../services/download_service.dart';
 import '../services/listenbrainz_service.dart';
 import '../services/rewind_service.dart';
+import '../services/saved_loops_service.dart';
 import '../services/waveform_service.dart';
 import '../theme/nautune_theme.dart';
 import '../widgets/equalizer_widget.dart';
@@ -550,11 +551,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: theme.scaffoldBackgroundColor,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) => SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -593,12 +595,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     label: 'Classic',
                     isSelected: iconService.currentIcon == 'default',
                     onTap: () async {
-                      // Capture appState before async gap
                       final appState = Platform.isLinux || Platform.isMacOS
                           ? Provider.of<NautuneAppState>(context, listen: false)
                           : null;
                       await iconService.setIcon('default');
-                      // Update tray icon on Linux/macOS
                       appState?.trayService?.updateTrayIcon();
                       if (context.mounted) Navigator.pop(context);
                     },
@@ -608,12 +608,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     label: 'Sunset',
                     isSelected: iconService.currentIcon == 'orange',
                     onTap: () async {
-                      // Capture appState before async gap
                       final appState = Platform.isLinux || Platform.isMacOS
                           ? Provider.of<NautuneAppState>(context, listen: false)
                           : null;
                       await iconService.setIcon('orange');
-                      // Update tray icon on Linux/macOS
+                      appState?.trayService?.updateTrayIcon();
+                      if (context.mounted) Navigator.pop(context);
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _IconOption(
+                    assetPath: 'assets/iconred.png',
+                    label: 'Crimson',
+                    isSelected: iconService.currentIcon == 'red',
+                    onTap: () async {
+                      final appState = Platform.isLinux || Platform.isMacOS
+                          ? Provider.of<NautuneAppState>(context, listen: false)
+                          : null;
+                      await iconService.setIcon('red');
+                      appState?.trayService?.updateTrayIcon();
+                      if (context.mounted) Navigator.pop(context);
+                    },
+                  ),
+                  _IconOption(
+                    assetPath: 'assets/icongreen.png',
+                    label: 'Emerald',
+                    isSelected: iconService.currentIcon == 'green',
+                    onTap: () async {
+                      final appState = Platform.isLinux || Platform.isMacOS
+                          ? Provider.of<NautuneAppState>(context, listen: false)
+                          : null;
+                      await iconService.setIcon('green');
                       appState?.trayService?.updateTrayIcon();
                       if (context.mounted) Navigator.pop(context);
                     },
@@ -1155,7 +1185,7 @@ class _StorageLimitSlider extends StatelessWidget {
   }
 }
 
-enum _StorageView { downloads, cache }
+enum _StorageView { downloads, cache, loops }
 
 class _StorageManagementScreen extends StatefulWidget {
   const _StorageManagementScreen();
@@ -1372,13 +1402,14 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
 
                   const SizedBox(height: 16),
 
-                  // Main view toggle: Downloads vs Cache
+                  // Main view toggle: Downloads vs Cache vs Loops
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: SegmentedButton<_StorageView>(
                       segments: const [
                         ButtonSegment(value: _StorageView.downloads, label: Text('Downloads'), icon: Icon(Icons.download)),
                         ButtonSegment(value: _StorageView.cache, label: Text('Cache'), icon: Icon(Icons.cached)),
+                        ButtonSegment(value: _StorageView.loops, label: Text('Loops'), icon: Icon(Icons.repeat)),
                       ],
                       selected: {_currentView},
                       onSelectionChanged: (selection) {
@@ -1456,7 +1487,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                           ? _buildAlbumList(stats, downloadService, theme)
                           : _buildArtistList(stats, downloadService, theme),
                     ),
-                  ] else ...[
+                  ] else if (_currentView == _StorageView.cache) ...[
                     // Cache view
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1521,6 +1552,9 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                     Expanded(
                       child: _buildCacheList(stats, theme),
                     ),
+                  ] else ...[
+                    // Loops view
+                    _buildLoopsView(theme),
                   ],
                 ],
               );
@@ -1707,6 +1741,170 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
         );
       },
     );
+  }
+
+  Widget _buildLoopsView(ThemeData theme) {
+    final savedLoopsService = SavedLoopsService();
+
+    return FutureBuilder(
+      future: savedLoopsService.initialize().then((_) => savedLoopsService.getAllLoops()),
+      builder: (context, snapshot) {
+        final loops = snapshot.data ?? [];
+
+        return Column(
+          children: [
+            // Clear all loops button
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      onPressed: loops.isEmpty
+                          ? null
+                          : () async {
+                              final confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: const Text('Delete All Saved Loops?'),
+                                  content: Text('This will remove all ${loops.length} saved loops. This cannot be undone.'),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context, false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context, true),
+                                      child: const Text('Delete All'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirm == true) {
+                                // Delete all loops for each track
+                                final trackIds = loops.map((l) => l.trackId).toSet();
+                                for (final trackId in trackIds) {
+                                  await savedLoopsService.deleteAllLoopsForTrack(trackId);
+                                }
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('All saved loops deleted')),
+                                  );
+                                  setState(() {});
+                                }
+                              }
+                            },
+                      icon: const Icon(Icons.delete_sweep),
+                      label: const Text('Delete All Loops'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 8),
+
+            // Info note
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                'Saved loops are stored as bookmarks. Long-press a loop to delete it.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+
+            const SizedBox(height: 8),
+
+            // List of saved loops
+            Expanded(
+              child: loops.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.repeat, size: 64, color: theme.colorScheme.outline),
+                          const SizedBox(height: 16),
+                          Text(
+                            'No saved loops',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Create A-B loops in the player and tap "Save Loop"',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.outline,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: loops.length,
+                      itemBuilder: (context, index) {
+                        final loop = loops[index];
+                        return ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: theme.colorScheme.primaryContainer,
+                            child: Icon(Icons.repeat_one, color: theme.colorScheme.onPrimaryContainer),
+                          ),
+                          title: Text(
+                            loop.trackName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text('${loop.formattedStart} - ${loop.formattedEnd}'),
+                          trailing: Text(
+                            _formatLoopDate(loop.createdAt),
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          onLongPress: () async {
+                            final confirm = await showDialog<bool>(
+                              context: context,
+                              builder: (context) => AlertDialog(
+                                title: const Text('Delete Loop?'),
+                                content: Text('Delete "${loop.displayName}"?'),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(context, false),
+                                    child: const Text('Cancel'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(context, true),
+                                    child: const Text('Delete'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirm == true) {
+                              await savedLoopsService.deleteLoop(loop.trackId, loop.id);
+                              if (context.mounted) {
+                                setState(() {});
+                              }
+                            }
+                          },
+                        );
+                      },
+                    ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  String _formatLoopDate(DateTime date) {
+    final now = DateTime.now();
+    final diff = now.difference(date);
+    if (diff.inDays == 0) return 'Today';
+    if (diff.inDays == 1) return 'Yesterday';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${date.day}/${date.month}';
   }
 }
 

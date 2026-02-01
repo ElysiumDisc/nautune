@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../data/network_channels.dart';
 import '../models/network_channel.dart';
 import '../providers/connectivity_provider.dart';
+import '../providers/demo_mode_provider.dart';
 import '../services/listening_analytics_service.dart';
 import '../services/network_download_service.dart';
 
@@ -200,21 +201,25 @@ class _NetworkScreenState extends State<NetworkScreen>
   @override
   Widget build(BuildContext context) {
     final connectivity = context.watch<ConnectivityProvider>();
-    final isOffline = !connectivity.networkAvailable;
+    final demoMode = context.watch<DemoModeProvider>();
+    final isOffline = !connectivity.networkAvailable || demoMode.isDemoMode;
     final hasDownloads = _downloadService.downloadedCount > 0;
 
-    // Show offline message only if no downloads available
+    // Show offline/demo message only if no downloads available
     if (isOffline && !hasDownloads) {
+      final message = demoMode.isDemoMode
+          ? 'DEMO MODE\n\nDownload channels while online\nto access them in demo mode'
+          : 'THE NETWORK REQUIRES\nAN INTERNET CONNECTION\n\nDownload channels from Settings\nto access them offline';
       return Scaffold(
         backgroundColor: Colors.black,
         appBar: _buildAppBar(),
-        body: const Center(
+        body: Center(
           child: Padding(
-            padding: EdgeInsets.all(32),
+            padding: const EdgeInsets.all(32),
             child: Text(
-              'THE NETWORK REQUIRES\nAN INTERNET CONNECTION\n\nDownload channels from Settings\nto access them offline',
+              message,
               textAlign: TextAlign.center,
-              style: TextStyle(
+              style: const TextStyle(
                 color: Colors.white,
                 fontFamily: 'monospace',
                 fontSize: 14,

@@ -1,3 +1,21 @@
+### v5.7.2 - A-B Loop Improvements & Saved Loops
+- **Save Loops**: Tap the active loop indicator to save the current A-B loop for later recall
+- **Saved Loops Management**: View and manage all saved loops in Settings > Storage Management > Loops tab
+- **Load Saved Loops**: Tap a saved loop to instantly restore its A-B markers on the current track
+- **Delete Saved Loops**: Long-press to delete individual loops, or clear all at once from Storage Management
+- **A-B Loop for Cached Tracks**: A-B Loop now works for both downloaded AND cached tracks (not just downloads)
+- **Current Track Caching**: The currently playing track now gets cached in the background while streaming, enabling A-B Loop mid-playback
+- **A-B Loop Toggle**: Added "Show A-B Loop" toggle in the three-dot menu to show/hide the A-B Loop button
+- **Desktop A-B Loop Access**: Added dedicated A-B Loop button below volume slider for easier access on desktop (no long-press needed)
+- **iOS Haptic Feedback**: Long-press on progress bar now triggers haptic feedback when opening A-B loop controls
+- **Scrollable Track Menu**: Fixed UI overflow in the three-dot menu by making it scrollable
+
+### v5.7.1 - Easter Egg Demo Mode Support
+- **Network in Demo Mode**: The Network easter egg now works in demo mode with downloaded channels
+- **Essential Mix in Demo Mode**: Essential Mix works in demo mode if downloaded while online
+- **Offline Graceful Handling**: Both easter eggs show helpful messages when offline without downloads
+- **Demo Mode Detection**: Easter eggs properly detect demo mode and disable network-only features
+
 ### v5.7.0 - A-B Loop, Essential Mix & Alternate Icons
 - **A-B Repeat Loop**: Set loop markers (A/B points) on downloaded/cached tracks to repeat a specific section
 - **Loop GUI Controls**: Long-press progress bar to access A/B marker buttons, visual loop region overlay, and loop toggle

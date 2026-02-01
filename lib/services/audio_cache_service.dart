@@ -50,12 +50,36 @@ class AudioCacheService {
   
   /// Get cached file path for a track, or null if not cached
   Future<File?> getCachedFile(String trackId) async {
+    // Auto-initialize if needed
+    if (_cacheManager == null) {
+      await initialize();
+    }
     if (_cacheManager == null) return null;
-    
+
     try {
+      // Try direct lookup first
       final fileInfo = await _cacheManager!.getFileFromCache(trackId);
       if (fileInfo != null && await fileInfo.file.exists()) {
         return fileInfo.file;
+      }
+
+      // Fallback: scan cache directory for files matching this track ID
+      // This handles cases where files exist but index is out of sync
+      final tempDir = await getTemporaryDirectory();
+      final cacheDir = Directory(path.join(tempDir.path, _cacheKey));
+      if (await cacheDir.exists()) {
+        await for (final entity in cacheDir.list(recursive: true)) {
+          if (entity is File) {
+            final fileName = path.basename(entity.path);
+            // Check if filename contains the track ID (handles hash-based keys too)
+            if (fileName.contains(trackId) || entity.path.contains(trackId)) {
+              if (await entity.exists()) {
+                debugPrint('✅ Found cached file via scan: ${entity.path}');
+                return entity;
+              }
+            }
+          }
+        }
       }
     } catch (e) {
       debugPrint('⚠️ Error checking cache for $trackId: $e');
@@ -78,10 +102,9 @@ class AudioCacheService {
       await initialize();
     }
 
-    // Use stream URL hash as cache key if provided (different quality = different cache)
-    final trackId = streamUrl != null
-        ? '${track.id}_${streamUrl.hashCode}'
-        : track.id;
+    // Always use track.id as cache key for consistent lookup
+    // This ensures getCachedFile(track.id) will find the file regardless of stream URL
+    final trackId = track.id;
 
     // Already caching this track - wait for it
     if (_cachingInProgress.contains(trackId)) {

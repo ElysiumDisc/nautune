@@ -3,8 +3,11 @@ import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../models/essential_mix_track.dart';
+import '../providers/connectivity_provider.dart';
+import '../providers/demo_mode_provider.dart';
 import '../models/waveform_data.dart';
 import '../services/essential_mix_service.dart';
 import '../services/ios_fft_service.dart';
@@ -328,6 +331,21 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     } else {
       // Check if downloaded - archive.org blocks direct streaming
       if (!_service.isPlayingOffline) {
+        // Check if we're in demo mode or offline
+        final connectivity = context.read<ConnectivityProvider>();
+        final demoMode = context.read<DemoModeProvider>();
+        final isOffline = !connectivity.networkAvailable || demoMode.isDemoMode;
+
+        if (isOffline) {
+          // Can't download in demo/offline mode
+          setState(() {
+            _errorMessage = demoMode.isDemoMode
+                ? 'Download the Essential Mix while online to listen in demo mode'
+                : 'Download required - connect to internet to download';
+          });
+          return;
+        }
+
         // Not downloaded - prompt to download
         setState(() {
           _errorMessage = 'Download required for playback';
@@ -1094,30 +1112,46 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
                   },
                 )
               else
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Download for offline playback with FFT visualizer and waveform support.\n(${_track.formattedFileSize})',
-                      style: TextStyle(color: theme.colorScheme.onSurface.withValues(alpha: 0.7), fontSize: 13),
-                    ),
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: () async {
-                          _service.startDownload();
-                          setSheetState(() {});
-                        },
-                        icon: const Icon(Icons.download),
-                        label: const Text('Download'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: theme.colorScheme.primary,
-                          foregroundColor: theme.colorScheme.onPrimary,
+                Builder(
+                  builder: (context) {
+                    final connectivity = context.watch<ConnectivityProvider>();
+                    final demoMode = context.watch<DemoModeProvider>();
+                    final isOffline = !connectivity.networkAvailable || demoMode.isDemoMode;
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          isOffline
+                              ? (demoMode.isDemoMode
+                                  ? 'Download the Essential Mix while online to listen in demo mode.\n(${_track.formattedFileSize})'
+                                  : 'Connect to internet to download.\n(${_track.formattedFileSize})')
+                              : 'Download for offline playback with FFT visualizer and waveform support.\n(${_track.formattedFileSize})',
+                          style: TextStyle(color: theme.colorScheme.onSurface.withValues(alpha: 0.7), fontSize: 13),
                         ),
-                      ),
-                    ),
-                  ],
+                        const SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: isOffline
+                                ? null
+                                : () async {
+                                    _service.startDownload();
+                                    setSheetState(() {});
+                                  },
+                            icon: const Icon(Icons.download),
+                            label: Text(isOffline ? 'Offline' : 'Download'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: theme.colorScheme.primary,
+                              foregroundColor: theme.colorScheme.onPrimary,
+                              disabledBackgroundColor: theme.colorScheme.primary.withValues(alpha: 0.3),
+                              disabledForegroundColor: theme.colorScheme.onPrimary.withValues(alpha: 0.5),
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
 
               // Listen time stats

@@ -13,7 +13,7 @@
 - **5 Audio Visualizers**: Ocean Waves, Spectrum Bars, Mirror Bars, Radial, and Psychedelic styles
 - **Real-Time FFT**: True audio-reactive visualization using PulseAudio (Linux) and MTAudioProcessingTap (iOS)
 - **Smart Playlists**: Tag-aware mood playlists (Chill, Energetic, Melancholy, Upbeat) using actual file tags
-- **Smart Pre-Cache**: Configurable pre-caching of upcoming tracks (3, 5, or 10) with WiFi-only option
+- **Smart Pre-Cache**: Configurable pre-caching of current and upcoming tracks (3, 5, or 10) with WiFi-only option
 - **Smart Lyrics**: Multi-source lyrics with sync, caching, and pre-fetching
 - **41 Nautical Milestones**: Earn achievements as you listen
 - **Track Sharing**: Share downloaded audio files via AirDrop (iOS) or file manager (Linux)
@@ -21,7 +21,7 @@
 - **Listening Analytics**: Heatmaps, streaks, and weekly comparisons
 - **Global Search**: Unified search across your entire library with instant results
 - **Smart Offline Mode**: Persistent offline preference, auto-detects airplane mode, seamless downloaded content playback
-- **A-B Repeat Loop**: Set loop markers on downloaded tracks to repeat a section (long-press progress bar to access)
+- **A-B Repeat Loop**: Set loop markers on downloaded/cached tracks to repeat a section (long-press with haptic feedback on iOS, or use the A-B Loop button on desktop). Save loops for later recall.
 - **High-Fidelity Playback**: Native backends for Linux and iOS ensuring bit-perfect audio
 - **CarPlay Support**: Take your Jellyfin library on the road with CarPlay interface
 - **Personalized Home**: Discover, On This Day, and For You recommendation shelves
@@ -54,6 +54,14 @@ The Network supports offline listening with auto-caching:
 5. Delete individual channels or clear all from settings
 
 When offline, only your saved channels appear in the list. The app shows an "OFFLINE" indicator when auto-cache is enabled.
+
+### Demo Mode & Offline Access
+
+The Network easter egg works in demo mode and airplane mode:
+
+- **With Downloads**: If you've downloaded channels while online, they remain accessible in demo mode and offline
+- **Without Downloads**: Shows a helpful message explaining that channels need to be downloaded while online
+- Download all channels using the "Download All" button in Settings to ensure full offline access
 
 ### Storage Location
 
@@ -191,6 +199,7 @@ A hidden feature to play the legendary 2-hour Soulwax/2ManyDJs BBC Essential Mix
 
 - **2-Hour Mix**: The full Soulwax/2ManyDJs BBC Radio 1 Essential Mix
 - **Download for Offline**: Download the 233MB audio file for offline listening
+- **Demo Mode Support**: Works in demo mode and airplane mode if downloaded while online
 - **Radial Visualizer**: FFT bars radiate around album art with smooth, non-twitchy animations
 - **Seekable Waveform**: Waveform doubles as progress bar - tap or drag to seek
 - **Profile Badge**: BBC Radio 1 Essential Mix badge with archive.org aesthetic appears in your Profile
@@ -206,6 +215,25 @@ Essential Mix downloads are stored separately from your Jellyfin library:
 ### Credit
 
 Audio sourced from [Internet Archive](https://archive.org/details/2017-05-20-soulwax-2manydjs-essential-mix).
+
+
+## 🌧️ Relax Mode (Easter Egg)
+
+An ambient sound mixer for focus or relaxation, inspired by [ebithril/relax-player](https://github.com/ebithril/relax-player).
+
+### How to Access
+
+1. Go to **Library** tab
+2. Search for **"relax"**
+3. Tap the **"Relax Mode"** card that appears
+
+### Features
+
+- **3 Sound Layers**: Mix rain, thunder, and campfire sounds with vertical sliders
+- **Seamless Loops**: Ambient audio loops continuously without gaps
+- **Works Everywhere**: Available in demo mode, offline mode, and airplane mode (uses bundled assets)
+- **Stats Tracking**: Track total time spent and sound usage breakdown (Rain/Thunder/Campfire %)
+- **"Calm Waters" Milestone**: Unlock a badge for discovering Relax Mode
 
 
 ## 🖥️ TUI Mode (Linux)
