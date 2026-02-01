@@ -1,5 +1,4 @@
-import 'dart:io' show Platform;
-import 'dart:math' show max, min;
+import 'dart:math' show max;
 import 'package:flutter/material.dart';
 import 'base_visualizer.dart';
 
@@ -81,6 +80,19 @@ class _SpectrumMirrorPainter extends CustomPainter {
   static const MaskFilter _blurFilter6 = MaskFilter.blur(BlurStyle.normal, 6);
   static const MaskFilter _blurFilter10 = MaskFilter.blur(BlurStyle.normal, 10);
 
+  // Cache for pre-computed HSL values from primary color
+  static Color? _cachedPrimaryColor;
+  static double _cachedBaseHue = 0.0;
+  static double _cachedBaseSaturation = 0.5;
+  static double _cachedBaseLightness = 0.5;
+
+  // Pre-computed hue offsets for bar indices (avoids per-bar computation)
+  static final List<double> _hueOffsets = List.generate(64, (i) => (i / 64) * 60 - 30);
+
+  // Gradient cache to avoid creating new shaders every frame
+  final Map<int, Shader> _topGradientCache = {};
+  final Map<int, Shader> _bottomGradientCache = {};
+
   _SpectrumMirrorPainter({
     required this.bars,
     required this.peaks,
@@ -100,22 +112,63 @@ class _SpectrumMirrorPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.0
       ..maskFilter = _blurFilter6;
+
+    // Cache HSL conversion of primary color (expensive operation)
+    if (_cachedPrimaryColor != primaryColor) {
+      _cachedPrimaryColor = primaryColor;
+      final primaryHsl = HSLColor.fromColor(primaryColor);
+      _cachedBaseHue = primaryHsl.hue;
+      _cachedBaseSaturation = primaryHsl.saturation;
+      _cachedBaseLightness = primaryHsl.lightness;
+    }
   }
 
   /// Get color based on frequency position
+  /// Uses cached HSL values to avoid per-bar HSL conversion
   Color _getBarColor(int index, int total, double value) {
-    final ratio = index / total;
-
-    // Use primary color with hue shift based on frequency
-    final hsl = HSLColor.fromColor(primaryColor);
-    final hueShift = ratio * 60 - 30; // -30 to +30 degree shift
-    final newHue = (hsl.hue + hueShift) % 360;
+    // Use cached hue offset instead of computing every time
+    final hueShift = _hueOffsets[index.clamp(0, 63)];
+    final newHue = (_cachedBaseHue + hueShift) % 360;
 
     // Boost saturation and lightness with value
-    final saturation = (hsl.saturation * (0.7 + value * 0.3)).clamp(0.0, 1.0);
-    final lightness = (hsl.lightness * (0.8 + value * 0.4)).clamp(0.0, 0.9);
+    final saturation = (_cachedBaseSaturation * (0.7 + value * 0.3)).clamp(0.0, 1.0);
+    final lightness = (_cachedBaseLightness * (0.8 + value * 0.4)).clamp(0.0, 0.9);
 
     return HSLColor.fromAHSL(1.0, newHue, saturation, lightness).toColor();
+  }
+
+  /// Get cached gradient shader for top bar
+  Shader _getTopGradient(int index, Rect rect, Color color) {
+    final heightBucket = (rect.height / 10).round();
+    final key = index * 1000 + heightBucket;
+
+    return _topGradientCache.putIfAbsent(key, () {
+      return LinearGradient(
+        begin: Alignment.bottomCenter,
+        end: Alignment.topCenter,
+        colors: [
+          color.withValues(alpha: opacity * 0.95),
+          color.withValues(alpha: opacity * 0.5),
+        ],
+      ).createShader(rect);
+    });
+  }
+
+  /// Get cached gradient shader for bottom bar
+  Shader _getBottomGradient(int index, Rect rect, Color color) {
+    final heightBucket = (rect.height / 10).round();
+    final key = index * 1000 + heightBucket;
+
+    return _bottomGradientCache.putIfAbsent(key, () {
+      return LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          color.withValues(alpha: opacity * 0.95),
+          color.withValues(alpha: opacity * 0.5),
+        ],
+      ).createShader(rect);
+    });
   }
 
   @override
@@ -128,11 +181,7 @@ class _SpectrumMirrorPainter extends CustomPainter {
     final barWidth = (size.width - totalSpacing) / barCount;
     final centerY = size.height / 2;
 
-    // On iOS portrait, height can be very tall - cap effective height to width ratio
-    // This prevents bars from looking giant in fullscreen portrait mode
-    final effectiveHeight = Platform.isIOS
-        ? min(size.height, size.width * 0.8)
-        : size.height;
+    final effectiveHeight = size.height;
 
     // Bass-reactive height - bars extend further on bass hits
     final bassBoost = 1.0 + bass * 0.5;
@@ -194,14 +243,7 @@ class _SpectrumMirrorPainter extends CustomPainter {
         barHeight,
       );
 
-      _barPaint.shader = LinearGradient(
-        begin: Alignment.bottomCenter,
-        end: Alignment.topCenter,
-        colors: [
-          color.withValues(alpha: opacity * 0.95),
-          color.withValues(alpha: opacity * 0.5),
-        ],
-      ).createShader(topRect);
+      _barPaint.shader = _getTopGradient(i, topRect, color);
 
       canvas.drawRRect(
         RRect.fromRectAndRadius(topRect, Radius.circular(barWidth / 4)),
@@ -216,14 +258,7 @@ class _SpectrumMirrorPainter extends CustomPainter {
         barHeight,
       );
 
-      _barPaint.shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          color.withValues(alpha: opacity * 0.95),
-          color.withValues(alpha: opacity * 0.5),
-        ],
-      ).createShader(bottomRect);
+      _barPaint.shader = _getBottomGradient(i, bottomRect, color);
 
       canvas.drawRRect(
         RRect.fromRectAndRadius(bottomRect, Radius.circular(barWidth / 4)),
@@ -293,5 +328,16 @@ class _SpectrumMirrorPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _SpectrumMirrorPainter old) => true;
+  bool shouldRepaint(covariant _SpectrumMirrorPainter old) {
+    const tolerance = 0.005;
+    if (bars.length != old.bars.length) return true;
+    if ((bass - old.bass).abs() > tolerance) return true;
+    if ((amplitude - old.amplitude).abs() > tolerance) return true;
+    if ((opacity - old.opacity).abs() > tolerance) return true;
+    if (primaryColor != old.primaryColor) return true;
+    for (int i = 0; i < bars.length; i++) {
+      if ((bars[i] - old.bars[i]).abs() > tolerance) return true;
+    }
+    return false;
+  }
 }

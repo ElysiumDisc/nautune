@@ -58,6 +58,10 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
   DateTime _lastFrameTime = DateTime.now();
   static const _frameInterval = Duration(milliseconds: 33);
 
+  // Rotation for visualizer (updated with FFT, not animation controller)
+  double _visualizerRotation = 0.0;
+  static const double _rotationSpeed = 0.02; // Radians per FFT frame
+
   // Waveform data
   WaveformData? _waveformData;
   bool _isExtractingWaveform = false;
@@ -223,6 +227,8 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
           _smoothBass += (_bassLevel - _smoothBass) * _smoothingFactor;
           _smoothMid += (_midLevel - _smoothMid) * _smoothingFactor;
           _smoothTreble += (_trebleLevel - _smoothTreble) * _smoothingFactor;
+          // Update rotation with FFT frame, not animation controller (saves CPU)
+          _visualizerRotation += _rotationSpeed;
         });
       });
     } else if (Platform.isLinux) {
@@ -244,6 +250,8 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
           _smoothBass += (_bassLevel - _smoothBass) * _smoothingFactor;
           _smoothMid += (_midLevel - _smoothMid) * _smoothingFactor;
           _smoothTreble += (_trebleLevel - _smoothTreble) * _smoothingFactor;
+          // Update rotation with FFT frame, not animation controller
+          _visualizerRotation += _rotationSpeed;
         });
       });
     }
@@ -793,25 +801,40 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
             alignment: Alignment.center,
             children: [
               // Radial FFT visualizer (behind artwork) - wrapped in RepaintBoundary
+              // On iOS: rotation tied to FFT updates (~30fps) to avoid 60fps repaints
+              // On Linux: use animation controller for smooth 60fps rotation
               if (showVisualizer)
                 RepaintBoundary(
-                  child: AnimatedBuilder(
-                    animation: _artworkController,
-                    builder: (context, _) {
-                      return CustomPaint(
-                        size: Size(visualizerSize, visualizerSize),
-                        painter: _RadialVisualizerPainter(
-                          bass: _smoothBass,
-                          mid: _smoothMid,
-                          treble: _smoothTreble,
-                          color: theme.colorScheme.primary,
-                          innerRadius: artworkSize / 2 + 6,
-                          maxBarLength: maxBarLength,
-                          rotation: _artworkController.value * 2 * pi, // Slow rotation
+                  child: Platform.isIOS
+                      ? CustomPaint(
+                          size: Size(visualizerSize, visualizerSize),
+                          painter: _RadialVisualizerPainter(
+                            bass: _smoothBass,
+                            mid: _smoothMid,
+                            treble: _smoothTreble,
+                            color: theme.colorScheme.primary,
+                            innerRadius: artworkSize / 2 + 6,
+                            maxBarLength: maxBarLength,
+                            rotation: _visualizerRotation,
+                          ),
+                        )
+                      : AnimatedBuilder(
+                          animation: _artworkController,
+                          builder: (context, _) {
+                            return CustomPaint(
+                              size: Size(visualizerSize, visualizerSize),
+                              painter: _RadialVisualizerPainter(
+                                bass: _smoothBass,
+                                mid: _smoothMid,
+                                treble: _smoothTreble,
+                                color: theme.colorScheme.primary,
+                                innerRadius: artworkSize / 2 + 6,
+                                maxBarLength: maxBarLength,
+                                rotation: _artworkController.value * 2 * pi,
+                              ),
+                            );
+                          },
                         ),
-                      );
-                    },
-                  ),
                 ),
 
               // Album artwork (centered)
@@ -1386,19 +1409,29 @@ class _BarWeights {
   const _BarWeights(this.bass, this.mid, this.treble, this.total);
 }
 
-/// Waveform painter
+/// Waveform painter - optimized with cached Paint objects
 class _WaveformPainter extends CustomPainter {
   final WaveformData waveform;
   final double progress;
   final Color playedColor;
   final Color unplayedColor;
 
+  late final Paint _playedPaint;
+  late final Paint _unplayedPaint;
+
   _WaveformPainter({
     required this.waveform,
     required this.progress,
     required this.playedColor,
     required this.unplayedColor,
-  });
+  }) {
+    _playedPaint = Paint()
+      ..color = playedColor
+      ..style = PaintingStyle.fill;
+    _unplayedPaint = Paint()
+      ..color = unplayedColor
+      ..style = PaintingStyle.fill;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1414,16 +1447,12 @@ class _WaveformPainter extends CustomPainter {
       final x = i * barWidth;
       final y = (size.height - barHeight) / 2;
 
-      final paint = Paint()
-        ..color = i <= progressIndex ? playedColor : unplayedColor
-        ..style = PaintingStyle.fill;
-
       canvas.drawRRect(
         RRect.fromRectAndRadius(
           Rect.fromLTWH(x, y, barWidth * 0.8, barHeight),
           const Radius.circular(1),
         ),
-        paint,
+        i <= progressIndex ? _playedPaint : _unplayedPaint,
       );
     }
   }
@@ -1431,6 +1460,8 @@ class _WaveformPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _WaveformPainter oldDelegate) {
     return progress != oldDelegate.progress ||
-        waveform != oldDelegate.waveform;
+        waveform != oldDelegate.waveform ||
+        playedColor != oldDelegate.playedColor ||
+        unplayedColor != oldDelegate.unplayedColor;
   }
 }

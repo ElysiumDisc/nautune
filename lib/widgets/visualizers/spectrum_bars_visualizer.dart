@@ -1,5 +1,4 @@
-import 'dart:io' show Platform;
-import 'dart:math' show max, min;
+import 'dart:math' show max;
 import 'package:flutter/material.dart';
 import 'base_visualizer.dart';
 
@@ -159,11 +158,7 @@ class _SpectrumBarsPainter extends CustomPainter {
     final totalSpacing = spacing * (barCount - 1);
     final barWidth = (size.width - totalSpacing) / barCount;
 
-    // On iOS portrait, height can be very tall - cap effective height to width ratio
-    // This prevents bars from looking giant in fullscreen portrait mode
-    final effectiveHeight = Platform.isIOS
-        ? min(size.height, size.width * 0.8)
-        : size.height;
+    final effectiveHeight = size.height;
 
     // Bass-reactive height multiplier - bars grow taller on bass hits
     final bassBoost = 1.0 + bass * 0.4;
@@ -257,7 +252,14 @@ class _SpectrumBarsPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _SpectrumBarsPainter old) {
-    // Always repaint - spectrum changes every frame
-    return true;
+    const tolerance = 0.005;
+    if (bars.length != old.bars.length) return true;
+    if ((bass - old.bass).abs() > tolerance) return true;
+    if ((opacity - old.opacity).abs() > tolerance) return true;
+    if (primaryColor != old.primaryColor) return true;
+    for (int i = 0; i < bars.length; i++) {
+      if ((bars[i] - old.bars[i]).abs() > tolerance) return true;
+    }
+    return false;
   }
 }
