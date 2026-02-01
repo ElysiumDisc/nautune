@@ -478,7 +478,13 @@ Nautune follows a clean data structure on Linux for easy backups and management:
 
 ### Linux / Desktop
 <img src="screenshots/linux-ipad1.png" width="400" alt="Nautune on Linux">
-<img src="screenshots/linux-ipad2.png" width="400" alt="Nautune on Linux">
+<img src="screenshots/linux-ipad2.png" width="400" alt="Nautune Login">
+<img src="screenshots/linux-ipad3.png" width="400" alt="Nautune Settings">
+<img src="screenshots/linux-ipad4.png" width="400" alt="Nautune Visualizer Styles">
+<img src="screenshots/linux-ipad5.png" width="400" alt="Nautune Genres">
+<img src="screenshots/linux-ipad6.png" width="400" alt="Nautune Artists">
+<img src="screenshots/linux-ipad7.png" width="400" alt="Nautune Albums">
+<img src="screenshots/linux-ipad8.png" width="400" alt="Nautune Lyrics">
 
 ### iOS
 <img src="screenshots/ios5.png" width="250" alt="Nautune on iOS">

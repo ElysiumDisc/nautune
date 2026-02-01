@@ -128,7 +128,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   // A-B loop controls state
   StreamSubscription? _loopSub;
   bool _showLoopControls = false;
-  bool _showLoopButton = true; // Toggle visibility of A-B Loop button
+  bool _showLoopButton = false; // Toggle visibility of A-B Loop button (off by default)
 
   @override
   void initState() {

@@ -1554,7 +1554,9 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                     ),
                   ] else ...[
                     // Loops view
-                    _buildLoopsView(theme),
+                    Expanded(
+                      child: _buildLoopsView(theme),
+                    ),
                   ],
                 ],
               );
