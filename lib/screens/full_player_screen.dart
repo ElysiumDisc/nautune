@@ -652,6 +652,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                   style: theme.textTheme.bodySmall,
                 ),
                 onTap: () async {
+                  final messenger = ScaffoldMessenger.of(context);
                   Navigator.pop(sheetContext);
                   await savedLoopsService.saveLoop(
                     trackId: track.id,
@@ -660,7 +661,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                     end: loopState.end!,
                   );
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    messenger.showSnackBar(
                       const SnackBar(
                         content: Text('Loop saved'),
                         duration: Duration(seconds: 2),
@@ -733,10 +734,11 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                               },
                             ),
                             onLongPress: () async {
+                              final messenger = ScaffoldMessenger.of(context);
                               Navigator.pop(sheetContext);
                               await savedLoopsService.deleteLoop(track.id, loop.id);
                               if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
+                                messenger.showSnackBar(
                                   const SnackBar(
                                     content: Text('Loop deleted'),
                                     duration: Duration(seconds: 2),

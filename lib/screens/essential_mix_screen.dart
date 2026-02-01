@@ -58,6 +58,10 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
   DateTime _lastFrameTime = DateTime.now();
   static const _frameInterval = Duration(milliseconds: 33);
 
+  // Throttle position updates on iOS to reduce rebuilds
+  DateTime _lastPositionUpdate = DateTime.now();
+  static const _positionUpdateInterval = Duration(milliseconds: 250); // 4 updates/sec on iOS
+
   // Rotation for visualizer (updated with FFT, not animation controller)
   double _visualizerRotation = 0.0;
   static const double _rotationSpeed = 0.02; // Radians per FFT frame
@@ -81,7 +85,11 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     _artworkController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 20),
-    )..repeat();
+    );
+    // Only run animation controller on non-iOS (iOS uses FFT-synced rotation)
+    if (!Platform.isIOS) {
+      _artworkController.repeat();
+    }
 
     // Listen to player state changes
     _audioPlayer.onPlayerStateChanged.listen((state) {
@@ -102,13 +110,23 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
       }
     });
 
-    // Position updates
+    // Position updates - throttled on iOS to reduce rebuilds
     _audioPlayer.onPositionChanged.listen((position) {
-      if (mounted) {
-        setState(() {
-          _position = position;
-        });
+      if (!mounted) return;
+
+      // On iOS, throttle position updates to reduce UI rebuilds
+      if (Platform.isIOS) {
+        final now = DateTime.now();
+        if (now.difference(_lastPositionUpdate) < _positionUpdateInterval) {
+          _position = position; // Update internally but don't rebuild
+          return;
+        }
+        _lastPositionUpdate = now;
       }
+
+      setState(() {
+        _position = position;
+      });
     });
 
     // Duration updates
@@ -613,8 +631,8 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
                       boxShadow: [
                         BoxShadow(
                           color: theme.colorScheme.primary.withValues(alpha: 0.4),
-                          blurRadius: 20,
-                          spreadRadius: 2,
+                          blurRadius: Platform.isIOS ? 10 : 20,
+                          spreadRadius: Platform.isIOS ? 1 : 2,
                         ),
                       ],
                     ),
@@ -882,7 +900,8 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
                 decoration: BoxDecoration(
                   color: theme.colorScheme.onSurface,
                   borderRadius: BorderRadius.circular(1.5),
-                  boxShadow: [
+                  // Reduced shadow on iOS for performance
+                  boxShadow: Platform.isIOS ? null : [
                     BoxShadow(
                       color: theme.colorScheme.primary.withValues(alpha: 0.5),
                       blurRadius: 6,
@@ -932,7 +951,8 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
                 decoration: BoxDecoration(
                   color: theme.colorScheme.primary,
                   shape: BoxShape.circle,
-                  boxShadow: [
+                  // Reduced shadow on iOS for performance
+                  boxShadow: Platform.isIOS ? null : [
                     BoxShadow(
                       color: theme.colorScheme.primary.withValues(alpha: 0.4),
                       blurRadius: 8,
@@ -972,29 +992,33 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
       );
     }
 
-    return AnimatedBuilder(
-      animation: _artworkController,
-      builder: (context, child) {
-        return Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: theme.colorScheme.primary.withValues(alpha: _isPlaying ? 0.6 : 0.3),
-                blurRadius: _isPlaying ? 40 : 20,
-                spreadRadius: _isPlaying ? 10 : 5,
-              ),
-            ],
+    // On iOS: reduce shadow blur for performance (no AnimatedBuilder needed)
+    // Shadow only changes based on _isPlaying state, not animation
+    final shadowBlur = Platform.isIOS
+        ? (_isPlaying ? 20.0 : 10.0)
+        : (_isPlaying ? 40.0 : 20.0);
+    final shadowSpread = Platform.isIOS
+        ? (_isPlaying ? 4.0 : 2.0)
+        : (_isPlaying ? 10.0 : 5.0);
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: theme.colorScheme.primary.withValues(alpha: _isPlaying ? 0.6 : 0.3),
+            blurRadius: shadowBlur,
+            spreadRadius: shadowSpread,
           ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: AspectRatio(
-              aspectRatio: 1,
-              child: artworkImage,
-            ),
-          ),
-        );
-      },
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: AspectRatio(
+          aspectRatio: 1,
+          child: artworkImage,
+        ),
+      ),
     );
   }
 
@@ -1459,7 +1483,10 @@ class _WaveformPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _WaveformPainter oldDelegate) {
-    return progress != oldDelegate.progress ||
+    // Use tolerance to avoid repainting for tiny progress changes
+    // 0.002 = ~0.2% change needed to repaint (for a 2hr mix, ~14 seconds)
+    const progressTolerance = 0.002;
+    return (progress - oldDelegate.progress).abs() > progressTolerance ||
         waveform != oldDelegate.waveform ||
         playedColor != oldDelegate.playedColor ||
         unplayedColor != oldDelegate.unplayedColor;
