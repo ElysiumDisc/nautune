@@ -6,7 +6,10 @@
   - Skips processing entirely when emitting too fast
   - Reduces event channel flooding
 - **Pre-computed Hanning Window**: Window function computed once at init (was recreated every callback)
-- **Result**: Essential Mix visualizer should now be smooth on iOS (was laggy due to GC pauses)
+- **Asymmetric Smoothing**: Essential Mix visualizer now uses fast attack (0.6) / slow decay (0.12) matching fullscreen visualizers
+  - Was using single 0.18 factor for both (too slow on attack, too fast on decay)
+  - Visualizer now reacts instantly to beats and fades smoothly
+- **Result**: Essential Mix visualizer should now be smooth AND reactive on iOS
 
 ### v5.7.5 - iOS Visualizer Performance Overhaul
 - **Essential Mix iOS Performance**: Complete performance overhaul for smooth playback on iOS

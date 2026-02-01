@@ -51,7 +51,9 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
   double _smoothMid = 0.0;
   double _smoothTreble = 0.0;
   double _visualizerRotation = 0.0;
-  static const double _smoothingFactor = 0.18; // Higher = more reactive
+  // Asymmetric smoothing: FAST attack, SLOW decay (matches fullscreen visualizers)
+  static const double _attackFactor = 0.6; // Fast response to increases
+  static const double _decayFactor = 0.12; // Slow falloff
   static const double _rotationSpeed = 0.02; // Radians per FFT frame
 
   // Frame rate throttling for FFT updates (~30fps)
@@ -234,10 +236,10 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
         if (now.difference(_lastFrameTime) < _frameInterval) return;
         _lastFrameTime = now;
 
-        // Update smoothed values and notify visualizer ONLY (no setState = no full rebuild)
-        _smoothBass += (data.bass - _smoothBass) * _smoothingFactor;
-        _smoothMid += (data.mid - _smoothMid) * _smoothingFactor;
-        _smoothTreble += (data.treble - _smoothTreble) * _smoothingFactor;
+        // Update smoothed values with FAST attack, SLOW decay (matches fullscreen visualizers)
+        _smoothBass += (data.bass - _smoothBass) * (data.bass > _smoothBass ? _attackFactor : _decayFactor);
+        _smoothMid += (data.mid - _smoothMid) * (data.mid > _smoothMid ? _attackFactor : _decayFactor);
+        _smoothTreble += (data.treble - _smoothTreble) * (data.treble > _smoothTreble ? _attackFactor : _decayFactor);
         _visualizerRotation += _rotationSpeed;
 
         // Only updates the visualizer widget, not the entire screen
@@ -254,10 +256,10 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
         if (now.difference(_lastFrameTime) < _frameInterval) return;
         _lastFrameTime = now;
 
-        // Update smoothed values and notify visualizer ONLY (no setState = no full rebuild)
-        _smoothBass += (data.bass - _smoothBass) * _smoothingFactor;
-        _smoothMid += (data.mid - _smoothMid) * _smoothingFactor;
-        _smoothTreble += (data.treble - _smoothTreble) * _smoothingFactor;
+        // Update smoothed values with FAST attack, SLOW decay (matches fullscreen visualizers)
+        _smoothBass += (data.bass - _smoothBass) * (data.bass > _smoothBass ? _attackFactor : _decayFactor);
+        _smoothMid += (data.mid - _smoothMid) * (data.mid > _smoothMid ? _attackFactor : _decayFactor);
+        _smoothTreble += (data.treble - _smoothTreble) * (data.treble > _smoothTreble ? _attackFactor : _decayFactor);
         _visualizerRotation += _rotationSpeed;
 
         // Only updates the visualizer widget, not the entire screen
