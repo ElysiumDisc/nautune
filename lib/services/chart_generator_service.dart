@@ -35,8 +35,29 @@ class ChartGeneratorService {
   static const double _highMidMaxFreq = 2000;  // Lane 3 - Blue (vocals, guitar lead)
   // Lane 4 - Orange (treble > 2000Hz - synths, cymbals)
 
+  // Maximum track duration for analysis (in minutes) - prevents memory crashes
+  static const int _maxDurationMinutesIOS = 15;      // iOS: strict limit due to memory
+  static const int _maxDurationMinutesOther = 30;    // Android/Desktop: more lenient
+
   /// Progress callback for UI updates (0.0 - 1.0)
   ValueNotifier<double> progress = ValueNotifier(0.0);
+
+  /// Check if track duration is within safe limits for current platform
+  /// Returns error message if too long, null if OK
+  String? checkDurationLimit(int durationMs) {
+    final durationMinutes = durationMs / 60000;
+    final maxMinutes = Platform.isIOS ? _maxDurationMinutesIOS : _maxDurationMinutesOther;
+
+    if (durationMinutes > maxMinutes) {
+      return 'Track is ${durationMinutes.toStringAsFixed(1)} minutes long. '
+          'Maximum for ${Platform.isIOS ? "iOS" : "this device"} is $maxMinutes minutes '
+          'to prevent crashes.';
+    }
+    return null;
+  }
+
+  /// Maximum duration in minutes for current platform
+  int get maxDurationMinutes => Platform.isIOS ? _maxDurationMinutesIOS : _maxDurationMinutesOther;
 
   /// Generate a chart from an audio file
   Future<ChartData?> generateChart({
@@ -48,6 +69,13 @@ class ChartGeneratorService {
   }) async {
     try {
       progress.value = 0.0;
+
+      // Check duration limit to prevent memory crashes
+      final durationError = checkDurationLimit(durationMs);
+      if (durationError != null) {
+        debugPrint('🎮 ChartGenerator: $durationError');
+        return null;
+      }
 
       // Read audio file
       final audioData = await _readAudioFile(audioPath);

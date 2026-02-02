@@ -230,6 +230,7 @@ A Guitar Hero-style rhythm game that auto-generates playable charts from any tra
 ### How to Play
 
 1. **Select a track** - Only downloaded tracks are available (the game needs to analyze the audio file)
+   - **Duration limits**: iOS max 15 min, Desktop max 30 min (prevents memory crashes)
 2. **Wait for analysis** - The app decodes and analyzes the audio using spectral flux onset detection (2-10 seconds depending on track length)
 3. **Play the game**:
    - Notes fall from the top in **5 colored lanes** (Green, Red, Yellow, Blue, Orange - like Guitar Hero)

@@ -74,6 +74,9 @@ class ListenBrainzRecommendation {
   /// Artist name (may be null if not resolved)
   final String? artistName;
 
+  /// Album name (may be null if not resolved)
+  final String? albumName;
+
   /// Recommendation score (0-1)
   final double score;
 
@@ -84,6 +87,7 @@ class ListenBrainzRecommendation {
     required this.recordingMbid,
     this.trackName,
     this.artistName,
+    this.albumName,
     required this.score,
     this.jellyfinTrackId,
   });
@@ -97,6 +101,7 @@ class ListenBrainzRecommendation {
       recordingMbid: recordingMbid,
       trackName: trackName,
       artistName: artistName,
+      albumName: albumName,
       score: score,
       jellyfinTrackId: trackId,
     );
@@ -108,6 +113,7 @@ class ListenBrainzRecommendation {
       recordingMbid: json['recording_mbid'] as String,
       trackName: json['track_name'] as String?,
       artistName: json['artist_name'] as String?,
+      albumName: json['album_name'] as String?,
       score: (json['score'] as num?)?.toDouble() ?? 0.0,
     );
   }

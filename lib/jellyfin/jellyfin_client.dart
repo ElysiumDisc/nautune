@@ -673,7 +673,7 @@ class JellyfinClient {
       'SearchTerm': query,
       'SortBy': 'Album,ParentIndexNumber,IndexNumber,SortName',
       'Fields':
-          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags',
+          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags,ProviderIds',
       'EnableImageTypes': 'Primary,Thumb',
       'EnableUserData': 'true',
     });

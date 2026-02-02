@@ -1867,11 +1867,26 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
     setState(() => _isLoading = true);
 
     try {
-      // Fetch recommendations from ListenBrainz
-      final recs = await listenBrainz.getRecommendations(count: 25);
+      // Use efficient batch matching - stops early when we have enough matches
+      final libraryId = widget.appState.selectedLibraryId;
+      if (libraryId == null) {
+        setState(() {
+          _isLoading = false;
+          _hasChecked = true;
+        });
+        return;
+      }
+
+      final matched = await listenBrainz.getRecommendationsWithMatching(
+        jellyfin: widget.appState.jellyfinService,
+        libraryId: libraryId,
+        targetMatches: 15,  // Stop when we have 15 matches
+        maxFetch: 100,      // Fetch up to 100 recommendations
+      );
+
       if (!mounted) return;
 
-      if (recs.isEmpty) {
+      if (matched.isEmpty) {
         setState(() {
           _recommendations = [];
           _matchedTracks = [];
@@ -1881,49 +1896,31 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
         return;
       }
 
-      // Match to Jellyfin library
-      final libraryId = widget.appState.selectedLibraryId;
-      if (libraryId != null) {
-        final matched = await listenBrainz.matchRecommendationsToLibrary(
-          recs,
-          widget.appState.jellyfinService,
-          libraryId: libraryId,
-        );
+      // Get tracks that are in library
+      final inLibraryRecs = matched.where((r) => r.isInLibrary).toList();
+      final tracks = <JellyfinTrack>[];
 
-        if (!mounted) return;
-
-        // Get tracks that are in library
-        final inLibraryRecs = matched.where((r) => r.isInLibrary).toList();
-        final tracks = <JellyfinTrack>[];
-
-        for (final rec in inLibraryRecs.take(10)) {
-          if (rec.jellyfinTrackId != null) {
-            try {
-              final track = await widget.appState.jellyfinService.getTrack(rec.jellyfinTrackId!);
-              if (track != null) {
-                tracks.add(track);
-              }
-            } catch (e) {
-              // Skip failed track fetches
+      for (final rec in inLibraryRecs.take(15)) {
+        if (rec.jellyfinTrackId != null) {
+          try {
+            final track = await widget.appState.jellyfinService.getTrack(rec.jellyfinTrackId!);
+            if (track != null) {
+              tracks.add(track);
             }
+          } catch (e) {
+            // Skip failed track fetches
           }
         }
-
-        if (!mounted) return;
-
-        setState(() {
-          _recommendations = matched;
-          _matchedTracks = tracks;
-          _isLoading = false;
-          _hasChecked = true;
-        });
-      } else {
-        setState(() {
-          _recommendations = recs;
-          _isLoading = false;
-          _hasChecked = true;
-        });
       }
+
+      if (!mounted) return;
+
+      setState(() {
+        _recommendations = matched;
+        _matchedTracks = tracks;
+        _isLoading = false;
+        _hasChecked = true;
+      });
     } catch (e) {
       debugPrint('ListenBrainz discovery error: $e');
       if (mounted) {

@@ -161,8 +161,9 @@ class JellyfinTrack {
     if (rawProviderIds is Map) {
       providerIds = {};
       rawProviderIds.forEach((key, value) {
-        if (key is String && value is String) {
-          providerIds![key] = value;
+        if (key is String && value != null) {
+          // Convert any value to String (Jellyfin may return non-String types)
+          providerIds![key] = value.toString();
         }
       });
       if (providerIds.isEmpty) providerIds = null;

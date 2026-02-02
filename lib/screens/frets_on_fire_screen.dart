@@ -339,6 +339,20 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       return;
     }
 
+    // Check duration limit before analyzing
+    final durationError = _chartGenerator.checkDurationLimit(durationMs);
+    if (durationError != null && mounted) {
+      setState(() => _gameState = GameState.selectTrack);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Track too long: ${(durationMs / 60000).toStringAsFixed(0)} min. '
+              'Max ${_chartGenerator.maxDurationMinutes} min for stability.'),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
     // Generate new chart
     final chart = await _chartGenerator.generateChart(
       audioPath: path,

@@ -1,3 +1,26 @@
+### v5.9.2 - ListenBrainz Reliability + Frets on Fire Stability
+- **ListenBrainz API Reliability**: Added retry logic with exponential backoff to all ListenBrainz API calls
+  - Recommendations, scrobble sync, and count sync now retry up to 3 times on network errors
+  - Handles "Connection reset by peer" and timeout errors gracefully
+  - 15-second timeout prevents hanging on slow connections
+- **ListenBrainz Metadata Enrichment**: Recommendations now fetch track/artist/album names from MusicBrainz API
+  - ListenBrainz only returns MBIDs - we now resolve them to actual metadata
+  - In-memory cache prevents repeated lookups for the same tracks
+  - Respects MusicBrainz 1 req/sec rate limit
+- **Smart Library Matching**: Multi-strategy search to find more tracks from your library
+  - Fetches 100 recommendations, stops early when finding 15 matches (efficient)
+  - Search strategies: track name → album name → artist name
+  - Album-based matching for compilations and various artists
+  - Batch processing with progress logging
+- **Improved Track Matching**: Fuzzy matching for recommendations
+  - Name matching now uses contains-check instead of exact match
+  - Handles variations like "Come as You Are" vs "Come As You Are"
+  - ProviderIds now included in Jellyfin search results for MBID matching
+- **Frets on Fire Duration Limits**: Prevents crashes on long tracks
+  - iOS: Maximum 15 minutes (prevents memory crashes)
+  - Android/Desktop: Maximum 30 minutes
+  - Shows user-friendly warning when track exceeds limit
+
 ### v5.9.1 - ListenBrainz MBID Matching Fix
 - **ListenBrainz Recommendations**: Fixed recommendation matching to prioritize MusicBrainz ID (MBID) over name matching
   - Tracks with proper MusicBrainz tags now match reliably (was 0/25 matches, now matches all tagged tracks)
