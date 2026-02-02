@@ -65,8 +65,10 @@ class JustWaveformBackend {
   }
 
   /// Convert just_waveform's Waveform to our WaveformData format
+  /// Downsamples to ~1000 samples for efficient rendering (matches FFmpeg backend)
   WaveformData _convertWaveform(Waveform waveform) {
-    final amplitudes = <double>[];
+    // Target ~1000 samples for visualization (same as FFmpeg backend)
+    const int targetSampleCount = 1000;
 
     // First pass: find the actual max value to detect bit depth
     int maxAbsValue = 0;
@@ -87,15 +89,32 @@ class JustWaveformBackend {
     // Trust 16-bit if either indicator suggests it (handles quiet 16-bit files)
     final normalizer = (flagSays16Bit || actuallyLooksLike16Bit) ? 32768.0 : 128.0;
 
-    // Second pass: normalize amplitudes
-    for (int i = 0; i < waveform.length; i++) {
-      final min = waveform.getPixelMin(i);
-      final max = waveform.getPixelMax(i);
-      final absMin = min.abs();
-      final absMax = max.abs();
-      final amplitude = (absMin > absMax ? absMin : absMax) / normalizer;
-      amplitudes.add(amplitude.clamp(0.0, 1.0));
+    // Downsample to targetSampleCount for efficient rendering
+    // For a 2-hour track at 100 samples/sec, this reduces 720,000 → 1,000 samples
+    final sourceLength = waveform.length;
+    final outputLength = sourceLength <= targetSampleCount ? sourceLength : targetSampleCount;
+    final samplesPerBucket = sourceLength / outputLength;
+
+    final amplitudes = List<double>.filled(outputLength, 0.0);
+
+    for (int i = 0; i < outputLength; i++) {
+      final startIdx = (i * samplesPerBucket).floor();
+      final endIdx = ((i + 1) * samplesPerBucket).floor().clamp(0, sourceLength);
+
+      // Find max amplitude in this bucket
+      double maxAmplitude = 0.0;
+      for (int j = startIdx; j < endIdx; j++) {
+        final min = waveform.getPixelMin(j);
+        final max = waveform.getPixelMax(j);
+        final absMin = min.abs();
+        final absMax = max.abs();
+        final amplitude = (absMin > absMax ? absMin : absMax) / normalizer;
+        if (amplitude > maxAmplitude) maxAmplitude = amplitude;
+      }
+      amplitudes[i] = maxAmplitude.clamp(0.0, 1.0);
     }
+
+    debugPrint('JustWaveformBackend: Downsampled $sourceLength → $outputLength samples');
 
     return WaveformData(
       amplitudes: amplitudes,

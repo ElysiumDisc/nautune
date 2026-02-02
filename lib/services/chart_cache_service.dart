@@ -37,7 +37,14 @@ class ChartCacheService extends ChangeNotifier {
 
     try {
       final appDir = await getApplicationDocumentsDirectory();
-      _cacheDir = Directory('${appDir.path}/charts');
+
+      // Use nautune subfolder on desktop platforms for consistency
+      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+        _cacheDir = Directory('${appDir.path}/nautune/charts');
+      } else {
+        _cacheDir = Directory('${appDir.path}/charts');
+      }
+
       if (!await _cacheDir!.exists()) {
         await _cacheDir!.create(recursive: true);
       }
@@ -290,7 +297,15 @@ class ChartCacheService extends ChangeNotifier {
 
     try {
       final appDir = await getApplicationDocumentsDirectory();
-      final legendaryDir = Directory('${appDir.path}/legendary');
+
+      // Use nautune subfolder on desktop platforms for consistency
+      Directory legendaryDir;
+      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+        legendaryDir = Directory('${appDir.path}/nautune/legendary');
+      } else {
+        legendaryDir = Directory('${appDir.path}/legendary');
+      }
+
       if (!await legendaryDir.exists()) {
         await legendaryDir.create(recursive: true);
       }
@@ -323,14 +338,23 @@ class ChartCacheService extends ChangeNotifier {
   Future<void> _loadLegendaryUnlockState() async {
     try {
       final appDir = await getApplicationDocumentsDirectory();
-      final stateFile = File('${appDir.path}/legendary/unlock_state.json');
+
+      // Use nautune subfolder on desktop platforms for consistency
+      String legendaryPath;
+      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+        legendaryPath = '${appDir.path}/nautune/legendary';
+      } else {
+        legendaryPath = '${appDir.path}/legendary';
+      }
+
+      final stateFile = File('$legendaryPath/unlock_state.json');
       if (await stateFile.exists()) {
         final json = jsonDecode(await stateFile.readAsString());
         _legendaryUnlocked = json['unlocked'] == true;
       }
 
       // Check if track file exists
-      final trackFile = File('${appDir.path}/legendary/through_the_fire_and_flames.mp3');
+      final trackFile = File('$legendaryPath/through_the_fire_and_flames.mp3');
       if (await trackFile.exists()) {
         _legendaryTrackFile = trackFile;
       }
@@ -345,7 +369,15 @@ class ChartCacheService extends ChangeNotifier {
   Future<void> _saveLegendaryUnlockState() async {
     try {
       final appDir = await getApplicationDocumentsDirectory();
-      final legendaryDir = Directory('${appDir.path}/legendary');
+
+      // Use nautune subfolder on desktop platforms for consistency
+      Directory legendaryDir;
+      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+        legendaryDir = Directory('${appDir.path}/nautune/legendary');
+      } else {
+        legendaryDir = Directory('${appDir.path}/legendary');
+      }
+
       if (!await legendaryDir.exists()) {
         await legendaryDir.create(recursive: true);
       }

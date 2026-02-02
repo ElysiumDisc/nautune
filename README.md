@@ -544,6 +544,10 @@ Nautune follows a clean data structure on Linux for easy backups and management:
 - `~/Documents/nautune/downloads/artwork/`: Cached album artwork (stored per-album to save space)
 - `~/Documents/nautune/network/audio/`: Network easter egg offline channels
 - `~/Documents/nautune/network/images/`: Network channel artwork
+- `~/Documents/nautune/charts/`: Frets on Fire cached chart data
+- `~/Documents/nautune/legendary/`: Through the Fire and Flames track and unlock state
+- `~/Documents/nautune/essential/audio/`: Essential Mix offline audio
+- `~/Documents/nautune/waveforms/`: Extracted waveform data for visualization
 
 ---
 
