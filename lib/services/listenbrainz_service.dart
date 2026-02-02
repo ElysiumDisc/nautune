@@ -523,6 +523,11 @@ class ListenBrainzService {
           final payload = data['payload'] as Map<String, dynamic>?;
           final mbids = payload?['mbids'] as List<dynamic>? ?? [];
 
+          if (mbids.isEmpty) {
+            debugPrint('ListenBrainzService: No recommendations yet - need more listening history (currently have ${_config?.totalScrobbles ?? 0} scrobbles, typically need 25-50+)');
+            return [];
+          }
+
           final recommendations = mbids.map((item) {
             if (item is Map<String, dynamic>) {
               return ListenBrainzRecommendation.fromJson(item);
