@@ -513,6 +513,11 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
 
   Future<void> _seekTo(Duration position) async {
     await _audioPlayer.seek(position);
+
+    // Sync FFT shadow player position on iOS
+    if (Platform.isIOS && _isPlaying) {
+      await IOSFFTService.instance.syncPosition(position.inMilliseconds / 1000.0);
+    }
   }
 
   void _seekFromTap(double localX, BuildContext context) {
