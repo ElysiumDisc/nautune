@@ -521,6 +521,9 @@ Nautune offers 5 audio-reactive visualizer styles. Access the picker via **Setti
 - **Album art colors**: Spectrum visualizers extract primary color from current artwork
 - **Bass boost**: All visualizers react dramatically to bass frequencies
 - **Low Power Mode**: Visualizers auto-disable on iOS when Low Power Mode is active
+- **Visualizer Position**: Choose where the visualizer appears:
+  - **Album Art**: Tap album art to toggle between artwork and visualizer (Plexamp-style)
+  - **Controls Bar**: Traditional position behind playback controls
 - **Volume Bar Toggle**: Hide the volume slider in Now Playing (Settings > Audio Visualizer) - useful for iOS where system volume is independent
 
 ---

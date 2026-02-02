@@ -1,3 +1,20 @@
+### v6.2.0 - Visualizer in Album Art
+
+**New Visualizer Position Setting**
+- **Album Art Visualizer**: New option to display visualizer in the album art area instead of behind controls
+  - Tap or swipe on album art to toggle between artwork and visualizer
+  - Smooth 300ms fade transition between states
+  - Higher visualizer opacity (0.9) for better visibility in album art position
+  - Mode indicator icon shows current state (equalizer/album icon)
+  - Haptic feedback on toggle (iOS)
+- **Position Setting**: New "Visualizer Position" option in Settings > Appearance
+  - **Album Art**: Plexamp-style tap-to-toggle visualizer
+  - **Controls Bar**: Traditional position behind playback controls (default)
+- **Track Change Reset**: Visualizer automatically resets to show album art when track changes
+- **Persisted Preference**: Position setting saved and restored across app restarts
+
+---
+
 ### v6.1.1 - UI Polish & Settings
 
 **Now Playing Improvements**
