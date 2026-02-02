@@ -12,6 +12,11 @@
   - Scoring matches original Frets on Fire: 50 pts per note, max 4x multiplier (at 30 combo)
   - BPM-based timing windows (tighter at higher BPMs, like original)
   - Charts cached for instant replay, supports 3+ hour DJ sets (caps at 3000 notes)
+  - **Streak animations**: Fire glow on hit line, pulsing multiplier, milestone flashes ("ON FIRE!", "BLAZING!", "INFERNO!", "LEGENDARY!", "GODLIKE!")
+  - **Fire mode cheat**: Press 'F' on desktop to instantly activate fire mode for testing
+  - **Legendary track included**: "Through the Fire and Flames" by DragonForce bundled in app
+  - **Always available in demo/offline**: Legendary track playable in demo mode and offline mode
+  - **Perfect score unlock (online)**: Get 100% accuracy online to permanently unlock the legendary status
   - **Profile stats**: Total songs, plays, notes hit, best score with track name displayed in fire-themed card
   - **"Rock Star" Milestone**: Unlock a badge with game controller icon for discovering the easter egg
 - **iOS Visualizer Decay Fix**: Increased decay factor for iOS (0.25 vs 0.12) so spectrum/mirror bars properly fall back down

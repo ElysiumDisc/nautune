@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/chart_data.dart';
 
@@ -15,6 +16,17 @@ class ChartCacheService extends ChangeNotifier {
   Directory? _cacheDir;
   final Map<String, ChartData> _cache = {};
   bool _initialized = false;
+
+  // Through the Fire and Flames - legendary unlock for perfect scores
+  // Bundled in assets - no download needed!
+  static const String _legendaryAssetPath = 'assets/fire/Through The Fire And Flames.mp3';
+  static const String _legendaryTrackId = 'dragonforce_ttfaf';
+  static const String _legendaryTrackName = 'Through the Fire and Flames';
+  static const String _legendaryArtistName = 'DragonForce';
+
+  bool _legendaryUnlocked = false;
+  bool _legendaryCopying = false;
+  File? _legendaryTrackFile;
 
   /// Whether the service is initialized
   bool get isInitialized => _initialized;
@@ -32,6 +44,10 @@ class ChartCacheService extends ChangeNotifier {
 
       // Load existing charts into memory
       await _loadAllCharts();
+
+      // Load legendary track unlock state
+      await _loadLegendaryUnlockState();
+
       _initialized = true;
       debugPrint('🎮 ChartCache: Initialized with ${_cache.length} cached charts');
     } catch (e) {
@@ -223,6 +239,123 @@ class ChartCacheService extends ChangeNotifier {
 
   /// Check if any games have been played
   bool get hasPlayedAnyGames => _cache.values.any((c) => c.playCount > 0);
+
+  // ============================================================
+  // LEGENDARY TRACK: Through the Fire and Flames
+  // Unlocked by getting a PERFECT score (100% accuracy) on any song
+  // ============================================================
+
+  /// Whether the legendary track is unlocked
+  bool get isLegendaryUnlocked => _legendaryUnlocked;
+
+  /// Whether the legendary track is currently being copied from assets
+  bool get isLegendaryCopying => _legendaryCopying;
+
+  /// Whether the legendary track is ready to play (copied from assets)
+  bool get isLegendaryReady => _legendaryTrackFile?.existsSync() ?? false;
+
+  /// Get the legendary track file path (null if not downloaded)
+  String? get legendaryTrackPath => _legendaryTrackFile?.path;
+
+  /// Legendary track info
+  String get legendaryTrackName => _legendaryTrackName;
+  String get legendaryArtistName => _legendaryArtistName;
+  String get legendaryTrackId => _legendaryTrackId;
+
+  /// Unlock the legendary track (called when player gets a perfect score)
+  Future<void> unlockLegendaryTrack() async {
+    if (_legendaryUnlocked) return;
+
+    _legendaryUnlocked = true;
+    await _saveLegendaryUnlockState();
+    notifyListeners();
+    debugPrint('🔥🎸 LEGENDARY UNLOCKED: Through the Fire and Flames!');
+  }
+
+  /// Check if a score qualifies as perfect (100% accuracy, no misses)
+  bool isPerfectScore(int perfectHits, int goodHits, int missedNotes, int totalNotes) {
+    if (totalNotes == 0) return false;
+    // Perfect = hit every note (perfect or good counts), no misses
+    return missedNotes == 0 && (perfectHits + goodHits) == totalNotes;
+  }
+
+  /// Copy the legendary track from bundled assets to documents directory
+  /// Can be called regardless of unlock state (for demo/offline mode)
+  Future<bool> prepareLegendaryTrack() async {
+    if (_legendaryCopying) return false;
+    if (isLegendaryReady) return true;
+
+    _legendaryCopying = true;
+    notifyListeners();
+
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final legendaryDir = Directory('${appDir.path}/legendary');
+      if (!await legendaryDir.exists()) {
+        await legendaryDir.create(recursive: true);
+      }
+
+      final filePath = '${legendaryDir.path}/through_the_fire_and_flames.mp3';
+      final file = File(filePath);
+
+      debugPrint('🔥 Copying Through the Fire and Flames from assets...');
+
+      // Copy from bundled assets to documents directory
+      final byteData = await rootBundle.load(_legendaryAssetPath);
+      final bytes = byteData.buffer.asUint8List();
+      await file.writeAsBytes(bytes);
+
+      _legendaryTrackFile = file;
+      _legendaryCopying = false;
+      notifyListeners();
+
+      debugPrint('🔥🎸 Ready: Through the Fire and Flames (${(bytes.length / 1024 / 1024).toStringAsFixed(1)} MB)');
+      return true;
+    } catch (e) {
+      debugPrint('🔥 Copy error: $e');
+      _legendaryCopying = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Load legendary unlock state from disk
+  Future<void> _loadLegendaryUnlockState() async {
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final stateFile = File('${appDir.path}/legendary/unlock_state.json');
+      if (await stateFile.exists()) {
+        final json = jsonDecode(await stateFile.readAsString());
+        _legendaryUnlocked = json['unlocked'] == true;
+      }
+
+      // Check if track file exists
+      final trackFile = File('${appDir.path}/legendary/through_the_fire_and_flames.mp3');
+      if (await trackFile.exists()) {
+        _legendaryTrackFile = trackFile;
+      }
+
+      debugPrint('🔥 Legendary state: unlocked=$_legendaryUnlocked, ready=$isLegendaryReady');
+    } catch (e) {
+      debugPrint('🔥 Error loading legendary state: $e');
+    }
+  }
+
+  /// Save legendary unlock state to disk
+  Future<void> _saveLegendaryUnlockState() async {
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final legendaryDir = Directory('${appDir.path}/legendary');
+      if (!await legendaryDir.exists()) {
+        await legendaryDir.create(recursive: true);
+      }
+
+      final stateFile = File('${legendaryDir.path}/unlock_state.json');
+      await stateFile.writeAsString(jsonEncode({'unlocked': _legendaryUnlocked}));
+    } catch (e) {
+      debugPrint('🔥 Error saving legendary state: $e');
+    }
+  }
 }
 
 /// Aggregate stats for Frets on Fire across all charts

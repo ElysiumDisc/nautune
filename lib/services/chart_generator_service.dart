@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' show max, min, log;
+import 'dart:math' show max, min, log, sqrt;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:fftea/fftea.dart';
@@ -391,6 +391,34 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
     bandFlux[4][frame] = trebleF;
   }
 
+  // Calculate spectral centroid statistics for adaptive thresholds
+  // This helps the chart adapt to the song's overall pitch range (e.g., bass-heavy vs treble-heavy)
+  double sumCentroid = 0;
+  double sumSqCentroid = 0;
+  int centroidCount = 0;
+
+  for (int i = 0; i < numFrames; i++) {
+    if (spectroids[i] > 10.0) { // Ignore silence/noise
+      sumCentroid += spectroids[i];
+      sumSqCentroid += spectroids[i] * spectroids[i];
+      centroidCount++;
+    }
+  }
+
+  final meanCentroid = centroidCount > 0 ? sumCentroid / centroidCount : 500.0;
+  final varianceCentroid = centroidCount > 0
+      ? (sumSqCentroid / centroidCount) - (meanCentroid * meanCentroid)
+      : 0.0;
+  final stdDevCentroid = sqrt(varianceCentroid > 0 ? varianceCentroid : 0);
+
+  // Dynamic thresholds based on Z-scores relative to song's own distribution
+  final thresh0 = meanCentroid - 0.8 * stdDevCentroid;
+  final thresh1 = meanCentroid - 0.2 * stdDevCentroid;
+  final thresh2 = meanCentroid + 0.2 * stdDevCentroid;
+  final thresh3 = meanCentroid + 0.8 * stdDevCentroid;
+
+  debugPrint('🎮 Adaptive Thresholds: Mean=${meanCentroid.round()}, Std=${stdDevCentroid.round()}, Thresh=[${thresh0.round()}, ${thresh1.round()}, ${thresh2.round()}, ${thresh3.round()}]');
+
   // STEP 1: Estimate BPM first (before onset detection)
   // This allows proper beat-grid quantization
   final bpm = _estimateBpmFromFlux(spectralFlux, hopSize, sampleRate);
@@ -458,7 +486,8 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
   // STEP 3: Create notes with beat-quantized timing and pitch-based lanes
   final notes = <ChartNote>[];
 
-  for (final frame in onsetFrames) {
+  for (int i = 0; i < onsetFrames.length; i++) {
+    final frame = onsetFrames[i];
     final rawTimestampMs = (frame * hopSize * 1000 / sampleRate).round();
 
     // Quantize to 16th note grid
@@ -468,18 +497,18 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
     // The centroid tells us the "pitch feel" of this moment in the song
     final centroid = spectroids[frame];
 
-    // Map centroid to a rough lane (0-4 based on frequency range)
+    // Map centroid to a rough lane (0-4) using ADAPTIVE thresholds
     int pitchLane;
-    if (centroid < 150) {
-      pitchLane = 0; // Very low - sub-bass
-    } else if (centroid < 350) {
-      pitchLane = 1; // Low - bass
-    } else if (centroid < 800) {
-      pitchLane = 2; // Mid-low - vocals/guitar
-    } else if (centroid < 1500) {
-      pitchLane = 3; // Mid-high - lead vocals/synth
+    if (centroid < thresh0) {
+      pitchLane = 0; // Green (Low relative to this song)
+    } else if (centroid < thresh1) {
+      pitchLane = 1; // Red
+    } else if (centroid < thresh2) {
+      pitchLane = 2; // Yellow
+    } else if (centroid < thresh3) {
+      pitchLane = 3; // Blue
     } else {
-      pitchLane = 4; // High - treble
+      pitchLane = 4; // Orange (High relative to this song)
     }
 
     // Also check which band had the strongest onset
@@ -487,39 +516,78 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
     final weights = [3.0, 2.5, 2.0, 1.5, 0.5]; // sub-bass, bass, low-mid, high-mid, treble
     double maxWeightedFlux = 0;
     int fluxLane = 2; // default to middle
+    double totalBandFlux = 0;
 
-    for (int i = 0; i < 5; i++) {
-      final weighted = bandFlux[i][frame] * weights[i];
+    // Store weighted fluxes for chord detection
+    final weightedFluxes = List<double>.filled(5, 0.0);
+
+    for (int b = 0; b < 5; b++) {
+      final flux = bandFlux[b][frame];
+      totalBandFlux += flux;
+      final weighted = flux * weights[b];
+      weightedFluxes[b] = weighted;
+
       if (weighted > maxWeightedFlux) {
         maxWeightedFlux = weighted;
-        fluxLane = i;
+        fluxLane = b;
       }
     }
 
     // Combine: prefer flux-based lane for drums/bass, pitch-based for melodic content
-    // If sub-bass or bass flux is strong, use flux lane (it's probably a kick/bass hit)
-    // Otherwise, use pitch lane (it's probably melodic content)
+    // If sub-bass or bass flux is strong relative to TOTAL band flux, use flux lane
     final bassFluxRatio = (bandFlux[0][frame] + bandFlux[1][frame]) /
-        (spectralFlux[frame] + 1e-6);
+        (totalBandFlux + 1e-6);
 
-    final lane = bassFluxRatio > 0.4 ? fluxLane : pitchLane;
+    final primaryLane = bassFluxRatio > 0.4 ? fluxLane : pitchLane;
+
+    // SUSTAIN CALCULATION
+    int? sustainMs;
+    if (i < onsetFrames.length - 1) {
+      final nextRawMs = (onsetFrames[i + 1] * hopSize * 1000 / sampleRate).round();
+      final gap = nextRawMs - rawTimestampMs;
+      // If gap is longer than a beat, make it a sustain
+      if (gap > beatIntervalMs) {
+        sustainMs = min(gap - 50, beatIntervalMs * 4); // Cap at 4 beats
+      }
+    }
 
     notes.add(ChartNote(
       timestampMs: quantizedMs,
-      lane: lane,
-      band: FrequencyBand.values[lane],
+      lane: primaryLane,
+      sustainMs: sustainMs,
+      band: FrequencyBand.values[primaryLane],
     ));
+
+    // CHORD GENERATION
+    // If we have another strong band that isn't the primary lane, add it
+    for (int b = 0; b < 5; b++) {
+      if (b == primaryLane) continue;
+
+      // If this band is at least 70% as strong as the max, add it as a chord note
+      // Only if total flux is high enough to justify chords (avoid chords in quiet sections)
+      if (weightedFluxes[b] > maxWeightedFlux * 0.7 && totalBandFlux > 1.0) {
+        notes.add(ChartNote(
+          timestampMs: quantizedMs,
+          lane: b,
+          sustainMs: sustainMs, // Chords share sustain
+          band: FrequencyBand.values[b],
+        ));
+        break; // Max 2 notes per chord to keep it playable
+      }
+    }
 
     // Cap at 3000 notes for very long tracks
     if (notes.length >= 3000) break;
   }
 
-  // Remove duplicate timestamps (can happen after quantization)
+  // Remove exact duplicates (same timestamp AND lane)
   final uniqueNotes = <ChartNote>[];
-  final seenTimestamps = <int>{};
+  final seenNotes = <String>{};
+
   for (final note in notes) {
-    if (!seenTimestamps.contains(note.timestampMs)) {
-      seenTimestamps.add(note.timestampMs);
+    final key = '${note.timestampMs}_${note.lane}';
+    if (!seenNotes.contains(key)) {
+      seenNotes.add(key);
       uniqueNotes.add(note);
     }
   }

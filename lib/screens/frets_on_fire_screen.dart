@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../models/chart_data.dart';
 import '../models/download_item.dart';
+import '../providers/demo_mode_provider.dart';
 import '../services/chart_cache_service.dart';
 import '../services/chart_generator_service.dart';
 import '../services/listening_analytics_service.dart';
@@ -54,6 +55,14 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   // Animation
   late AnimationController _noteController;
 
+  // Streak feedback animations
+  late AnimationController _multiplierPulseController;
+  late AnimationController _milestoneFlashController;
+  late Animation<double> _multiplierPulse;
+  late Animation<double> _milestoneFlash;
+  String? _milestoneText; // "ON FIRE!", "BLAZING!", "INFERNO!"
+  bool _showStreakFire = false; // Show fire effect when on a streak
+
   // Keyboard focus
   final FocusNode _focusNode = FocusNode();
 
@@ -67,10 +76,17 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   final List<bool> _lanePressed = [false, false, false, false, false];
   final List<DateTime?> _laneHitTime = [null, null, null, null, null];
 
+  // Legendary track unlock state
+  bool _showLegendaryUnlock = false;
+  bool _showLegendaryDownloadPrompt = false;
+
   @override
   void initState() {
     super.initState();
-    _chartCache.initialize();
+    _chartCache.initialize().then((_) {
+      // Check if legendary track is unlocked but not downloaded
+      _checkLegendaryDownloadPrompt();
+    });
 
     // Mark easter egg as discovered for milestone badge
     ListeningAnalyticsService().markFretsOnFireDiscovered();
@@ -79,6 +95,30 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       vsync: this,
       duration: const Duration(milliseconds: 16), // ~60fps
     )..addListener(_onFrame);
+
+    // Multiplier pulse animation (continuous when on streak)
+    _multiplierPulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _multiplierPulse = Tween<double>(begin: 1.0, end: 1.3).animate(
+      CurvedAnimation(parent: _multiplierPulseController, curve: Curves.easeInOut),
+    );
+
+    // Milestone flash animation (one-shot when hitting 10/20/30 combo)
+    // Long duration (2.5 seconds) - stays visible for 70%, fades for 30%
+    _milestoneFlashController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2500),
+    );
+    _milestoneFlash = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _milestoneFlashController, curve: Curves.easeOut),
+    );
+    _milestoneFlashController.addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        setState(() => _milestoneText = null);
+      }
+    });
 
     _gamePlayer.onPositionChanged.listen((pos) {
       if (mounted) {
@@ -106,6 +146,8 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   @override
   void dispose() {
     _noteController.dispose();
+    _multiplierPulseController.dispose();
+    _milestoneFlashController.dispose();
     _gamePlayer.dispose();
     _focusNode.dispose();
     super.dispose();
@@ -135,6 +177,9 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     _missedNotes++;
     _combo = 0;
     _multiplier = 1;
+    _showStreakFire = false;
+    _multiplierPulseController.stop();
+    _multiplierPulseController.reset();
   }
 
   void _hitNote(int lane, bool isPerfect) {
@@ -153,13 +198,33 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     // Multiplier milestones like original: 10→2x, 20→3x, 30→4x (max 4x)
     if (_combo == 10) {
       _multiplier = 2;
+      _triggerMilestone('ON FIRE!');
     } else if (_combo == 20) {
       _multiplier = 3;
+      _triggerMilestone('BLAZING!');
     } else if (_combo == 30) {
       _multiplier = 4;
+      _triggerMilestone('INFERNO!');
+    } else if (_combo == 50) {
+      _triggerMilestone('LEGENDARY!');
+    } else if (_combo == 100) {
+      _triggerMilestone('GODLIKE!');
+    }
+
+    // Start/maintain streak fire effect and multiplier pulse
+    if (_combo >= 10) {
+      _showStreakFire = true;
+      if (!_multiplierPulseController.isAnimating) {
+        _multiplierPulseController.repeat(reverse: true);
+      }
     }
 
     _laneHitTime[lane] = DateTime.now();
+  }
+
+  void _triggerMilestone(String text) {
+    _milestoneText = text;
+    _milestoneFlashController.forward(from: 0);
   }
 
   void _onLaneTap(int lane) {
@@ -200,8 +265,24 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   Future<void> _selectTrack() async {
     // Get downloaded tracks from download service
     final downloads = _appState?.downloadService.completedDownloads ?? [];
+    final isDemoMode = context.read<DemoModeProvider>().isDemoMode;
+    final isOfflineMode = _appState?.isOfflineMode ?? false;
 
-    if (downloads.isEmpty) {
+    // Legendary track is ALWAYS available in demo mode or offline mode (bundled in app)
+    // In normal online mode, it requires unlocking via perfect score
+    final legendaryAvailable = isDemoMode || isOfflineMode || _chartCache.isLegendaryUnlocked;
+
+    // Make sure the legendary track file is ready (copy from assets if needed)
+    String? legendaryPath = _chartCache.legendaryTrackPath;
+    if (legendaryAvailable && !_chartCache.isLegendaryReady) {
+      // Auto-prepare the legendary track from bundled assets
+      await _chartCache.prepareLegendaryTrack();
+      if (!mounted) return;
+      legendaryPath = _chartCache.legendaryTrackPath;
+    }
+    final legendaryReady = legendaryAvailable && _chartCache.isLegendaryReady;
+
+    if (downloads.isEmpty && !legendaryReady) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('No downloaded tracks available')),
@@ -210,10 +291,20 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       return;
     }
 
+    if (!mounted) return;
+
     // Show track selection dialog
     final selected = await showDialog<Map<String, String>>(
       context: context,
-      builder: (context) => _TrackSelectionDialog(downloads: downloads),
+      builder: (context) => _TrackSelectionDialog(
+        downloads: downloads,
+        legendaryReady: legendaryReady,
+        legendaryPath: legendaryPath,
+        legendaryTrackName: _chartCache.legendaryTrackName,
+        legendaryArtistName: _chartCache.legendaryArtistName,
+        legendaryTrackId: _chartCache.legendaryTrackId,
+        isDemoMode: isDemoMode,
+      ),
     );
 
     if (selected != null && mounted) {
@@ -320,7 +411,37 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       _chartCache.updateScore(_chart!.trackId, _score, _multiplier);
     }
 
+    // Check for PERFECT score - unlock legendary track!
+    final totalNotes = _chart?.notes.length ?? 0;
+    if (_chartCache.isPerfectScore(_perfectHits, _goodHits, _missedNotes, totalNotes)) {
+      if (!_chartCache.isLegendaryUnlocked) {
+        _chartCache.unlockLegendaryTrack();
+        _showLegendaryUnlock = true;
+      }
+    }
+
     setState(() => _gameState = GameState.ended);
+  }
+
+  void _checkLegendaryDownloadPrompt() {
+    if (_chartCache.isLegendaryUnlocked && !_chartCache.isLegendaryReady) {
+      // Auto-prepare the legendary track from bundled assets
+      _prepareLegendaryTrack();
+    }
+  }
+
+  Future<void> _prepareLegendaryTrack() async {
+    setState(() => _showLegendaryDownloadPrompt = false);
+    final success = await _chartCache.prepareLegendaryTrack();
+    if (success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('🔥 Through the Fire and Flames ready to play!'),
+          backgroundColor: Color(0xFFFF6B35),
+        ),
+      );
+      setState(() {}); // Refresh to show in track list
+    }
   }
 
   void _restartGame() {
@@ -360,11 +481,120 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
                 onPressed: () => Navigator.pop(context),
               ),
             ),
-      body: KeyboardListener(
-        focusNode: _focusNode,
-        autofocus: true,
-        onKeyEvent: _handleKeyEvent,
-        child: _buildBody(theme),
+      body: Stack(
+        children: [
+          KeyboardListener(
+            focusNode: _focusNode,
+            autofocus: true,
+            onKeyEvent: _handleKeyEvent,
+            child: _buildBody(theme),
+          ),
+          // Legendary track download prompt overlay
+          if (_showLegendaryDownloadPrompt)
+            _buildLegendaryDownloadPrompt(theme),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLegendaryDownloadPrompt(ThemeData theme) {
+    const fireOrange = Color(0xFFFF6B35);
+    const fireRed = Color(0xFFFF4D6D);
+    const fireYellow = Color(0xFFFFD700);
+
+    return Container(
+      color: Colors.black87,
+      child: Center(
+        child: Container(
+          margin: const EdgeInsets.all(32),
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                const Color(0xFF1A0A0A),
+                fireRed.withValues(alpha: 0.2),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: fireOrange.withValues(alpha: 0.5), width: 2),
+            boxShadow: [
+              BoxShadow(
+                color: fireOrange.withValues(alpha: 0.3),
+                blurRadius: 20,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.local_fire_department, color: fireYellow, size: 56),
+              const SizedBox(height: 16),
+              Text(
+                'LEGENDARY UNLOCKED!',
+                style: GoogleFonts.pacifico(
+                  color: fireYellow,
+                  fontSize: 24,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Through the Fire and Flames',
+                style: GoogleFonts.raleway(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              Text(
+                'by DragonForce',
+                style: GoogleFonts.raleway(
+                  color: Colors.white70,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'The ultimate Guitar Hero track awaits!',
+                style: GoogleFonts.raleway(
+                  color: fireOrange,
+                  fontSize: 12,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              if (_chartCache.isLegendaryCopying) ...[
+                const CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation(fireOrange),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Preparing...',
+                  style: TextStyle(color: Colors.white54),
+                ),
+              ] else ...[
+                ElevatedButton.icon(
+                  onPressed: _prepareLegendaryTrack,
+                  icon: const Icon(Icons.local_fire_department),
+                  label: const Text('UNLOCK'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: fireOrange,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: () => setState(() => _showLegendaryDownloadPrompt = false),
+                  child: const Text('Later', style: TextStyle(color: Colors.white54)),
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -393,11 +623,35 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     } else if (event.logicalKey == LogicalKeyboardKey.escape) {
       _pauseGame();
       return;
+    } else if (event.logicalKey == LogicalKeyboardKey.keyF) {
+      // Cheat key: Press F to ignite! Instant fire mode
+      _activateFireMode();
+      return;
     }
 
     if (lane != null) {
       _onLaneTap(lane);
     }
+  }
+
+  /// Cheat: Press F to activate fire mode instantly
+  void _activateFireMode() {
+    if (_gameState != GameState.playing) return;
+
+    // Boost combo to trigger max multiplier
+    _combo = 30;
+    _multiplier = 4;
+    _showStreakFire = true;
+
+    // Start the pulse animation
+    if (!_multiplierPulseController.isAnimating) {
+      _multiplierPulseController.repeat(reverse: true);
+    }
+
+    // Show the message
+    _triggerMilestone('IGNITED!');
+
+    setState(() {});
   }
 
   Widget _buildBody(ThemeData theme) {
@@ -418,6 +672,11 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   }
 
   Widget _buildTrackSelect(ThemeData theme) {
+    final isDemoMode = context.watch<DemoModeProvider>().isDemoMode;
+    final isOfflineMode = _appState?.isOfflineMode ?? false;
+    // Legendary is always available in demo/offline mode
+    final legendaryAvailable = isDemoMode || isOfflineMode || _chartCache.isLegendaryUnlocked;
+
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -427,7 +686,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
             Icon(
               Icons.local_fire_department,
               size: 80,
-              color: theme.colorScheme.primary,
+              color: legendaryAvailable ? const Color(0xFFFF6B35) : theme.colorScheme.primary,
             ),
             const SizedBox(height: 24),
             Text(
@@ -438,18 +697,22 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
             ),
             const SizedBox(height: 8),
             Text(
-              'Only downloaded tracks are available',
+              isDemoMode || isOfflineMode
+                  ? 'Through the Fire and Flames included!'
+                  : 'Only downloaded tracks are available',
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: Colors.white54,
+                color: legendaryAvailable ? const Color(0xFFFF6B35) : Colors.white54,
               ),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 32),
             ElevatedButton.icon(
               onPressed: _selectTrack,
-              icon: const Icon(Icons.library_music),
-              label: const Text('CHOOSE TRACK'),
+              icon: Icon(legendaryAvailable ? Icons.local_fire_department : Icons.library_music),
+              label: Text(legendaryAvailable ? 'CHOOSE TRACK' : 'CHOOSE TRACK'),
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                backgroundColor: legendaryAvailable ? const Color(0xFFFF6B35) : null,
               ),
             ),
           ],
@@ -568,6 +831,11 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   }
 
   Widget _buildPlaying(ThemeData theme) {
+    // Fire colors for streak effects
+    const fireOrange = Color(0xFFFF6B35);
+    const fireRed = Color(0xFFFF4D6D);
+    const fireYellow = Color(0xFFFFD700);
+
     return Stack(
       children: [
         // Note highway
@@ -579,6 +847,8 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
           laneHitTime: _laneHitTime,
           primaryColor: theme.colorScheme.primary,
           onLaneTap: _onLaneTap,
+          showStreakFire: _showStreakFire,
+          combo: _combo,
         ),
         // Score display with Nautune font
         Positioned(
@@ -605,40 +875,137 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
                   ),
                 ],
               ),
+              // Combo with fire indicator
               Column(
                 children: [
-                  Text(
-                    'COMBO',
-                    style: GoogleFonts.raleway(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.w600),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_showStreakFire) ...[
+                        Icon(Icons.local_fire_department, color: fireOrange, size: 14),
+                        const SizedBox(width: 4),
+                      ],
+                      Text(
+                        'COMBO',
+                        style: GoogleFonts.raleway(
+                          color: _showStreakFire ? fireOrange : Colors.white38,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
                   Text(
                     _combo.toString(),
                     style: GoogleFonts.raleway(
-                      color: theme.colorScheme.primary,
+                      color: _showStreakFire ? fireYellow : theme.colorScheme.primary,
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                 ],
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primary.withValues(alpha: 0.3),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  '${_multiplier}x',
-                  style: GoogleFonts.raleway(
-                    color: theme.colorScheme.primary,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+              // Animated multiplier with pulse
+              AnimatedBuilder(
+                animation: _multiplierPulse,
+                builder: (context, child) {
+                  final scale = _showStreakFire ? _multiplierPulse.value : 1.0;
+                  return Transform.scale(
+                    scale: scale,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        gradient: _showStreakFire
+                            ? const LinearGradient(
+                                colors: [fireRed, fireOrange],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              )
+                            : null,
+                        color: _showStreakFire ? null : theme.colorScheme.primary.withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(8),
+                        boxShadow: _showStreakFire
+                            ? [
+                                BoxShadow(
+                                  color: fireOrange.withValues(alpha: 0.5),
+                                  blurRadius: 12,
+                                  spreadRadius: 2,
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_showStreakFire && _multiplier >= 4)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: Icon(
+                                Icons.local_fire_department,
+                                color: fireYellow,
+                                size: 16,
+                              ),
+                            ),
+                          Text(
+                            '${_multiplier}x',
+                            style: GoogleFonts.raleway(
+                              color: _showStreakFire ? Colors.white : theme.colorScheme.primary,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
               ),
             ],
           ),
         ),
+        // Milestone flash overlay - stays visible for 70% of animation, then fades
+        if (_milestoneText != null)
+          AnimatedBuilder(
+            animation: _milestoneFlash,
+            builder: (context, child) {
+              // Hold at full opacity for 70% of the animation, then fade out
+              final progress = _milestoneFlash.value;
+              final opacity = progress < 0.7
+                  ? 1.0
+                  : (1.0 - ((progress - 0.7) / 0.3)).clamp(0.0, 1.0);
+              // Gentle scale: start at 1.0, grow slightly to 1.15
+              final scale = 1.0 + (progress * 0.15);
+              return Positioned.fill(
+                child: IgnorePointer(
+                  child: Center(
+                    child: Transform.scale(
+                      scale: scale,
+                      child: Opacity(
+                        opacity: opacity,
+                        child: Text(
+                          _milestoneText!,
+                          style: GoogleFonts.pacifico(
+                            fontSize: 52,
+                            color: fireYellow,
+                            shadows: [
+                              Shadow(
+                                color: fireOrange,
+                                blurRadius: 24,
+                              ),
+                              Shadow(
+                                color: fireRed,
+                                blurRadius: 48,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
         // Pause button
         Positioned(
           top: MediaQuery.of(context).padding.top + 8,
@@ -705,16 +1072,129 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     }
 
     final isNewHighScore = _chart != null && _score > _chart!.highScore;
+    final isPerfect = _missedNotes == 0 && totalNotes > 0;
+
+    // Fire colors
+    const fireOrange = Color(0xFFFF6B35);
+    const fireRed = Color(0xFFFF4D6D);
+    const fireYellow = Color(0xFFFFD700);
 
     return Container(
-      color: Colors.black,
+      decoration: BoxDecoration(
+        color: Colors.black,
+        gradient: _showLegendaryUnlock
+            ? LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  fireRed.withValues(alpha: 0.3),
+                  Colors.black,
+                  fireOrange.withValues(alpha: 0.2),
+                ],
+              )
+            : null,
+      ),
       child: Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(32),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              if (isNewHighScore) ...[
+              // LEGENDARY UNLOCK CELEBRATION
+              if (_showLegendaryUnlock) ...[
+                Icon(
+                  Icons.local_fire_department,
+                  color: fireYellow,
+                  size: 64,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'LEGENDARY UNLOCKED!',
+                  style: GoogleFonts.pacifico(
+                    color: fireYellow,
+                    fontSize: 28,
+                    shadows: [
+                      Shadow(color: fireOrange, blurRadius: 20),
+                      Shadow(color: fireRed, blurRadius: 40),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Through the Fire and Flames',
+                  style: GoogleFonts.raleway(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  'by DragonForce',
+                  style: GoogleFonts.raleway(
+                    color: Colors.white70,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'PERFECT SCORE ACHIEVED!',
+                  style: GoogleFonts.raleway(
+                    color: fireOrange,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 2,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    setState(() => _showLegendaryUnlock = false);
+                    _prepareLegendaryTrack();
+                  },
+                  icon: const Icon(Icons.local_fire_department),
+                  label: const Text('UNLOCK NOW'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: fireOrange,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => setState(() => _showLegendaryUnlock = false),
+                  child: const Text('Later', style: TextStyle(color: Colors.white54)),
+                ),
+                const SizedBox(height: 24),
+                const Divider(color: Colors.white24),
+                const SizedBox(height: 16),
+              ],
+              // Perfect score badge
+              if (isPerfect && !_showLegendaryUnlock) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(colors: [fireRed, fireOrange]),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.star, color: Colors.white, size: 18),
+                      const SizedBox(width: 8),
+                      Text(
+                        'PERFECT!',
+                        style: GoogleFonts.raleway(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+              if (isNewHighScore && !_showLegendaryUnlock) ...[
                 Text(
                   'NEW HIGH SCORE!',
                   style: GoogleFonts.raleway(
@@ -858,6 +1338,8 @@ class _NoteHighway extends StatelessWidget {
   final List<DateTime?> laneHitTime;
   final Color primaryColor;
   final Function(int) onLaneTap;
+  final bool showStreakFire;
+  final int combo;
 
   const _NoteHighway({
     required this.chart,
@@ -867,6 +1349,8 @@ class _NoteHighway extends StatelessWidget {
     required this.laneHitTime,
     required this.primaryColor,
     required this.onLaneTap,
+    this.showStreakFire = false,
+    this.combo = 0,
   });
 
   @override
@@ -874,7 +1358,10 @@ class _NoteHighway extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final laneWidth = constraints.maxWidth / 5; // 5 lanes
-        final hitLineY = constraints.maxHeight - 120;
+        // Scale hit line position for portrait mode (more room at bottom on narrow screens)
+        final isPortrait = constraints.maxHeight > constraints.maxWidth;
+        final hitLineOffset = isPortrait ? 100.0 : 120.0;
+        final hitLineY = constraints.maxHeight - hitLineOffset;
 
         // Get visible notes
         final visibleNotes = <ChartNote>[];
@@ -901,6 +1388,8 @@ class _NoteHighway extends StatelessWidget {
               lanePressed: lanePressed,
               laneHitTime: laneHitTime,
               primaryColor: primaryColor,
+              showStreakFire: showStreakFire,
+              combo: combo,
             ),
             size: Size(constraints.maxWidth, constraints.maxHeight),
           ),
@@ -919,6 +1408,8 @@ class _NoteHighwayPainter extends CustomPainter {
   final List<bool> lanePressed;
   final List<DateTime?> laneHitTime;
   final Color primaryColor;
+  final bool showStreakFire;
+  final int combo;
 
   _NoteHighwayPainter({
     required this.notes,
@@ -929,6 +1420,8 @@ class _NoteHighwayPainter extends CustomPainter {
     required this.lanePressed,
     required this.laneHitTime,
     required this.primaryColor,
+    this.showStreakFire = false,
+    this.combo = 0,
   });
 
   @override
@@ -944,6 +1437,19 @@ class _NoteHighwayPainter extends CustomPainter {
       baseHsl.withHue((baseHsl.hue + 60) % 360).withSaturation(0.9).withLightness(0.5).toColor(),  // Lane 4
     ];
 
+    // Scale sizes based on lane width for iOS portrait mode
+    // On narrow screens (portrait), elements scale down proportionally
+    final isPortrait = size.height > size.width;
+    final scaleFactor = isPortrait ? (laneWidth / 80.0).clamp(0.6, 1.0) : 1.0;
+    final noteRadius = 10.0 * scaleFactor;
+    final noteGlowRadius = 14.0 * scaleFactor;
+    final highlightRadius = 3.0 * scaleFactor;
+    final highlightOffset = 3.0 * scaleFactor;
+    final zoneHeight = 40.0 * scaleFactor;
+    final zonePadding = 2.0 * scaleFactor;
+    final zoneCornerRadius = 8.0 * scaleFactor;
+    final flashRadius = 20.0 * scaleFactor;
+
     // Draw lane dividers
     final lanePaint = Paint()
       ..color = Colors.white12
@@ -957,15 +1463,42 @@ class _NoteHighwayPainter extends CustomPainter {
       );
     }
 
-    // Draw hit line
+    // Draw hit line (with fire effect when on streak)
     final hitLinePaint = Paint()
-      ..color = primaryColor.withValues(alpha: 0.8)
-      ..strokeWidth = 3;
+      ..color = showStreakFire
+          ? const Color(0xFFFF6B35).withValues(alpha: 0.9) // Fire orange
+          : primaryColor.withValues(alpha: 0.8)
+      ..strokeWidth = showStreakFire ? 4 : 3;
     canvas.drawLine(
       Offset(0, hitLineY),
       Offset(size.width, hitLineY),
       hitLinePaint,
     );
+
+    // Streak fire glow effect on hit line
+    if (showStreakFire) {
+      final fireIntensity = (combo / 50.0).clamp(0.3, 1.0);
+      final fireGlowPaint = Paint()
+        ..color = const Color(0xFFFF6B35).withValues(alpha: 0.3 * fireIntensity)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 15 * scaleFactor);
+      canvas.drawLine(
+        Offset(0, hitLineY),
+        Offset(size.width, hitLineY),
+        fireGlowPaint..strokeWidth = 20,
+      );
+
+      // Secondary yellow glow for higher combos
+      if (combo >= 20) {
+        final yellowGlowPaint = Paint()
+          ..color = const Color(0xFFFFD700).withValues(alpha: 0.2 * fireIntensity)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 25 * scaleFactor);
+        canvas.drawLine(
+          Offset(0, hitLineY),
+          Offset(size.width, hitLineY),
+          yellowGlowPaint..strokeWidth = 30,
+        );
+      }
+    }
 
     // Draw hit zones for 5 frets
     for (int lane = 0; lane < 5; lane++) {
@@ -975,10 +1508,10 @@ class _NoteHighwayPainter extends CustomPainter {
           DateTime.now().difference(hitTime).inMilliseconds < 150;
 
       final zoneRect = Rect.fromLTWH(
-        lane * laneWidth + 2,
-        hitLineY - 20,
-        laneWidth - 4,
-        40,
+        lane * laneWidth + zonePadding,
+        hitLineY - zoneHeight / 2,
+        laneWidth - zonePadding * 2,
+        zoneHeight,
       );
 
       final zonePaint = Paint()
@@ -987,7 +1520,7 @@ class _NoteHighwayPainter extends CustomPainter {
             : laneColors[lane].withValues(alpha: 0.2);
 
       canvas.drawRRect(
-        RRect.fromRectAndRadius(zoneRect, const Radius.circular(8)),
+        RRect.fromRectAndRadius(zoneRect, Radius.circular(zoneCornerRadius)),
         zonePaint,
       );
 
@@ -995,10 +1528,10 @@ class _NoteHighwayPainter extends CustomPainter {
       if (isRecentHit) {
         final flashPaint = Paint()
           ..color = Colors.white.withValues(alpha: 0.4)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 15);
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 15 * scaleFactor);
         canvas.drawCircle(
           Offset(lane * laneWidth + laneWidth / 2, hitLineY),
-          20,
+          flashRadius,
           flashPaint,
         );
       }
@@ -1007,7 +1540,7 @@ class _NoteHighwayPainter extends CustomPainter {
     // Draw notes
     final notePaint = Paint()..style = PaintingStyle.fill;
     final noteGlowPaint = Paint()
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 6 * scaleFactor);
 
     for (final note in notes) {
       // Clamp lane to valid range (0-4)
@@ -1020,15 +1553,15 @@ class _NoteHighwayPainter extends CustomPainter {
 
       // Glow
       noteGlowPaint.color = color.withValues(alpha: 0.4);
-      canvas.drawCircle(Offset(noteX, noteY), 14, noteGlowPaint);
+      canvas.drawCircle(Offset(noteX, noteY), noteGlowRadius, noteGlowPaint);
 
-      // Note (smaller for 5 lanes)
+      // Note (scales for portrait mode)
       notePaint.color = color;
-      canvas.drawCircle(Offset(noteX, noteY), 10, notePaint);
+      canvas.drawCircle(Offset(noteX, noteY), noteRadius, notePaint);
 
       // Inner highlight
       notePaint.color = Colors.white.withValues(alpha: 0.4);
-      canvas.drawCircle(Offset(noteX - 3, noteY - 3), 3, notePaint);
+      canvas.drawCircle(Offset(noteX - highlightOffset, noteY - highlightOffset), highlightRadius, notePaint);
     }
   }
 
@@ -1039,12 +1572,27 @@ class _NoteHighwayPainter extends CustomPainter {
 /// Track selection dialog with album art
 class _TrackSelectionDialog extends StatelessWidget {
   final List<DownloadItem> downloads;
+  final bool legendaryReady;
+  final String? legendaryPath;
+  final String legendaryTrackName;
+  final String legendaryArtistName;
+  final String legendaryTrackId;
+  final bool isDemoMode;
 
-  const _TrackSelectionDialog({required this.downloads});
+  const _TrackSelectionDialog({
+    required this.downloads,
+    this.legendaryReady = false,
+    this.legendaryPath,
+    this.legendaryTrackName = '',
+    this.legendaryArtistName = '',
+    this.legendaryTrackId = '',
+    this.isDemoMode = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final totalItems = downloads.length + (legendaryReady ? 1 : 0);
 
     return AlertDialog(
       backgroundColor: theme.colorScheme.surface,
@@ -1059,9 +1607,15 @@ class _TrackSelectionDialog extends StatelessWidget {
         width: double.maxFinite,
         height: 400,
         child: ListView.builder(
-          itemCount: downloads.length,
+          itemCount: totalItems,
           itemBuilder: (context, index) {
-            final item = downloads[index];
+            // Show legendary track at the top if available
+            if (legendaryReady && index == 0) {
+              return _buildLegendaryTrackItem(context, theme);
+            }
+
+            final downloadIndex = legendaryReady ? index - 1 : index;
+            final item = downloads[downloadIndex];
             final track = item.track;
 
             // Get album art info
@@ -1182,6 +1736,118 @@ class _TrackSelectionDialog extends StatelessWidget {
           child: const Text('CANCEL'),
         ),
       ],
+    );
+  }
+
+  Widget _buildLegendaryTrackItem(BuildContext context, ThemeData theme) {
+    const fireOrange = Color(0xFFFF6B35);
+    const fireYellow = Color(0xFFFFD700);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () {
+            Navigator.pop(context, {
+              'path': legendaryPath ?? '',
+              'id': legendaryTrackId,
+              'name': legendaryTrackName,
+              'artist': legendaryArtistName,
+              'duration': '442000', // ~7:22 for TTFAF
+            });
+          },
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [
+                  fireOrange.withValues(alpha: 0.2),
+                  Colors.transparent,
+                ],
+              ),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: fireOrange.withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              children: [
+                // Fire icon as album art
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [fireOrange, Color(0xFFFF4D6D)],
+                    ),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.local_fire_department,
+                    color: fireYellow,
+                    size: 32,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Track info
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.star, color: fireYellow, size: 14),
+                          const SizedBox(width: 4),
+                          Text(
+                            'LEGENDARY',
+                            style: GoogleFonts.raleway(
+                              color: fireYellow,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 1,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        legendaryTrackName,
+                        style: TextStyle(
+                          color: theme.colorScheme.onSurface,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        legendaryArtistName,
+                        style: TextStyle(
+                          color: fireOrange,
+                          fontSize: 13,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                // Fire play icon
+                Icon(
+                  Icons.local_fire_department,
+                  color: fireOrange,
+                  size: 28,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

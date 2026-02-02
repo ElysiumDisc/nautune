@@ -259,12 +259,22 @@ A Guitar Hero-style rhythm game that auto-generates playable charts from any tra
 - **"Rock Star" Milestone**: Unlock a badge for discovering this easter egg
 - **Storage Management**: Manage cached charts in Settings > Data Management
 
+### Legendary Unlock: Through the Fire and Flames
+
+**"Through the Fire and Flames" by DragonForce** - the ultimate Guitar Hero challenge is included!
+
+- **Always available** in demo mode and offline mode (bundled in app)
+- In online mode: Get a **PERFECT score** (100% accuracy, no misses) on ANY song to unlock it
+- Once unlocked online, the legendary status persists forever
+
 ### Controls
 
-| Platform | Green | Red | Yellow | Blue | Orange | Pause |
-|----------|-------|-----|--------|------|--------|-------|
-| Mobile   | Tap 1 | Tap 2 | Tap 3 | Tap 4 | Tap 5 | Pause button |
-| Desktop  | 1/F1  | 2/F2  | 3/F3   | 4/F4  | 5/F5   | Escape |
+| Platform | Green | Red | Yellow | Blue | Orange | Pause | Fire Mode |
+|----------|-------|-----|--------|------|--------|-------|-----------|
+| Mobile   | Tap 1 | Tap 2 | Tap 3 | Tap 4 | Tap 5 | Pause button | N/A |
+| Desktop  | 1/F1  | 2/F2  | 3/F3   | 4/F4  | 5/F5   | Escape | F key |
+
+**Fire Mode**: Press 'F' on desktop to instantly activate fire mode (cheat key for testing streak animations).
 
 
 ## 🌧️ Relax Mode (Easter Egg)

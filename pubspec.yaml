@@ -72,6 +72,7 @@ flutter:
     - assets/no_artist_art.png
     - assets/relax/
     - assets/images/
+    - assets/fire/
 
 flutter_launcher_icons:
   android: false

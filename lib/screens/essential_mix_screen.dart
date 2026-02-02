@@ -53,7 +53,8 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
   double _visualizerRotation = 0.0;
   // Asymmetric smoothing: FAST attack, SLOW decay (matches fullscreen visualizers)
   static const double _attackFactor = 0.6; // Fast response to increases
-  static const double _decayFactor = 0.12; // Slow falloff
+  // iOS needs faster decay (0.25) since FFT values tend to stay elevated
+  static final double _decayFactor = Platform.isIOS ? 0.25 : 0.12;
   static const double _rotationSpeed = 0.02; // Radians per FFT frame
 
   // Frame rate throttling for FFT updates (~30fps)
