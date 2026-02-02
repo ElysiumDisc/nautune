@@ -77,6 +77,9 @@ class ListenBrainzRecommendation {
   /// Album name (may be null if not resolved)
   final String? albumName;
 
+  /// MusicBrainz Release ID (for fetching album art from Cover Art Archive)
+  final String? releaseMbid;
+
   /// Recommendation score (0-1)
   final double score;
 
@@ -88,12 +91,18 @@ class ListenBrainzRecommendation {
     this.trackName,
     this.artistName,
     this.albumName,
+    this.releaseMbid,
     required this.score,
     this.jellyfinTrackId,
   });
 
   /// Check if this recommendation is in the user's library
   bool get isInLibrary => jellyfinTrackId != null;
+
+  /// Get Cover Art Archive URL for album artwork (250px)
+  String? get coverArtUrl => releaseMbid != null
+      ? 'https://coverartarchive.org/release/$releaseMbid/front-250'
+      : null;
 
   /// Create a copy with Jellyfin match
   ListenBrainzRecommendation withJellyfinMatch(String trackId) {
@@ -102,6 +111,7 @@ class ListenBrainzRecommendation {
       trackName: trackName,
       artistName: artistName,
       albumName: albumName,
+      releaseMbid: releaseMbid,
       score: score,
       jellyfinTrackId: trackId,
     );
@@ -114,6 +124,7 @@ class ListenBrainzRecommendation {
       trackName: json['track_name'] as String?,
       artistName: json['artist_name'] as String?,
       albumName: json['album_name'] as String?,
+      releaseMbid: json['release_mbid'] as String?,
       score: (json['score'] as num?)?.toDouble() ?? 0.0,
     );
   }

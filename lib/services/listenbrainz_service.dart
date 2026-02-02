@@ -624,10 +624,12 @@ class ListenBrainzService {
             }).join();
           }
 
-          // Get first album name for additional matching
+          // Get first album name and release ID for additional matching and album art
           String? albumName;
+          String? releaseMbid;
           if (releases != null && releases.isNotEmpty) {
             albumName = releases.first['title'] as String?;
+            releaseMbid = releases.first['id'] as String?;
           }
 
           // Cache the result
@@ -635,7 +637,7 @@ class ListenBrainzService {
             _mbMetadataCache[rec.recordingMbid] = {
               'trackName': title,
               'artistName': artistName,
-              if (albumName != null) 'albumName': albumName,
+              'albumName': ?albumName,
             };
           }
 
@@ -644,6 +646,7 @@ class ListenBrainzService {
             trackName: title,
             artistName: artistName,
             albumName: albumName,
+            releaseMbid: releaseMbid,
             score: rec.score,
           ));
         } else if (response.statusCode == 429) {
@@ -757,8 +760,8 @@ class ListenBrainzService {
   Future<List<ListenBrainzRecommendation>> getRecommendationsWithMatching({
     required JellyfinService jellyfin,
     required String libraryId,
-    int targetMatches = 10,
-    int maxFetch = 100,
+    int targetMatches = 20,
+    int maxFetch = 50,
   }) async {
     if (!_initialized || _config == null) {
       return [];

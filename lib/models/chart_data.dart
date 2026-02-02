@@ -1,6 +1,24 @@
 // Chart data model for Frets on Fire rhythm game.
 // Contains note positions, timing, and metadata for a song chart.
 
+/// Bonus types for golden power-up notes
+enum BonusType {
+  /// Auto-hits all notes in one random lane for 5 seconds with lightning visual
+  lightningLane,
+
+  /// Protects combo from 1-2 misses (doesn't reset streak)
+  shield,
+
+  /// 2x score multiplier for 5 seconds (stacks with combo for up to 8x!)
+  doublePoints,
+
+  /// Instantly jump to max 4x multiplier
+  multiplierBoost,
+
+  /// Forgiving timing window for 3 seconds - slightly off hits still count
+  noteMagnet,
+}
+
 /// A single note in the chart
 class ChartNote {
   /// When the note should be hit (milliseconds from song start)
@@ -15,11 +33,19 @@ class ChartNote {
   /// Frequency band that triggered this note (for visual styling)
   final FrequencyBand band;
 
+  /// Whether this is a golden bonus note
+  final bool isBonus;
+
+  /// The type of bonus this note gives (only valid if isBonus is true)
+  final BonusType? bonusType;
+
   const ChartNote({
     required this.timestampMs,
     required this.lane,
     this.sustainMs,
     this.band = FrequencyBand.lowMid,
+    this.isBonus = false,
+    this.bonusType,
   });
 
   /// Whether this is a hold note
@@ -31,6 +57,8 @@ class ChartNote {
         'l': lane,
         if (sustainMs != null) 's': sustainMs,
         'b': band.index,
+        if (isBonus) 'bonus': true,
+        if (bonusType != null) 'bt': bonusType!.index,
       };
 
   /// Create from JSON
@@ -39,6 +67,8 @@ class ChartNote {
         lane: json['l'] as int,
         sustainMs: json['s'] as int?,
         band: FrequencyBand.values[json['b'] as int? ?? 1],
+        isBonus: json['bonus'] as bool? ?? false,
+        bonusType: json['bt'] != null ? BonusType.values[json['bt'] as int] : null,
       );
 }
 

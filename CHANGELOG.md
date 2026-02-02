@@ -1,3 +1,38 @@
+### v6.0.0 - CarPlay/Lock Screen Sync + Frets on Fire Power-Ups
+
+**CarPlay & Lock Screen Fixes**
+- **Lock Screen Play/Pause Fix**: Fixed grayed out play/pause button during gapless playback transitions
+  - Added `forcePlayingState()` to explicitly broadcast playing state to iOS media controls
+  - Includes position update to force OS to re-render controls after gapless transitions
+- **CarPlay Endless Loading Spinner Fix**: Fixed the main CarPlay desync issue where browsing stops working after playing a track or using the phone app
+  - Root cause: `complete()` callback was called AFTER async work, blocking CarPlay UI when loading took time
+  - Fix: ALL `onPress` handlers now call `complete()` IMMEDIATELY before any async operations
+  - Affects: Albums, Artists, Playlists, Favorites, Recently Played, Downloads, and all "Load More" buttons
+- **CarPlay Network Recovery**: Additional robustness for stuck loading states
+  - `_waitFor()` now returns boolean indicating success vs timeout
+  - On timeout, forces a refresh (which guarantees loading flag reset)
+  - If data still empty after loading, attempts one final refresh
+  - Loading flags now reset in `_handleNetworkDrop()` to prevent stuck states
+
+**Frets on Fire Visual Feedback**
+- **PERFECT/GOOD Hit Text**: Floating feedback text appears on note hits
+  - Gold text for PERFECT timing, white text for GOOD timing
+  - Animates upward and fades out
+- **Fire Particle Effects**: Sparks fly on successful note hits
+  - Enhanced particle burst on milestone achievements (10/20/30/50/100 combo)
+  - Color-coded particles match the fire theme
+
+**Frets on Fire Bonus Power-Ups**
+- **Golden Bonus Notes**: Random power-up notes spawn during gameplay (~1 per 30-60 seconds)
+- **5 Unique Bonuses**:
+  - **Lightning Lane** (5s): Auto-hits all notes in one random lane with lightning visual
+  - **Shield**: Protects combo from 1-2 misses (doesn't reset streak)
+  - **Double Points** (5s): 2x score multiplier (stacks with combo for up to 8x!)
+  - **Multiplier Boost**: Instantly jump to max 4x multiplier
+  - **Note Magnet** (3s): Forgiving timing window - slightly off hits still count
+- **Active Bonus Indicator**: Shows current bonus with countdown timer in corner
+- **Results Screen**: Now shows total bonuses collected
+
 ### v5.9.2 - ListenBrainz Reliability + Frets on Fire Stability
 - **ListenBrainz API Reliability**: Added retry logic with exponential backoff to all ListenBrainz API calls
   - Recommendations, scrobble sync, and count sync now retry up to 3 times on network errors

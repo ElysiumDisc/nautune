@@ -87,6 +87,32 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
     ));
   }
 
+  /// Force broadcast playing state to OS media controls.
+  /// This is used after gapless transitions where the state change event
+  /// may not fire because the new player is already in playing state.
+  /// Includes position update to force iOS/CarPlay to re-render controls.
+  Future<void> forcePlayingState() async {
+    // Get current position from player
+    final position = await _player.getCurrentPosition() ?? Duration.zero;
+
+    playbackState.add(playbackState.value.copyWith(
+      playing: true,
+      updatePosition: position,
+      controls: [
+        audio_service.MediaControl.skipToPrevious,
+        audio_service.MediaControl.pause,
+        audio_service.MediaControl.stop,
+        audio_service.MediaControl.skipToNext,
+      ],
+      systemActions: const {
+        audio_service.MediaAction.seek,
+        audio_service.MediaAction.seekForward,
+        audio_service.MediaAction.seekBackward,
+      },
+      processingState: audio_service.AudioProcessingState.ready,
+    ));
+  }
+
   void updateNautuneMediaItem(JellyfinTrack track, {Uri? offlineArtUri}) {
     // Use network artwork URL if available, otherwise fall back to offline artwork
     final networkArtUrl = track.artworkUrl();

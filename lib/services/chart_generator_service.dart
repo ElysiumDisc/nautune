@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' show max, min, log, sqrt;
+import 'dart:math' show Random, max, min, log, sqrt;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:fftea/fftea.dart';
@@ -59,6 +59,63 @@ class ChartGeneratorService {
   /// Maximum duration in minutes for current platform
   int get maxDurationMinutes => Platform.isIOS ? _maxDurationMinutesIOS : _maxDurationMinutesOther;
 
+  /// Insert golden bonus notes into the chart at random intervals (30-60 seconds apart)
+  List<ChartNote> _insertBonusNotes(List<ChartNote> notes, int durationMs) {
+    if (notes.isEmpty || durationMs < 45000) return notes; // Too short for bonuses
+
+    final random = Random();
+    final result = List<ChartNote>.from(notes);
+    final bonusTypes = BonusType.values;
+
+    // Calculate how many bonus notes to add (1 per 30-60 seconds)
+    final avgInterval = 45000; // 45 seconds average
+    final numBonuses = max(1, durationMs ~/ avgInterval);
+
+    // Distribute bonuses across the track duration
+    // Start after 15 seconds to let player warm up
+    final startMs = 15000;
+    final endMs = durationMs - 10000; // Don't add in last 10 seconds
+    final availableRange = endMs - startMs;
+
+    if (availableRange < 30000) return notes; // Not enough room
+
+    final bonusTimestamps = <int>[];
+
+    for (int i = 0; i < numBonuses; i++) {
+      // Random timestamp within the range, with some spacing
+      final segmentSize = availableRange ~/ numBonuses;
+      final segmentStart = startMs + (i * segmentSize);
+      final jitter = random.nextInt(segmentSize ~/ 2); // Random offset within segment
+      final timestamp = segmentStart + jitter;
+
+      // Make sure not too close to existing bonus
+      bool tooClose = bonusTimestamps.any((t) => (t - timestamp).abs() < 20000);
+      if (!tooClose) {
+        bonusTimestamps.add(timestamp);
+      }
+    }
+
+    // Create bonus notes at these timestamps
+    for (final timestamp in bonusTimestamps) {
+      // Pick a random lane and bonus type
+      final lane = random.nextInt(5);
+      final bonusType = bonusTypes[random.nextInt(bonusTypes.length)];
+
+      result.add(ChartNote(
+        timestampMs: timestamp,
+        lane: lane,
+        band: FrequencyBand.values[lane],
+        isBonus: true,
+        bonusType: bonusType,
+      ));
+    }
+
+    // Sort by timestamp
+    result.sort((a, b) => a.timestampMs.compareTo(b.timestampMs));
+
+    return result;
+  }
+
   /// Generate a chart from an audio file
   Future<ChartData?> generateChart({
     required String audioPath,
@@ -110,16 +167,19 @@ class ChartGeneratorService {
         return null;
       }
 
+      // Insert bonus notes (approximately 1 per 30-60 seconds)
+      final notesWithBonuses = _insertBonusNotes(result.notes, durationMs);
+
       progress.value = 1.0;
 
-      debugPrint('🎮 ChartGenerator: Generated ${result.notes.length} notes, BPM: ${result.bpm.round()}');
+      debugPrint('🎮 ChartGenerator: Generated ${notesWithBonuses.length} notes (${notesWithBonuses.where((n) => n.isBonus).length} bonus), BPM: ${result.bpm.round()}');
 
       return ChartData(
         id: '${trackId}_chart',
         trackId: trackId,
         trackName: trackName,
         artistName: artistName,
-        notes: result.notes,
+        notes: notesWithBonuses,
         bpm: result.bpm,
         durationMs: durationMs,
         generatedAt: DateTime.now(),

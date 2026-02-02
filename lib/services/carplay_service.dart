@@ -147,24 +147,24 @@ class CarPlayService {
               text: 'Albums',
               detailText: _getAlbumCount(),
               onPress: (complete, self) async {
+                complete(); // Signal CarPlay immediately to stop spinner
                 await _showAlbums();
-                complete();
               },
             ),
             CPListItem(
               text: 'Artists',
               detailText: _getArtistCount(),
               onPress: (complete, self) async {
+                complete(); // Signal CarPlay immediately to stop spinner
                 await _showArtists();
-                complete();
               },
             ),
             CPListItem(
               text: 'Playlists',
               detailText: _getPlaylistCount(),
               onPress: (complete, self) async {
+                complete(); // Signal CarPlay immediately to stop spinner
                 await _showPlaylists();
-                complete();
               },
             ),
           ],
@@ -182,16 +182,16 @@ class CarPlayService {
               text: 'Recently Played',
               detailText: 'Your listening history',
               onPress: (complete, self) async {
+                complete(); // Signal CarPlay immediately to stop spinner
                 await _showRecentlyPlayed();
-                complete();
               },
             ),
             CPListItem(
               text: 'Favorite Tracks',
               detailText: _getFavoriteCount(),
               onPress: (complete, self) async {
+                complete(); // Signal CarPlay immediately to stop spinner
                 await _showFavorites();
-                complete();
               },
             ),
           ],
@@ -209,8 +209,8 @@ class CarPlayService {
               text: 'Downloaded Music',
               detailText: _getDownloadCount(),
               onPress: (complete, self) async {
+                complete(); // Signal CarPlay immediately to stop spinner
                 await _showDownloads();
-                complete();
               },
             ),
           ],
@@ -254,12 +254,14 @@ class CarPlayService {
     return count > 0 ? '$count songs available offline' : 'Available offline';
   }
 
-  /// Wait for a condition to be met with a timeout
-  Future<void> _waitFor(bool Function() condition, {Duration timeout = const Duration(seconds: 10)}) async {
+  /// Wait for a condition to be met with a timeout.
+  /// Returns true if condition was met, false if timeout occurred.
+  Future<bool> _waitFor(bool Function() condition, {Duration timeout = const Duration(seconds: 10)}) async {
     final end = DateTime.now().add(timeout);
     while (!condition() && DateTime.now().isBefore(end)) {
       await Future.delayed(const Duration(milliseconds: 100));
     }
+    return condition();
   }
 
   Future<void> _showAlbums({int offset = 0}) async {
@@ -278,10 +280,22 @@ class CarPlayService {
           await appState.refreshAlbums();
         } else if (appState.isLoadingAlbums) {
           // If already loading, wait for it to finish
-          await _waitFor(() => !appState.isLoadingAlbums);
+          final success = await _waitFor(() => !appState.isLoadingAlbums);
+          if (!success) {
+            // Timeout - force a refresh which has finally block to reset flags
+            debugPrint('🚗 CarPlay: Albums loading timed out, forcing refresh');
+            await appState.refreshAlbums();
+          }
         }
 
         allAlbums = appState.albums ?? [];
+
+        // If still empty after loading, try one more refresh
+        if (allAlbums.isEmpty && !appState.isOfflineMode) {
+          debugPrint('🚗 CarPlay: Albums still empty, attempting final refresh');
+          await appState.refreshAlbums();
+          allAlbums = appState.albums ?? [];
+        }
       }
 
       if (allAlbums.isEmpty) {
@@ -298,8 +312,8 @@ class CarPlayService {
         text: album.name,
         detailText: album.artists.join(', '),
         onPress: (complete, self) async {
+          complete(); // Signal CarPlay immediately
           await _showAlbumTracks(album.id, album.name);
-          complete();
         },
       )).toList();
 
@@ -310,8 +324,8 @@ class CarPlayService {
           text: 'Load More...',
           detailText: '$remaining more albums',
           onPress: (complete, self) async {
+            complete(); // Signal CarPlay immediately
             await _showAlbums(offset: offset + _maxItemsPerPage);
-            complete();
           },
         ));
       }
@@ -348,10 +362,22 @@ class CarPlayService {
           await appState.refreshArtists();
         } else if (appState.isLoadingArtists) {
           // If already loading, wait for it to finish
-          await _waitFor(() => !appState.isLoadingArtists);
+          final success = await _waitFor(() => !appState.isLoadingArtists);
+          if (!success) {
+            // Timeout - force a refresh which has finally block to reset flags
+            debugPrint('🚗 CarPlay: Artists loading timed out, forcing refresh');
+            await appState.refreshArtists();
+          }
         }
 
         allArtists = appState.artists ?? [];
+
+        // If still empty after loading, try one more refresh
+        if (allArtists.isEmpty && !appState.isOfflineMode) {
+          debugPrint('🚗 CarPlay: Artists still empty, attempting final refresh');
+          await appState.refreshArtists();
+          allArtists = appState.artists ?? [];
+        }
       }
 
       if (allArtists.isEmpty) {
@@ -367,8 +393,8 @@ class CarPlayService {
       final items = paginatedArtists.map((artist) => CPListItem(
         text: artist.name,
         onPress: (complete, self) async {
+          complete(); // Signal CarPlay immediately
           await _showArtistAlbums(artist.id, artist.name);
-          complete();
         },
       )).toList();
 
@@ -379,8 +405,8 @@ class CarPlayService {
           text: 'Load More...',
           detailText: '$remaining more artists',
           onPress: (complete, self) async {
+            complete(); // Signal CarPlay immediately
             await _showArtists(offset: offset + _maxItemsPerPage);
-            complete();
           },
         ));
       }
@@ -414,10 +440,22 @@ class CarPlayService {
         await appState.refreshPlaylists();
       } else if (appState.isLoadingPlaylists) {
         // If already loading, wait for it to finish
-        await _waitFor(() => !appState.isLoadingPlaylists);
+        final success = await _waitFor(() => !appState.isLoadingPlaylists);
+        if (!success) {
+          // Timeout - force a refresh which has finally block to reset flags
+          debugPrint('🚗 CarPlay: Playlists loading timed out, forcing refresh');
+          await appState.refreshPlaylists();
+        }
       }
 
-      final allPlaylists = appState.playlists ?? [];
+      var allPlaylists = appState.playlists ?? [];
+
+      // If still empty after loading, try one more refresh
+      if (allPlaylists.isEmpty) {
+        debugPrint('🚗 CarPlay: Playlists still empty, attempting final refresh');
+        await appState.refreshPlaylists();
+        allPlaylists = appState.playlists ?? [];
+      }
 
       if (allPlaylists.isEmpty) {
         await _showEmptyState('Playlists', 'No playlists available');
@@ -433,8 +471,8 @@ class CarPlayService {
         text: playlist.name,
         detailText: '${playlist.trackCount} tracks',
         onPress: (complete, self) async {
+          complete(); // Signal CarPlay immediately
           await _showPlaylistTracks(playlist.id, playlist.name);
-          complete();
         },
       )).toList();
 
@@ -445,8 +483,8 @@ class CarPlayService {
           text: 'Load More...',
           detailText: '$remaining more playlists',
           onPress: (complete, self) async {
+            complete(); // Signal CarPlay immediately
             await _showPlaylists(offset: offset + _maxItemsPerPage);
-            complete();
           },
         ));
       }
@@ -551,8 +589,8 @@ class CarPlayService {
         text: album.name,
         detailText: album.artists.join(', '),
         onPress: (complete, self) async {
+          complete(); // Signal CarPlay immediately
           await _showAlbumTracks(album.id, album.name);
-          complete();
         },
       )).toList();
 
@@ -661,8 +699,8 @@ class CarPlayService {
           text: 'Load More...',
           detailText: '$remaining more songs',
           onPress: (complete, self) async {
+            complete(); // Signal CarPlay immediately
             await _showFavorites(offset: offset + _maxItemsPerPage);
-            complete();
           },
         ));
       }
@@ -735,8 +773,8 @@ class CarPlayService {
           text: 'Load More...',
           detailText: '$remaining more songs',
           onPress: (complete, self) async {
+            complete(); // Signal CarPlay immediately
             await _showRecentlyPlayed(offset: offset + _maxItemsPerPage);
-            complete();
           },
         ));
       }
@@ -796,8 +834,8 @@ class CarPlayService {
           text: 'Load More...',
           detailText: '$remaining more songs',
           onPress: (complete, self) async {
+            complete(); // Signal CarPlay immediately
             await _showDownloads(offset: offset + _maxItemsPerPage);
-            complete();
           },
         ));
       }

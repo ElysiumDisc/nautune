@@ -260,6 +260,28 @@ A Guitar Hero-style rhythm game that auto-generates playable charts from any tra
 - **"Rock Star" Milestone**: Unlock a badge for discovering this easter egg
 - **Storage Management**: Manage cached charts in Settings > Data Management
 
+### Visual Feedback
+
+- **PERFECT/GOOD Hit Text**: Floating feedback text on note hits (gold for PERFECT, white for GOOD)
+- **Fire Particle Effects**: Sparks fly on successful hits, enhanced particles on milestone achievements
+- **Lightning Effects**: Blue lightning visual for Lightning Lane bonus
+- **Streak Fire Glow**: Fire effect on hit line when combo reaches 10+
+- **Milestone Flashes**: "ON FIRE!", "BLAZING!", "INFERNO!", "LEGENDARY!", "GODLIKE!" celebrations
+
+### Bonus Power-Ups
+
+Golden bonus notes spawn randomly during gameplay (~1 per 30-60 seconds). Hit them to collect power-ups!
+
+| Bonus | Duration | Effect |
+|-------|----------|--------|
+| **Lightning Lane** | 5 sec | Auto-hits ALL notes in one random lane with lightning visual |
+| **Shield** | Until used | Protects combo from 1-2 misses (doesn't reset streak) |
+| **Double Points** | 5 sec | 2x score multiplier (stacks with combo for up to 8x!) |
+| **Multiplier Boost** | Instant | Instantly jump to max 4x multiplier |
+| **Note Magnet** | 3 sec | Forgiving timing window - slightly off hits still count |
+
+Active bonuses display in the corner with countdown timers.
+
 ### Legendary Unlock: Through the Fire and Flames
 
 **"Through the Fire and Flames" by DragonForce** - the ultimate Guitar Hero challenge is included!

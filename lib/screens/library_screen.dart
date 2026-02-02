@@ -1880,8 +1880,8 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
       final matched = await listenBrainz.getRecommendationsWithMatching(
         jellyfin: widget.appState.jellyfinService,
         libraryId: libraryId,
-        targetMatches: 15,  // Stop when we have 15 matches
-        maxFetch: 100,      // Fetch up to 100 recommendations
+        targetMatches: 20,  // Stop when we have 20 matches
+        maxFetch: 50,       // Fetch up to 50 recommendations
       );
 
       if (!mounted) return;
@@ -1900,7 +1900,7 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
       final inLibraryRecs = matched.where((r) => r.isInLibrary).toList();
       final tracks = <JellyfinTrack>[];
 
-      for (final rec in inLibraryRecs.take(15)) {
+      for (final rec in inLibraryRecs.take(20)) {
         if (rec.jellyfinTrackId != null) {
           try {
             final track = await widget.appState.jellyfinService.getTrack(rec.jellyfinTrackId!);
@@ -1942,57 +1942,206 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
       return const SizedBox.shrink();
     }
 
-    // Don't show if no recommendations
-    if (_hasChecked && (_matchedTracks == null || _matchedTracks!.isEmpty)) {
+    // Get recommendations NOT in library (for discovery section)
+    final notInLibraryRecs = _recommendations
+        ?.where((r) => !r.isInLibrary && r.trackName != null && r.artistName != null)
+        .take(10)
+        .toList() ?? [];
+
+    final hasMatchedData = _matchedTracks != null && _matchedTracks!.isNotEmpty;
+    final hasDiscoveryData = notInLibraryRecs.isNotEmpty;
+
+    // Don't show if no recommendations at all
+    if (_hasChecked && !hasMatchedData && !hasDiscoveryData) {
       return const SizedBox.shrink();
     }
 
-    final hasData = _matchedTracks != null && _matchedTracks!.isNotEmpty;
     final inLibraryCount = _recommendations?.where((r) => r.isInLibrary).length ?? 0;
     final totalCount = _recommendations?.length ?? 0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _ShelfHeader(
-          title: 'ListenBrainz Mix',
-          subtitle: '$inLibraryCount of $totalCount in your library',
-          onRefresh: _loadRecommendations,
-          isLoading: _isLoading,
-        ),
-        SizedBox(
-          height: 140,
-          child: !hasData && _isLoading
-              ? const SkeletonTrackShelf()
-              : hasData
-                  ? ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      itemCount: _matchedTracks!.length,
-                      separatorBuilder: (context, _) => const SizedBox(width: 12),
-                      itemBuilder: (context, index) {
-                        final track = _matchedTracks![index];
-                        return _TrackChip(
-                          track: track,
-                          onTap: () {
-                            widget.appState.audioPlayerService.playTrack(
-                              track,
-                              queueContext: _matchedTracks!,
-                            );
-                          },
-                        );
-                      },
-                    )
-                  : Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Text(
-                        'Getting recommendations from ListenBrainz...',
-                        style: theme.textTheme.bodySmall,
+        // ListenBrainz Mix - tracks in your library
+        if (hasMatchedData || _isLoading) ...[
+          _ShelfHeader(
+            title: 'ListenBrainz Mix',
+            subtitle: '$inLibraryCount of $totalCount in your library',
+            onRefresh: _loadRecommendations,
+            isLoading: _isLoading,
+          ),
+          SizedBox(
+            height: 140,
+            child: !hasMatchedData && _isLoading
+                ? const SkeletonTrackShelf()
+                : hasMatchedData
+                    ? ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        itemCount: _matchedTracks!.length,
+                        separatorBuilder: (context, _) => const SizedBox(width: 12),
+                        itemBuilder: (context, index) {
+                          final track = _matchedTracks![index];
+                          return _TrackChip(
+                            track: track,
+                            onTap: () {
+                              widget.appState.audioPlayerService.playTrack(
+                                track,
+                                queueContext: _matchedTracks!,
+                              );
+                            },
+                          );
+                        },
+                      )
+                    : Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Text(
+                          'Getting recommendations from ListenBrainz...',
+                          style: theme.textTheme.bodySmall,
+                        ),
                       ),
-                    ),
-        ),
-        const SizedBox(height: 20),
+          ),
+          const SizedBox(height: 20),
+        ],
+
+        // Discover New Music - tracks NOT in your library
+        if (hasDiscoveryData) ...[
+          _ShelfHeader(
+            title: 'Discover New Music',
+            subtitle: 'Based on your ListenBrainz history',
+            onRefresh: _loadRecommendations,
+            isLoading: _isLoading,
+          ),
+          SizedBox(
+            height: 100,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemCount: notInLibraryRecs.length,
+              separatorBuilder: (context, _) => const SizedBox(width: 12),
+              itemBuilder: (context, index) {
+                final rec = notInLibraryRecs[index];
+                return _DiscoveryChip(
+                  trackName: rec.trackName!,
+                  artistName: rec.artistName!,
+                  albumName: rec.albumName,
+                  coverArtUrl: rec.coverArtUrl,
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 20),
+        ],
       ],
+    );
+  }
+}
+
+/// Chip for discovery recommendations (tracks not in library)
+class _DiscoveryChip extends StatelessWidget {
+  const _DiscoveryChip({
+    required this.trackName,
+    required this.artistName,
+    this.albumName,
+    this.coverArtUrl,
+  });
+
+  final String trackName;
+  final String artistName;
+  final String? albumName;
+  final String? coverArtUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return SizedBox(
+      width: 200,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        color: theme.colorScheme.surfaceContainerHighest,
+        child: Row(
+          children: [
+            // Album art from Cover Art Archive
+            if (coverArtUrl != null)
+              SizedBox(
+                width: 80,
+                height: 100,
+                child: Image.network(
+                  coverArtUrl!,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    color: theme.colorScheme.surfaceContainerHigh,
+                    child: Icon(
+                      Icons.album,
+                      size: 32,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              )
+            else
+              Container(
+                width: 80,
+                height: 100,
+                color: theme.colorScheme.surfaceContainerHigh,
+                child: Icon(
+                  Icons.album,
+                  size: 32,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            // Track info
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.explore,
+                          size: 12,
+                          color: theme.colorScheme.primary,
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            'Discover',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      trackName,
+                      style: theme.textTheme.titleSmall?.copyWith(fontSize: 12),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      artistName,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontSize: 11,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

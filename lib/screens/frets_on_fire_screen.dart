@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
-import 'dart:math' show max;
+import 'dart:math' show Random, max, pi, cos, sin;
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
@@ -51,6 +51,25 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   int _goodHits = 0;
   int _missedNotes = 0;
   int _nextNoteIndex = 0;
+
+  // Active bonuses
+  BonusType? _activeBonus;
+  DateTime? _bonusExpiry;
+  int _shieldCharges = 0;
+  int? _lightningLane; // Which lane is being auto-hit
+  bool _doublePointsActive = false;
+  bool _noteMagnetActive = false;
+  int _bonusesCollected = 0;
+
+  // Hit feedback
+  String? _hitFeedbackText;
+  Color? _hitFeedbackColor;
+  DateTime? _hitFeedbackTime;
+  int? _hitFeedbackLane;
+
+  // Particle effects
+  final List<_Particle> _particles = [];
+  final Random _random = Random();
 
   // Animation
   late AnimationController _noteController;
@@ -158,11 +177,31 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
     final currentMs = _position.inMilliseconds;
 
+    // Update particle effects
+    _updateParticles();
+
+    // Check bonus expiry
+    _checkBonusExpiry();
+
+    // Handle lightning lane auto-hits
+    if (_lightningLane != null) {
+      _handleLightningLaneAutoHits(currentMs);
+    }
+
     // Check for missed notes (past the hit window)
     while (_nextNoteIndex < _chart!.notes.length) {
       final note = _chart!.notes[_nextNoteIndex];
+      // Skip bonus notes for miss detection (they just disappear if not hit)
+      if (note.isBonus) {
+        if (note.timestampMs < currentMs - _hitWindow) {
+          _nextNoteIndex++;
+        } else {
+          break;
+        }
+        continue;
+      }
       if (note.timestampMs < currentMs - _hitWindow) {
-        // Missed this note
+        // Missed this note - check shield
         _missNote();
         _nextNoteIndex++;
       } else {
@@ -173,7 +212,56 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     if (mounted) setState(() {});
   }
 
+  void _updateParticles() {
+    final now = DateTime.now();
+    _particles.removeWhere((p) => now.difference(p.createdAt).inMilliseconds > p.lifetimeMs);
+    for (final p in _particles) {
+      final age = now.difference(p.createdAt).inMilliseconds;
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.2; // gravity
+      p.opacity = 1.0 - (age / p.lifetimeMs);
+    }
+  }
+
+  void _checkBonusExpiry() {
+    if (_bonusExpiry != null && DateTime.now().isAfter(_bonusExpiry!)) {
+      _activeBonus = null;
+      _bonusExpiry = null;
+      _lightningLane = null;
+      _doublePointsActive = false;
+      _noteMagnetActive = false;
+    }
+  }
+
+  void _handleLightningLaneAutoHits(int currentMs) {
+    // Auto-hit any notes in the lightning lane that are within the hit window
+    for (int i = _nextNoteIndex; i < _chart!.notes.length; i++) {
+      final note = _chart!.notes[i];
+      if (note.lane != _lightningLane) continue;
+      if (note.isBonus) continue;
+
+      final diff = note.timestampMs - currentMs;
+      if (diff <= 50 && diff >= -50) {
+        // Auto-hit with perfect timing
+        _hitNote(_lightningLane!, true);
+        _spawnParticles(_lightningLane!, isLightning: true);
+        if (i == _nextNoteIndex) _nextNoteIndex++;
+      } else if (diff > 50) {
+        break;
+      }
+    }
+  }
+
   void _missNote() {
+    // Shield protects combo from misses
+    if (_shieldCharges > 0) {
+      _shieldCharges--;
+      // Show shield absorbed feedback
+      _triggerMilestone('SHIELDED!');
+      return;
+    }
+
     _missedNotes++;
     _combo = 0;
     _multiplier = 1;
@@ -183,32 +271,45 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   }
 
   void _hitNote(int lane, bool isPerfect) {
+    // Calculate effective multiplier (with double points bonus)
+    final effectiveMultiplier = _doublePointsActive ? _multiplier * 2 : _multiplier;
+
     // Scoring like original Frets on Fire: 50 points per note * multiplier
     if (isPerfect) {
       _perfectHits++;
-      _score += 50 * _multiplier;
+      _score += 50 * effectiveMultiplier;
+      _showHitFeedback(lane, 'PERFECT', const Color(0xFFFFD700));
     } else {
       _goodHits++;
-      _score += 50 * _multiplier;
+      _score += 50 * effectiveMultiplier;
+      _showHitFeedback(lane, 'GOOD', Colors.white);
     }
 
     _combo++;
     _maxCombo = max(_maxCombo, _combo);
 
+    // Spawn hit particles
+    _spawnParticles(lane);
+
     // Multiplier milestones like original: 10→2x, 20→3x, 30→4x (max 4x)
     if (_combo == 10) {
       _multiplier = 2;
       _triggerMilestone('ON FIRE!');
+      _spawnMilestoneParticles();
     } else if (_combo == 20) {
       _multiplier = 3;
       _triggerMilestone('BLAZING!');
+      _spawnMilestoneParticles();
     } else if (_combo == 30) {
       _multiplier = 4;
       _triggerMilestone('INFERNO!');
+      _spawnMilestoneParticles();
     } else if (_combo == 50) {
       _triggerMilestone('LEGENDARY!');
+      _spawnMilestoneParticles();
     } else if (_combo == 100) {
       _triggerMilestone('GODLIKE!');
+      _spawnMilestoneParticles();
     }
 
     // Start/maintain streak fire effect and multiplier pulse
@@ -220,6 +321,112 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     }
 
     _laneHitTime[lane] = DateTime.now();
+  }
+
+  void _showHitFeedback(int lane, String text, Color color) {
+    _hitFeedbackText = text;
+    _hitFeedbackColor = color;
+    _hitFeedbackTime = DateTime.now();
+    _hitFeedbackLane = lane;
+  }
+
+  void _spawnParticles(int lane, {bool isLightning = false}) {
+    final laneX = (lane + 0.5) / 5.0; // Normalized X position
+    final particleCount = isLightning ? 12 : 6;
+    final color = isLightning ? const Color(0xFF00BFFF) : const Color(0xFFFF6B35);
+
+    for (int i = 0; i < particleCount; i++) {
+      final angle = _random.nextDouble() * 2 * pi;
+      final speed = 2.0 + _random.nextDouble() * 4.0;
+      _particles.add(_Particle(
+        x: laneX,
+        y: 0.85, // Hit line position
+        vx: cos(angle) * speed * 0.01,
+        vy: -sin(angle).abs() * speed * 0.015, // Always go up initially
+        color: color,
+        size: isLightning ? 4.0 + _random.nextDouble() * 3.0 : 2.0 + _random.nextDouble() * 2.0,
+        lifetimeMs: 400 + _random.nextInt(200),
+        createdAt: DateTime.now(),
+      ));
+    }
+  }
+
+  void _spawnMilestoneParticles() {
+    // Spawn a burst of particles across the screen
+    for (int i = 0; i < 30; i++) {
+      final x = _random.nextDouble();
+      final angle = _random.nextDouble() * 2 * pi;
+      final speed = 3.0 + _random.nextDouble() * 5.0;
+      _particles.add(_Particle(
+        x: x,
+        y: 0.5,
+        vx: cos(angle) * speed * 0.015,
+        vy: sin(angle) * speed * 0.015,
+        color: Color.lerp(const Color(0xFFFF6B35), const Color(0xFFFFD700), _random.nextDouble())!,
+        size: 3.0 + _random.nextDouble() * 4.0,
+        lifetimeMs: 600 + _random.nextInt(400),
+        createdAt: DateTime.now(),
+      ));
+    }
+  }
+
+  void _collectBonus(BonusType bonusType) {
+    _bonusesCollected++;
+
+    switch (bonusType) {
+      case BonusType.lightningLane:
+        // Pick a random lane to auto-hit
+        _lightningLane = _random.nextInt(5);
+        _activeBonus = bonusType;
+        _bonusExpiry = DateTime.now().add(const Duration(seconds: 5));
+        _triggerMilestone('LIGHTNING!');
+        break;
+
+      case BonusType.shield:
+        _shieldCharges = 2; // Protects 2 misses
+        _triggerMilestone('SHIELD!');
+        break;
+
+      case BonusType.doublePoints:
+        _doublePointsActive = true;
+        _activeBonus = bonusType;
+        _bonusExpiry = DateTime.now().add(const Duration(seconds: 5));
+        _triggerMilestone('2X POINTS!');
+        break;
+
+      case BonusType.multiplierBoost:
+        _multiplier = 4;
+        _combo = max(_combo, 30); // Ensure combo supports 4x
+        _showStreakFire = true;
+        if (!_multiplierPulseController.isAnimating) {
+          _multiplierPulseController.repeat(reverse: true);
+        }
+        _triggerMilestone('MAX POWER!');
+        break;
+
+      case BonusType.noteMagnet:
+        _noteMagnetActive = true;
+        _activeBonus = bonusType;
+        _bonusExpiry = DateTime.now().add(const Duration(seconds: 3));
+        _triggerMilestone('MAGNET!');
+        break;
+    }
+
+    // Spawn golden particles for bonus
+    for (int i = 0; i < 20; i++) {
+      final angle = _random.nextDouble() * 2 * pi;
+      final speed = 2.0 + _random.nextDouble() * 6.0;
+      _particles.add(_Particle(
+        x: 0.5,
+        y: 0.5,
+        vx: cos(angle) * speed * 0.02,
+        vy: sin(angle) * speed * 0.02,
+        color: const Color(0xFFFFD700),
+        size: 4.0 + _random.nextDouble() * 4.0,
+        lifetimeMs: 800 + _random.nextInt(400),
+        createdAt: DateTime.now(),
+      ));
+    }
   }
 
   void _triggerMilestone(String text) {
@@ -238,6 +445,10 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
     final currentMs = _position.inMilliseconds;
 
+    // Effective hit window (Note Magnet makes it more forgiving)
+    final effectiveHitWindow = _noteMagnetActive ? (_hitWindow * 1.5).round() : _hitWindow;
+    final effectivePerfectWindow = _noteMagnetActive ? (_hitWindow * 0.8).round() : _perfectWindow;
+
     // Find a note in this lane that's within the hit window
     for (int i = _nextNoteIndex; i < _chart!.notes.length; i++) {
       final note = _chart!.notes[i];
@@ -245,12 +456,23 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
       final diff = (note.timestampMs - currentMs).abs();
 
-      if (diff <= _perfectWindow) {
+      // Handle bonus notes
+      if (note.isBonus && diff <= effectiveHitWindow) {
+        if (note.bonusType != null) {
+          _collectBonus(note.bonusType!);
+        }
+        _nextNoteIndex = i + 1;
+        setState(() {});
+        return;
+      }
+
+      // Regular notes
+      if (diff <= effectivePerfectWindow) {
         _hitNote(lane, true);
         _nextNoteIndex = i + 1;
         setState(() {});
         return;
-      } else if (diff <= _hitWindow) {
+      } else if (diff <= effectiveHitWindow) {
         _hitNote(lane, false);
         _nextNoteIndex = i + 1;
         setState(() {});
@@ -258,7 +480,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       }
 
       // Notes are sorted, so if this note is too far in the future, stop looking
-      if (note.timestampMs > currentMs + _hitWindow) break;
+      if (note.timestampMs > currentMs + effectiveHitWindow) break;
     }
   }
 
@@ -388,6 +610,17 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     _goodHits = 0;
     _missedNotes = 0;
     _nextNoteIndex = 0;
+
+    // Reset bonus state
+    _activeBonus = null;
+    _bonusExpiry = null;
+    _shieldCharges = 0;
+    _lightningLane = null;
+    _doublePointsActive = false;
+    _noteMagnetActive = false;
+    _bonusesCollected = 0;
+    _particles.clear();
+    _hitFeedbackText = null;
 
     // Start audio
     await _gamePlayer.play(DeviceFileSource(_selectedTrackPath!));
@@ -849,6 +1082,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     const fireOrange = Color(0xFFFF6B35);
     const fireRed = Color(0xFFFF4D6D);
     const fireYellow = Color(0xFFFFD700);
+    const lightningBlue = Color(0xFF00BFFF);
 
     return Stack(
       children: [
@@ -863,6 +1097,12 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
           onLaneTap: _onLaneTap,
           showStreakFire: _showStreakFire,
           combo: _combo,
+          lightningLane: _lightningLane,
+          particles: _particles,
+          hitFeedbackText: _hitFeedbackText,
+          hitFeedbackColor: _hitFeedbackColor,
+          hitFeedbackTime: _hitFeedbackTime,
+          hitFeedbackLane: _hitFeedbackLane,
         ),
         // Score display with Nautune font
         Positioned(
@@ -1020,6 +1260,13 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
               );
             },
           ),
+        // Active bonus indicator
+        if (_activeBonus != null || _shieldCharges > 0)
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 60,
+            left: 16,
+            child: _buildActiveBonusIndicator(fireOrange, fireYellow, lightningBlue),
+          ),
         // Pause button
         Positioned(
           top: MediaQuery.of(context).padding.top + 8,
@@ -1029,6 +1276,56 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
             onPressed: _pauseGame,
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _buildActiveBonusIndicator(Color fireOrange, Color fireYellow, Color lightningBlue) {
+    final remaining = _bonusExpiry != null
+        ? _bonusExpiry!.difference(DateTime.now()).inMilliseconds / 1000.0
+        : 0.0;
+
+    Widget buildBonusChip(String label, IconData icon, Color color, {String? countdown}) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.3),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.6)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 14),
+            const SizedBox(width: 4),
+            Text(
+              countdown != null ? '$label $countdown' : label,
+              style: GoogleFonts.raleway(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_activeBonus == BonusType.lightningLane)
+          buildBonusChip('LIGHTNING', Icons.bolt, lightningBlue,
+              countdown: '${remaining.toStringAsFixed(1)}s'),
+        if (_activeBonus == BonusType.doublePoints)
+          buildBonusChip('2X POINTS', Icons.double_arrow, fireYellow,
+              countdown: '${remaining.toStringAsFixed(1)}s'),
+        if (_activeBonus == BonusType.noteMagnet)
+          buildBonusChip('MAGNET', Icons.track_changes, Colors.purple,
+              countdown: '${remaining.toStringAsFixed(1)}s'),
+        if (_shieldCharges > 0)
+          buildBonusChip('SHIELD x$_shieldCharges', Icons.shield, Colors.cyan),
       ],
     );
   }
@@ -1254,6 +1551,10 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
                   _StatColumn(label: 'Max Combo', value: _maxCombo.toString()),
                   const SizedBox(width: 32),
                   _StatColumn(label: 'Accuracy', value: '${accuracy.toStringAsFixed(1)}%'),
+                  if (_bonusesCollected > 0) ...[
+                    const SizedBox(width: 32),
+                    _StatColumn(label: 'Bonuses', value: _bonusesCollected.toString()),
+                  ],
                 ],
               ),
               const SizedBox(height: 32),
@@ -1287,6 +1588,30 @@ enum GameState {
   playing,
   paused,
   ended,
+}
+
+/// Particle effect for visual feedback
+class _Particle {
+  double x;
+  double y;
+  double vx;
+  double vy;
+  final Color color;
+  final double size;
+  final int lifetimeMs;
+  final DateTime createdAt;
+  double opacity;
+
+  _Particle({
+    required this.x,
+    required this.y,
+    required this.vx,
+    required this.vy,
+    required this.color,
+    required this.size,
+    required this.lifetimeMs,
+    required this.createdAt,
+  }) : opacity = 1.0;
 }
 
 class _InfoChip extends StatelessWidget {
@@ -1354,6 +1679,12 @@ class _NoteHighway extends StatelessWidget {
   final Function(int) onLaneTap;
   final bool showStreakFire;
   final int combo;
+  final int? lightningLane;
+  final List<_Particle> particles;
+  final String? hitFeedbackText;
+  final Color? hitFeedbackColor;
+  final DateTime? hitFeedbackTime;
+  final int? hitFeedbackLane;
 
   const _NoteHighway({
     required this.chart,
@@ -1365,6 +1696,12 @@ class _NoteHighway extends StatelessWidget {
     required this.onLaneTap,
     this.showStreakFire = false,
     this.combo = 0,
+    this.lightningLane,
+    this.particles = const [],
+    this.hitFeedbackText,
+    this.hitFeedbackColor,
+    this.hitFeedbackTime,
+    this.hitFeedbackLane,
   });
 
   @override
@@ -1404,6 +1741,12 @@ class _NoteHighway extends StatelessWidget {
               primaryColor: primaryColor,
               showStreakFire: showStreakFire,
               combo: combo,
+              lightningLane: lightningLane,
+              particles: particles,
+              hitFeedbackText: hitFeedbackText,
+              hitFeedbackColor: hitFeedbackColor,
+              hitFeedbackTime: hitFeedbackTime,
+              hitFeedbackLane: hitFeedbackLane,
             ),
             size: Size(constraints.maxWidth, constraints.maxHeight),
           ),
@@ -1424,6 +1767,12 @@ class _NoteHighwayPainter extends CustomPainter {
   final Color primaryColor;
   final bool showStreakFire;
   final int combo;
+  final int? lightningLane;
+  final List<_Particle> particles;
+  final String? hitFeedbackText;
+  final Color? hitFeedbackColor;
+  final DateTime? hitFeedbackTime;
+  final int? hitFeedbackLane;
 
   _NoteHighwayPainter({
     required this.notes,
@@ -1436,6 +1785,12 @@ class _NoteHighwayPainter extends CustomPainter {
     required this.primaryColor,
     this.showStreakFire = false,
     this.combo = 0,
+    this.lightningLane,
+    this.particles = const [],
+    this.hitFeedbackText,
+    this.hitFeedbackColor,
+    this.hitFeedbackTime,
+    this.hitFeedbackLane,
   });
 
   @override
@@ -1551,6 +1906,25 @@ class _NoteHighwayPainter extends CustomPainter {
       }
     }
 
+    // Draw lightning lane effect
+    if (lightningLane != null) {
+      final lightningPaint = Paint()
+        ..color = const Color(0xFF00BFFF).withValues(alpha: 0.15)
+        ..style = PaintingStyle.fill;
+      canvas.drawRect(
+        Rect.fromLTWH(lightningLane! * laneWidth, 0, laneWidth, size.height),
+        lightningPaint,
+      );
+
+      // Lightning bolt line down the center
+      final boltPaint = Paint()
+        ..color = const Color(0xFF00BFFF).withValues(alpha: 0.6)
+        ..strokeWidth = 3
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 8 * scaleFactor);
+      final boltX = lightningLane! * laneWidth + laneWidth / 2;
+      canvas.drawLine(Offset(boltX, 0), Offset(boltX, hitLineY), boltPaint);
+    }
+
     // Draw notes
     final notePaint = Paint()..style = PaintingStyle.fill;
     final noteGlowPaint = Paint()
@@ -1563,19 +1937,85 @@ class _NoteHighwayPainter extends CustomPainter {
       final noteY = hitLineY - (progress * hitLineY);
       final noteX = lane * laneWidth + laneWidth / 2;
 
-      final color = laneColors[lane];
+      if (note.isBonus) {
+        // Golden bonus note
+        const bonusGold = Color(0xFFFFD700);
+        const bonusOrange = Color(0xFFFF8C00);
 
-      // Glow
-      noteGlowPaint.color = color.withValues(alpha: 0.4);
-      canvas.drawCircle(Offset(noteX, noteY), noteGlowRadius, noteGlowPaint);
+        // Larger glow for bonus
+        noteGlowPaint.color = bonusGold.withValues(alpha: 0.6);
+        canvas.drawCircle(Offset(noteX, noteY), noteGlowRadius * 1.8, noteGlowPaint);
 
-      // Note (scales for portrait mode)
-      notePaint.color = color;
-      canvas.drawCircle(Offset(noteX, noteY), noteRadius, notePaint);
+        // Star shape or diamond for bonus
+        notePaint.color = bonusGold;
+        canvas.drawCircle(Offset(noteX, noteY), noteRadius * 1.4, notePaint);
 
-      // Inner highlight
-      notePaint.color = Colors.white.withValues(alpha: 0.4);
-      canvas.drawCircle(Offset(noteX - highlightOffset, noteY - highlightOffset), highlightRadius, notePaint);
+        // Inner glow
+        notePaint.color = bonusOrange;
+        canvas.drawCircle(Offset(noteX, noteY), noteRadius * 0.8, notePaint);
+
+        // Sparkle highlight
+        notePaint.color = Colors.white.withValues(alpha: 0.8);
+        canvas.drawCircle(Offset(noteX - highlightOffset * 1.5, noteY - highlightOffset * 1.5), highlightRadius * 1.2, notePaint);
+      } else {
+        final color = laneColors[lane];
+
+        // Glow
+        noteGlowPaint.color = color.withValues(alpha: 0.4);
+        canvas.drawCircle(Offset(noteX, noteY), noteGlowRadius, noteGlowPaint);
+
+        // Note (scales for portrait mode)
+        notePaint.color = color;
+        canvas.drawCircle(Offset(noteX, noteY), noteRadius, notePaint);
+
+        // Inner highlight
+        notePaint.color = Colors.white.withValues(alpha: 0.4);
+        canvas.drawCircle(Offset(noteX - highlightOffset, noteY - highlightOffset), highlightRadius, notePaint);
+      }
+    }
+
+    // Draw particles
+    for (final particle in particles) {
+      final particlePaint = Paint()
+        ..color = particle.color.withValues(alpha: particle.opacity)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(
+        Offset(particle.x * size.width, particle.y * size.height),
+        particle.size,
+        particlePaint,
+      );
+    }
+
+    // Draw hit feedback text
+    if (hitFeedbackText != null && hitFeedbackTime != null && hitFeedbackLane != null) {
+      final age = DateTime.now().difference(hitFeedbackTime!).inMilliseconds;
+      if (age < 400) {
+        final opacity = 1.0 - (age / 400.0);
+        final yOffset = age * 0.08; // Float upward
+
+        final textPainter = TextPainter(
+          text: TextSpan(
+            text: hitFeedbackText,
+            style: TextStyle(
+              color: (hitFeedbackColor ?? Colors.white).withValues(alpha: opacity),
+              fontSize: 16 * scaleFactor,
+              fontWeight: FontWeight.bold,
+              shadows: [
+                Shadow(
+                  color: Colors.black.withValues(alpha: opacity * 0.5),
+                  blurRadius: 4,
+                ),
+              ],
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        );
+        textPainter.layout();
+
+        final feedbackX = hitFeedbackLane! * laneWidth + laneWidth / 2 - textPainter.width / 2;
+        final feedbackY = hitLineY - 50 - yOffset;
+        textPainter.paint(canvas, Offset(feedbackX, feedbackY));
+      }
     }
   }
 

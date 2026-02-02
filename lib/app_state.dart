@@ -1192,6 +1192,17 @@ class NautuneAppState extends ChangeNotifier {
       _networkAvailable = false;
       // Note: isOfflineMode getter automatically returns true when !_networkAvailable
       debugPrint('Network lost while syncing: $error');
+
+      // Reset all loading flags to prevent stuck states (especially in CarPlay)
+      _isLoadingLibraries = false;
+      _isLoadingAlbums = false;
+      _isLoadingArtists = false;
+      _isLoadingPlaylists = false;
+      _isLoadingFavorites = false;
+      _isLoadingRecent = false;
+      _isLoadingRecentlyAdded = false;
+      _isLoadingRecentlyPlayed = false;
+
       notifyListeners();
     }
   }

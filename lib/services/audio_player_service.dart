@@ -794,6 +794,9 @@ class AudioPlayerService {
           //    if player was already playing when attached
           _playingController.add(true);
           _lastPlayingState = true;
+
+          // 8. Force OS media controls to update (fixes lock screen grayed out button)
+          await _audioHandler?.forcePlayingState();
           
           // Immediately update duration from metadata
           if (nextTrack.duration != null) {
