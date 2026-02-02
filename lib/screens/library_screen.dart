@@ -1872,26 +1872,28 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
     // Only show if user has connected and enabled scrobbling
     if (!listenBrainz.isConfigured) {
       debugPrint('🎵 ListenBrainz Discovery: Not configured, skipping');
-      setState(() => _hasChecked = true);
+      if (mounted) setState(() => _hasChecked = true);
       return;
     }
     if (!listenBrainz.isScrobblingEnabled) {
       debugPrint('🎵 ListenBrainz Discovery: Scrobbling disabled, skipping');
-      setState(() => _hasChecked = true);
+      if (mounted) setState(() => _hasChecked = true);
       return;
     }
     debugPrint('🎵 ListenBrainz Discovery: User ${listenBrainz.username} is configured, fetching...');
 
-    setState(() => _isLoading = true);
+    if (mounted) setState(() => _isLoading = true);
 
     try {
       // Use efficient batch matching - stops early when we have enough matches
       final libraryId = widget.appState.selectedLibraryId;
       if (libraryId == null) {
-        setState(() {
-          _isLoading = false;
-          _hasChecked = true;
-        });
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _hasChecked = true;
+          });
+        }
         return;
       }
 
