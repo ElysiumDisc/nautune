@@ -612,9 +612,11 @@ Nautune follows a clean data structure on Linux for easy backups and management:
 <img src="screenshots/linux-ipad8.png" width="400" alt="Nautune Lyrics">
 
 ### iOS
+<img src="screenshots/ios4.png" width="250" alt="Frets on Fire Game Mode">
 <img src="screenshots/ios5.png" width="250" alt="Nautune on iOS">
 <img src="screenshots/ios6.png" width="250" alt="Nautune on iOS">
 <img src="screenshots/ios7.jpg" width="250" alt="Nautune on iOS">
+<img src="screenshots/ios8.png" width="250" alt="Relax Mode">
 <img src="screenshots/ios9.jpg" width="250" alt="Nautune on iOS">
 
 ### CarPlay
