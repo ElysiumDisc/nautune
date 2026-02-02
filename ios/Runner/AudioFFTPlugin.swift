@@ -35,9 +35,9 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private var magnitudesBuffer: [Float]
     private var spectrumBuffer: [Float]
 
-    // Throttling at native level (~30fps max)
+    // Throttling at native level (~20fps max for battery optimization)
     private var lastEmitTime: CFTimeInterval = 0
-    private let minEmitInterval: CFTimeInterval = 0.033  // ~30fps
+    private let minEmitInterval: CFTimeInterval = 0.050  // ~20fps (was 30fps)
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         let instance = AudioFFTPlugin()
@@ -257,8 +257,10 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
     private func startSyncTimer() {
         // Start position sync timer if not already running
+        // Using 1.0 second interval instead of 0.5s for battery optimization
+        // Sync accuracy is still acceptable for visualizer purposes
         if syncTimer == nil {
-            syncTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            syncTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
                 self?.checkSync()
             }
         }

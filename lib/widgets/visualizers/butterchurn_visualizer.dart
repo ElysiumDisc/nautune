@@ -456,5 +456,24 @@ class _ButterchurnPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _ButterchurnPainter old) => true;
+  bool shouldRepaint(covariant _ButterchurnPainter old) {
+    // Threshold-based repaint for battery optimization
+    const tolerance = 0.01;
+    const timeTolerance = 0.05; // Skip frames during slow animations
+
+    // Always repaint if preset changed or trail points changed significantly
+    if (preset != old.preset || trailPoints.length != old.trailPoints.length) {
+      return true;
+    }
+
+    // Skip if nothing meaningful changed
+    if ((time - old.time).abs() < timeTolerance &&
+        (bass - old.bass).abs() < tolerance &&
+        (mid - old.mid).abs() < tolerance &&
+        (treble - old.treble).abs() < tolerance &&
+        (amplitude - old.amplitude).abs() < tolerance) {
+      return false;
+    }
+    return true;
+  }
 }

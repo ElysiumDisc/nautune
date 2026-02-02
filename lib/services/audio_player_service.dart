@@ -2014,7 +2014,10 @@ class AudioPlayerService {
 
   void _startPositionSaving() {
     _positionSaveTimer?.cancel();
-    _positionSaveTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    // iOS: Save every 3 seconds to reduce battery drain (wakeups)
+    // Other platforms: Save every 1 second for better accuracy
+    final interval = Platform.isIOS ? const Duration(seconds: 3) : const Duration(seconds: 1);
+    _positionSaveTimer = Timer.periodic(interval, (_) {
       _saveCurrentPosition();
     });
   }

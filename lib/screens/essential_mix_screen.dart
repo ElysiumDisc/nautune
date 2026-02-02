@@ -59,9 +59,11 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
   static final double _decayFactor = Platform.isIOS ? 0.25 : 0.12;
   static const double _rotationSpeed = 0.02; // Radians per FFT frame
 
-  // Frame rate throttling for FFT updates (~30fps)
+  // Frame rate throttling for FFT updates
+  // iOS: 20fps (50ms) for battery optimization
+  // Other: 30fps (33ms)
   DateTime _lastFrameTime = DateTime.now();
-  static const _frameInterval = Duration(milliseconds: 33);
+  static final _frameInterval = Duration(milliseconds: Platform.isIOS ? 50 : 33);
 
   // Throttle position updates on iOS to reduce rebuilds
   DateTime _lastPositionUpdate = DateTime.now();
@@ -167,20 +169,28 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     _initPowerModeListener();
   }
 
-  void _initPowerModeListener() {
+  void _initPowerModeListener() async {
     if (!Platform.isIOS) return;
 
     final powerService = PowerModeService.instance;
 
-    // Check initial state
+    // Ensure PowerModeService is initialized before checking state
+    await powerService.initialize();
+
+    // Check initial state - visualizer ON by default, OFF only if low power mode
     _visualizerEnabled = !powerService.isLowPowerMode;
 
     // Listen for changes
     _powerModeSubscription = powerService.lowPowerModeStream.listen((isLowPower) {
-      if (mounted) {
-        setState(() {
-          _visualizerEnabled = !isLowPower;
-        });
+      if (!mounted) return;
+
+      final wasEnabled = _visualizerEnabled;
+      _visualizerEnabled = !isLowPower;
+
+      // Only rebuild if state actually changed
+      if (wasEnabled != _visualizerEnabled) {
+        setState(() {});
+
         // Stop FFT capture if entering low power mode
         if (isLowPower && _isPlaying) {
           _stopFFT(resetLevels: true);
@@ -200,13 +210,38 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     }
   }
 
+  // Track previous download state to avoid unnecessary rebuilds
+  bool _wasDownloading = false;
+  bool _wasDownloaded = false;
+  double _lastReportedProgress = 0.0;
+
   void _onServiceChanged() {
-    if (mounted) {
+    if (!mounted) return;
+
+    // Only rebuild on meaningful state changes, not every progress tick
+    final isDownloading = _service.isDownloading;
+    final isDownloaded = _service.isDownloaded;
+    final progress = _service.downloadProgress;
+
+    // Rebuild when:
+    // 1. Download state changed (started/stopped/completed)
+    // 2. During download: only every 5% progress to update indicator
+    final stateChanged = (isDownloading != _wasDownloading) ||
+        (isDownloaded != _wasDownloaded);
+    final progressChanged = isDownloading &&
+        (progress - _lastReportedProgress).abs() >= 0.05;
+
+    _wasDownloading = isDownloading;
+    _wasDownloaded = isDownloaded;
+    if (progressChanged) _lastReportedProgress = progress;
+
+    if (stateChanged || progressChanged) {
       setState(() {});
-      // When download completes, extract waveform
-      if (_service.isDownloaded && _waveformData == null && !_isExtractingWaveform) {
-        _extractWaveform();
-      }
+    }
+
+    // When download completes, extract waveform
+    if (isDownloaded && _waveformData == null && !_isExtractingWaveform) {
+      _extractWaveform();
     }
   }
 

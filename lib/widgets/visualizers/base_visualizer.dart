@@ -38,9 +38,11 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
   double _targetAmplitude = 0.0;
   List<double> _targetSpectrum = [];
 
-  // Frame rate throttling (30fps for battery savings)
+  // Frame rate throttling for battery savings
+  // iOS: 20fps (50ms) - more aggressive throttling for battery
+  // Other: 30fps (33ms)
   DateTime _lastFrameTime = DateTime.now();
-  static const _frameInterval = Duration(milliseconds: 33); // ~30fps
+  static final _frameInterval = Duration(milliseconds: Platform.isIOS ? 50 : 33);
 
   // Cached values for frame skipping
   double lastPaintedTime = 0;

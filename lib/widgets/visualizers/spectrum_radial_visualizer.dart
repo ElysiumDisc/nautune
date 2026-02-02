@@ -228,5 +228,20 @@ class _SpectrumRadialPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _SpectrumRadialPainter old) => true;
+  bool shouldRepaint(covariant _SpectrumRadialPainter old) {
+    // Threshold-based repaint for battery optimization
+    // Always repaint if time changed significantly (animation) or audio values changed
+    const tolerance = 0.01;
+    const timeTolerance = 0.05; // Skip frames during slow animations
+
+    // Skip if nothing meaningful changed
+    if ((time - old.time).abs() < timeTolerance &&
+        (bass - old.bass).abs() < tolerance &&
+        (mid - old.mid).abs() < tolerance &&
+        (treble - old.treble).abs() < tolerance &&
+        (amplitude - old.amplitude).abs() < tolerance) {
+      return false;
+    }
+    return true;
+  }
 }
