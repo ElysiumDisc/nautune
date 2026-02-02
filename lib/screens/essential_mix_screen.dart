@@ -33,9 +33,11 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
 
   bool _isPlaying = false;
   bool _isLoading = false;
-  Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   String? _errorMessage;
+
+  // Position notifier for iOS performance - avoids full rebuilds on position change
+  final ValueNotifier<Duration> _positionNotifier = ValueNotifier(Duration.zero);
 
   // Listening time tracking
   DateTime? _playStartTime;
@@ -109,7 +111,7 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
       }
     });
 
-    // Position updates - throttled on iOS to reduce rebuilds
+    // Position updates - use ValueNotifier on iOS to avoid full rebuilds
     _audioPlayer.onPositionChanged.listen((position) {
       if (!mounted) return;
 
@@ -117,15 +119,19 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
       if (Platform.isIOS) {
         final now = DateTime.now();
         if (now.difference(_lastPositionUpdate) < _positionUpdateInterval) {
-          _position = position; // Update internally but don't rebuild
+          _positionNotifier.value = position; // Update notifier but don't rebuild screen
           return;
         }
         _lastPositionUpdate = now;
       }
 
-      setState(() {
-        _position = position;
-      });
+      // Update position notifier (triggers ValueListenableBuilder rebuilds only)
+      _positionNotifier.value = position;
+
+      // On non-iOS, also call setState for any widgets not using the notifier
+      if (!Platform.isIOS) {
+        setState(() {});
+      }
     });
 
     // Duration updates
@@ -140,9 +146,9 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     // Player completion
     _audioPlayer.onPlayerComplete.listen((_) {
       if (mounted) {
+        _positionNotifier.value = Duration.zero;
         setState(() {
           _isPlaying = false;
-          _position = Duration.zero;
         });
         _recordListenTime();
         _stopFFT();
@@ -212,6 +218,7 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     _powerModeSubscription?.cancel();
     _artworkController.dispose();
     _fftNotifier.dispose();
+    _positionNotifier.dispose();
     _audioPlayer.dispose();
     _service.removeListener(_onServiceChanged);
     super.dispose();
@@ -486,9 +493,6 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final progress = _duration.inMilliseconds > 0
-        ? _position.inMilliseconds / _duration.inMilliseconds
-        : 0.0;
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
@@ -566,45 +570,54 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
                 const SizedBox(height: 24),
 
                 // Seekable waveform/progress bar (combined)
+                // Wrapped in ValueListenableBuilder to avoid full screen rebuilds on iOS
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child: Column(
-                    children: [
-                      // Seekable waveform or simple progress bar
-                      GestureDetector(
-                        onTapDown: (details) => _seekFromTap(details.localPosition.dx, context),
-                        onHorizontalDragUpdate: (details) => _seekFromTap(details.localPosition.dx, context),
-                        child: SizedBox(
-                          height: 56,
-                          child: _waveformData != null
-                              ? _buildSeekableWaveform(theme, progress)
-                              : _buildSimpleProgressBar(theme, progress),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              _formatDuration(_position),
-                              style: TextStyle(
-                                color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                                fontSize: 12,
-                              ),
+                  child: ValueListenableBuilder<Duration>(
+                    valueListenable: _positionNotifier,
+                    builder: (context, position, _) {
+                      final localProgress = _duration.inMilliseconds > 0
+                          ? position.inMilliseconds / _duration.inMilliseconds
+                          : 0.0;
+                      return Column(
+                        children: [
+                          // Seekable waveform or simple progress bar
+                          GestureDetector(
+                            onTapDown: (details) => _seekFromTap(details.localPosition.dx, context),
+                            onHorizontalDragUpdate: (details) => _seekFromTap(details.localPosition.dx, context),
+                            child: SizedBox(
+                              height: 56,
+                              child: _waveformData != null
+                                  ? _buildSeekableWaveform(theme, localProgress)
+                                  : _buildSimpleProgressBar(theme, localProgress),
                             ),
-                            Text(
-                              _formatDuration(_duration),
-                              style: TextStyle(
-                                color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                                fontSize: 12,
-                              ),
+                          ),
+                          const SizedBox(height: 8),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  _formatDuration(position),
+                                  style: TextStyle(
+                                    color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                                    fontSize: 12,
+                                  ),
+                                ),
+                                Text(
+                                  _formatDuration(_duration),
+                                  style: TextStyle(
+                                    color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                      ),
-                    ],
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
 

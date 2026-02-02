@@ -141,8 +141,28 @@ class ChartGeneratorService {
         return null;
       }
 
-      final samples = result['samples'] as Float64List?;
-      if (samples == null || samples.isEmpty) {
+      // iOS returns List<dynamic> which needs to be converted to Float64List
+      final rawSamples = result['samples'];
+      if (rawSamples == null) {
+        debugPrint('🎮 ChartGenerator: No samples in result');
+        return null;
+      }
+
+      // Convert from List<dynamic> (List<double>) to Float64List
+      Float64List samples;
+      if (rawSamples is Float64List) {
+        samples = rawSamples;
+      } else if (rawSamples is List) {
+        samples = Float64List(rawSamples.length);
+        for (int i = 0; i < rawSamples.length; i++) {
+          samples[i] = (rawSamples[i] as num).toDouble();
+        }
+      } else {
+        debugPrint('🎮 ChartGenerator: Unexpected samples type: ${rawSamples.runtimeType}');
+        return null;
+      }
+
+      if (samples.isEmpty) {
         debugPrint('🎮 ChartGenerator: No samples decoded');
         return null;
       }
