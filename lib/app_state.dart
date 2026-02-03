@@ -2557,6 +2557,7 @@ class NautuneAppState extends ChangeNotifier {
     _periodicSyncTimer?.cancel();
     _demoModeProvider?.removeListener(_onDemoModeChanged);
     _sessionProvider?.removeListener(_onSessionChanged);
+    _carPlayService?.dispose();
     super.dispose();
   }
 

@@ -1364,20 +1364,21 @@ class AudioPlayerService {
   Future<void> _fadeOutAndPause() async {
     _crossfadeTimer?.cancel();
     _crossfadeTimer = null;
-    
+
     // Quick fade out (gentler: 400ms total, 20Hz update rate)
     const steps = 8;
-    const stepDuration = Duration(milliseconds: 50); 
+    const stepDuration = Duration(milliseconds: 50);
     final startVolume = _volume;
-    
+    final currentMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
+
     for (int i = 0; i < steps; i++) {
       final vol = startVolume * (1.0 - ((i + 1) / steps));
-      await _player.setVolume(vol);
+      await _player.setVolume((vol * currentMultiplier).clamp(0.0, 1.0));
       await Future.delayed(stepDuration);
     }
-    
+
     await _player.pause();
-    await _player.setVolume(startVolume); // Restore for next play
+    await _player.setVolume((startVolume * currentMultiplier).clamp(0.0, 1.0)); // Restore for next play
   }
 
   Future<void> _resumeAndFadeIn() async {
@@ -1392,10 +1393,11 @@ class AudioPlayerService {
     const steps = 8;
     const stepDuration = Duration(milliseconds: 50);
     final targetVolume = _volume;
+    final currentMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
 
     for (int i = 0; i <= steps; i++) {
       final vol = targetVolume * (i / steps);
-      await _player.setVolume(vol);
+      await _player.setVolume((vol * currentMultiplier).clamp(0.0, 1.0));
       await Future.delayed(stepDuration);
     }
   }

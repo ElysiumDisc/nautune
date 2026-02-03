@@ -15,6 +15,8 @@ class CarPlayService {
   bool _isConnected = false;
   StreamSubscription? _playbackSubscription;
   Timer? _refreshDebounceTimer;
+  bool _hasEverConnected = false;
+  int _navigationDepth = 0;
 
   // Pagination limits for CarPlay (prevents performance issues with large libraries)
   static const int _maxItemsPerPage = 100;
@@ -24,7 +26,7 @@ class CarPlayService {
   bool get isConnected => _isConnected;
 
   /// Returns true if user is at the CarPlay root level (no pushed templates)
-  bool get _isAtRootLevel => FlutterCarPlayController.templateHistory.length <= 1;
+  bool get _isAtRootLevel => _navigationDepth == 0;
   
   /// Call this after the app is fully loaded
   Future<void> initialize() async {
@@ -72,12 +74,23 @@ class CarPlayService {
   void _onCarPlayConnect() {
     _isConnected = true;
     debugPrint('🚗 CarPlay connected');
-    // Refresh content when CarPlay connects
-    _refreshRootTemplate();
+
+    // Only refresh root template on true first connection
+    // Skip if we've connected before (resuming from background) and user is navigating
+    if (!_hasEverConnected) {
+      _hasEverConnected = true;
+      _refreshRootTemplate();
+    } else if (_navigationDepth == 0) {
+      // Only refresh if user is at root level (not navigating)
+      _refreshRootTemplate();
+    } else {
+      debugPrint('🚗 CarPlay: Skipping refresh - user is navigating (depth: $_navigationDepth)');
+    }
   }
   
   void _onCarPlayDisconnect() {
     _isConnected = false;
+    _navigationDepth = 0;
     debugPrint('🚗 CarPlay disconnected');
   }
   
@@ -105,7 +118,17 @@ class CarPlayService {
   
   Future<void> _refreshRootTemplate() async {
     if (!_isInitialized || !_isConnected) return;
+
+    // Don't refresh if user is navigating
+    if (_navigationDepth > 0) {
+      debugPrint('🔄 CarPlay: Skipping root refresh - user is navigating (depth: $_navigationDepth)');
+      return;
+    }
+
     try {
+      // Clear template history before setting root to prevent history accumulation
+      FlutterCarPlayController.templateHistory.clear();
+
       final rootTemplate = _buildRootTemplate();
       await FlutterCarplay.setRootTemplate(
         rootTemplate: rootTemplate,
@@ -341,6 +364,7 @@ class CarPlayService {
           systemIcon: 'music.note.list',
         ),
       );
+      _navigationDepth++;
     } catch (e) {
       debugPrint('⚠️ CarPlay push Albums failed: $e');
     }
@@ -422,6 +446,7 @@ class CarPlayService {
           systemIcon: 'music.mic',
         ),
       );
+      _navigationDepth++;
     } catch (e) {
       debugPrint('⚠️ CarPlay push Artists failed: $e');
     }
@@ -500,6 +525,7 @@ class CarPlayService {
           systemIcon: 'music.note.list',
         ),
       );
+      _navigationDepth++;
     } catch (e) {
       debugPrint('⚠️ CarPlay push Playlists failed: $e');
     }
@@ -542,6 +568,7 @@ class CarPlayService {
           systemIcon: 'music.note',
         ),
       );
+      _navigationDepth++;
     } catch (e) {
       debugPrint('⚠️ CarPlay push AlbumTracks failed: $e');
     }
@@ -601,6 +628,7 @@ class CarPlayService {
           systemIcon: 'music.note.list',
         ),
       );
+      _navigationDepth++;
     } catch (e) {
       debugPrint('⚠️ CarPlay push ArtistAlbums failed: $e');
     }
@@ -641,6 +669,7 @@ class CarPlayService {
           systemIcon: 'music.note',
         ),
       );
+      _navigationDepth++;
     } catch (e) {
       debugPrint('⚠️ CarPlay push PlaylistTracks failed: $e');
     }
@@ -716,6 +745,7 @@ class CarPlayService {
           systemIcon: 'heart.fill',
         ),
       );
+      _navigationDepth++;
     } catch (e) {
       debugPrint('⚠️ CarPlay push Favorites failed: $e');
     }
@@ -790,6 +820,7 @@ class CarPlayService {
           systemIcon: 'clock.fill',
         ),
       );
+      _navigationDepth++;
     } catch (e) {
       debugPrint('⚠️ CarPlay push RecentlyPlayed failed: $e');
     }
@@ -851,6 +882,7 @@ class CarPlayService {
           systemIcon: 'arrow.down.circle',
         ),
       );
+      _navigationDepth++;
     } catch (e) {
       debugPrint('⚠️ CarPlay push Downloads failed: $e');
     }
@@ -879,6 +911,7 @@ class CarPlayService {
           systemIcon: 'exclamationmark.circle',
         ),
       );
+      _navigationDepth++;
     } catch (e) {
       debugPrint('⚠️ CarPlay push EmptyState failed: $e');
     }
