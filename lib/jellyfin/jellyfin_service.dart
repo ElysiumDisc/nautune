@@ -1036,6 +1036,30 @@ class JellyfinService {
     )).toList();
   }
 
+  /// Get random tracks by artist (for artist instant mix)
+  Future<List<JellyfinTrack>> getArtistMix({
+    required String artistId,
+    int limit = 50,
+  }) async {
+    final client = _client;
+    if (client == null) throw StateError('Not connected');
+    final session = _session;
+    if (session == null) throw StateError('No session');
+
+    final tracksJson = await client.fetchTracksByArtist(
+      session.credentials,
+      artistId: artistId,
+      limit: limit,
+    );
+
+    return tracksJson.map((json) => JellyfinTrack.fromJson(
+      json,
+      serverUrl: session.serverUrl,
+      token: session.credentials.accessToken,
+      userId: session.credentials.userId,
+    )).toList();
+  }
+
   /// Get playback info for an item (formats, bitrates, codecs)
   Future<Map<String, dynamic>> getPlaybackInfo(String itemId) async {
     final client = _client;

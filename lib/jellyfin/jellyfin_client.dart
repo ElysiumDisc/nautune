@@ -830,6 +830,38 @@ class JellyfinClient {
     return items.whereType<Map<String, dynamic>>().toList();
   }
 
+  /// Fetches random tracks by artist ID (for artist instant mix)
+  Future<List<Map<String, dynamic>>> fetchTracksByArtist(
+    JellyfinCredentials credentials, {
+    required String artistId,
+    int limit = 50,
+  }) async {
+    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+      'ArtistIds': artistId,
+      'IncludeItemTypes': 'Audio',
+      'Recursive': 'true',
+      'SortBy': 'Random',
+      'Limit': '$limit',
+      'Fields': 'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags',
+    });
+
+    final response = await _robustClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch tracks by artist: ${response.statusCode}',
+      );
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final items = data?['Items'] as List<dynamic>? ?? const [];
+
+    return items.whereType<Map<String, dynamic>>().toList();
+  }
+
   /// Fetches playback info for an item
   Future<Map<String, dynamic>> fetchPlaybackInfo(
     JellyfinCredentials credentials, {

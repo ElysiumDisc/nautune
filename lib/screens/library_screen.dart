@@ -1058,6 +1058,16 @@ class _AlbumsTab extends StatelessWidget {
 
           // List mode rendering
           if (useListMode) {
+            // Only show section headers when sorted by name
+            final showHeaders = appState.albumSortBy == SortOption.name;
+            final letterGroups = showHeaders
+                ? AlphabetSectionBuilder.groupByLetter<JellyfinAlbum>(
+                    albums!,
+                    (album) => album.name,
+                    appState.albumSortOrder,
+                  )
+                : <(String, List<JellyfinAlbum>)>[];
+
             return Stack(
               children: [
                 CustomScrollView(
@@ -1065,22 +1075,51 @@ class _AlbumsTab extends StatelessWidget {
                   slivers: [
                     SliverPadding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
-                      sliver: SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                          (context, index) {
-                            if (index >= albums!.length) {
-                              return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
-                            }
-                            final album = albums![index];
-                            return _AlbumListTile(
-                              album: album,
-                              onTap: () => onAlbumTap(album),
-                              appState: appState,
-                            );
-                          },
-                          childCount: albums!.length + (isLoadingMore ? 1 : 0),
-                        ),
-                      ),
+                      sliver: showHeaders
+                          ? SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  // Calculate which group and item we're at
+                                  int currentIndex = 0;
+                                  for (final (letter, items) in letterGroups) {
+                                    // Header
+                                    if (index == currentIndex) {
+                                      return _AlphabetSectionHeader(letter: letter);
+                                    }
+                                    currentIndex++;
+                                    // Items in this group
+                                    if (index < currentIndex + items.length) {
+                                      final album = items[index - currentIndex];
+                                      return _AlbumListTile(
+                                        album: album,
+                                        onTap: () => onAlbumTap(album),
+                                        appState: appState,
+                                      );
+                                    }
+                                    currentIndex += items.length;
+                                  }
+                                  // Loading indicator
+                                  return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
+                                },
+                                childCount: letterGroups.fold(0, (sum, g) => sum + 1 + g.$2.length) + (isLoadingMore ? 1 : 0),
+                              ),
+                            )
+                          : SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  if (index >= albums!.length) {
+                                    return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
+                                  }
+                                  final album = albums![index];
+                                  return _AlbumListTile(
+                                    album: album,
+                                    onTap: () => onAlbumTap(album),
+                                    appState: appState,
+                                  );
+                                },
+                                childCount: albums!.length + (isLoadingMore ? 1 : 0),
+                              ),
+                            ),
                     ),
                   ],
                 ),
@@ -1098,44 +1137,90 @@ class _AlbumsTab extends StatelessWidget {
           }
 
           // Grid mode rendering
+          final showGridHeaders = appState.albumSortBy == SortOption.name;
+          final gridLetterGroups = showGridHeaders
+              ? AlphabetSectionBuilder.groupByLetter<JellyfinAlbum>(
+                  albums!,
+                  (album) => album.name,
+                  appState.albumSortOrder,
+                )
+              : <(String, List<JellyfinAlbum>)>[];
+          final itemHeight = ((constraints.maxWidth - 32 - (crossAxisCount - 1) * 16) / crossAxisCount) / 0.75 + 16;
+
           return Stack(
             children: [
               CustomScrollView(
                 controller: scrollController,
-                slivers: [
-                  // Albums grid
-                  SliverPadding(
-                    padding: const EdgeInsets.all(16),
-                    sliver: SliverGrid(
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: crossAxisCount,
-                        childAspectRatio: 0.75,
-                        crossAxisSpacing: 16,
-                        mainAxisSpacing: 16,
-                      ),
-                      delegate: SliverChildBuilderDelegate(
-                        (context, index) {
-                          if (index >= albums!.length) {
-                            return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
-                          }
-                          final album = albums![index];
-                          return _AlbumCard(
-                            album: album,
-                            onTap: () => onAlbumTap(album),
-                            appState: appState,
-                          );
-                        },
-                        childCount: albums!.length + (isLoadingMore ? 2 : 0),
-                      ),
-                    ),
-                  ),
-                ],
+                slivers: showGridHeaders
+                    ? [
+                        // Build alternating headers and grids for each letter group
+                        for (final (letter, items) in gridLetterGroups) ...[
+                          SliverToBoxAdapter(
+                            child: _AlphabetSectionHeader(letter: letter),
+                          ),
+                          SliverPadding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            sliver: SliverGrid(
+                              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: crossAxisCount,
+                                childAspectRatio: 0.75,
+                                crossAxisSpacing: 16,
+                                mainAxisSpacing: 16,
+                              ),
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  if (index >= items.length) return null;
+                                  final album = items[index];
+                                  return _AlbumCard(
+                                    album: album,
+                                    onTap: () => onAlbumTap(album),
+                                    appState: appState,
+                                  );
+                                },
+                                childCount: items.length,
+                              ),
+                            ),
+                          ),
+                        ],
+                        if (isLoadingMore)
+                          const SliverToBoxAdapter(
+                            child: Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator())),
+                          ),
+                      ]
+                    : [
+                        // Original single grid without headers
+                        SliverPadding(
+                          padding: const EdgeInsets.all(16),
+                          sliver: SliverGrid(
+                            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: crossAxisCount,
+                              childAspectRatio: 0.75,
+                              crossAxisSpacing: 16,
+                              mainAxisSpacing: 16,
+                            ),
+                            delegate: SliverChildBuilderDelegate(
+                              (context, index) {
+                                if (index >= albums!.length) {
+                                  return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
+                                }
+                                final album = albums![index];
+                                return _AlbumCard(
+                                  album: album,
+                                  onTap: () => onAlbumTap(album),
+                                  appState: appState,
+                                );
+                              },
+                              childCount: albums!.length + (isLoadingMore ? 2 : 0),
+                            ),
+                          ),
+                        ),
+                      ],
               ),
               AlphabetScrollbar(
                 items: albums!,
                 getItemName: (album) => (album as JellyfinAlbum).name,
                 scrollController: scrollController,
-                itemHeight: ((constraints.maxWidth - 32 - (crossAxisCount - 1) * 16) / crossAxisCount) / 0.75 + 16,
+                itemHeight: itemHeight,
                 crossAxisCount: crossAxisCount,
                 sortOrder: appState.albumSortOrder,
                 sortBy: appState.albumSortBy,
@@ -4114,6 +4199,17 @@ class _ArtistsTab extends StatelessWidget {
           final controller = scrollController ?? ScrollController();
 
           // List mode rendering
+          final effectiveSortBy = artists != null ? SortOption.name : appState.artistSortBy;
+          final effectiveSortOrder = artists != null ? SortOrder.ascending : appState.artistSortOrder;
+          final showArtistHeaders = effectiveSortBy == SortOption.name;
+          final artistLetterGroups = showArtistHeaders
+              ? AlphabetSectionBuilder.groupByLetter<JellyfinArtist>(
+                  effectiveArtists,
+                  (artist) => artist.name,
+                  effectiveSortOrder,
+                )
+              : <(String, List<JellyfinArtist>)>[];
+
           if (useListMode) {
             return Stack(
               children: [
@@ -4122,23 +4218,39 @@ class _ArtistsTab extends StatelessWidget {
                   slivers: [
                     SliverPadding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
-                      sliver: SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                          (context, index) {
-                            if (index >= effectiveArtists.length) {
-                              return const Center(
-                                child: Padding(
-                                  padding: EdgeInsets.all(16.0),
-                                  child: CircularProgressIndicator(),
-                                ),
-                              );
-                            }
-                            final artist = effectiveArtists[index];
-                            return _ArtistListTile(artist: artist, appState: appState);
-                          },
-                          childCount: effectiveArtists.length + (effectiveIsLoadingMore ? 1 : 0),
-                        ),
-                      ),
+                      sliver: showArtistHeaders
+                          ? SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  int currentIndex = 0;
+                                  for (final (letter, items) in artistLetterGroups) {
+                                    if (index == currentIndex) {
+                                      return _AlphabetSectionHeader(letter: letter);
+                                    }
+                                    currentIndex++;
+                                    if (index < currentIndex + items.length) {
+                                      final artist = items[index - currentIndex];
+                                      return _ArtistListTile(artist: artist, appState: appState);
+                                    }
+                                    currentIndex += items.length;
+                                  }
+                                  return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
+                                },
+                                childCount: artistLetterGroups.fold(0, (sum, g) => sum + 1 + g.$2.length) + (effectiveIsLoadingMore ? 1 : 0),
+                              ),
+                            )
+                          : SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  if (index >= effectiveArtists.length) {
+                                    return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
+                                  }
+                                  final artist = effectiveArtists[index];
+                                  return _ArtistListTile(artist: artist, appState: appState);
+                                },
+                                childCount: effectiveArtists.length + (effectiveIsLoadingMore ? 1 : 0),
+                              ),
+                            ),
                     ),
                   ],
                 ),
@@ -4146,58 +4258,85 @@ class _ArtistsTab extends StatelessWidget {
                   items: effectiveArtists,
                   getItemName: (artist) => (artist as JellyfinArtist).name,
                   scrollController: controller,
-                  itemHeight: 72, // List tile height
+                  itemHeight: 72,
                   crossAxisCount: 1,
-                  sortOrder: artists != null ? SortOrder.ascending : appState.artistSortOrder,
-                  sortBy: artists != null ? SortOption.name : appState.artistSortBy,
+                  sortOrder: effectiveSortOrder,
+                  sortBy: effectiveSortBy,
                 ),
               ],
             );
           }
 
           // Grid mode rendering
+          final artistItemHeight = ((constraints.maxWidth - 32 - (crossAxisCount - 1) * 12) / crossAxisCount) / 0.75 + 12;
+
           return Stack(
             children: [
               CustomScrollView(
                 controller: controller,
-                slivers: [
-                  // Artists grid
-                  SliverPadding(
-                    padding: const EdgeInsets.all(16),
-                    sliver: SliverGrid(
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: crossAxisCount,
-                        childAspectRatio: 0.75,
-                        crossAxisSpacing: 12,
-                        mainAxisSpacing: 12,
-                      ),
-                      delegate: SliverChildBuilderDelegate(
-                        (context, index) {
-                          if (index >= effectiveArtists.length) {
-                            return const Center(
-                              child: Padding(
-                                padding: EdgeInsets.all(16.0),
-                                child: CircularProgressIndicator(),
+                slivers: showArtistHeaders
+                    ? [
+                        for (final (letter, items) in artistLetterGroups) ...[
+                          SliverToBoxAdapter(
+                            child: _AlphabetSectionHeader(letter: letter),
+                          ),
+                          SliverPadding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            sliver: SliverGrid(
+                              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: crossAxisCount,
+                                childAspectRatio: 0.75,
+                                crossAxisSpacing: 12,
+                                mainAxisSpacing: 12,
                               ),
-                            );
-                          }
-                          final artist = effectiveArtists[index];
-                          return _ArtistCard(artist: artist, appState: appState);
-                        },
-                        childCount: effectiveArtists.length + (effectiveIsLoadingMore ? 2 : 0),
-                      ),
-                    ),
-                  ),
-                ],
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  if (index >= items.length) return null;
+                                  final artist = items[index];
+                                  return _ArtistCard(artist: artist, appState: appState);
+                                },
+                                childCount: items.length,
+                              ),
+                            ),
+                          ),
+                        ],
+                        if (effectiveIsLoadingMore)
+                          const SliverToBoxAdapter(
+                            child: Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator())),
+                          ),
+                      ]
+                    : [
+                        SliverPadding(
+                          padding: const EdgeInsets.all(16),
+                          sliver: SliverGrid(
+                            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: crossAxisCount,
+                              childAspectRatio: 0.75,
+                              crossAxisSpacing: 12,
+                              mainAxisSpacing: 12,
+                            ),
+                            delegate: SliverChildBuilderDelegate(
+                              (context, index) {
+                                if (index >= effectiveArtists.length) {
+                                  return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
+                                }
+                                final artist = effectiveArtists[index];
+                                return _ArtistCard(artist: artist, appState: appState);
+                              },
+                              childCount: effectiveArtists.length + (effectiveIsLoadingMore ? 2 : 0),
+                            ),
+                          ),
+                        ),
+                      ],
               ),
               AlphabetScrollbar(
                 items: effectiveArtists,
                 getItemName: (artist) => (artist as JellyfinArtist).name,
                 scrollController: controller,
-                itemHeight: ((constraints.maxWidth - 32 - (crossAxisCount - 1) * 12) / crossAxisCount) / 0.75 + 12,
+                itemHeight: artistItemHeight,
                 crossAxisCount: crossAxisCount,
-                sortOrder: artists != null ? SortOrder.ascending : appState.artistSortOrder,
-                sortBy: artists != null ? SortOption.name : appState.artistSortBy,
+                sortOrder: effectiveSortOrder,
+                sortBy: effectiveSortBy,
               ),
             ],
           );
@@ -4346,28 +4485,50 @@ class _GenresTabState extends State<_GenresTab> {
           final uiState = context.watch<UIStateProvider>();
           final crossAxisCount = uiState.gridSize;
 
+          // Genres are always sorted by name
+          final genreLetterGroups = AlphabetSectionBuilder.groupByLetter<JellyfinGenre>(
+            genres,
+            (genre) => genre.name,
+            SortOrder.ascending,
+          );
+          final genreItemHeight = ((constraints.maxWidth - 32 - (crossAxisCount - 1) * 12) / crossAxisCount) / 1.5 + 12;
+
           return Stack(
             children: [
-              GridView.builder(
+              CustomScrollView(
                 controller: _genresScrollController,
-                padding: const EdgeInsets.all(16),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: crossAxisCount,
-                  childAspectRatio: 1.5,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                ),
-                itemCount: genres.length,
-                itemBuilder: (context, index) {
-                  final genre = genres[index];
-                  return _GenreCard(genre: genre, appState: widget.appState);
-                },
+                slivers: [
+                  for (final (letter, items) in genreLetterGroups) ...[
+                    SliverToBoxAdapter(
+                      child: _AlphabetSectionHeader(letter: letter),
+                    ),
+                    SliverPadding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      sliver: SliverGrid(
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: crossAxisCount,
+                          childAspectRatio: 1.5,
+                          crossAxisSpacing: 12,
+                          mainAxisSpacing: 12,
+                        ),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            if (index >= items.length) return null;
+                            final genre = items[index];
+                            return _GenreCard(genre: genre, appState: widget.appState);
+                          },
+                          childCount: items.length,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
               AlphabetScrollbar(
                 items: genres,
                 getItemName: (genre) => (genre as JellyfinGenre).name,
                 scrollController: _genresScrollController,
-                itemHeight: ((constraints.maxWidth - 32 - (crossAxisCount - 1) * 12) / crossAxisCount) / 1.5 + 12,
+                itemHeight: genreItemHeight,
                 crossAxisCount: crossAxisCount,
               ),
             ],
@@ -5487,6 +5648,120 @@ class _DownloadsTab extends StatelessWidget {
   }
 }
 
+/// Section header widget for alphabet groups
+class _AlphabetSectionHeader extends StatelessWidget {
+  const _AlphabetSectionHeader({required this.letter});
+  final String letter;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      alignment: Alignment.centerLeft,
+      child: Text(
+        letter,
+        style: theme.textTheme.titleMedium?.copyWith(
+          fontWeight: FontWeight.bold,
+          color: theme.colorScheme.primary,
+        ),
+      ),
+    );
+  }
+}
+
+/// Helper to build a flat list with section headers for SliverList
+class AlphabetSectionBuilder {
+  AlphabetSectionBuilder._();
+
+  /// Groups items by first letter and returns a list of (letter, items) pairs
+  static List<(String, List<T>)> groupByLetter<T>(
+    List<T> items,
+    String Function(T) getItemName,
+    SortOrder sortOrder,
+  ) {
+    if (items.isEmpty) return [];
+
+    final isAscending = sortOrder == SortOrder.ascending;
+
+    // Group items by first letter
+    final Map<String, List<T>> letterGroups = {};
+    for (final item in items) {
+      final name = getItemName(item).toUpperCase();
+      if (name.isEmpty) continue;
+      final firstChar = name[0];
+      final letter = RegExp(r'[0-9]').hasMatch(firstChar) ? '#' : firstChar;
+      letterGroups.putIfAbsent(letter, () => []).add(item);
+    }
+
+    // Sort letters
+    final sortedLetters = letterGroups.keys.toList()
+      ..sort((a, b) {
+        if (a == '#') return isAscending ? -1 : 1;
+        if (b == '#') return isAscending ? 1 : -1;
+        return isAscending ? a.compareTo(b) : b.compareTo(a);
+      });
+
+    return sortedLetters.map((letter) => (letter, letterGroups[letter]!)).toList();
+  }
+}
+
+/// Helper class to map letters to their positions in a list with section headers
+class LetterPositions {
+  LetterPositions._();
+
+  /// Build a map of letter -> flat index accounting for section headers
+  /// Returns (letterToFlatIndex, totalItemCount including headers)
+  static (Map<String, int>, int) buildWithHeaders(
+    List items,
+    String Function(dynamic) getItemName,
+    SortOrder sortOrder,
+  ) {
+    if (items.isEmpty) return ({}, 0);
+
+    final Map<String, int> letterToIndex = {};
+    final isAscending = sortOrder == SortOrder.ascending;
+
+    // Group items by first letter
+    final Map<String, List<int>> letterGroups = {};
+    for (int i = 0; i < items.length; i++) {
+      final name = getItemName(items[i]).toUpperCase();
+      if (name.isEmpty) continue;
+      final firstChar = name[0];
+      final letter = RegExp(r'[0-9]').hasMatch(firstChar) ? '#' : firstChar;
+      letterGroups.putIfAbsent(letter, () => []).add(i);
+    }
+
+    // Sort letters appropriately
+    final sortedLetters = letterGroups.keys.toList()
+      ..sort((a, b) {
+        // # comes first in ascending, last in descending
+        if (a == '#') return isAscending ? -1 : 1;
+        if (b == '#') return isAscending ? 1 : -1;
+        return isAscending ? a.compareTo(b) : b.compareTo(a);
+      });
+
+    // Calculate flat positions (each letter group adds 1 header)
+    int flatIndex = 0;
+    for (final letter in sortedLetters) {
+      letterToIndex[letter] = flatIndex;
+      flatIndex++; // The header
+      flatIndex += letterGroups[letter]!.length; // The items
+    }
+
+    return (letterToIndex, flatIndex);
+  }
+
+  /// Get the letter for an item at a given index
+  static String getLetterForItem(dynamic item, String Function(dynamic) getItemName) {
+    final name = getItemName(item).toUpperCase();
+    if (name.isEmpty) return '#';
+    final firstChar = name[0];
+    return RegExp(r'[0-9]').hasMatch(firstChar) ? '#' : firstChar;
+  }
+}
+
 // Alphabet scrollbar for quick navigation
 class AlphabetScrollbar extends StatefulWidget {
   const AlphabetScrollbar({
@@ -5498,6 +5773,8 @@ class AlphabetScrollbar extends StatefulWidget {
     required this.crossAxisCount,
     this.sortOrder = SortOrder.ascending,
     this.sortBy,
+    this.headerHeight = 40.0,
+    this.useHeaders = true,
   });
 
   final List items;
@@ -5507,6 +5784,8 @@ class AlphabetScrollbar extends StatefulWidget {
   final int crossAxisCount;
   final SortOrder sortOrder;
   final SortOption? sortBy;
+  final double headerHeight;
+  final bool useHeaders;
 
   @override
   State<AlphabetScrollbar> createState() => _AlphabetScrollbarState();
@@ -5516,111 +5795,130 @@ class _AlphabetScrollbarState extends State<AlphabetScrollbar> {
   static const _alphabet = ['#', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I',
                              'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S',
                              'T', 'U', 'V', 'W', 'X', 'Y', 'Z'];
-  
+
   String? _activeLetter;
   double _bubbleY = 0.0;
-  
-  // Build a map from first letter to item index for fast lookup
-  Map<String, int> _buildLetterIndex() {
-    final Map<String, int> letterToIndex = {};
-    
+
+  // Build a map from first letter to scroll position for fast lookup
+  // Returns (letterToPosition, totalHeight)
+  (Map<String, double>, double) _buildLetterPositions() {
+    final Map<String, double> letterToPosition = {};
+    final isAscending = widget.sortOrder == SortOrder.ascending;
+
+    // Group items by first letter
+    final Map<String, List<int>> letterGroups = {};
     for (int i = 0; i < widget.items.length; i++) {
       final name = widget.getItemName(widget.items[i]).toUpperCase();
       if (name.isEmpty) continue;
-      
       final firstChar = name[0];
       final letter = RegExp(r'[0-9]').hasMatch(firstChar) ? '#' : firstChar;
-      
-      // Only store first occurrence of each letter
-      if (!letterToIndex.containsKey(letter)) {
-        letterToIndex[letter] = i;
-      }
+      letterGroups.putIfAbsent(letter, () => []).add(i);
+    }
+
+    // Sort letters appropriately
+    final sortedLetters = letterGroups.keys.toList()
+      ..sort((a, b) {
+        if (a == '#') return isAscending ? -1 : 1;
+        if (b == '#') return isAscending ? 1 : -1;
+        return isAscending ? a.compareTo(b) : b.compareTo(a);
+      });
+
+    // Calculate scroll positions accounting for headers
+    // Grid mode (crossAxisCount > 1): no initial padding, first header at 0
+    // List mode (crossAxisCount == 1): 8px initial padding from SliverPadding
+    final isListMode = widget.crossAxisCount == 1;
+    double currentPosition = isListMode ? 8.0 : 0.0;
+
+    for (final letter in sortedLetters) {
+      letterToPosition[letter] = currentPosition;
+      currentPosition += widget.headerHeight; // Header (40px)
+      final itemCount = letterGroups[letter]!.length;
+      final rowCount = (itemCount / widget.crossAxisCount).ceil();
+      currentPosition += rowCount * widget.itemHeight;
     }
     
-    return letterToIndex;
+    // Add bottom padding
+    currentPosition += 100.0; 
+
+    return (letterToPosition, currentPosition);
   }
 
   void _scrollToLetter(String letter) {
     if (widget.items.isEmpty) return;
     if (!widget.scrollController.hasClients) return;
 
-    final letterIndex = _buildLetterIndex();
-    int targetIndex = -1;
-    
+    final (letterPositions, totalHeight) = _buildLetterPositions();
+    double targetPosition;
+
     // Direct match
-    if (letterIndex.containsKey(letter)) {
-      targetIndex = letterIndex[letter]!;
+    if (letterPositions.containsKey(letter)) {
+      targetPosition = letterPositions[letter]!;
     } else {
       // No exact match - find nearest letter
       final isAscending = widget.sortOrder == SortOrder.ascending;
-      
+
       if (letter == '#') {
-        // Looking for numbers but none found
-        // In ascending, numbers would be at start; in descending, at end
-        targetIndex = isAscending ? 0 : widget.items.length - 1;
+        // Looking for numbers but none found - go to start/end
+        targetPosition = isAscending ? 0.0 : totalHeight;
       } else {
         // Find the closest available letter
         final letterCode = letter.codeUnitAt(0);
-        
+        String? bestMatch;
+        final sortedKeys = letterPositions.keys.toList()
+          ..sort((a, b) {
+            if (a == '#') return isAscending ? -1 : 1;
+            if (b == '#') return isAscending ? 1 : -1;
+            return isAscending ? a.compareTo(b) : b.compareTo(a);
+          });
+
+        // Filter to only standard A-Z letters for fallback (ignore accented chars like Á, †, etc.)
+        final standardKeys = sortedKeys.where((k) => k == '#' || (k.codeUnitAt(0) >= 65 && k.codeUnitAt(0) <= 90)).toList();
+
         if (isAscending) {
-          // Find first letter that comes after the requested letter
-          int? nearestIndex;
-          int nearestDiff = 100;
-          
-          for (final entry in letterIndex.entries) {
-            if (entry.key == '#') continue;
-            final entryCode = entry.key.codeUnitAt(0);
-            final diff = entryCode - letterCode;
-            
-            // Find closest letter that is >= requested letter
-            if (diff >= 0 && diff < nearestDiff) {
-              nearestDiff = diff;
-              nearestIndex = entry.value;
+          // Ascending: Find first existing letter >= target
+          for (final key in standardKeys) {
+            if (key == '#') continue;
+            if (key.codeUnitAt(0) >= letterCode) {
+              bestMatch = key;
+              break;
             }
           }
-          
-          // If no letter after, scroll to end
-          targetIndex = nearestIndex ?? widget.items.length - 1;
         } else {
-          // Descending: Find first letter that comes before or equal the requested letter
-          int? nearestIndex;
-          int nearestDiff = -100;
-          
-          for (final entry in letterIndex.entries) {
-            if (entry.key == '#') continue;
-            final entryCode = entry.key.codeUnitAt(0);
-            final diff = entryCode - letterCode;
-            
-            // Find closest letter that is <= requested letter
-            if (diff <= 0 && diff > nearestDiff) {
-              nearestDiff = diff;
-              nearestIndex = entry.value;
+          // Descending: Find first existing letter <= target
+          for (final key in standardKeys) {
+            if (key == '#') continue;
+            if (key.codeUnitAt(0) <= letterCode) {
+              bestMatch = key;
+              break;
             }
           }
-          
-          // If no letter before, scroll to end
-          targetIndex = nearestIndex ?? widget.items.length - 1;
+        }
+
+        if (bestMatch != null) {
+          targetPosition = letterPositions[bestMatch]!;
+        } else {
+          // If no letter found after target (e.g. target Z, only have A-Y), go to end
+          // Use calculated totalHeight instead of maxScrollExtent which might be inaccurate
+          targetPosition = isAscending ? totalHeight : 0.0;
         }
       }
     }
 
-    if (targetIndex >= 0 && targetIndex < widget.items.length) {
-      final row = targetIndex ~/ widget.crossAxisCount;
-      // Account for grid padding (16px on each side)
-      final targetPosition = (row * widget.itemHeight) + 16.0;
-      final maxScroll = widget.scrollController.position.maxScrollExtent;
-      final clampedPosition = targetPosition.clamp(0.0, maxScroll);
-      
-      // Use jumpTo during drag for immediate response
-      if (_activeLetter != null) {
-        widget.scrollController.jumpTo(clampedPosition);
-      } else {
-        widget.scrollController.animateTo(
-          clampedPosition,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-      }
+    // Ensure we don't scroll before the start
+    // We do NOT clamp to maxScrollExtent because in List View (SliverList),
+    // the maxExtent might be estimated and much smaller than the real content height.
+    // Jumping to the calculated position usually forces the list to build and update the extent.
+    final safePosition = targetPosition < 0.0 ? 0.0 : targetPosition;
+
+    // Use jumpTo during drag for immediate response
+    if (_activeLetter != null) {
+      widget.scrollController.jumpTo(safePosition);
+    } else {
+      widget.scrollController.animateTo(
+        safePosition,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+      );
     }
   }
 

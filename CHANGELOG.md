@@ -1,3 +1,32 @@
+### v6.4.1 - Alphabet Scrollbar Bugfix
+
+**Library: Alphabet Scrollbar Fix**
+- **Fixed Accented Character Bug**: Alphabet scrollbar fallback no longer jumps to accented characters (Á, †, ╚, etc.) when a letter is missing
+- **Standard A-Z Fallback**: When tapping a missing letter, now correctly jumps to the next standard A-Z letter instead of Unicode characters with higher code points
+- **Works Across All Views**: Fix applies to Albums, Artists, and Genres sorted by name
+- **Both Sort Directions**: Ascending and descending sort orders both work correctly
+
+---
+
+### v6.4.0 - Alphabet Navigation & Artist Mix Fix
+
+**Library: Alphabet Section Headers**
+- **Visual Section Headers**: Albums, Artists, and Genres now display letter section headers (A, B, C...) between groups
+- **Reliable Scrollbar Navigation**: Tapping letters on the alphabet scrollbar now jumps directly to section headers
+- **Accurate Position Calculation**: Fixed scroll position math for both grid and list modes accounting for section padding
+- **Smart Letter Jumping**: Alphabet scrollbar now intelligently jumps to the *next* available section when a letter is missing (e.g. tapping 'B' goes to 'C' if 'B' is missing), preventing loops
+- **Lazy Loading Support**: Alphabet navigation now works correctly with large lists by forcing scroll to unrendered positions instead of clamping to estimated height
+- **Works with Pagination**: Headers are calculated from item names, not positions, so they work correctly as more items load
+- **Grid & List Mode Support**: Section headers appear in both grid view and list view
+- **Sort-Aware**: Headers only appear when sorted by name; other sort orders hide the alphabet scrollbar
+
+**Artist Page: Instant Mix Fix**
+- **Fixed 400 Error**: Instant Mix on artist pages no longer fails with "jellyfin exception: unable to fetch instant mix: 400"
+- **Artist Mix**: Uses random track selection by artist instead of Jellyfin's InstantMix endpoint (which doesn't support Artist items)
+- **50 Track Shuffle**: Creates a shuffled playlist of up to 50 tracks from the selected artist
+
+---
+
 ### v6.3.0 - Popular Tracks & Artist Page Redesign
 
 **Artist Page: Top Tracks Section**

@@ -354,8 +354,8 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                         ),
                       );
 
-                      final mixTracks = await _appState.jellyfinService.getInstantMix(
-                        itemId: widget.artist.id,
+                      final mixTracks = await _appState.jellyfinService.getArtistMix(
+                        artistId: widget.artist.id,
                         limit: 50,
                       );
 
