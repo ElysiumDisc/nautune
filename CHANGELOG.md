@@ -1,3 +1,23 @@
+### v6.4.2 - CarPlay Stability & ReplayGain Fix
+
+**CarPlay: Browsing Desync Fix**
+- **Fixed Browsing Stops Working**: CarPlay browsing no longer breaks after phone unlock or app resume
+- **Navigation State Tracking**: Internal navigation depth tracking prevents root template corruption when user is navigating
+- **Smart Reconnect Handling**: Differentiates between true first connection vs resuming from background - skips disruptive refresh when user is mid-browse
+- **Template History Cleanup**: Clears template history before root reset to prevent navigation stack accumulation
+- **Memory Leak Fix**: CarPlayService now properly disposed when app closes
+
+**Audio: ReplayGain Volume Jump Fix**
+- **Fixed Volume Jump on Resume**: Resuming a paused track no longer causes a sudden volume increase
+- **ReplayGain in Fade Methods**: Fade-out and fade-in now correctly apply ReplayGain normalization multiplier
+- **Consistent Playback Volume**: Volume stays consistent before pause and after resume for tracks with ReplayGain metadata
+
+**Album Detail: Layout Fix**
+- **Fixed Title/Artist Overlap**: Added proper spacing between album artwork and album info section
+- **Text Overflow Handling**: Long album titles (2 lines max) and artist names (1 line) now truncate with ellipsis instead of overflowing
+
+---
+
 ### v6.4.1 - Alphabet Scrollbar Bugfix
 
 **Library: Alphabet Scrollbar Fix**
