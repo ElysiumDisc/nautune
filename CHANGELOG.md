@@ -1,3 +1,61 @@
+### v6.6.0 - Artist Tracks, Adaptive Colors & Smart Mix Expansion
+
+**Artist Page: Tracks Section**
+- **Library Tracks**: Artist pages now show a "Tracks" section with all songs from your library
+- **4 Sort Options**: Most Listened, Random, By Album, Alphabetical
+- **Collapsible Sections**: Popular, Tracks, and Albums sections can be expanded/collapsed
+
+**Now Playing: Adaptive Text Colors**
+- **Smart Contrast**: Text color automatically adapts based on album art luminance (Gradient/Blur layouts)
+- **Light Albums = Dark Text**: Albums with bright artwork get dark text for readability
+- **Dark Albums = Light Text**: Albums with dark artwork get light text
+- **WCAG Compliant**: Follows accessibility guidelines for contrast ratios
+
+**Smart Mix: Expanded Genre Matching**
+- **100+ Genres**: Massively expanded genre-to-mood mapping for better playlist generation
+- **Subgenres**: Added lo-fi, neo-soul, psytrance, metalcore, post-punk, and many more
+- **Variations**: Handles spelling variations (chill/chillout/chill-out, nu metal/nu-metal)
+- **Common Abbreviations**: Recognizes alt, prog, heavy as genre shortcuts
+
+**Smart Mix Cards: Compact Layout**
+- **1x4 Grid**: Smart Mix mood cards now display in a single row of 4 compact cards
+- **More Space**: Reduced card size frees up screen real estate for other content
+
+**Album Page: Hot Tracks from Artist Popularity**
+- **Artist-Based**: Hot track detection now uses artist's top tracks from ListenBrainz (more reliable)
+- **Name Matching**: Fuzzy matching finds popular tracks even with slight title variations
+- **Flame Indicators**: Popular tracks still display flame icon with album-palette-matched color
+
+**Playback Bar: Visualizer Position Aware**
+- **Respects Position Setting**: When visualizer position is set to "Album Art", the playback bar no longer shows the visualizer overlay
+- **Avoids Duplication**: Visualizer only appears in one location based on your preference
+
+**App Restore: Fixed Auto-Play**
+- **Paused on Launch**: App now correctly restores in paused state (no more unexpected audio on startup)
+- **Explicit Resume**: User must tap play to start playback after app restore
+
+**Linux: Tray Right-Click Fix**
+- **Fixed Context Menu**: Right-click on system tray icon now reliably shows the context menu
+- **AppIndicator Compatibility**: Removed conflicting manual popup that blocked native menu
+
+**Linux FFT: Code Optimization**
+- **Cleaner Architecture**: FFT processing code reorganized for better maintainability
+- **Consistent Performance**: Optimized processing pipeline for smooth visualization
+
+**Theme-Aware UI Colors**
+- **Library Header**: Nautune logo and wave icon now use theme colors instead of hardcoded purple
+- **Playback Bar Waveform**: Waveform tint colors now match your theme
+
+**Fixed Alphabetical Navigation**
+- **Foreign Characters**: Properly handles foreign characters in alphabetical navigation
+
+**iOS: Lock Screen Playback Fix**
+- **Audio Session Recovery**: Properly reactivates audio session after interruptions (phone calls, Siri)
+- **Background Playback**: Fixed greyed-out lock screen controls when returning from background
+- **Reliable Resume**: Audio session now properly reconfigures when app returns to foreground
+
+---
+
 ### v6.5.0 - Now Playing Layouts, Crossfade Fix & Battery Optimization
 
 **Now Playing Screen Layouts**

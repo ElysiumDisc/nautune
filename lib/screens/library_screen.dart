@@ -374,9 +374,9 @@ class _LibraryScreenState extends State<LibraryScreen>
                     ),
                     child: Icon(
                       Icons.waves,
-                      color: appState.isOfflineMode 
-                          ? const Color(0xFF7A3DF1)  // Violet when offline
-                          : const Color(0xFFB39DDB),  // Light purple when online
+                      color: appState.isOfflineMode
+                          ? theme.colorScheme.primary  // Theme primary when offline
+                          : theme.colorScheme.primary.withValues(alpha: 0.7),  // Theme primary (lighter) when online
                       size: 28,
                     ),
                   ),
@@ -399,7 +399,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                           'Nautune',
                           style: GoogleFonts.pacifico(
                             fontSize: 24,
-                            color: const Color(0xFFB39DDB),
+                            color: theme.colorScheme.primary.withValues(alpha: 0.7),
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -408,7 +408,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                           Icon(
                             Icons.offline_bolt,
                             size: 20,
-                            color: const Color(0xFF7A3DF1),
+                            color: theme.colorScheme.primary,
                           ),
                         ],
                       ],
@@ -2853,15 +2853,15 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                     ],
                   ),
                 ),
-                // 2x2 Mood Grid
-                GridView.count(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 12,
-                  childAspectRatio: 1.6,
-                  children: Mood.values.map((mood) => _buildMoodCard(mood, theme)).toList(),
+                // Horizontal 1x4 Mood Cards (compact layout)
+                SizedBox(
+                  height: 70,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: Mood.values.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 8),
+                    itemBuilder: (context, index) => _buildCompactMoodCard(Mood.values[index], theme),
+                  ),
                 ),
                 const SizedBox(height: 16),
                 const Divider(),
@@ -2938,60 +2938,69 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
     );
   }
 
-  Widget _buildMoodCard(Mood mood, ThemeData theme) {
+  /// Compact mood card for horizontal 1x4 layout
+  Widget _buildCompactMoodCard(Mood mood, ThemeData theme) {
     final isLoading = _loadingMood == mood;
     final gradientColors = _getMoodGradient(mood, theme);
+    // Extract first genre from subtitle (e.g., "Jazz" from "Jazz, Blues, Ambient...")
+    final firstGenre = mood.subtitle.split(',').first.trim();
 
-    return Material(
-      borderRadius: BorderRadius.circular(16),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: isLoading ? null : () => _playMoodMix(mood),
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: gradientColors,
+    return SizedBox(
+      width: 100,
+      child: Material(
+        borderRadius: BorderRadius.circular(12),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: isLoading ? null : () => _playMoodMix(mood),
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: gradientColors,
+              ),
             ),
-          ),
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      mood.displayName,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
+            padding: const EdgeInsets.all(8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        mood.displayName,
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                  ),
-                  if (isLoading)
-                    const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
+                    if (isLoading)
+                      const SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                mood.subtitle,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: Colors.white.withValues(alpha: 0.8),
+                  ],
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
+                const SizedBox(height: 2),
+                Text(
+                  firstGenre,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: Colors.white.withValues(alpha: 0.8),
+                    fontSize: 10,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -5799,19 +5808,74 @@ class _AlphabetScrollbarState extends State<AlphabetScrollbar> {
   String? _activeLetter;
   double _bubbleY = 0.0;
 
+  /// Normalizes accented characters to their base A-Z letter.
+  /// E.g., 'É' → 'E', 'Ñ' → 'N', 'Ü' → 'U'
+  static String _normalizeToBaseLetter(String char) {
+    if (char.isEmpty) return '#';
+    final code = char.codeUnitAt(0);
+
+    // Already a standard A-Z letter
+    if (code >= 65 && code <= 90) return char;
+
+    // Already a digit
+    if (code >= 48 && code <= 57) return '#';
+
+    // Map common accented characters to base letters
+    // This covers most Latin-based languages
+    const accentMap = {
+      // A variants
+      'À': 'A', 'Á': 'A', 'Â': 'A', 'Ã': 'A', 'Ä': 'A', 'Å': 'A', 'Ă': 'A', 'Ą': 'A',
+      // C variants
+      'Ç': 'C', 'Ć': 'C', 'Č': 'C',
+      // D variants
+      'Ď': 'D', 'Đ': 'D',
+      // E variants
+      'È': 'E', 'É': 'E', 'Ê': 'E', 'Ë': 'E', 'Ě': 'E', 'Ę': 'E',
+      // G variants
+      'Ğ': 'G',
+      // I variants
+      'Ì': 'I', 'Í': 'I', 'Î': 'I', 'Ï': 'I', 'İ': 'I',
+      // L variants
+      'Ł': 'L',
+      // N variants
+      'Ñ': 'N', 'Ń': 'N', 'Ň': 'N',
+      // O variants
+      'Ò': 'O', 'Ó': 'O', 'Ô': 'O', 'Õ': 'O', 'Ö': 'O', 'Ø': 'O', 'Ő': 'O',
+      // R variants
+      'Ř': 'R',
+      // S variants
+      'Ś': 'S', 'Ş': 'S', 'Š': 'S',
+      // T variants
+      'Ť': 'T', 'Ţ': 'T',
+      // U variants
+      'Ù': 'U', 'Ú': 'U', 'Û': 'U', 'Ü': 'U', 'Ů': 'U', 'Ű': 'U',
+      // Y variants
+      'Ý': 'Y', 'Ÿ': 'Y',
+      // Z variants
+      'Ź': 'Z', 'Ż': 'Z', 'Ž': 'Z',
+      // Ligatures and special
+      'Æ': 'A', 'Œ': 'O', 'Þ': 'T', 'Ð': 'D',
+    };
+
+    return accentMap[char] ?? '#';
+  }
+
   // Build a map from first letter to scroll position for fast lookup
   // Returns (letterToPosition, totalHeight)
   (Map<String, double>, double) _buildLetterPositions() {
     final Map<String, double> letterToPosition = {};
     final isAscending = widget.sortOrder == SortOrder.ascending;
 
-    // Group items by first letter
+    // Group items by first letter (normalized to base A-Z)
     final Map<String, List<int>> letterGroups = {};
     for (int i = 0; i < widget.items.length; i++) {
       final name = widget.getItemName(widget.items[i]).toUpperCase();
       if (name.isEmpty) continue;
       final firstChar = name[0];
-      final letter = RegExp(r'[0-9]').hasMatch(firstChar) ? '#' : firstChar;
+      // Use normalizer to map accented chars to base letters
+      final letter = RegExp(r'[0-9]').hasMatch(firstChar)
+          ? '#'
+          : _normalizeToBaseLetter(firstChar);
       letterGroups.putIfAbsent(letter, () => []).add(i);
     }
 

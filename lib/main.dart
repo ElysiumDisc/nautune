@@ -475,11 +475,15 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
   }
 
   Future<void> _onAppResumed() async {
+    // Reactivate audio session on iOS when returning from background
+    // This fixes lock screen playback getting stuck with greyed-out controls
+    await widget.appState.audioPlayerService.reactivateAudioSession();
+
     // Check connectivity when app returns to foreground
     await widget.connectivityProvider.checkConnectivity();
-    
+
     // If we're back online and have a session, trigger a light refresh
-    if (widget.connectivityProvider.networkAvailable && 
+    if (widget.connectivityProvider.networkAvailable &&
         widget.sessionProvider.session != null &&
         !widget.demoModeProvider.isDemoMode) {
       // Don't force refresh everything, just update critical data

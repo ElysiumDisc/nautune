@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../models/listenbrainz_config.dart' show PopularTrack;
 import '../services/listenbrainz_service.dart';
 import '../services/share_service.dart';
 import '../widgets/add_to_playlist_dialog.dart';
@@ -72,9 +73,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   bool? _previousNetworkAvailable;
   bool _hasInitialized = false;
 
-  // Track popularity data from ListenBrainz (recording MBID -> listen count)
-  Map<String, int>? _trackPopularities;
-  static const int _popularityThreshold = 1000;
+  // Hot track IDs (tracks that appear in artist's top tracks on ListenBrainz)
+  Set<String>? _hotTrackIds;
 
   @override
   void initState() {
@@ -258,35 +258,94 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       return;
     }
 
-    // Collect MBIDs from tracks
-    final mbids = <String>[];
+    // Get artist MBID from one of the tracks (album doesn't have providerIds)
+    String? artistMbid;
     for (final track in tracks) {
-      final mbid = track.providerIds?['MusicBrainzTrack'];
-      if (mbid != null && mbid.isNotEmpty) {
-        mbids.add(mbid);
-      }
+      artistMbid = track.providerIds?['MusicBrainzArtist'];
+      if (artistMbid != null && artistMbid.isNotEmpty) break;
     }
-
-    if (mbids.isEmpty) {
-      debugPrint('AlbumDetailScreen: No MusicBrainz IDs for tracks');
+    if (artistMbid == null || artistMbid.isEmpty) {
+      debugPrint('AlbumDetailScreen: No MusicBrainz Artist ID found in tracks');
       return;
     }
 
     try {
       final listenbrainz = ListenBrainzService();
-      final popularities = await listenbrainz.getRecordingPopularities(
-        recordingMbids: mbids,
+      final popularTracks = await listenbrainz.getArtistTopTracks(
+        artistMbid: artistMbid,
+        limit: 50, // Get more for better matching
       );
 
-      if (mounted && popularities.isNotEmpty) {
+      if (popularTracks.isEmpty) {
+        debugPrint('AlbumDetailScreen: No popular tracks found for artist');
+        return;
+      }
+
+      // Match popular tracks to album tracks using fuzzy matching
+      final hotIds = <String>{};
+      for (final track in tracks) {
+        if (_isHotTrack(track, popularTracks)) {
+          hotIds.add(track.id);
+        }
+      }
+
+      if (mounted && hotIds.isNotEmpty) {
         setState(() {
-          _trackPopularities = popularities;
+          _hotTrackIds = hotIds;
         });
-        debugPrint('AlbumDetailScreen: Loaded popularities for ${popularities.length} tracks');
+        debugPrint('AlbumDetailScreen: Found ${hotIds.length} hot tracks');
       }
     } catch (e) {
-      debugPrint('AlbumDetailScreen: Error loading track popularities: $e');
+      debugPrint('AlbumDetailScreen: Error loading hot tracks: $e');
     }
+  }
+
+  /// Check if a track matches any of the artist's popular tracks
+  bool _isHotTrack(JellyfinTrack track, List<PopularTrack> popularTracks) {
+    final trackMbid = track.providerIds?['MusicBrainzTrack'];
+
+    for (final pop in popularTracks) {
+      // Primary match: MBID
+      if (trackMbid != null && trackMbid.isNotEmpty && trackMbid == pop.recordingMbid) {
+        return true;
+      }
+
+      // Fallback: fuzzy name match
+      if (_fuzzyTrackMatch(track.name, pop.recordingName)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Fuzzy match two track names (handles slight variations)
+  bool _fuzzyTrackMatch(String trackName, String popularName) {
+    final normalizedTrack = _normalizeTrackName(trackName);
+    final normalizedPopular = _normalizeTrackName(popularName);
+
+    // Exact match after normalization
+    if (normalizedTrack == normalizedPopular) return true;
+
+    // Check if one contains the other (for "Track (Remaster)" vs "Track" cases)
+    if (normalizedTrack.contains(normalizedPopular) ||
+        normalizedPopular.contains(normalizedTrack)) {
+      // Only if the shorter one is at least 5 chars to avoid false positives
+      final shorter = normalizedTrack.length < normalizedPopular.length
+          ? normalizedTrack : normalizedPopular;
+      if (shorter.length >= 5) return true;
+    }
+
+    return false;
+  }
+
+  /// Normalize track name for comparison
+  String _normalizeTrackName(String name) {
+    return name
+        .toLowerCase()
+        .replaceAll(RegExp(r'\s*[\(\[].*?[\)\]]'), '') // Remove parenthetical content
+        .replaceAll(RegExp(r'[^\w\s]'), '') // Remove punctuation
+        .replaceAll(RegExp(r'\s+'), ' ') // Collapse whitespace
+        .trim();
   }
 
   @override
@@ -665,8 +724,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                           track: track,
                           displayTrackNumber: displayNumber,
                           appState: _appState!,
-                          listenCount: _trackPopularities?[track.providerIds?['MusicBrainzTrack']],
-                          popularityThreshold: _popularityThreshold,
+                          isHotTrack: _hotTrackIds?.contains(track.id) ?? false,
                           onTap: () async {
                             try {
                               await _appState!.audioPlayerService
@@ -721,16 +779,14 @@ class _TrackTile extends StatelessWidget {
     required this.displayTrackNumber,
     required this.onTap,
     required this.appState,
-    this.listenCount,
-    this.popularityThreshold = 1000,
+    this.isHotTrack = false,
   });
 
   final JellyfinTrack track;
   final String displayTrackNumber;
   final VoidCallback onTap;
   final NautuneAppState appState;
-  final int? listenCount;
-  final int popularityThreshold;
+  final bool isHotTrack;
 
   @override
   Widget build(BuildContext context) {
@@ -773,12 +829,12 @@ class _TrackTile extends StatelessWidget {
                             textAlign: TextAlign.center,
                           ),
                   ),
-                  // Flame icon for popular tracks
-                  if (listenCount != null && listenCount! >= popularityThreshold)
+                  // Flame icon for hot tracks (artist's popular songs)
+                  if (isHotTrack)
                     Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: Tooltip(
-                        message: '${_formatNumber(listenCount!)} plays on ListenBrainz',
+                        message: 'Popular track by this artist',
                         child: Icon(
                           Icons.local_fire_department,
                           size: 16,
@@ -1112,15 +1168,6 @@ class _TrackTile extends StatelessWidget {
       return '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
     }
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
-  }
-
-  String _formatNumber(int number) {
-    if (number >= 1000000) {
-      return '${(number / 1000000).toStringAsFixed(1)}M';
-    } else if (number >= 1000) {
-      return '${(number / 1000).toStringAsFixed(1)}K';
-    }
-    return number.toString();
   }
 }
 

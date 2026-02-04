@@ -4,6 +4,91 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:rxdart/rxdart.dart';
 
+/// FFT implementation (Cooley-Tukey radix-2)
+List<double> _performFFT(List<double> samples) {
+  var n = 512;
+  while (n < samples.length && n < 2048) {
+    n *= 2;
+  }
+
+  final real = List<double>.filled(n, 0);
+  final imag = List<double>.filled(n, 0);
+
+  final len = math.min(samples.length, n);
+  for (var i = 0; i < len; i++) {
+    final window = 0.5 * (1 - math.cos(2 * math.pi * i / (len - 1)));
+    real[i] = samples[i] * window;
+  }
+
+  var j = 0;
+  for (var i = 0; i < n - 1; i++) {
+    if (i < j) {
+      final tempR = real[i];
+      real[i] = real[j];
+      real[j] = tempR;
+    }
+    var k = n >> 1;
+    while (k <= j) {
+      j -= k;
+      k >>= 1;
+    }
+    j += k;
+  }
+
+  var mmax = 1;
+  while (n > mmax) {
+    final step = mmax << 1;
+    final theta = -math.pi / mmax;
+    final wpr = math.cos(theta);
+    final wpi = math.sin(theta);
+
+    var wr = 1.0;
+    var wi = 0.0;
+
+    for (var m = 0; m < mmax; m++) {
+      for (var i = m; i < n; i += step) {
+        final jj = i + mmax;
+        final tempR = wr * real[jj] - wi * imag[jj];
+        final tempI = wr * imag[jj] + wi * real[jj];
+        real[jj] = real[i] - tempR;
+        imag[jj] = imag[i] - tempI;
+        real[i] += tempR;
+        imag[i] += tempI;
+      }
+      final tempWr = wr;
+      wr = wr * wpr - wi * wpi;
+      wi = wi * wpr + tempWr * wpi;
+    }
+    mmax = step;
+  }
+
+  final magnitudes = <double>[];
+  final halfN = n ~/ 2;
+  for (var i = 0; i < halfN; i++) {
+    final mag = math.sqrt(real[i] * real[i] + imag[i] * imag[i]) / halfN;
+    magnitudes.add(mag);
+  }
+
+  return magnitudes;
+}
+
+/// Compute RMS average for a range of frequency bins
+double _averageRange(List<double> data, int start, int end) {
+  if (data.isEmpty || start >= end) return 0.0;
+  final s = start.clamp(0, data.length);
+  final e = end.clamp(s, data.length);
+  if (s >= e) return 0.0;
+  final slice = data.sublist(s, e);
+  if (slice.isEmpty) return 0.0;
+
+  var sumSq = 0.0;
+  for (final v in slice) {
+    sumSq += v * v;
+  }
+  return math.sqrt(sumSq / slice.length);
+}
+
+/// Intermediate result from isolate FFT processing
 /// Real-time FFT analysis via PulseAudio loopback on Linux.
 /// Uses `parec` to capture system audio output (not microphone) for visualization.
 class PulseAudioFFTService {
@@ -269,95 +354,6 @@ class PulseAudioFFTService {
     } catch (e) {
       // Silent fail - don't spam logs
     }
-  }
-
-  double _averageRange(List<double> data, int start, int end) {
-    if (data.isEmpty || start >= end) return 0.0;
-    final s = start.clamp(0, data.length);
-    final e = end.clamp(s, data.length);
-    if (s >= e) return 0.0;
-    final slice = data.sublist(s, e);
-    if (slice.isEmpty) return 0.0;
-
-    // Use RMS instead of simple average for better energy representation
-    var sumSq = 0.0;
-    for (final v in slice) {
-      sumSq += v * v;
-    }
-    return math.sqrt(sumSq / slice.length);
-  }
-
-  /// Simple FFT implementation (Cooley-Tukey radix-2)
-  List<double> _performFFT(List<double> samples) {
-    // Pad/trim to power of 2
-    var n = 512;
-    while (n < samples.length && n < 2048) {
-      n *= 2;
-    }
-
-    final real = List<double>.filled(n, 0);
-    final imag = List<double>.filled(n, 0);
-
-    // Apply Hanning window and copy samples
-    final len = math.min(samples.length, n);
-    for (var i = 0; i < len; i++) {
-      final window = 0.5 * (1 - math.cos(2 * math.pi * i / (len - 1)));
-      real[i] = samples[i] * window;
-    }
-
-    // Bit-reversal permutation
-    var j = 0;
-    for (var i = 0; i < n - 1; i++) {
-      if (i < j) {
-        final tempR = real[i];
-        real[i] = real[j];
-        real[j] = tempR;
-      }
-      var k = n >> 1;
-      while (k <= j) {
-        j -= k;
-        k >>= 1;
-      }
-      j += k;
-    }
-
-    // FFT computation
-    var mmax = 1;
-    while (n > mmax) {
-      final step = mmax << 1;
-      final theta = -math.pi / mmax;
-      final wpr = math.cos(theta);
-      final wpi = math.sin(theta);
-
-      var wr = 1.0;
-      var wi = 0.0;
-
-      for (var m = 0; m < mmax; m++) {
-        for (var i = m; i < n; i += step) {
-          final jj = i + mmax;
-          final tempR = wr * real[jj] - wi * imag[jj];
-          final tempI = wr * imag[jj] + wi * real[jj];
-          real[jj] = real[i] - tempR;
-          imag[jj] = imag[i] - tempI;
-          real[i] += tempR;
-          imag[i] += tempI;
-        }
-        final tempWr = wr;
-        wr = wr * wpr - wi * wpi;
-        wi = wi * wpr + tempWr * wpi;
-      }
-      mmax = step;
-    }
-
-    // Compute magnitudes (only first half - positive frequencies)
-    final magnitudes = <double>[];
-    final halfN = n ~/ 2;
-    for (var i = 0; i < halfN; i++) {
-      final mag = math.sqrt(real[i] * real[i] + imag[i] * imag[i]) / halfN;
-      magnitudes.add(mag);
-    }
-
-    return magnitudes;
   }
 
   void dispose() {

@@ -144,7 +144,12 @@ class TrayService with TrayListener {
 
   @override
   void onTrayIconRightMouseDown() {
-    // Also show context menu on right click
+    // On Linux, let native AppIndicator handle right-click menu automatically.
+    // Manual popUpContextMenu() conflicts with native behavior and causes menu to not appear.
+    if (Platform.isLinux) {
+      return;
+    }
+    // On Windows/macOS, manually show context menu on right click
     try {
       trayManager.popUpContextMenu();
     } catch (e) {

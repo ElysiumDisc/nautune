@@ -591,14 +591,17 @@ class AudioPlayerService {
       await _interruptionSubscription?.cancel();
       _interruptionSubscription = session.interruptionEventStream.listen((event) {
         if (event.begin) {
+          debugPrint('🔊 Audio interruption began: ${event.type}');
           if (event.type == AudioInterruptionType.pause ||
               event.type == AudioInterruptionType.duck ||
               event.type == AudioInterruptionType.unknown) {
             unawaited(pause());
           }
         } else {
+          debugPrint('🔊 Audio interruption ended: ${event.type}');
+          // After interruption ends, reactivate session then resume
           if (event.type == AudioInterruptionType.pause && !isPlaying) {
-            unawaited(resume());
+            unawaited(_reactivateAndResume());
           }
         }
       });
@@ -612,7 +615,39 @@ class AudioPlayerService {
       debugPrint('Audio session setup failed: $e');
     }
   }
-  
+
+  /// Reactivate audio session after interruption and resume playback.
+  /// This is critical for iOS lock screen playback recovery.
+  Future<void> _reactivateAndResume() async {
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+      debugPrint('🔊 Audio session reactivated after interruption');
+      await resume();
+    } catch (e) {
+      debugPrint('⚠️ Failed to reactivate audio session: $e');
+    }
+  }
+
+  /// Public method to reactivate the audio session.
+  /// Call this when app returns from background on iOS.
+  Future<void> reactivateAudioSession() async {
+    if (!Platform.isIOS) return;
+
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+      debugPrint('🔊 Audio session reactivated on app resume');
+
+      // If we were supposed to be playing, force the media controls to sync
+      if (isPlaying) {
+        await _audioHandler?.forcePlayingState();
+      }
+    } catch (e) {
+      debugPrint('⚠️ Failed to reactivate audio session: $e');
+    }
+  }
+
   void _detachListeners() {
     _playerPosSub?.cancel();
     _playerDurSub?.cancel();
@@ -758,6 +793,17 @@ class AudioPlayerService {
         if (_gaplessPlaybackEnabled && _preloadedTrack?.id == nextTrack.id) {
           debugPrint('⚡ Using pre-loaded track for instant playback: ${nextTrack.name}');
 
+          // CRITICAL: Ensure audio session is active before gapless transition (iOS fix)
+          // Without this, resume() can fail silently if iOS deactivated the session
+          if (Platform.isIOS) {
+            try {
+              final session = await AudioSession.instance;
+              await session.configure(const AudioSessionConfiguration.music());
+            } catch (e) {
+              debugPrint('⚠️ Failed to reactivate audio session for gapless: $e');
+            }
+          }
+
           // SWAP PLAYERS for seamless transition
           // 1. Detach listeners from current player (which is ending)
           _detachListeners();
@@ -835,6 +881,7 @@ class AudioPlayerService {
           _preloadedTrack = null;
         } else {
           // No pre-loaded track or gapless disabled, do regular playback
+          debugPrint('🎵 Gapless not available, using regular playback for: ${nextTrack.name}');
           _currentIndex++;
           await playTrack(
             _queue[_currentIndex],
@@ -844,10 +891,20 @@ class AudioPlayerService {
         }
       } catch (e) {
         debugPrint('❌ Gapless transition failed: $e');
-        // Recovery: try to play next track without gapless optimization
+        // Recovery: reactivate audio session and try to play next track
         if (_currentIndex + 1 < _queue.length) {
           _currentIndex++;
           try {
+            // Ensure audio session is active before recovery attempt
+            if (Platform.isIOS) {
+              try {
+                final session = await AudioSession.instance;
+                await session.configure(const AudioSessionConfiguration.music());
+                debugPrint('🔊 Audio session reactivated for recovery');
+              } catch (sessionError) {
+                debugPrint('⚠️ Session reactivation failed: $sessionError');
+              }
+            }
             await playTrack(
               _queue[_currentIndex],
               queueContext: _queue,
@@ -1008,21 +1065,83 @@ class AudioPlayerService {
     final clampedIndex = state.currentQueueIndex.clamp(0, queue.length - 1);
     final track = queue[clampedIndex];
 
-    await playTrack(
-      track,
-      queueContext: queue,
-      reorderQueue: false,
-      fromShuffle: state.shuffleEnabled,
-    );
+    // Set up track state WITHOUT auto-playing
+    // This prevents unexpected audio on app restore
+    _currentTrack = track;
+    _currentTrackController.add(track);
+    _cachedDuration = track.duration;
+    _queue = queue;
+    _currentIndex = clampedIndex;
+    _queueController.add(List.from(_queue));
 
+    // Update duration from metadata immediately
+    if (track.duration != null) {
+      _durationController.add(track.duration);
+    }
+
+    // Prepare audio source without playing
+    try {
+      final (url, _) = await _resolveTrackSource(track);
+      if (url != null) {
+        await _player.setSource(UrlSource(url));
+      }
+    } catch (e) {
+      debugPrint('⚠️ Failed to prepare audio source during restore: $e');
+    }
+
+    // Seek to saved position
     if (state.positionMs > 0) {
       final position = Duration(milliseconds: state.positionMs);
-      await seek(position);
+      try {
+        await seek(position);
+      } catch (e) {
+        debugPrint('⚠️ Failed to seek during restore: $e');
+      }
+      _positionController.add(position);
+      _lastPosition = position;
     }
 
-    if (!state.isPlaying) {
-      await pause();
+    // Always restore in paused state - user must explicitly resume
+    // This prevents unexpected audio playback on app launch
+    _playingController.add(false);
+
+    // Update media controls to show paused state
+    _audioHandler?.playbackState.add(
+      audio_service.PlaybackState(
+        controls: [
+          audio_service.MediaControl.skipToPrevious,
+          audio_service.MediaControl.play,
+          audio_service.MediaControl.skipToNext,
+        ],
+        systemActions: const {
+          audio_service.MediaAction.seek,
+          audio_service.MediaAction.seekForward,
+          audio_service.MediaAction.seekBackward,
+        },
+        androidCompactActionIndices: const [0, 1, 2],
+        processingState: audio_service.AudioProcessingState.ready,
+        playing: false,
+        updatePosition: Duration(milliseconds: state.positionMs),
+        speed: 1.0,
+        queueIndex: clampedIndex,
+      ),
+    );
+  }
+
+  /// Resolve the track source URL (download or streaming)
+  Future<(String?, bool)> _resolveTrackSource(JellyfinTrack track) async {
+    // 1) Downloaded file
+    final localPath = _downloadService?.getLocalPath(track.id);
+    if (localPath != null) {
+      final file = File(localPath);
+      if (file.existsSync()) {
+        return (localPath, true);
+      }
     }
+
+    // 2) Streaming URL
+    final (url, _) = _getStreamUrl(track);
+    return (url, false);
   }
   
   Future<void> playTrack(
@@ -1033,8 +1152,16 @@ class AudioPlayerService {
     bool reorderQueue = false,
     bool fromShuffle = false,
   }) async {
-    // Reset FFT URL tracking to ensure new track gets fresh FFT setup
+    // CRITICAL: Ensure audio session is active before playing (iOS fix)
+    // iOS can deactivate the session when app is in background or after interruptions
     if (Platform.isIOS) {
+      try {
+        final session = await AudioSession.instance;
+        await session.configure(const AudioSessionConfiguration.music());
+      } catch (e) {
+        debugPrint('⚠️ Failed to ensure audio session for playTrack: $e');
+      }
+      // Reset FFT URL tracking to ensure new track gets fresh FFT setup
       IOSFFTService.instance.resetUrl();
     }
 

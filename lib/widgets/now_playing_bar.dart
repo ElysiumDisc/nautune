@@ -523,15 +523,25 @@ class _WaveformDisplay extends StatefulWidget {
 class _WaveformDisplayState extends State<_WaveformDisplay> {
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final borderRadius = BorderRadius.circular(12);
-    final primaryTint = const Color(0xFFCCB8FF);
-    final secondaryTint = const Color(0xFF5F3FAE);
+    // Use theme-based colors instead of hardcoded purple
+    final primaryTint = theme.colorScheme.primary.withValues(alpha: 0.7);
+    final secondaryTint = HSLColor.fromColor(theme.colorScheme.primary)
+        .withLightness(0.25)
+        .toColor();
     final visualizerEnabled = context.select<NautuneAppState, bool>(
       (state) => state.visualizerEnabled,
     );
     final visualizerType = context.select<NautuneAppState, VisualizerType>(
       (state) => state.visualizerType,
     );
+    final visualizerPosition = context.select<NautuneAppState, VisualizerPosition>(
+      (state) => state.visualizerPosition,
+    );
+    // Only show visualizer overlay when position is set to controlsBar
+    final showVisualizerOverlay = visualizerEnabled &&
+        visualizerPosition == VisualizerPosition.controlsBar;
 
     return SizedBox(
       height: 40,
@@ -560,9 +570,9 @@ class _WaveformDisplayState extends State<_WaveformDisplay> {
                       height: 40,
                     ),
                   ),
-                  // Audio visualizer overlay (conditionally shown)
+                  // Audio visualizer overlay (shown only when position is controlsBar)
                   // Wrapped in RepaintBoundary to isolate repaints from parent layout
-                  if (visualizerEnabled)
+                  if (showVisualizerOverlay)
                     Positioned.fill(
                       child: RepaintBoundary(
                         child: VisualizerFactory(

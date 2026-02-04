@@ -1010,6 +1010,45 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     }
   }
 
+  /// Compute adaptive text color based on palette luminance.
+  /// Light albums (luminance > 0.5) get dark text, dark albums get light text.
+  /// Only applies to Gradient and Blur layouts.
+  Color _getAdaptiveTextColor(ThemeData theme, {double alpha = 1.0}) {
+    final layout = _appState.nowPlayingLayout;
+    // Only apply adaptive colors for Gradient and Blur layouts
+    if (layout != NowPlayingLayout.gradient && layout != NowPlayingLayout.blur) {
+      return theme.colorScheme.onSurface.withValues(alpha: alpha);
+    }
+
+    // Compute average luminance from palette colors
+    if (_paletteColors == null || _paletteColors!.isEmpty) {
+      return theme.colorScheme.onSurface.withValues(alpha: alpha);
+    }
+
+    // Calculate average luminance of the first 2 colors (most prominent)
+    double totalLuminance = 0;
+    final colorsToCheck = _paletteColors!.take(2).toList();
+    for (final color in colorsToCheck) {
+      totalLuminance += color.computeLuminance();
+    }
+    final avgLuminance = totalLuminance / colorsToCheck.length;
+
+    // WCAG recommendation: use dark text on light backgrounds, light text on dark backgrounds
+    // Threshold of 0.5 is standard for luminance-based contrast decisions
+    if (avgLuminance > 0.5) {
+      // Light background - use dark text
+      return Colors.black.withValues(alpha: alpha * 0.87);
+    } else {
+      // Dark background - use light text
+      return Colors.white.withValues(alpha: alpha);
+    }
+  }
+
+  /// Get secondary adaptive color (for subtitles, icons) with reduced opacity
+  Color _getAdaptiveSecondaryColor(ThemeData theme) {
+    return _getAdaptiveTextColor(theme, alpha: 0.7);
+  }
+
   /// Build artwork container with optional visualizer toggle (when position is albumArt)
   Widget _buildArtworkVisualizerContainer({
     required Widget artwork,
@@ -2020,14 +2059,17 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
 
                         const SizedBox(height: 24),
 
-                        // Track Info - Compact
+                        // Track Info - Compact with adaptive colors
                         Text(
                           track.name,
                           style:
                               (isDesktop
                                       ? theme.textTheme.headlineMedium
                                       : theme.textTheme.titleLarge)
-                                  ?.copyWith(fontWeight: FontWeight.bold),
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                    color: _getAdaptiveTextColor(theme),
+                                  ),
                           textAlign: TextAlign.center,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
@@ -2144,9 +2186,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                               Icon(
                                 Icons.person,
                                 size: 16,
-                                color: theme.colorScheme.tertiary.withValues(
-                                  alpha: 0.7,
-                                ),
+                                color: _getAdaptiveSecondaryColor(theme),
                               ),
                               const SizedBox(width: 4),
                               Flexible(
@@ -2157,13 +2197,10 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                               ? theme.textTheme.headlineSmall
                                               : theme.textTheme.titleMedium)
                                           ?.copyWith(
-                                            color: theme.colorScheme.tertiary,
+                                            color: _getAdaptiveSecondaryColor(theme),
                                             decoration:
                                                 TextDecoration.underline,
-                                            decorationColor: theme
-                                                .colorScheme
-                                                .tertiary
-                                                .withValues(alpha: 0.5),
+                                            decorationColor: _getAdaptiveSecondaryColor(theme).withValues(alpha: 0.5),
                                           ),
                                   textAlign: TextAlign.center,
                                   maxLines: 1,
