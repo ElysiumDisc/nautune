@@ -1,0 +1,63 @@
+id: com.github.ElysiumDisc.nautune
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: nautune
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=pulseaudio
+  - --device=dri
+  - --socket=wayland
+  - --socket=fallback-x11
+  # System tray support
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.Notifications
+  # MPRIS media controls
+  - --own-name=org.mpris.MediaPlayer2.nautune
+
+modules:
+  - name: nautune
+    buildsystem: simple
+    build-options:
+      arch:
+        x86_64:
+          env:
+            BUNDLE_PATH: build/linux/x64/release/bundle
+        aarch64:
+          env:
+            BUNDLE_PATH: build/linux/arm64/release/bundle
+      append-path: /run/build/nautune/flutter/bin
+      env:
+        PUB_CACHE: /run/build/nautune/.pub-cache
+    build-commands:
+      - flutter build linux --release --no-pub
+      # Install binary and libs
+      - install -D $BUNDLE_PATH/nautune /app/bin/nautune
+      - cp -r $BUNDLE_PATH/lib /app/bin/lib
+      - cp -r $BUNDLE_PATH/data /app/bin/data
+      # Install desktop file and metainfo
+      - install -Dm644 com.github.ElysiumDisc.nautune.desktop /app/share/applications/com.github.ElysiumDisc.nautune.desktop
+      - install -Dm644 com.github.ElysiumDisc.nautune.metainfo.xml /app/share/metainfo/com.github.ElysiumDisc.nautune.metainfo.xml
+      # Install icons — resize from 1024x1024 source to required sizes
+      - |
+        python3 -c "
+        import gi
+        gi.require_version('GdkPixbuf', '2.0')
+        from gi.repository import GdkPixbuf
+        import os
+        for size in [512, 256, 128]:
+            d = f'/app/share/icons/hicolor/{size}x{size}/apps'
+            os.makedirs(d, exist_ok=True)
+            pb = GdkPixbuf.Pixbuf.new_from_file_at_scale('assets/icon.png', size, size, True)
+            pb.savev(f'{d}/com.github.ElysiumDisc.nautune.png', 'png', [], [])
+        "
+    sources:
+      - type: git
+        url: https://github.com/ElysiumDisc/nautune.git
+        commit: db810545a082af3341c1b18358ca26f12651d8c3
+      - type: git
+        url: https://github.com/flutter/flutter.git
+        tag: 3.38.9
+        dest: flutter
