@@ -75,13 +75,21 @@ class HelmService extends ChangeNotifier {
     _targetController.add(target);
     notifyListeners();
 
-    // Start polling to keep target state updated
-    _pollingTimer?.cancel();
-    _pollingTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      _refreshTargetState();
-    });
+    // Start adaptive polling: 3s when playing, 10s when idle
+    _startAdaptivePolling();
 
     debugPrint('Helm: Activated control of ${target.deviceName}');
+  }
+
+  /// Adaptive polling: frequent when target is playing, slower when idle.
+  void _startAdaptivePolling() {
+    _pollingTimer?.cancel();
+    final interval = (_activeTarget?.isPaused ?? true)
+        ? const Duration(seconds: 10)
+        : const Duration(seconds: 3);
+    _pollingTimer = Timer.periodic(interval, (_) {
+      _refreshTargetState();
+    });
   }
 
   /// Deactivate helm mode — stop controlling the remote session.
@@ -107,9 +115,15 @@ class HelmService extends ChangeNotifier {
       );
 
       if (match.isNotEmpty) {
+        final oldPaused = _activeTarget!.isPaused;
         _activeTarget = HelmSession.fromSessionJson(match);
         _targetController.add(_activeTarget);
         notifyListeners();
+
+        // Adjust polling rate when play/pause state changes
+        if (_activeTarget!.isPaused != oldPaused) {
+          _startAdaptivePolling();
+        }
       }
     } catch (e) {
       debugPrint('Helm: Failed to refresh target state: $e');

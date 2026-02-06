@@ -112,8 +112,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   static const int _maxCacheSize = 50;
 
   StreamSubscription? _trackSub;
-  StreamSubscription? _positionSub;
-  StreamSubscription? _playingSub;
   late TabController _tabController;
   List<_LyricLine>? _lyrics;
   bool _loadingLyrics = false;
@@ -173,12 +171,9 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
           }
         }
       });
-      _positionSub = _audioService.positionStream.listen((_) {
-        if (mounted) setState(() {});
-      });
-      _playingSub = _audioService.playingStream.listen((_) {
-        if (mounted) setState(() {});
-      });
+      // Position and playing state are handled by StreamBuilder<PlayerSnapshot>
+      // in build() — no setState needed here (avoids double-rebuilds).
+      // Only loop state needs setState since it's not in PlayerSnapshot.
       _loopSub = _audioService.loopStateStream.listen((_) {
         if (mounted) setState(() {});
       });
@@ -601,8 +596,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   void dispose() {
     _tabController.dispose();
     _trackSub?.cancel();
-    _positionSub?.cancel();
-    _playingSub?.cancel();
     _loopSub?.cancel();
     _lyricsScrollController.dispose();
     _userScrollTimer?.cancel();
@@ -1985,6 +1978,24 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                                 content: Text('Refreshing lyrics...'),
                                                 duration: Duration(seconds: 1),
                                               ),
+                                            );
+                                          },
+                                        ),
+                                        StatefulBuilder(
+                                          builder: (context, setMenuState) {
+                                            return SwitchListTile(
+                                              secondary: const Icon(Icons.all_inclusive),
+                                              title: const Text('Infinite Radio'),
+                                              subtitle: Text(
+                                                _appState.infiniteRadioEnabled
+                                                    ? 'Auto-adds similar tracks when queue is low'
+                                                    : 'Endless playback based on current track',
+                                              ),
+                                              value: _appState.infiniteRadioEnabled,
+                                              onChanged: (value) {
+                                                _appState.toggleInfiniteRadio(value);
+                                                setMenuState(() {});
+                                              },
                                             );
                                           },
                                         ),

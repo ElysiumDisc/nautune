@@ -444,23 +444,30 @@ class _OfflineLibraryScreenState extends State<OfflineLibraryScreen> {
                             width: 48,
                             height: 48,
                             decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(4),
+                              borderRadius: BorderRadius.circular(8),
                               color: theme.colorScheme.primaryContainer,
                             ),
-                            child: download.isCompleted
-                                ? Icon(Icons.check_circle,
-                                    color: theme.colorScheme.primary)
-                                : download.isDownloading
-                                    ? CircularProgressIndicator(
-                                        value: download.progress,
-                                        strokeWidth: 3,
-                                      )
-                                    : download.isFailed
-                                        ? Icon(Icons.error,
-                                            color: theme.colorScheme.error)
-                                        : Icon(Icons.schedule,
-                                            color: theme.colorScheme
-                                                .onPrimaryContainer),
+                            child: Center(
+                              child: download.isCompleted
+                                  ? Icon(Icons.check_circle,
+                                      color: theme.colorScheme.primary)
+                                  : download.isDownloading
+                                      ? SizedBox(
+                                          width: 28,
+                                          height: 28,
+                                          child: CircularProgressIndicator(
+                                            value: download.progress,
+                                            strokeWidth: 3,
+                                            color: theme.colorScheme.primary,
+                                          ),
+                                        )
+                                      : download.isFailed
+                                          ? Icon(Icons.error,
+                                              color: theme.colorScheme.error)
+                                          : Icon(Icons.schedule,
+                                              color: theme.colorScheme
+                                                  .onPrimaryContainer),
+                            ),
                           ),
                           title: Text(
                             track.name,

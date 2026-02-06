@@ -26,6 +26,7 @@
 - **Global Search**: Unified search across your entire library with instant results
 - **Smart Offline Mode**: Persistent offline preference, auto-detects airplane mode, seamless downloaded content playback
 - **A-B Repeat Loop**: Set loop markers on downloaded/cached tracks to repeat a section (long-press with haptic feedback on iOS, or use the A-B Loop button on desktop). Save loops for later recall.
+- **Infinite Radio**: Auto-generates similar tracks when your queue runs low — toggle from the full player's more options menu
 - **High-Fidelity Playback**: Native backends for Linux and iOS ensuring bit-perfect audio
 - **CarPlay Support**: Take your Jellyfin library on the road with CarPlay interface
 - **Personalized Home**: Discover, On This Day, and For You recommendation shelves
@@ -517,9 +518,9 @@ Nautune offers 5 audio-reactive visualizer styles. Access the picker via **Setti
 | Style | Description |
 |-------|-------------|
 | **Ocean Waves** | Bioluminescent waves with floating particles, bass-reactive depth |
-| **Spectrum Bars** | Classic vertical frequency bars with album art colors and peak hold |
+| **Spectrum Bars** | Classic vertical frequency bars with album art colors, glowing peak indicators |
 | **Mirror Bars** | Symmetric bars extending from center, creates "sound wave" look |
-| **Radial** | Circular bar arrangement with slow rotation and bass pulse rings |
+| **Radial** | Circular bar arrangement with slow rotation, bass pulse rings, bright center core |
 | **Psychedelic** | Milkdrop-inspired effects with 3 auto-cycling presets |
 
 - **30fps rendering**: Battery-optimized frame rate with smooth interpolation
@@ -646,6 +647,19 @@ flutter run -d linux --debug
 flutter build linux --release
 ```
 
+### Build AppImage (Linux)
+```bash
+flutter build linux --release && \
+rm -rf AppDir && \
+mkdir -p AppDir/usr/bin && \
+cp -r build/linux/x64/release/bundle/* AppDir/usr/bin/ && \
+cp linux/nautune.desktop AppDir/ && \
+cp linux/nautune.png AppDir/ && \
+cd AppDir && ln -s usr/bin/nautune AppRun && cd .. && \
+mkdir -p dist && \
+ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-6.7.0.AppImage
+```
+
 ### Build Deb Package (Linux)
 ```bash
 # Requires: dart pub global activate fastforge
@@ -710,26 +724,56 @@ flatpak run com.github.ElysiumDisc.nautune
 # 4. Commit and push the updated manifest + generated/ files
 ```
 
-#### Submit an update to Flathub
-After your app is accepted on Flathub, updates go to your dedicated repo
-(`flathub/com.github.ElysiumDisc.nautune`):
+#### After Flathub accepts your app (one-time setup)
+Once your submission PR is merged, Flathub creates a dedicated repo for your app at
+`flathub/com.github.ElysiumDisc.nautune`. You'll receive a GitHub email invitation —
+**accept it within 7 days** (requires 2FA enabled on your GitHub account).
 
 ```bash
-# 1. Push your code changes to the nautune repo and note the commit hash
+# Clone your Flathub app repo (do this once after accepting the invite)
+git clone git@github.com:flathub/com.github.ElysiumDisc.nautune.git ~/flathub-nautune
+```
+
+#### Publish an update to Flathub
+Every time you release a new version of Nautune:
+
+```bash
+# 1. Make your changes in the nautune repo, commit and push
+cd ~/nautune
+git add . && git commit -m "v6.8.0 - new features" && git push
+
+# 2. Get the commit hash you just pushed
+git rev-parse HEAD
+# Example output: abc123def456...
+
+# 3. Edit flatpak-flutter.yml — replace the old commit hash with the new one
+#    (under sources > type: git > commit:)
+
+# 4a. If you changed pubspec.yaml (added/removed/updated dependencies):
+#     Regenerate the full manifest
+source /opt/flatpak-flutter/venv/bin/activate
+/opt/flatpak-flutter/flatpak-flutter.py flatpak-flutter.yml
+deactivate
+
+# 4b. If you did NOT change dependencies:
+#     Just update the commit hash directly in com.github.ElysiumDisc.nautune.yml
+#     (same sources > type: git > commit: field)
+
+# 5. (Optional) Test locally before publishing
+flatpak-builder --user --install --force-clean build-dir com.github.ElysiumDisc.nautune.yml
+flatpak run com.github.ElysiumDisc.nautune
+
+# 6. Copy updated files to your Flathub repo and push
+cp com.github.ElysiumDisc.nautune.yml ~/flathub-nautune/
+cp -r generated/ ~/flathub-nautune/
+cd ~/flathub-nautune
+git pull
+git add .
+git commit -m "Update to v6.8.0"
 git push
 
-# 2. Update flatpak-flutter.yml with the new commit hash
-# 3. Regenerate the manifest (see above)
-# 4. Clone your Flathub app repo
-git clone git@github.com:flathub/com.github.ElysiumDisc.nautune.git /tmp/flathub-nautune
-
-# 5. Copy updated files
-cp com.github.ElysiumDisc.nautune.yml /tmp/flathub-nautune/
-cp -r generated/ /tmp/flathub-nautune/
-
-# 6. Commit, push, and the Flathub bot auto-builds
-cd /tmp/flathub-nautune
-git add . && git commit -m "Update to vX.Y.Z" && git push
+# The Flathub bot auto-builds on push — your update goes live within a few hours.
+# No PR needed, you have direct push access to your app's repo.
 ```
 
 ### Static Analysis

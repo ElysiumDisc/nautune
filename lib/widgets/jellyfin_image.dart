@@ -6,7 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 
-class JellyfinImage extends StatelessWidget {
+class JellyfinImage extends StatefulWidget {
   const JellyfinImage({
     super.key,
     required this.itemId,
@@ -35,30 +35,64 @@ class JellyfinImage extends StatelessWidget {
   final String? artistId; // If provided, will check for downloaded artist image first
 
   @override
+  State<JellyfinImage> createState() => _JellyfinImageState();
+}
+
+class _JellyfinImageState extends State<JellyfinImage> {
+  Future<File?>? _artistImageFuture;
+  Future<File?>? _artworkFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _initFutures();
+  }
+
+  @override
+  void didUpdateWidget(JellyfinImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Only recreate futures if the relevant IDs change
+    if (oldWidget.artistId != widget.artistId ||
+        oldWidget.trackId != widget.trackId) {
+      _initFutures();
+    }
+  }
+
+  void _initFutures() {
+    final appState = Provider.of<NautuneAppState>(context, listen: false);
+    if (widget.artistId != null) {
+      _artistImageFuture = appState.downloadService.getArtistImageFile(widget.artistId!);
+    }
+    if (widget.trackId != null) {
+      _artworkFuture = appState.downloadService.getArtworkFile(widget.trackId!);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (imageTag == null || imageTag!.isEmpty) {
+    if (widget.imageTag == null || widget.imageTag!.isEmpty) {
       return _buildError(context, 'No image tag provided');
     }
 
     final appState = Provider.of<NautuneAppState>(context, listen: false);
 
     // If artistId is provided, try to load downloaded artist image first
-    if (artistId != null) {
-      final isOfflineMarker = imageTag == 'offline';
+    if (widget.artistId != null) {
+      final isOfflineMarker = widget.imageTag == 'offline';
       return FutureBuilder<File?>(
-        future: appState.downloadService.getArtistImageFile(artistId!),
+        future: _artistImageFuture,
         builder: (context, snapshot) {
           if (snapshot.hasData && snapshot.data != null) {
             // Offline artist image found - use it!
             return Image.file(
               snapshot.data!,
-              width: width,
-              height: height,
-              fit: boxFit,
+              width: widget.width,
+              height: widget.height,
+              fit: widget.boxFit,
               errorBuilder: (context, error, stackTrace) {
                 if (isOfflineMarker) {
-                  if (errorBuilder != null) {
-                    return errorBuilder!(context, '', error);
+                  if (widget.errorBuilder != null) {
+                    return widget.errorBuilder!(context, '', error);
                   }
                   return _buildError(context, error);
                 }
@@ -68,8 +102,8 @@ class JellyfinImage extends StatelessWidget {
           }
           // No offline artist image - fall back to network image (unless offline marker)
           if (isOfflineMarker) {
-            if (errorBuilder != null) {
-              return errorBuilder!(context, '', 'No offline image available');
+            if (widget.errorBuilder != null) {
+              return widget.errorBuilder!(context, '', 'No offline image available');
             }
             return _buildError(context, 'No offline image available');
           }
@@ -79,17 +113,17 @@ class JellyfinImage extends StatelessWidget {
     }
 
     // If trackId is provided, try to load downloaded album artwork first
-    if (trackId != null) {
+    if (widget.trackId != null) {
       return FutureBuilder<File?>(
-        future: appState.downloadService.getArtworkFile(trackId!),
+        future: _artworkFuture,
         builder: (context, snapshot) {
           if (snapshot.hasData && snapshot.data != null) {
             // Offline artwork found - use it!
             return Image.file(
               snapshot.data!,
-              width: width,
-              height: height,
-              fit: boxFit,
+              width: widget.width,
+              height: widget.height,
+              fit: widget.boxFit,
               errorBuilder: (context, error, stackTrace) => _buildNetworkImage(context, appState),
             );
           }
@@ -105,12 +139,12 @@ class JellyfinImage extends StatelessWidget {
 
   Widget _buildNetworkImage(BuildContext context, NautuneAppState appState) {
     // Determine optimal dimensions for request
-    final requestWidth = maxWidth ?? (width != null ? (width! * 2).toInt() : 400);
-    final requestHeight = maxHeight ?? (height != null ? (height! * 2).toInt() : null);
+    final requestWidth = widget.maxWidth ?? (widget.width != null ? (widget.width! * 2).toInt() : 400);
+    final requestHeight = widget.maxHeight ?? (widget.height != null ? (widget.height! * 2).toInt() : null);
 
     final imageUrl = appState.jellyfinService.buildImageUrl(
-      itemId: itemId,
-      tag: imageTag!,
+      itemId: widget.itemId,
+      tag: widget.imageTag!,
       maxWidth: requestWidth,
       maxHeight: requestHeight,
     );
@@ -118,18 +152,18 @@ class JellyfinImage extends StatelessWidget {
     return CachedNetworkImage(
       imageUrl: imageUrl,
       httpHeaders: appState.jellyfinService.imageHeaders(),
-      width: width,
-      height: height,
-      fit: boxFit,
-      placeholder: placeholderBuilder != null
-          ? (context, url) => placeholderBuilder!(context, url)
+      width: widget.width,
+      height: widget.height,
+      fit: widget.boxFit,
+      placeholder: widget.placeholderBuilder != null
+          ? (context, url) => widget.placeholderBuilder!(context, url)
           : (context, url) => Container(
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                width: width,
-                height: height,
+                width: widget.width,
+                height: widget.height,
               ),
-      errorWidget: errorBuilder != null
-          ? (context, url, error) => errorBuilder!(context, url, error)
+      errorWidget: widget.errorBuilder != null
+          ? (context, url, error) => widget.errorBuilder!(context, url, error)
           : (context, url, error) => _buildError(context, error),
       memCacheWidth: requestWidth,
       memCacheHeight: requestHeight,
@@ -140,8 +174,8 @@ class JellyfinImage extends StatelessWidget {
   Widget _buildError(BuildContext context, dynamic error) {
     return Container(
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      width: width,
-      height: height,
+      width: widget.width,
+      height: widget.height,
       child: Center(
         child: Icon(
           Icons.image_not_supported,

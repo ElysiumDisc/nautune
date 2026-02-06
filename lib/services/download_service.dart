@@ -62,6 +62,7 @@ class DownloadService extends ChangeNotifier {
   bool _isDownloading = false;
   int _maxConcurrentDownloads = 3; // Now configurable
   int _activeDownloads = 0;
+  final http.Client _httpClient = http.Client(); // Reuse for connection pooling
   bool _demoModeEnabled = false;
   Uint8List? _demoAudioBytes;
   final Set<String> _demoDownloadIds = <String>{};
@@ -757,17 +758,13 @@ class DownloadService extends ChangeNotifier {
     }
   }
 
-  String? getArtworkPath(String trackId) {
+  Future<String?> getArtworkPath(String trackId) async {
     // Return cached artwork path if it exists
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
       final path = 'downloads/artwork/$trackId.jpg';
-      if (File(path).existsSync()) {
+      if (await File(path).exists()) {
         return path;
       }
-    } else {
-      // For mobile, we need async path, so this won't work perfectly
-      // Better to use a Future getter or callback
-      return null;
     }
     return null;
   }
@@ -937,7 +934,7 @@ class DownloadService extends ChangeNotifier {
 
     try {
       final url = item.track.downloadUrl(jellyfinService.baseUrl, jellyfinService.token);
-      final response = await http.Client().send(http.Request('GET', Uri.parse(url)));
+      final response = await _httpClient.send(http.Request('GET', Uri.parse(url)));
       
       if (response.statusCode != 200) {
         throw Exception('Failed to download: HTTP ${response.statusCode}');
@@ -1311,11 +1308,11 @@ class DownloadService extends ChangeNotifier {
     unawaited(_processQueue());
   }
 
-  String? getLocalPath(String trackId) {
+  Future<String?> getLocalPath(String trackId) async {
     final item = _downloads[trackId];
     if (item != null && item.isCompleted) {
       final file = File(item.localPath);
-      if (file.existsSync()) {
+      if (await file.exists()) {
         return item.localPath;
       }
     }

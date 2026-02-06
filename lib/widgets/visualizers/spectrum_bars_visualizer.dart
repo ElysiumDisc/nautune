@@ -217,7 +217,7 @@ class _SpectrumBarsPainter extends CustomPainter {
       canvas.drawRRect(rrect, _barPaint);
     }
 
-    // Draw peak indicators
+    // Draw peak indicators — brighter, thicker, with glow
     for (int i = 0; i < barCount && i < peaks.length; i++) {
       final peakValue = peaks[i];
       if (peakValue < 0.05) continue;
@@ -226,11 +226,19 @@ class _SpectrumBarsPainter extends CustomPainter {
       final peakY = size.height - (peakValue * effectiveHeight * 0.85);
       final color = _getBarColor(i, barCount, peakValue);
 
-      _peakPaint.color = color.withValues(alpha: opacity * 0.9);
+      // Glow behind peak
+      _glowPaint.color = color.withValues(alpha: opacity * 0.4);
+      final glowRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(x - 1, peakY - 4, barWidth + 2, 6),
+        const Radius.circular(3),
+      );
+      canvas.drawRRect(glowRect, _glowPaint);
 
+      // Bright peak bar
+      _peakPaint.color = color.withValues(alpha: opacity * 0.95);
       final peakRect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(x, peakY - 3, barWidth, 3),
-        const Radius.circular(1.5),
+        Rect.fromLTWH(x, peakY - 2.5, barWidth, 4),
+        const Radius.circular(2),
       );
       canvas.drawRRect(peakRect, _peakPaint);
     }

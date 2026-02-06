@@ -150,11 +150,14 @@ class _SpectrumRadialPainter extends CustomPainter {
       canvas.drawCircle(center, pulseRadius, _centerPaint);
     }
 
-    // Inner core (brighter, pulses with treble)
-    final coreRadius = innerRadius * (0.25 + treble * 0.15);
-    _centerPaint.color = primaryColor.withValues(alpha: opacity * (0.6 + amplitude * 0.3));
+    // Inner core — brighter, pulses with treble + mid
+    final coreRadius = innerRadius * (0.3 + treble * 0.2 + mid * 0.1);
+    _centerPaint.color = primaryColor.withValues(alpha: opacity * (0.7 + amplitude * 0.3));
     _centerPaint.maskFilter = null;
     canvas.drawCircle(center, coreRadius, _centerPaint);
+    // Bright highlight in center
+    _centerPaint.color = Colors.white.withValues(alpha: opacity * (0.15 + bass * 0.2));
+    canvas.drawCircle(center, coreRadius * 0.5, _centerPaint);
     _centerPaint.maskFilter = _blurFilter8;
 
     final barCount = bars.length;

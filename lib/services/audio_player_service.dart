@@ -188,7 +188,7 @@ class AudioPlayerService {
   /// Returns a file:// URI for local artwork, or null if not available.
   Future<Uri?> _getOfflineArtworkUri(String trackId) async {
     final artworkPath = await _downloadService?.getArtworkPathForTrack(trackId);
-    if (artworkPath != null && File(artworkPath).existsSync()) {
+    if (artworkPath != null && await File(artworkPath).exists()) {
       return Uri.file(artworkPath);
     }
     return null;
@@ -1130,12 +1130,9 @@ class AudioPlayerService {
   /// Resolve the track source URL (download or streaming)
   Future<(String?, bool)> _resolveTrackSource(JellyfinTrack track) async {
     // 1) Downloaded file
-    final localPath = _downloadService?.getLocalPath(track.id);
+    final localPath = await _downloadService?.getLocalPath(track.id);
     if (localPath != null) {
-      final file = File(localPath);
-      if (file.existsSync()) {
-        return (localPath, true);
-      }
+      return (localPath, true);
     }
 
     // 2) Streaming URL
@@ -1244,20 +1241,12 @@ class AudioPlayerService {
     bool isLocalFile = false;
 
     // Check for downloaded file first (works in airplane mode!)
-    final localPath = _downloadService?.getLocalPath(track.id);
+    final localPath = await _downloadService?.getLocalPath(track.id);
     if (localPath != null) {
-      // Verify file exists before trying to play
-      final file = File(localPath);
-      if (await file.exists()) {
-          activeUrl = localPath;
-          isOffline = true;
-          isLocalFile = true;
-          debugPrint('✅ Found local file: $localPath');
-        } else {
-          debugPrint('⚠️ Local file not found (may be orphaned): $localPath');
-          // Clean up orphaned reference
-          await _downloadService?.verifyAndCleanupDownloads();
-        }
+      activeUrl = localPath;
+      isOffline = true;
+      isLocalFile = true;
+      debugPrint('✅ Found local file: $localPath');
     }
 
     // Check for cached file (pre-cached during album playback)
@@ -2429,14 +2418,11 @@ class AudioPlayerService {
 
     try {
       // Check for local file first
-      final localPath = _downloadService?.getLocalPath(track.id);
+      final localPath = await _downloadService?.getLocalPath(track.id);
       if (localPath != null) {
-        final file = File(localPath);
-        if (await file.exists()) {
-          await _crossfadePlayer!.setSourceDeviceFile(localPath);
-          debugPrint('✅ Crossfade: loaded local file');
-          return true;
-        }
+        await _crossfadePlayer!.setSourceDeviceFile(localPath);
+        debugPrint('✅ Crossfade: loaded local file');
+        return true;
       }
       
       // Fall back to streaming
@@ -2652,15 +2638,12 @@ class AudioPlayerService {
       bool isLocal = false;
 
       // Try local file first (downloaded)
-      final localPath = _downloadService?.getLocalPath(track.id);
+      final localPath = await _downloadService?.getLocalPath(track.id);
       if (localPath != null) {
-        final file = File(localPath);
-        if (await file.exists()) {
-          if (await trySetSource(localPath, isFile: true)) {
-            loaded = true;
-            isLocal = true;
-            debugPrint('✅ Pre-loaded from local file: ${track.name}');
-          }
+        if (await trySetSource(localPath, isFile: true)) {
+          loaded = true;
+          isLocal = true;
+          debugPrint('✅ Pre-loaded from local file: ${track.name}');
         }
       }
 

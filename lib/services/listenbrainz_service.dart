@@ -25,7 +25,9 @@ class ListenBrainzService {
   List<Map<String, dynamic>> _pendingScrobbles = [];
 
   // Cache for MusicBrainz recording metadata (MBID -> {trackName, artistName})
+  // Bounded to prevent unbounded memory growth during long sessions.
   static final Map<String, Map<String, String>> _mbMetadataCache = {};
+  static const int _mbCacheMaxSize = 200;
 
   // Cache for popularity data (expires after 7 days)
   static const _popularityCacheBoxName = 'listenbrainz_popularity_cache';
@@ -607,6 +609,7 @@ class ListenBrainzService {
           trackName: cached['trackName'],
           artistName: cached['artistName'],
           albumName: cached['albumName'],
+          releaseMbid: cached['releaseMbid'],
           score: rec.score,
         ));
         continue;
@@ -645,12 +648,22 @@ class ListenBrainzService {
             releaseMbid = releases.first['id'] as String?;
           }
 
-          // Cache the result
+          // Cache the result (including releaseMbid for album art)
           if (title != null && artistName != null) {
+            // Evict oldest entries if cache is full
+            if (_mbMetadataCache.length >= _mbCacheMaxSize) {
+              final keysToRemove = _mbMetadataCache.keys
+                  .take(_mbMetadataCache.length - _mbCacheMaxSize + 20)
+                  .toList();
+              for (final key in keysToRemove) {
+                _mbMetadataCache.remove(key);
+              }
+            }
             _mbMetadataCache[rec.recordingMbid] = {
               'trackName': title,
               'artistName': artistName,
               'albumName': ?albumName,
+              'releaseMbid': ?releaseMbid,
             };
           }
 
@@ -729,22 +742,24 @@ class ListenBrainzService {
             break;
           }
 
-          // Second priority: name + artist match (fuzzy)
-          final recTrackLower = rec.trackName!.toLowerCase();
-          final recArtistLower = rec.artistName!.toLowerCase();
-          final trackNameLower = track.name.toLowerCase();
+          // Second priority: name + artist match (strict fuzzy)
+          final recTrackLower = rec.trackName!.toLowerCase().trim();
+          final recArtistLower = rec.artistName!.toLowerCase().trim();
+          final trackNameLower = track.name.toLowerCase().trim();
 
-          // Check if track names match (exact or one contains the other)
+          // Check if track names match — exact match, or contains only
+          // if the shorter string is long enough to be meaningful (>= 8 chars)
+          // to prevent short names like "Love" matching "I Love You Baby"
           final nameMatch = trackNameLower == recTrackLower ||
-              trackNameLower.contains(recTrackLower) ||
-              recTrackLower.contains(trackNameLower);
+              (recTrackLower.length >= 8 && trackNameLower.contains(recTrackLower)) ||
+              (trackNameLower.length >= 8 && recTrackLower.contains(trackNameLower));
 
-          // Check if any artist matches (fuzzy - contains check)
+          // Check if any artist matches (exact or contains with min length)
           final artistMatch = track.artists.any((a) {
-            final artistLower = a.toLowerCase();
+            final artistLower = a.toLowerCase().trim();
             return artistLower == recArtistLower ||
-                artistLower.contains(recArtistLower) ||
-                recArtistLower.contains(artistLower);
+                (recArtistLower.length >= 6 && artistLower.contains(recArtistLower)) ||
+                (artistLower.length >= 6 && recArtistLower.contains(artistLower));
           });
 
           if (nameMatch && artistMatch) {

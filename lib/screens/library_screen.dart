@@ -1163,7 +1163,7 @@ class _AlbumsTab extends StatelessWidget {
                             sliver: SliverGrid(
                               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                                 crossAxisCount: crossAxisCount,
-                                childAspectRatio: 0.75,
+                                childAspectRatio: 0.7,
                                 crossAxisSpacing: 16,
                                 mainAxisSpacing: 16,
                               ),
@@ -1194,7 +1194,7 @@ class _AlbumsTab extends StatelessWidget {
                           sliver: SliverGrid(
                             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                               crossAxisCount: crossAxisCount,
-                              childAspectRatio: 0.75,
+                              childAspectRatio: 0.7,
                               crossAxisSpacing: 16,
                               mainAxisSpacing: 16,
                             ),
@@ -1699,36 +1699,36 @@ class _AlbumCard extends StatelessWidget {
               ),
             ),
             Expanded(
-              child: ClipRect(
-                child: Padding(
-                  padding: const EdgeInsets.all(6.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Flexible(
-                        child: Text(
-                          album.name,
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            color: theme.colorScheme.tertiary,  // Ocean blue
-                            height: 1.2,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        album.name,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          color: theme.colorScheme.tertiary,  // Ocean blue
+                          height: 1.15,
                         ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      if (album.artists.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          album.displayArtist,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.tertiary.withValues(alpha: 0.7),  // Ocean blue slightly transparent
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                    ),
+                    if (album.artists.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        album.displayArtist,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.tertiary.withValues(alpha: 0.7),  // Ocean blue slightly transparent
+                          height: 1.1,
                         ),
-                      ],
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ],
-                  ),
+                  ],
                 ),
               ),
             ),
@@ -4294,7 +4294,7 @@ class _ArtistsTab extends StatelessWidget {
                             sliver: SliverGrid(
                               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                                 crossAxisCount: crossAxisCount,
-                                childAspectRatio: 0.75,
+                                childAspectRatio: 0.7,
                                 crossAxisSpacing: 12,
                                 mainAxisSpacing: 12,
                               ),
@@ -4320,7 +4320,7 @@ class _ArtistsTab extends StatelessWidget {
                           sliver: SliverGrid(
                             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                               crossAxisCount: crossAxisCount,
-                              childAspectRatio: 0.75,
+                              childAspectRatio: 0.7,
                               crossAxisSpacing: 12,
                               mainAxisSpacing: 12,
                             ),
@@ -5532,22 +5532,29 @@ class _DownloadsTab extends StatelessWidget {
                         width: 48,
                         height: 48,
                         decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(8),
                           color: theme.colorScheme.primaryContainer,
                         ),
-                        child: download.isCompleted
-                            ? Icon(Icons.check_circle,
-                                color: theme.colorScheme.primary)
-                            : download.isDownloading
-                                ? CircularProgressIndicator(
-                                    value: download.progress,
-                                    strokeWidth: 3,
-                                  )
-                                : download.isFailed
-                                    ? Icon(Icons.error,
-                                        color: theme.colorScheme.error)
-                                    : Icon(Icons.schedule,
-                                        color: theme.colorScheme.onPrimaryContainer),
+                        child: Center(
+                          child: download.isCompleted
+                              ? Icon(Icons.check_circle,
+                                  color: theme.colorScheme.primary)
+                              : download.isDownloading
+                                  ? SizedBox(
+                                      width: 28,
+                                      height: 28,
+                                      child: CircularProgressIndicator(
+                                        value: download.progress,
+                                        strokeWidth: 3,
+                                        color: theme.colorScheme.primary,
+                                      ),
+                                    )
+                                  : download.isFailed
+                                      ? Icon(Icons.error,
+                                          color: theme.colorScheme.error)
+                                      : Icon(Icons.schedule,
+                                          color: theme.colorScheme.onPrimaryContainer),
+                        ),
                       ),
                       title: Text(
                         track.name,

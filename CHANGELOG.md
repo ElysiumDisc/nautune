@@ -1,10 +1,10 @@
-### v6.7.0 - Helm Mode, Fleet Mode, Bug Fixes & Flatpak
+### v6.7.0 - Helm Mode, Fleet Mode, Bug Fixes, Performance & Flatpak
 
 **Helm Mode (Remote Control)**
 - **Sessions API**: Control another Nautune instance on the same Jellyfin server
 - **Device Discovery**: Automatically finds other Nautune instances via Sessions API
 - **Full Remote Control**: Play, pause, seek, skip next/previous on the target device
-- **Polling State**: Target's now-playing state refreshes every 3 seconds
+- **Adaptive Polling**: 3s refresh when target is playing, 10s when idle (saves API calls)
 - **Player Integration**: Ship's wheel icon in the full player screen header to activate Helm Mode
 - **Active Banner**: Shows "Controlling: [Device Name]" banner when helm is active
 
@@ -14,6 +14,22 @@
 - **Sync Quality Indicator**: Colored dot (green/yellow/red) showing sync health and average RTT
 - **Shuffle/Repeat Controls**: Toggle buttons added to Fleet Mode playback controls, wired to SyncPlay API
 - **Buffering State Wiring**: Audio player buffering state now reported to SyncPlay server for sailor coordination
+
+**Performance Improvements**
+- **Player Screen**: Removed redundant setState listeners — position/playing state handled solely by StreamBuilder (eliminates double-rebuilds at ~30fps)
+- **Image Widget**: Converted JellyfinImage to StatefulWidget — FutureBuilder futures are cached and only recreated when IDs change (prevents re-fetching on every parent rebuild)
+- **Downloads**: Reused single HTTP client for all downloads instead of creating a new one per track (connection pooling)
+- **File I/O**: Replaced all synchronous `existsSync()` calls with async `exists()` in audio player and download service (unblocks main thread)
+- **MusicBrainz Cache**: Capped metadata cache at 200 entries with LRU eviction (prevents unbounded memory growth)
+
+**Visualizer Improvements**
+- **Spectrum Bars**: Enhanced peak indicators — thicker (4px), brighter, with glow layer behind each peak
+- **Radial Visualizer**: Larger inner core, mid-frequency reactive sizing, white highlight center on bass hits
+
+**UI Fixes**
+- **Album Grid (iOS)**: Fixed album name overlapping artist name — reduced aspect ratio (0.75 → 0.7), removed ClipRect, increased spacing
+- **Infinite Radio**: Moved toggle from Settings to full player screen's "more options" menu where it's contextually relevant
+- **Download Progress**: Fixed progress wheel clipped by container — centered with proper sizing and rounded corners
 
 **Bug Fix: CarPlay Lists Stop Loading After First Browse**
 - **Root Cause**: `_navigationDepth` counter was never decremented on back-press
@@ -25,10 +41,17 @@
 - **Fix**: New `forceBroadcastCurrentState()` method broadcasts actual state (playing or paused) to iOS
 - **Result**: Lock screen controls stay interactive regardless of play/pause state
 
+**Bug Fix: ListenBrainz Discovery False Matches**
+- **Fuzzy Matching**: Added minimum string length requirements (8 chars for tracks, 6 for artists) to prevent short strings like "Love" matching unrelated tracks
+- **Album Art Cache**: `releaseMbid` now stored in MusicBrainz metadata cache — discovery album art persists on refresh
+
 **Flatpak Packaging**
+- **Source Build**: Built from source using [flatpak-flutter](https://github.com/TheAppgineer/flatpak-flutter) (no pre-built binaries)
 - **Manifest**: `com.github.ElysiumDisc.nautune.yml` with Freedesktop runtime 24.08
 - **AppStream Metadata**: `com.github.ElysiumDisc.nautune.metainfo.xml` with app description and release history
+- **Desktop Entry**: `com.github.ElysiumDisc.nautune.desktop` with MPRIS and system tray support
 - **Permissions**: Network, PulseAudio, DRI, Wayland/X11, D-Bus for system tray and MPRIS
+- **Flathub Submission**: Pending review at [flathub.org](https://flathub.org)
 
 **Version**
 - Bumped to 6.7.0+1

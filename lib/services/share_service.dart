@@ -40,13 +40,13 @@ class ShareService {
     required DownloadService downloadService,
   }) async {
     // Check if track is downloaded
-    final localPath = downloadService.getLocalPath(track.id);
+    final localPath = await downloadService.getLocalPath(track.id);
     if (localPath == null) {
       debugPrint('ShareService: Track not downloaded: ${track.name}');
       return ShareResult.notDownloaded;
     }
 
-    // Verify file exists
+    // Verify file exists (already checked in getLocalPath, but double-check)
     final file = File(localPath);
     if (!await file.exists()) {
       debugPrint('ShareService: File not found: $localPath');
