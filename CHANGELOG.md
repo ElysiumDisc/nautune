@@ -1,3 +1,14 @@
+### v6.7.1 - Infinite Radio Fix
+
+**Bug Fix: Infinite Radio Not Working After Album Ends**
+- **Root Cause 1**: Race condition — background fetch flag blocked subsequent fetch attempts when tracks finished quickly
+- **Root Cause 2**: Duplicate filtering — InstantMix returned album tracks already in queue, nothing new was added
+- **Root Cause 3**: No UI notification — queue screen didn't update when infinite radio tracks were added
+- **Fix**: Wait for in-flight fetches, fallback to different seed track when all results are duplicates, notify UI after queue changes
+- **Also**: Infinite Radio now works with manual skip-to-next at end of queue
+
+---
+
 ### v6.7.0 - Helm Mode, Fleet Mode, Bug Fixes, Performance & Flatpak
 
 **Helm Mode (Remote Control)**
@@ -47,11 +58,13 @@
 
 **Flatpak Packaging**
 - **Source Build**: Built from source using [flatpak-flutter](https://github.com/TheAppgineer/flatpak-flutter) (no pre-built binaries)
-- **Manifest**: `com.github.ElysiumDisc.nautune.yml` with Freedesktop runtime 24.08
+- **Freedesktop Runtime 25.08**: Uses latest SDK with LLVM 20 extension for clang++ compilation
+- **Shared Modules**: System tray dependency (libayatana-appindicator) uses [Flathub shared-modules](https://github.com/flathub/shared-modules)
+- **Pre-Sized Icons**: 512/256/128px icons pre-generated with ImageMagick (SDK 25.08 lacks PyGObject)
 - **AppStream Metadata**: `com.github.ElysiumDisc.nautune.metainfo.xml` with app description and release history
 - **Desktop Entry**: `com.github.ElysiumDisc.nautune.desktop` with MPRIS and system tray support
 - **Permissions**: Network, PulseAudio, DRI, Wayland/X11, D-Bus for system tray and MPRIS
-- **Flathub Submission**: Pending review at [flathub.org](https://flathub.org)
+- **Flathub Submission**: PR [#7761](https://github.com/flathub/flathub/pull/7761) under review
 
 **Version**
 - Bumped to 6.7.0+1

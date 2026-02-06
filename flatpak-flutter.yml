@@ -116,7 +116,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/ElysiumDisc/nautune.git
-        commit: REPLACE_WITH_FINAL_COMMIT_HASH
+        commit: ecdce9be0efb1677bc8840fecc23a50eef08b1b0
       - type: git
         url: https://github.com/flutter/flutter.git
         tag: 3.38.9

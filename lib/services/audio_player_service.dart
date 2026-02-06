@@ -144,7 +144,7 @@ class AudioPlayerService {
   
   // Infinite Radio support
   bool _infiniteRadioEnabled = false;
-  bool _isFetchingInfiniteRadio = false;
+  Completer<void>? _infiniteRadioFetchCompleter;
   static const int _infiniteRadioThreshold = 2; // Fetch when 2 or fewer tracks remain
 
   // Streaming quality
@@ -1571,6 +1571,16 @@ class AudioPlayerService {
           queueContext: _queue,
           fromShuffle: _isShuffleEnabled,
         );
+      } else if (_infiniteRadioEnabled) {
+        await _checkInfiniteRadio();
+        if (_currentIndex < _queue.length - 1) {
+          _currentIndex++;
+          await playTrack(
+            _queue[_currentIndex],
+            queueContext: _queue,
+            fromShuffle: _isShuffleEnabled,
+          );
+        }
       }
     } catch (e) {
       debugPrint('❌ Skip to next failed: $e');
@@ -2053,12 +2063,16 @@ class AudioPlayerService {
   
   /// Check if we need to fetch more tracks for infinite radio mode
   Future<void> _checkInfiniteRadio() async {
-    if (!_infiniteRadioEnabled || _isFetchingInfiniteRadio) return;
+    // Wait for any in-flight fetch to complete first
+    if (_infiniteRadioFetchCompleter != null) {
+      await _infiniteRadioFetchCompleter!.future;
+    }
+    if (!_infiniteRadioEnabled) return;
     if (_jellyfinService == null || _currentTrack == null) return;
-    
+
     // Calculate remaining tracks in queue
     final remainingTracks = _queue.length - _currentIndex - 1;
-    
+
     if (remainingTracks <= _infiniteRadioThreshold) {
       debugPrint('📻 Infinite Radio: $remainingTracks tracks remaining, fetching more...');
       await _fetchInfiniteRadioTracks();
@@ -2067,48 +2081,71 @@ class AudioPlayerService {
   
   /// Fetch similar tracks using Jellyfin's Instant Mix and append to queue
   Future<void> _fetchInfiniteRadioTracks() async {
-    if (_isFetchingInfiniteRadio || _jellyfinService == null || _currentTrack == null) {
+    if (_infiniteRadioFetchCompleter != null || _jellyfinService == null || _currentTrack == null) {
       return;
     }
-    
-    _isFetchingInfiniteRadio = true;
-    
+
+    _infiniteRadioFetchCompleter = Completer<void>();
+
     try {
       // Use current track to find similar tracks
       final mixTracks = await _jellyfinService!.getInstantMix(
         itemId: _currentTrack!.id,
         limit: 20, // Fetch 20 tracks at a time
       );
-      
+
       if (mixTracks.isEmpty) {
         debugPrint('📻 Infinite Radio: No similar tracks found');
         return;
       }
-      
+
       // Filter out tracks already in queue to avoid duplicates
       final existingIds = _queue.map((t) => t.id).toSet();
-      final newTracks = mixTracks.where((t) => !existingIds.contains(t.id)).toList();
-      
+      var newTracks = mixTracks.where((t) => !existingIds.contains(t.id)).toList();
+
+      // Fallback: if all duplicates, try with a random different track from queue
+      if (newTracks.isEmpty && _queue.length > 1) {
+        debugPrint('📻 Infinite Radio: All duplicates, trying different seed track...');
+
+        // Pick a random track from the queue that has a different albumId
+        final currentAlbumId = _currentTrack!.albumId;
+        final differentAlbumTracks = _queue.where((t) => t.albumId != currentAlbumId).toList();
+        final seedTrack = differentAlbumTracks.isNotEmpty
+            ? differentAlbumTracks[Random().nextInt(differentAlbumTracks.length)]
+            : _queue[Random().nextInt(_queue.length)];
+
+        final fallbackTracks = await _jellyfinService!.getInstantMix(
+          itemId: seedTrack.id,
+          limit: 20,
+        );
+        newTracks = fallbackTracks.where((t) => !existingIds.contains(t.id)).toList();
+      }
+
       if (newTracks.isEmpty) {
-        debugPrint('📻 Infinite Radio: All suggested tracks already in queue');
+        debugPrint('📻 Infinite Radio: No new tracks found after fallback');
         return;
       }
-      
+
       // Append new tracks to queue
       _queue.addAll(newTracks);
-      
+
       debugPrint('📻 Infinite Radio: Added ${newTracks.length} tracks to queue (total: ${_queue.length})');
-      
+
+      // Notify UI and audio handler of queue change
+      _queueController.add(List.from(_queue));
+      _audioHandler?.updateNautuneQueue(_queue);
+
       // Save updated queue
       unawaited(_stateStore.savePlaybackSnapshot(
         queue: _queue,
         currentQueueIndex: _currentIndex,
       ));
-      
+
     } catch (e) {
       debugPrint('📻 Infinite Radio: Failed to fetch tracks: $e');
     } finally {
-      _isFetchingInfiniteRadio = false;
+      _infiniteRadioFetchCompleter!.complete();
+      _infiniteRadioFetchCompleter = null;
     }
   }
   

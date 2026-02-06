@@ -668,6 +668,25 @@ fastforge package --platform linux --targets deb
 
 ### Build Flatpak (Linux)
 
+Nautune is distributed on Flathub as a source build using [flatpak-flutter](https://github.com/TheAppgineer/flatpak-flutter). The Flatpak manifest lives in a **separate Flathub repo** (not this repo) and points to a specific commit hash in this repo.
+
+#### How it works
+
+There are **two repos** involved:
+
+| Repo | Purpose |
+|------|---------|
+| `ElysiumDisc/nautune` (this repo) | App source code + `flatpak-flutter.yml` (source of truth) + `flatpak-local-test.yml` (local testing) |
+| `flathub/com.github.ElysiumDisc.nautune` | Flathub build repo with generated manifest + `shared-modules` submodule + `generated/` files |
+
+The Flathub repo contains the **generated** manifest (`com.github.ElysiumDisc.nautune.yml`) which is produced by running `flatpak-flutter` against `flatpak-flutter.yml` from this repo.
+
+#### Key files in this repo
+
+- **`flatpak-flutter.yml`** — Source of truth. Defines the build: runtime, SDK extensions, dependencies, build commands. Contains a `commit:` field that must point to the latest pushed commit hash.
+- **`flatpak-local-test.yml`** — Same as the generated manifest but uses `type: dir` instead of `type: git`, so you can test locally without pushing first.
+- **`com.github.ElysiumDisc.nautune.yml`** — Generated manifest (output of `flatpak-flutter`). Kept in this repo for reference; the real one lives in the Flathub repo.
+
 #### Prerequisites (one-time setup)
 ```bash
 # Install Flatpak tools
@@ -676,23 +695,19 @@ sudo apt install flatpak flatpak-builder
 # Add Flathub remote
 flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 
-# Install the SDK and runtime
-flatpak install flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
+# Install the SDK, runtime, and extensions
+flatpak install flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
+flatpak install flathub org.freedesktop.Sdk.Extension.llvm20//25.08
+flatpak install flathub org.freedesktop.Sdk.Extension.vala//25.08
 
-# Clone the flatpak-flutter pre-processor
-git clone https://github.com/TheAppgineer/flatpak-flutter.git /opt/flatpak-flutter
-
-# Set up a Python venv for flatpak-flutter
-python3 -m venv /opt/flatpak-flutter/venv
-source /opt/flatpak-flutter/venv/bin/activate
-pip install -r /opt/flatpak-flutter/requirements.txt
-deactivate
+# Clone the Flathub repo (separate from this repo)
+git clone git@github.com:ElysiumDisc/flathub.git ~/flathub
 ```
 
 #### Build and test locally
 ```bash
-# Build the Flatpak (uses the pre-generated manifest)
-flatpak-builder --user --install --force-clean build-dir com.github.ElysiumDisc.nautune.yml
+# Use the local test manifest (type: dir, no commit hash needed)
+flatpak-builder --user --install --force-clean build-dir flatpak-local-test.yml
 
 # Run it
 flatpak run com.github.ElysiumDisc.nautune
@@ -703,78 +718,65 @@ When you add/remove/update packages in `pubspec.yaml`, you need to regenerate th
 offline manifest so Flathub can build without network access:
 
 ```bash
-# 1. Update the commit hash in flatpak-flutter.yml to your latest pushed commit
-#    (edit the 'commit:' field under the nautune git source)
+# 1. Commit and push your changes to this repo
+git add . && git commit -m "your changes" && git push
 
-# 2. Activate the venv and run the pre-processor
-source /opt/flatpak-flutter/venv/bin/activate
-/opt/flatpak-flutter/flatpak-flutter.py flatpak-flutter.yml
-deactivate
+# 2. Update the commit hash in flatpak-flutter.yml to the commit you just pushed
+git rev-parse HEAD
+# Edit flatpak-flutter.yml: replace the commit: field with the new hash
 
-# This regenerates:
+# 3. Clone flatpak-flutter tool and set up a venv
+git clone https://github.com/TheAppgineer/flatpak-flutter.git ~/flathub/.flatpak-flutter-tool
+python3 -m venv ~/flathub/.venv
+~/flathub/.venv/bin/pip install -r ~/flathub/.flatpak-flutter-tool/requirements.txt
+
+# 4. Run the pre-processor (from the Flathub repo directory)
+cd ~/flathub
+~/flathub/.venv/bin/python3 ~/flathub/.flatpak-flutter-tool/flatpak-flutter.py ~/nautune/flatpak-flutter.yml
+
+# This regenerates in ~/flathub:
 #   com.github.ElysiumDisc.nautune.yml  (the build manifest)
 #   generated/sources/pubspec.json      (pinned Dart dependencies)
 #   generated/modules/flutter-sdk-*.json (Flutter SDK module)
-
-# 3. Test the build locally
-flatpak-builder --repo=repo --force-clean --sandbox --user --install \
-  --install-deps-from=flathub build-dir com.github.ElysiumDisc.nautune.yml
-flatpak run com.github.ElysiumDisc.nautune
-
-# 4. Commit and push the updated manifest + generated/ files
-```
-
-#### After Flathub accepts your app (one-time setup)
-Once your submission PR is merged, Flathub creates a dedicated repo for your app at
-`flathub/com.github.ElysiumDisc.nautune`. You'll receive a GitHub email invitation —
-**accept it within 7 days** (requires 2FA enabled on your GitHub account).
-
-```bash
-# Clone your Flathub app repo (do this once after accepting the invite)
-git clone git@github.com:flathub/com.github.ElysiumDisc.nautune.git ~/flathub-nautune
 ```
 
 #### Publish an update to Flathub
 Every time you release a new version of Nautune:
 
 ```bash
-# 1. Make your changes in the nautune repo, commit and push
+# 1. Make your changes in this repo, commit and push
 cd ~/nautune
 git add . && git commit -m "v6.8.0 - new features" && git push
 
-# 2. Get the commit hash you just pushed
+# 2. Update commit hash in flatpak-flutter.yml to the new commit
 git rev-parse HEAD
-# Example output: abc123def456...
+# Edit flatpak-flutter.yml with the new hash
 
-# 3. Edit flatpak-flutter.yml — replace the old commit hash with the new one
-#    (under sources > type: git > commit:)
+# 3a. If you changed pubspec.yaml (added/removed/updated dependencies):
+#     Regenerate the full manifest (see above)
 
-# 4a. If you changed pubspec.yaml (added/removed/updated dependencies):
-#     Regenerate the full manifest
-source /opt/flatpak-flutter/venv/bin/activate
-/opt/flatpak-flutter/flatpak-flutter.py flatpak-flutter.yml
-deactivate
+# 3b. If you did NOT change dependencies:
+#     Just update the commit hash in ~/flathub/com.github.ElysiumDisc.nautune.yml
 
-# 4b. If you did NOT change dependencies:
-#     Just update the commit hash directly in com.github.ElysiumDisc.nautune.yml
-#     (same sources > type: git > commit: field)
-
-# 5. (Optional) Test locally before publishing
-flatpak-builder --user --install --force-clean build-dir com.github.ElysiumDisc.nautune.yml
+# 4. (Optional) Test locally first
+flatpak-builder --user --install --force-clean build-dir flatpak-local-test.yml
 flatpak run com.github.ElysiumDisc.nautune
 
-# 6. Copy updated files to your Flathub repo and push
-cp com.github.ElysiumDisc.nautune.yml ~/flathub-nautune/
-cp -r generated/ ~/flathub-nautune/
-cd ~/flathub-nautune
-git pull
-git add .
+# 5. Push to Flathub repo
+cd ~/flathub
+git add com.github.ElysiumDisc.nautune.yml generated/
 git commit -m "Update to v6.8.0"
 git push
 
-# The Flathub bot auto-builds on push — your update goes live within a few hours.
-# No PR needed, you have direct push access to your app's repo.
+# Flathub auto-builds on push — your update goes live within a few hours.
 ```
+
+#### SDK 25.08 notes
+
+The Freedesktop SDK 25.08 has some quirks that the manifest works around:
+- **clang++ required**: SDK sets `CXX=clang++` but doesn't include it — the `org.freedesktop.Sdk.Extension.llvm20` extension provides it
+- **No PyGObject**: SDK removed `gi` module — icons are pre-generated with ImageMagick (`assets/icons/icon-{512,256,128}.png`) instead of resized at build time
+- **System tray deps**: `tray_manager` needs `libayatana-appindicator3` which is provided by [Flathub shared-modules](https://github.com/flathub/shared-modules) (added as a git submodule in the Flathub repo)
 
 ### Static Analysis
 ```bash
