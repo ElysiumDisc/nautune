@@ -30,11 +30,19 @@ modules:
       - install -Dm644 com.github.ElysiumDisc.nautune.desktop /app/share/applications/com.github.ElysiumDisc.nautune.desktop
       # Install metainfo
       - install -Dm644 com.github.ElysiumDisc.nautune.metainfo.xml /app/share/metainfo/com.github.ElysiumDisc.nautune.metainfo.xml
-      # Install icons at multiple sizes
-      - install -Dm644 icon.png /app/share/icons/hicolor/1024x1024/apps/com.github.ElysiumDisc.nautune.png
-      - install -Dm644 icon.png /app/share/icons/hicolor/512x512/apps/com.github.ElysiumDisc.nautune.png
-      - install -Dm644 icon.png /app/share/icons/hicolor/256x256/apps/com.github.ElysiumDisc.nautune.png
-      - install -Dm644 icon.png /app/share/icons/hicolor/128x128/apps/com.github.ElysiumDisc.nautune.png
+      # Install icons — resize from 1024x1024 source to required sizes
+      - |
+        python3 -c "
+        import gi
+        gi.require_version('GdkPixbuf', '2.0')
+        from gi.repository import GdkPixbuf
+        import os
+        for size in [512, 256, 128]:
+            d = f'/app/share/icons/hicolor/{size}x{size}/apps'
+            os.makedirs(d, exist_ok=True)
+            pb = GdkPixbuf.Pixbuf.new_from_file_at_scale('icon.png', size, size, True)
+            pb.savev(f'{d}/com.github.ElysiumDisc.nautune.png', 'png', [], [])
+        "
     sources:
       - type: dir
         path: build/linux/x64/release/bundle
