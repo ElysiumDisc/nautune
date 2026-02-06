@@ -44,6 +44,7 @@ class SyncPlayProvider extends ChangeNotifier {
   StreamSubscription<SyncPlayCommand>? _playbackCommandSubscription;
   StreamSubscription<ConnectionQuality>? _connectionQualitySubscription;
   StreamSubscription<ReconnectionState>? _reconnectionSubscription;
+  StreamSubscription<bool>? _bufferingSubscription;
 
   // State
   SyncPlaySession? _currentSession;
@@ -176,6 +177,14 @@ class SyncPlayProvider extends ChangeNotifier {
       notifyListeners();
     });
 
+    // Wire audio player buffering state to SyncPlay server
+    _bufferingSubscription = _audioPlayerService.playingStream.listen((isPlaying) {
+      // When playback resumes after buffering, report not buffering
+      if (isPlaying && _syncPlayService != null && _currentSession != null) {
+        _syncPlayService!.reportBuffering(false);
+      }
+    });
+
     // Listen to service loading state
     _syncPlayService!.addListener(_onServiceChanged);
 
@@ -257,12 +266,25 @@ class SyncPlayProvider extends ChangeNotifier {
 
       // Seek to position if specified and different
       if (command.position != null) {
-        // Get current position
+        // Drift correction: 3-tier approach for smooth sync
         final currentPos = _audioPlayerService.currentPosition;
         final diff = (currentPos.inMilliseconds - command.position!.inMilliseconds).abs();
-        if (diff > 1000) {
-          // More than 1 second difference - sync position
+        if (diff > 500) {
+          // Large drift (>500ms) — hard seek to sync immediately
           await _audioPlayerService.seek(command.position!);
+        } else if (diff > 200) {
+          // Medium drift (200-500ms) — adjust playback rate to catch up gradually
+          final behind = currentPos.inMilliseconds < command.position!.inMilliseconds;
+          await _audioPlayerService.setPlaybackRate(behind ? 1.02 : 0.98);
+          // Schedule rate restore when within 50ms
+          Future.delayed(const Duration(milliseconds: 500), () async {
+            final newDiff = (_audioPlayerService.currentPosition.inMilliseconds -
+                    (command.position!.inMilliseconds + 500))
+                .abs();
+            if (newDiff < 50) {
+              await _audioPlayerService.setPlaybackRate(1.0);
+            }
+          });
         }
       }
     }
@@ -286,6 +308,8 @@ class SyncPlayProvider extends ChangeNotifier {
     _connectionQualitySubscription = null;
     _reconnectionSubscription?.cancel();
     _reconnectionSubscription = null;
+    _bufferingSubscription?.cancel();
+    _bufferingSubscription = null;
     _syncPlayService?.removeListener(_onServiceChanged);
     _syncPlayService?.dispose();
     _syncPlayService = null;
@@ -571,6 +595,50 @@ class SyncPlayProvider extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('Failed to set track: $e');
+    }
+  }
+
+  // ============ Shuffle & Repeat ============
+
+  bool _isShuffled = false;
+  String _repeatMode = 'RepeatNone';
+
+  bool get isShuffled => _isShuffled;
+  String get repeatMode => _repeatMode;
+
+  /// Toggle shuffle mode
+  Future<void> toggleShuffle() async {
+    if (_syncPlayService == null) return;
+    _isShuffled = !_isShuffled;
+    notifyListeners();
+
+    try {
+      await _syncPlayService!.setShuffle(_isShuffled);
+    } catch (e) {
+      debugPrint('Failed to toggle shuffle: $e');
+    }
+  }
+
+  /// Toggle repeat mode: RepeatNone -> RepeatAll -> RepeatOne -> RepeatNone
+  Future<void> toggleRepeat() async {
+    if (_syncPlayService == null) return;
+
+    switch (_repeatMode) {
+      case 'RepeatNone':
+        _repeatMode = 'RepeatAll';
+        break;
+      case 'RepeatAll':
+        _repeatMode = 'RepeatOne';
+        break;
+      default:
+        _repeatMode = 'RepeatNone';
+    }
+    notifyListeners();
+
+    try {
+      await _syncPlayService!.setRepeat(_repeatMode);
+    } catch (e) {
+      debugPrint('Failed to toggle repeat: $e');
     }
   }
 

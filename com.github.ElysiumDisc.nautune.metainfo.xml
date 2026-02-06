@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.github.ElysiumDisc.nautune</id>
+
+  <name>Nautune</name>
+  <summary>Poseidon Music Player for Jellyfin</summary>
+
+  <developer id="com.github.ElysiumDisc">
+    <name>ElysiumDisc</name>
+  </developer>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <description>
+    <p>
+      Nautune is a feature-rich music player for Jellyfin media servers. Stream
+      your personal music library with a polished, cross-platform experience
+      featuring adaptive colors, lyrics, waveform visualizers, gapless playback,
+      and collaborative listening via Fleet Mode.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>Gapless and crossfade playback with ReplayGain support</li>
+      <li>Adaptive UI colors extracted from album artwork</li>
+      <li>Synchronized lyrics with automatic fetching</li>
+      <li>Fleet Mode: synchronized playback across devices</li>
+      <li>Helm Mode: remote control other Nautune instances</li>
+      <li>Offline downloads for listening without a connection</li>
+      <li>Smart Mix, Instant Mix, and listening analytics</li>
+      <li>Waveform and FFT audio visualizers</li>
+      <li>ListenBrainz scrobbling</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">com.github.ElysiumDisc.nautune.desktop</launchable>
+
+  <url type="homepage">https://github.com/ElysiumDisc/nautune</url>
+  <url type="bugtracker">https://github.com/ElysiumDisc/nautune/issues</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Nautune library and player on Linux</caption>
+      <image>https://raw.githubusercontent.com/ElysiumDisc/nautune/main/screenshots/linux-ipad1.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Now Playing with adaptive colors</caption>
+      <image>https://raw.githubusercontent.com/ElysiumDisc/nautune/main/screenshots/linux-ipad2.png</image>
+    </screenshot>
+  </screenshots>
+
+  <provides>
+    <binary>nautune</binary>
+  </provides>
+
+  <categories>
+    <category>Audio</category>
+    <category>Music</category>
+    <category>Player</category>
+  </categories>
+
+  <releases>
+    <release version="6.7.0" date="2026-02-06">
+      <description>
+        <p>v6.7.0: Helm Mode, Fleet Mode, Bug Fixes, Flatpak</p>
+        <ul>
+          <li>Helm Mode: Remote control other Nautune instances via Jellyfin Sessions API</li>
+          <li>Fleet Mode: Rebranded SyncPlay with tighter drift correction, sync quality indicator, and shuffle/repeat controls</li>
+          <li>Fix: CarPlay browsing no longer breaks after navigating back (root cause fix)</li>
+          <li>Fix: iOS lock screen play/pause button no longer grays out when paused</li>
+          <li>Flatpak packaging for Linux distribution</li>
+        </ul>
+      </description>
+    </release>
+    <release version="6.6.0" date="2026-01-15">
+      <description>
+        <p>v6.6.0: Artist Tracks, Adaptive Colors, iOS Lock Screen Fix, Smart Mix Expansion</p>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1" />
+</component>

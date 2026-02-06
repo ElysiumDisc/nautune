@@ -58,8 +58,8 @@ class _AddToCollabButtonState extends State<AddToCollabButton> {
           SnackBar(
             content: Text(
               widget.tracks.length == 1
-                  ? 'Added to collaborative playlist'
-                  : 'Added ${widget.tracks.length} tracks to collaborative playlist',
+                  ? 'Added to fleet'
+                  : 'Added ${widget.tracks.length} tracks to fleet',
             ),
             duration: const Duration(seconds: 2),
           ),
@@ -166,9 +166,9 @@ class AddToCollabMenuItem extends StatelessWidget {
             Icons.playlist_add,
             color: theme.colorScheme.primary,
           ),
-          title: const Text('Add to Collab Playlist'),
+          title: const Text('Add to Fleet'),
           subtitle: Text(
-            provider.groupName ?? 'Collaborative Playlist',
+            provider.groupName ?? 'Fleet Mode',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.primary,
             ),
@@ -181,7 +181,7 @@ class AddToCollabMenuItem extends StatelessWidget {
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content: Text('Added to collaborative playlist'),
+                    content: Text('Added to fleet'),
                     duration: Duration(seconds: 2),
                   ),
                 );

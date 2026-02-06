@@ -40,7 +40,7 @@ class SyncPlayGroup {
 
     return SyncPlayGroup(
       groupId: json['GroupId'] as String? ?? '',
-      groupName: json['GroupName'] as String? ?? 'Collaborative Playlist',
+      groupName: json['GroupName'] as String? ?? 'Fleet Mode',
       participants: participants,
       state: SyncPlayState.fromString(json['State'] as String?),
       lastUpdatedAt: json['LastUpdatedAt'] != null

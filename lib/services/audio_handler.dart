@@ -113,6 +113,17 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
     ));
   }
 
+  /// Force broadcast current actual state (playing OR paused) to OS.
+  /// Unlike forcePlayingState() which always says "playing", this reads
+  /// the real player state. Ensures lock screen controls stay interactive.
+  Future<void> forceBroadcastCurrentState() async {
+    final position = await _player.getCurrentPosition() ?? Duration.zero;
+    _broadcastState(_player.state);
+    playbackState.add(playbackState.value.copyWith(
+      updatePosition: position,
+    ));
+  }
+
   void updateNautuneMediaItem(JellyfinTrack track, {Uri? offlineArtUri}) {
     // Use network artwork URL if available, otherwise fall back to offline artwork
     final networkArtUrl = track.artworkUrl();

@@ -135,7 +135,7 @@ class NowPlayingBar extends StatelessWidget {
                           Icon(Icons.group, size: 12, color: theme.colorScheme.onPrimaryContainer),
                           const SizedBox(width: 4),
                           Text(
-                            'COLLAB',
+                            'FLEET',
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: theme.colorScheme.onPrimaryContainer,
                               fontWeight: FontWeight.bold,

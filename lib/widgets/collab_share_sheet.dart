@@ -27,7 +27,7 @@ class CollabShareSheet extends StatelessWidget {
     return Consumer<SyncPlayProvider>(
       builder: (context, provider, _) {
         final groupId = provider.groupId;
-        final groupName = provider.groupName ?? 'Collaborative Playlist';
+        final groupName = provider.groupName ?? 'Fleet Mode';
 
         return Container(
           decoration: BoxDecoration(
@@ -109,7 +109,7 @@ class CollabShareSheet extends StatelessWidget {
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        'Share this ID with friends. They can join via the Collaborative Playlists screen.',
+                        'Share this ID with friends. They can join via the Fleet Mode screen.',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),

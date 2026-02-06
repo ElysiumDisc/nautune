@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Nautune
+Comment=Poseidon's Music Player for Jellyfin
+Exec=nautune %u
+Icon=com.github.ElysiumDisc.nautune
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;Music;Player;
+StartupWMClass=com.elysiumdisc.nautune
+MimeType=x-scheme-handler/nautune;

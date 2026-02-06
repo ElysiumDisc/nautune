@@ -238,7 +238,7 @@ class SyncPlayService extends ChangeNotifier {
     _currentSession = SyncPlaySession(
       group: SyncPlayGroup(
         groupId: groupId,
-        groupName: 'Collaborative Playlist',
+        groupName: 'Fleet Mode',
         participants: [],
         state: SyncPlayState.idle,
       ),
@@ -671,6 +671,34 @@ class SyncPlayService extends ChangeNotifier {
     }
   }
 
+  // ============ Shuffle & Repeat ============
+
+  /// Set shuffle mode for the group
+  Future<void> setShuffle(bool shuffle) async {
+    if (_currentSession == null) return;
+    try {
+      await _client.setShuffleMode(
+        credentials: _credentials,
+        shuffle: shuffle,
+      );
+    } catch (e) {
+      debugPrint('Failed to set shuffle: $e');
+    }
+  }
+
+  /// Set repeat mode for the group
+  Future<void> setRepeat(String mode) async {
+    if (_currentSession == null) return;
+    try {
+      await _client.setRepeatMode(
+        credentials: _credentials,
+        mode: mode,
+      );
+    } catch (e) {
+      debugPrint('Failed to set repeat: $e');
+    }
+  }
+
   // ============ Sync State ============
 
   /// Signal ready state
@@ -782,7 +810,7 @@ class SyncPlayService extends ChangeNotifier {
         _currentSession = SyncPlaySession(
           group: SyncPlayGroup(
             groupId: groupIdToRejoin,
-            groupName: 'Collaborative Playlist',
+            groupName: 'Fleet Mode',
             participants: [
               SyncPlayParticipant(
                 oderId: _deviceId,
@@ -1011,7 +1039,7 @@ class SyncPlayService extends ChangeNotifier {
     final preservedGroupId = isInvalidGroupId
         ? _currentSession!.group.groupId
         : group.groupId;
-    final preservedGroupName = group.groupName.isNotEmpty && group.groupName != 'Collaborative Playlist'
+    final preservedGroupName = group.groupName.isNotEmpty && group.groupName != 'Fleet Mode'
         ? group.groupName
         : _currentSession!.group.groupName;
 

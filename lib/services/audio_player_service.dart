@@ -639,10 +639,9 @@ class AudioPlayerService {
       await session.configure(const AudioSessionConfiguration.music());
       debugPrint('🔊 Audio session reactivated on app resume');
 
-      // If we were supposed to be playing, force the media controls to sync
-      if (isPlaying) {
-        await _audioHandler?.forcePlayingState();
-      }
+      // Force broadcast current state (playing or paused) so iOS lock screen
+      // controls stay interactive even when paused before locking the screen.
+      await _audioHandler?.forceBroadcastCurrentState();
     } catch (e) {
       debugPrint('⚠️ Failed to reactivate audio session: $e');
     }
@@ -1551,6 +1550,11 @@ class AudioPlayerService {
     if (Platform.isIOS) {
       IOSFFTService.instance.syncPosition(clampedPosition.inMilliseconds / 1000.0);
     }
+  }
+
+  /// Set playback speed rate. Used by Fleet Mode drift correction.
+  Future<void> setPlaybackRate(double rate) async {
+    await _player.setPlaybackRate(rate);
   }
   
   Future<void> skipToNext() async {

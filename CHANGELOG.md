@@ -1,3 +1,40 @@
+### v6.7.0 - Helm Mode, Fleet Mode, Bug Fixes & Flatpak
+
+**Helm Mode (Remote Control)**
+- **Sessions API**: Control another Nautune instance on the same Jellyfin server
+- **Device Discovery**: Automatically finds other Nautune instances via Sessions API
+- **Full Remote Control**: Play, pause, seek, skip next/previous on the target device
+- **Polling State**: Target's now-playing state refreshes every 3 seconds
+- **Player Integration**: Ship's wheel icon in the full player screen header to activate Helm Mode
+- **Active Banner**: Shows "Controlling: [Device Name]" banner when helm is active
+
+**Fleet Mode (SyncPlay Rebrand + Improvements)**
+- **Rebranded**: "Collaborative Playlists" is now "Fleet Mode" across all UI surfaces
+- **Tighter Drift Correction**: 3-tier approach — hard seek for >500ms drift, gradual playback rate adjustment (1.02x/0.98x) for 200-500ms drift, no action below 200ms
+- **Sync Quality Indicator**: Colored dot (green/yellow/red) showing sync health and average RTT
+- **Shuffle/Repeat Controls**: Toggle buttons added to Fleet Mode playback controls, wired to SyncPlay API
+- **Buffering State Wiring**: Audio player buffering state now reported to SyncPlay server for sailor coordination
+
+**Bug Fix: CarPlay Lists Stop Loading After First Browse**
+- **Root Cause**: `_navigationDepth` counter was never decremented on back-press
+- **Fix**: Replaced manual counter with `FlutterCarPlayController.templateHistory.length` as source of truth
+- **Result**: CarPlay browsing, back navigation, and reconnects all work reliably
+
+**Bug Fix: iOS Lock Screen Play/Pause Grayed Out**
+- **Root Cause**: `reactivateAudioSession()` only broadcast state when `isPlaying` was true
+- **Fix**: New `forceBroadcastCurrentState()` method broadcasts actual state (playing or paused) to iOS
+- **Result**: Lock screen controls stay interactive regardless of play/pause state
+
+**Flatpak Packaging**
+- **Manifest**: `com.github.ElysiumDisc.nautune.yml` with Freedesktop runtime 24.08
+- **AppStream Metadata**: `com.github.ElysiumDisc.nautune.metainfo.xml` with app description and release history
+- **Permissions**: Network, PulseAudio, DRI, Wayland/X11, D-Bus for system tray and MPRIS
+
+**Version**
+- Bumped to 6.7.0+1
+
+---
+
 ### v6.6.0 - Artist Tracks, Adaptive Colors & Smart Mix Expansion
 
 **Artist Page: Tracks Section**

@@ -224,7 +224,7 @@ class CollabStatusBar extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          provider.groupName ?? 'Collaborative Playlist',
+                          provider.groupName ?? 'Fleet Mode',
                           style: theme.textTheme.labelLarge?.copyWith(
                             color: theme.colorScheme.onPrimaryContainer,
                             fontWeight: FontWeight.bold,

@@ -1344,6 +1344,90 @@ class JellyfinClient {
     }
   }
 
+  // ============ Sessions API (Helm Mode) ============
+
+  /// Fetch all active sessions from the server.
+  /// GET /Sessions
+  Future<List<Map<String, dynamic>>> fetchSessions(
+    JellyfinCredentials credentials,
+  ) async {
+    final uri = _buildUri('/Sessions');
+    final response = await _robustClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+      useCache: false,
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch sessions: ${response.statusCode}',
+      );
+    }
+
+    final data = jsonDecode(response.body) as List<dynamic>? ?? [];
+    return data.whereType<Map<String, dynamic>>().toList();
+  }
+
+  /// Send a playstate command to a remote session.
+  /// POST /Sessions/{sessionId}/Playing/{command}
+  /// Commands: PlayPause, Pause, Unpause, NextTrack, PreviousTrack, Seek
+  Future<void> sendPlaystateCommand(
+    JellyfinCredentials credentials, {
+    required String sessionId,
+    required String command,
+    int? seekPositionTicks,
+  }) async {
+    final queryParams = <String, String>{};
+    if (seekPositionTicks != null) {
+      queryParams['SeekPositionTicks'] = seekPositionTicks.toString();
+    }
+
+    final uri = _buildUri(
+      '/Sessions/$sessionId/Playing/$command',
+      queryParams.isNotEmpty ? queryParams : null,
+    );
+    final response = await _robustClient.post(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200 && response.statusCode != 204) {
+      throw JellyfinRequestException(
+        'Failed to send playstate command "$command": ${response.statusCode}',
+      );
+    }
+  }
+
+  /// Send a play command to a remote session (play specific items).
+  /// POST /Sessions/{sessionId}/Playing
+  Future<void> sendPlayCommand(
+    JellyfinCredentials credentials, {
+    required String sessionId,
+    required List<String> itemIds,
+    String playCommand = 'PlayNow',
+    int? startIndex,
+  }) async {
+    final queryParams = <String, String>{
+      'ItemIds': itemIds.join(','),
+      'PlayCommand': playCommand,
+    };
+    if (startIndex != null) {
+      queryParams['StartIndex'] = startIndex.toString();
+    }
+
+    final uri = _buildUri('/Sessions/$sessionId/Playing', queryParams);
+    final response = await _robustClient.post(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200 && response.statusCode != 204) {
+      throw JellyfinRequestException(
+        'Failed to send play command: ${response.statusCode}',
+      );
+    }
+  }
+
   /// Clear the HTTP cache (ETag/Last-Modified)
   void clearHttpCache() {
     _robustClient.clearCache();

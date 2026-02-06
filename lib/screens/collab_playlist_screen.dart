@@ -10,7 +10,7 @@ import '../widgets/collab_status_bar.dart';
 import '../widgets/syncplay_user_avatar.dart';
 import 'library_screen.dart';
 
-/// Main screen for the collaborative playlist session.
+/// Main screen for the fleet session.
 ///
 /// Features:
 /// - Shows queue with user avatars
@@ -36,7 +36,7 @@ class _CollabPlaylistScreenState extends State<CollabPlaylistScreen> {
         if (!provider.isInSession) {
           return Scaffold(
             appBar: AppBar(
-              title: const Text('Collaborative Playlist'),
+              title: const Text('Fleet Mode'),
             ),
             body: Center(
               child: Column(
@@ -58,7 +58,7 @@ class _CollabPlaylistScreenState extends State<CollabPlaylistScreen> {
                   FilledButton.icon(
                     onPressed: () => _showCreateDialog(context),
                     icon: const Icon(Icons.add),
-                    label: const Text('Create Collaborative Playlist'),
+                    label: const Text('Create Fleet Mode'),
                   ),
                   const SizedBox(height: 12),
                   OutlinedButton.icon(
@@ -76,7 +76,7 @@ class _CollabPlaylistScreenState extends State<CollabPlaylistScreen> {
 
         return Scaffold(
           appBar: AppBar(
-            title: Text(provider.groupName ?? 'Collaborative Playlist'),
+            title: Text(provider.groupName ?? 'Fleet Mode'),
             actions: [
               const CollabShareButton(iconOnly: true),
               PopupMenuButton<String>(
@@ -115,6 +115,9 @@ class _CollabPlaylistScreenState extends State<CollabPlaylistScreen> {
                     onPlayPause: provider.togglePlayPause,
                   ),
                 ),
+
+              // Sync quality indicator
+              _buildSyncQualityIndicator(context, provider),
 
               // Playback controls (all participants can control playback)
               _buildPlaybackControls(context, provider),
@@ -222,12 +225,71 @@ class _CollabPlaylistScreenState extends State<CollabPlaylistScreen> {
     );
   }
 
+  Widget _buildSyncQualityIndicator(BuildContext context, SyncPlayProvider provider) {
+    final theme = Theme.of(context);
+    Color dotColor;
+    String label;
+
+    switch (provider.connectionQuality) {
+      case ConnectionQuality.good:
+        dotColor = Colors.green;
+        label = 'Sync: Good (${provider.averageRtt}ms)';
+        break;
+      case ConnectionQuality.moderate:
+        dotColor = Colors.orange;
+        label = 'Sync: Moderate (${provider.averageRtt}ms)';
+        break;
+      case ConnectionQuality.poor:
+        dotColor = Colors.red;
+        label = 'Sync: Poor (${provider.averageRtt}ms)';
+        break;
+      case ConnectionQuality.disconnected:
+        dotColor = Colors.grey;
+        label = 'Disconnected';
+        break;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: dotColor,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPlaybackControls(BuildContext context, SyncPlayProvider provider) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
+          // Shuffle toggle
+          IconButton(
+            onPressed: () => provider.toggleShuffle(),
+            icon: Icon(
+              Icons.shuffle,
+              color: provider.isShuffled ? Theme.of(context).colorScheme.primary : null,
+            ),
+            iconSize: 24,
+          ),
+          const SizedBox(width: 8),
           IconButton(
             onPressed: provider.previousTrack,
             icon: const Icon(Icons.skip_previous),
@@ -250,6 +312,18 @@ class _CollabPlaylistScreenState extends State<CollabPlaylistScreen> {
             onPressed: provider.nextTrack,
             icon: const Icon(Icons.skip_next),
             iconSize: 32,
+          ),
+          const SizedBox(width: 8),
+          // Repeat toggle
+          IconButton(
+            onPressed: () => provider.toggleRepeat(),
+            icon: Icon(
+              provider.repeatMode == 'RepeatOne' ? Icons.repeat_one : Icons.repeat,
+              color: provider.repeatMode != 'RepeatNone'
+                  ? Theme.of(context).colorScheme.primary
+                  : null,
+            ),
+            iconSize: 24,
           ),
         ],
       ),
@@ -355,7 +429,7 @@ class _CollabPlaylistScreenState extends State<CollabPlaylistScreen> {
           builder: (context) => AlertDialog(
             title: const Text('Leave Session?'),
             content: const Text(
-              'You will be removed from this collaborative playlist session.',
+              'You will be removed from this fleet session.',
             ),
             actions: [
               TextButton(
@@ -391,7 +465,7 @@ class _CollabPlaylistScreenState extends State<CollabPlaylistScreen> {
   }
 }
 
-/// Dialog for creating a new collaborative playlist
+/// Dialog for creating a new fleet
 class CreateCollabDialog extends StatefulWidget {
   const CreateCollabDialog({super.key});
 
@@ -400,7 +474,7 @@ class CreateCollabDialog extends StatefulWidget {
 }
 
 class _CreateCollabDialogState extends State<CreateCollabDialog> {
-  final _nameController = TextEditingController(text: 'My Collab Playlist');
+  final _nameController = TextEditingController(text: 'My Fleet');
   bool _isCreating = false;
 
   @override
@@ -412,7 +486,7 @@ class _CreateCollabDialogState extends State<CreateCollabDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Create Collaborative Playlist'),
+      title: const Text('Create Fleet Mode'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -486,7 +560,7 @@ class _CreateCollabDialogState extends State<CreateCollabDialog> {
   }
 }
 
-/// Dialog for joining a collaborative playlist
+/// Dialog for joining a fleet
 class JoinCollabDialog extends StatefulWidget {
   const JoinCollabDialog({
     super.key,
@@ -518,7 +592,7 @@ class _JoinCollabDialogState extends State<JoinCollabDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Join Collaborative Playlist'),
+      title: const Text('Join Fleet Mode'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -576,7 +650,7 @@ class _JoinCollabDialogState extends State<JoinCollabDialog> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Joined collaborative playlist!'),
+            content: Text('Joined fleet!'),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 2),
           ),

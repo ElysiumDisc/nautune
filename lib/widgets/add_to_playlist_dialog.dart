@@ -50,12 +50,12 @@ Future<void> showAddToPlaylistDialog({
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Active Collab Playlist (if in session)
+            // Active Fleet (if in session)
             if (syncPlay.isInSession) ...[
               ListTile(
                 leading: Icon(Icons.group, color: Theme.of(dialogContext).colorScheme.primary),
                 title: Text(
-                  syncPlay.groupName ?? 'Collab Playlist',
+                  syncPlay.groupName ?? 'Fleet',
                   style: TextStyle(color: Theme.of(dialogContext).colorScheme.primary),
                 ),
                 subtitle: Text(
@@ -125,7 +125,7 @@ Future<void> _addToCollabPlaylist(
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Added ${tracks.length} tracks to "${syncPlay.groupName ?? "Collab Playlist"}"'),
+          content: Text('Added ${tracks.length} tracks to "${syncPlay.groupName ?? "Fleet"}"'),
           backgroundColor: Colors.green,
         ),
       );
@@ -134,7 +134,7 @@ Future<void> _addToCollabPlaylist(
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Failed to add to collab playlist: $e'),
+          content: Text('Failed to add to fleet: $e'),
           backgroundColor: Colors.red,
         ),
       );

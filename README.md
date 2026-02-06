@@ -9,7 +9,8 @@
 - **ListenBrainz Integration**: Scrobble your plays and get personalized music recommendations (matches via MusicBrainz IDs for reliable library matching)
 - **Popular Tracks**: Artist pages show top 5 most popular tracks globally with dynamic accent colors, album pages highlight popular songs with flame icons (powered by ListenBrainz)
 - **Artist Page Redesign**: Dynamic gradient backgrounds extracted from artist artwork, expandable bio cards, compact album grid layout
-- **Collaborative Playlists**: Real-time SyncPlay sessions - listen together with friends via QR code or share link
+- **Fleet Mode**: Real-time synchronized playback across devices - listen together with friends via QR code or share link (formerly Collaborative Playlists)
+- **Helm Mode**: Remote control any other Nautune instance on the same Jellyfin server via the Sessions API
 - **Custom Color Theme**: Create your own theme with primary/secondary color picker
 - **Alternate App Icons**: Choose between Classic (purple), Sunset (orange), Crimson (red), and Emerald (green) icons across all platforms
 - **10-Band Equalizer** (Linux): Full graphic EQ with 12 presets (Rock, Pop, Jazz, Classical, and more)
@@ -651,6 +652,13 @@ flutter build linux --release
 fastforge package --platform linux --targets deb
 ```
 
+### Build Flatpak (Linux)
+```bash
+flutter build linux --release
+flatpak-builder --user --install build-dir com.github.ElysiumDisc.nautune.yml
+flatpak run com.github.ElysiumDisc.nautune
+```
+
 ### Static Analysis
 ```bash
 flutter analyze
@@ -661,11 +669,12 @@ flutter analyze
 | Feature | Platform | Status |
 |---------|----------|--------|
 | Android Build | Android | 🔜 Planned |
-| Desktop Remote Control | iOS → Linux | 🔜 Planned |
+| Helm Mode (Remote Control) | All | ✅ Complete (v6.7) |
+| Fleet Mode (SyncPlay) | All | ✅ Complete (v6.7) |
+| Flatpak Packaging | Linux | ✅ Complete (v6.7) |
 | Additional Visualizers | All | ✅ Complete |
 
 - **Android Build**: Native Android app with full feature parity (visualizers, offline, CarPlay equivalent via Android Auto).
-- **Desktop Remote Control**: Control desktop playback from iOS device over local network.
 
 ## 🙏 Acknowledgments
 

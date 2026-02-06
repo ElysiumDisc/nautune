@@ -2496,7 +2496,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      syncPlay.groupName ?? 'Collaborative Playlist',
+                                      syncPlay.groupName ?? 'Fleet Mode',
                                       style: theme.textTheme.titleMedium?.copyWith(
                                         fontWeight: FontWeight.bold,
                                         color: theme.colorScheme.onPrimaryContainer,
@@ -2615,7 +2615,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                           _showCreateCollabPlaylistDialog(context);
                         },
                         icon: const Icon(Icons.group_add),
-                        label: const Text('Create Collaborative Playlist'),
+                        label: const Text('Create Fleet'),
                       ),
                     if (!appState.isOfflineMode)
                       const SizedBox(height: 12),
@@ -2694,7 +2694,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
-                                        syncPlay.groupName ?? 'Collaborative Playlist',
+                                        syncPlay.groupName ?? 'Fleet Mode',
                                         style: theme.textTheme.titleMedium?.copyWith(
                                           fontWeight: FontWeight.bold,
                                           color: theme.colorScheme.onPrimaryContainer,
@@ -2808,7 +2808,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                         _showCreateCollabPlaylistDialog(context);
                       },
                       icon: const Icon(Icons.group_add),
-                      label: const Text('Create Collaborative Playlist'),
+                      label: const Text('Create Fleet'),
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.all(16),
                         side: BorderSide(color: theme.colorScheme.primary),
@@ -3345,12 +3345,12 @@ class _FavoritesTab extends StatelessWidget {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              // Add to Collab Playlist (if session active)
+                              // Add to Fleet (if session active)
                               if (syncPlay.isInSession)
                                 ListTile(
                                   leading: Icon(Icons.group_add, color: Theme.of(sheetContext).colorScheme.primary),
                                   title: Text(
-                                    'Add to ${syncPlay.groupName ?? "Collab Playlist"}',
+                                    'Add to ${syncPlay.groupName ?? "Fleet"}',
                                     style: TextStyle(color: Theme.of(sheetContext).colorScheme.primary),
                                   ),
                                   onTap: () async {
@@ -3359,7 +3359,7 @@ class _FavoritesTab extends StatelessWidget {
                                       await syncPlay.addTrackToQueue(track);
                                       if (parentContext.mounted) {
                                         ScaffoldMessenger.of(parentContext).showSnackBar(
-                                          SnackBar(content: Text('${track.name} added to collab playlist')),
+                                          SnackBar(content: Text('${track.name} added to fleet')),
                                         );
                                       }
                                     } catch (e) {
