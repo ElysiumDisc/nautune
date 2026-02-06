@@ -1,6 +1,6 @@
 id: com.github.ElysiumDisc.nautune
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 command: nautune
 
@@ -56,7 +56,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/ElysiumDisc/nautune.git
-        commit: 9a6d06383cee4724832ae3ed04984498a6b811d1
+        commit: 98a43f38ab9edeb23c03b68105d5e3322dd5b371
       - type: git
         url: https://github.com/flutter/flutter.git
         tag: 3.38.9
