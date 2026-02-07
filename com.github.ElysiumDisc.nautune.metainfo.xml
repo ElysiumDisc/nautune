@@ -60,6 +60,15 @@
   </categories>
 
   <releases>
+    <release version="6.7.1" date="2026-02-06">
+      <description>
+        <p>v6.7.1: Infinite Radio Fix</p>
+        <ul>
+          <li>Fix: Infinite Radio now continues playing after album ends (race condition, duplicate filtering, and UI notification fixes)</li>
+          <li>Fix: Skip-to-next at end of queue now triggers Infinite Radio fetch</li>
+        </ul>
+      </description>
+    </release>
     <release version="6.7.0" date="2026-02-06">
       <description>
         <p>v6.7.0: Helm Mode, Fleet Mode, Bug Fixes, Flatpak</p>

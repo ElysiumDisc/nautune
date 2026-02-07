@@ -116,7 +116,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/ElysiumDisc/nautune.git
-        commit: ecdce9be0efb1677bc8840fecc23a50eef08b1b0
+        commit: bb0272cea71fc39f16e2e77a46312d83af19ca81
       - type: git
         url: https://github.com/flutter/flutter.git
         tag: 3.38.9
