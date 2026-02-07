@@ -840,6 +840,14 @@ class ListenBrainzService {
           );
         }
 
+        // Try combined "artist track" query for better recall
+        if (tracks.isEmpty) {
+          tracks = await jellyfin.searchTracks(
+            libraryId: libraryId,
+            query: '${rec.artistName!} ${rec.trackName!}',
+          );
+        }
+
         bool matched = false;
         for (final track in tracks) {
           // MBID match
@@ -852,27 +860,28 @@ class ListenBrainzService {
             break;
           }
 
-          // Fuzzy name match
-          final recTrackLower = rec.trackName!.toLowerCase();
-          final recArtistLower = rec.artistName!.toLowerCase();
-          final trackNameLower = track.name.toLowerCase();
+          // Fuzzy name match (with .trim() and min length guards for consistency
+          // with matchRecommendationsToLibrary)
+          final recTrackLower = rec.trackName!.toLowerCase().trim();
+          final recArtistLower = rec.artistName!.toLowerCase().trim();
+          final trackNameLower = track.name.toLowerCase().trim();
 
           final nameMatch = trackNameLower == recTrackLower ||
-              trackNameLower.contains(recTrackLower) ||
-              recTrackLower.contains(trackNameLower);
+              (recTrackLower.length >= 8 && trackNameLower.contains(recTrackLower)) ||
+              (trackNameLower.length >= 8 && recTrackLower.contains(trackNameLower));
 
           final artistMatch = track.artists.any((a) {
-            final artistLower = a.toLowerCase();
+            final artistLower = a.toLowerCase().trim();
             return artistLower == recArtistLower ||
-                artistLower.contains(recArtistLower) ||
-                recArtistLower.contains(artistLower);
+                (recArtistLower.length >= 6 && artistLower.contains(recArtistLower)) ||
+                (artistLower.length >= 6 && recArtistLower.contains(artistLower));
           });
 
-          // Also check album match as additional criteria
+          // Also check album match as additional criteria (with min length guards)
           final albumMatch = rec.albumName != null && track.album != null &&
-              (track.album!.toLowerCase() == rec.albumName!.toLowerCase() ||
-               track.album!.toLowerCase().contains(rec.albumName!.toLowerCase()) ||
-               rec.albumName!.toLowerCase().contains(track.album!.toLowerCase()));
+              (track.album!.toLowerCase().trim() == rec.albumName!.toLowerCase().trim() ||
+               (rec.albumName!.length >= 8 && track.album!.toLowerCase().trim().contains(rec.albumName!.toLowerCase().trim())) ||
+               (track.album!.length >= 8 && rec.albumName!.toLowerCase().trim().contains(track.album!.toLowerCase().trim())));
 
           if (nameMatch && artistMatch) {
             allMatched.add(rec.withJellyfinMatch(track.id));

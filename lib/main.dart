@@ -444,6 +444,8 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
         unawaited(_savePlaybackState());
         // Also ensure analytics data is persisted
         unawaited(ListeningAnalyticsService().saveAnalytics());
+        // Broadcast media session state so lock screen controls stay active
+        unawaited(_broadcastMediaSessionState());
         break;
         
       case AppLifecycleState.resumed:
@@ -471,6 +473,14 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
       debugPrint('💾 Saving playback state for: ${currentTrack.name}');
       // Await the save to ensure it completes before app termination
       await audioService.saveFullPlaybackState();
+    }
+  }
+
+  Future<void> _broadcastMediaSessionState() async {
+    try {
+      await widget.appState.audioPlayerService.reactivateAudioSession();
+    } catch (e) {
+      debugPrint('⚠️ Failed to broadcast media session state: $e');
     }
   }
 

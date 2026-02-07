@@ -1098,6 +1098,51 @@ class JellyfinService {
     )).toList();
   }
 
+  /// Fetches ALL played tracks by paginating through the API.
+  /// Used for accurate stats (top artists, genres, etc.) that need the full picture.
+  Future<List<JellyfinTrack>> getAllPlayedTracks({
+    required String libraryId,
+  }) async {
+    final client = _client;
+    if (client == null) throw StateError('Not connected');
+    final session = _session;
+    if (session == null) throw StateError('No session');
+
+    // First get the total count so we know how many pages to fetch
+    final totalCount = await client.fetchPlayedItemCount(
+      session.credentials,
+      libraryId: libraryId,
+    );
+
+    if (totalCount == 0) return [];
+
+    const pageSize = 500;
+    final allTracks = <JellyfinTrack>[];
+
+    for (int offset = 0; offset < totalCount; offset += pageSize) {
+      final tracksJson = await client.fetchMostPlayed(
+        session.credentials,
+        libraryId: libraryId,
+        itemType: 'Audio',
+        limit: pageSize,
+        startIndex: offset,
+        filterPlayed: true,
+      );
+
+      if (tracksJson.isEmpty) break; // No more results
+
+      allTracks.addAll(tracksJson.map((json) => JellyfinTrack.fromJson(
+        json,
+        serverUrl: session.serverUrl,
+        token: session.credentials.accessToken,
+        userId: session.credentials.userId,
+      )));
+    }
+
+    debugPrint('Stats: Fetched ${allTracks.length} played tracks (total on server: $totalCount)');
+    return allTracks;
+  }
+
   /// Get least played tracks for discovery
   Future<List<JellyfinTrack>> getLeastPlayedTracks({
     required String libraryId,

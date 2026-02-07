@@ -523,20 +523,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return;
     }
 
-    // Try to load cached stats first for instant display
-    final cachedStats = await _ProfileStatsCache.load();
-    if (cachedStats != null && mounted) {
-      _applyCachedStats(cachedStats);
-      // If cache is still fresh, don't refresh from network
-      if (_ProfileStatsCache.isFresh) {
-        // Still load recent tracks (they change often)
-        _loadRecentTracks(appState, libraryId);
-        return;
+    try {
+      // Try to load cached stats first for instant display
+      // Timeout prevents Hive box corruption/lock from hanging forever
+      final cachedStats = await _ProfileStatsCache.load()
+          .timeout(const Duration(seconds: 5));
+      if (cachedStats != null && mounted) {
+        _applyCachedStats(cachedStats);
+        // If cache is still fresh, don't refresh from network
+        if (_ProfileStatsCache.isFresh) {
+          // Still load recent tracks (they change often)
+          _loadRecentTracks(appState, libraryId);
+          return;
+        }
+      }
+
+      // Refresh stats from network
+      await _refreshStatsFromNetwork(appState, libraryId);
+    } catch (e) {
+      debugPrint('Error loading stats: $e');
+    } finally {
+      if (mounted && _statsLoading) {
+        setState(() => _statsLoading = false);
       }
     }
-
-    // Refresh stats from network
-    await _refreshStatsFromNetwork(appState, libraryId);
   }
 
   void _applyCachedStats(Map<String, dynamic> cached) {
@@ -606,8 +616,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _refreshStatsFromNetwork(NautuneAppState appState, String libraryId) async {
     try {
-      // Reduced limit from 10000 to 1000 - still accurate but much faster
-      final tracksFuture = appState.jellyfinService.getMostPlayedTracks(libraryId: libraryId, limit: 1000);
+      // Fetch ALL played tracks via pagination for accurate stats
+      final tracksFuture = appState.jellyfinService.getAllPlayedTracks(libraryId: libraryId);
       final recentFuture = appState.jellyfinService.getRecentlyPlayedTracks(libraryId: libraryId, limit: 10);
       final results = await Future.wait([tracksFuture, recentFuture]);
 
@@ -699,6 +709,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
         }
       });
 
+      // Use actual listening time from local analytics instead of
+      // server-calculated trackDuration × playCount (which is inflated)
+      final actualListeningTime = _analyticsService?.getTotalListeningTime();
+      final actualHours = actualListeningTime != null
+          ? actualListeningTime.inSeconds / 3600.0
+          : statsResult.totalHours; // Fallback to server estimate
+
       if (mounted) {
         setState(() {
           _topTracks = tracks.take(5).toList();
@@ -706,7 +723,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _topArtists = computedTopArtists;
           _recentTracks = results[1];
           _totalPlays = statsResult.totalPlays;
-          _totalHours = statsResult.totalHours;
+          _totalHours = actualHours;
           _genrePlayCounts = statsResult.genrePlayCounts;
           _codecBreakdown = codecCounts;
           _highestQualityTrack = highestQuality;
@@ -752,7 +769,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   ) async {
     final cacheData = <String, dynamic>{
       'totalPlays': statsResult.totalPlays,
-      'totalHours': statsResult.totalHours,
+      'totalHours': _totalHours,
       'uniqueArtists': statsResult.uniqueArtistsCount,
       'uniqueAlbums': statsResult.uniqueAlbumsCount,
       'uniqueTracks': statsResult.uniqueTracksCount,

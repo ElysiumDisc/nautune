@@ -1,3 +1,32 @@
+### v6.7.2 - Stats, Discovery & Lock Screen Fixes
+
+**Bug Fix: Profile Stats Infinite Loading Spinner**
+- **Root Cause**: `_loadStats()` had no top-level error handling — if the Hive cache hung or threw before reaching the network refresh, `_statsLoading` was never set to `false`
+- **Fix**: Added try-catch-finally with a 5-second timeout on cache load and guaranteed `_statsLoading = false` in the finally block
+
+**Bug Fix: Total Listening Hours Inflated**
+- **Root Cause**: Total hours was calculated as `trackDuration × playCount` from the server — assumed every play was a full listen (skipped tracks counted as full duration)
+- **Fix**: Now uses actual listening time from the local `ListeningAnalyticsService` which records real wall-clock duration per play. Falls back to server estimate if local data is unavailable
+
+**Bug Fix: Top Artists Missing (1000 Track Limit)**
+- **Root Cause**: Stats were computed from only the top 1000 most-played tracks — artists beyond that cutoff were invisible in top artist rankings, genre breakdowns, and diversity scores
+- **Fix**: Added paginated `getAllPlayedTracks()` that fetches every played track from the server (in batches of 500). Profile stats now reflect the entire library
+
+**Bug Fix: ListenBrainz "Discover New Music" Showing Library Tracks**
+- **Root Cause**: Fuzzy matching in `getRecommendationsWithMatching()` was inconsistent with `matchRecommendationsToLibrary()` — missing `.trim()` calls and minimum string length guards caused false negatives (library tracks slipping into "Discover")
+- **Fix**: Added `.trim()` to all string comparisons, minimum length guards (8 chars for track/album names, 6 for artists), length guards on album matching, and a combined `"artist track"` search strategy for better Jellyfin search recall
+
+**Bug Fix: Lock Screen Controls Greyed Out After In-App Pause**
+- **Root Cause**: Pausing from the app then locking the screen caused the OS to lose the media session state — `forceBroadcastCurrentState()` only ran on app resume (too late) and only on iOS
+- **Fix 1**: Broadcast paused state to OS immediately after in-app pause completes
+- **Fix 2**: `reactivateAudioSession()` now broadcasts on all platforms (iOS guard only wraps audio session config)
+- **Fix 3**: Added media session broadcast when app goes to background — ensures OS has latest state before app is suspended
+
+**Version**
+- Bumped to 6.7.2+1
+
+---
+
 ### v6.7.1 - Infinite Radio Fix
 
 **Bug Fix: Infinite Radio Not Working After Album Ends**

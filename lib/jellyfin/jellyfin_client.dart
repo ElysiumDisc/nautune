@@ -894,6 +894,8 @@ class JellyfinClient {
     required String libraryId,
     String itemType = 'Audio', // 'Audio', 'MusicAlbum', 'MusicArtist'
     int limit = 50,
+    int startIndex = 0,
+    bool filterPlayed = false,
   }) async {
     final queryParams = <String, String>{
       'UserId': credentials.userId,
@@ -902,8 +904,9 @@ class JellyfinClient {
       'SortBy': 'PlayCount',
       'SortOrder': 'Descending',
       'Recursive': 'true',
+      'StartIndex': startIndex.toString(),
       'Limit': limit.toString(),
-      // 'Filters': 'IsPlayed', // Removed to ensure Artists/Albums show up even if not marked "fully played"
+      if (filterPlayed) 'Filters': 'IsPlayed',
       'Fields': 'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,UserData,Genres,Tags',
       'EnableImageTypes': 'Primary,Thumb',
       'EnableUserData': 'true',
@@ -925,6 +928,36 @@ class JellyfinClient {
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items.whereType<Map<String, dynamic>>().toList();
+  }
+
+  /// Returns the total number of played items in the library.
+  Future<int> fetchPlayedItemCount(
+    JellyfinCredentials credentials, {
+    required String libraryId,
+    String itemType = 'Audio',
+  }) async {
+    final queryParams = <String, String>{
+      'UserId': credentials.userId,
+      'ParentId': libraryId,
+      'IncludeItemTypes': itemType,
+      'SortBy': 'PlayCount',
+      'SortOrder': 'Descending',
+      'Recursive': 'true',
+      'Limit': '0',
+      'Filters': 'IsPlayed',
+      'EnableUserData': 'true',
+    };
+
+    final uri = _buildUri('/Users/${credentials.userId}/Items', queryParams);
+    final response = await _robustClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) return 0;
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    return (data?['TotalRecordCount'] as int?) ?? 0;
   }
 
   /// Fetch least played (discovery) items from Jellyfin

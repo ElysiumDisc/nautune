@@ -630,17 +630,19 @@ class AudioPlayerService {
   }
 
   /// Public method to reactivate the audio session.
-  /// Call this when app returns from background on iOS.
+  /// Call this when app returns from background or goes to background.
   Future<void> reactivateAudioSession() async {
-    if (!Platform.isIOS) return;
-
     try {
-      final session = await AudioSession.instance;
-      await session.configure(const AudioSessionConfiguration.music());
-      debugPrint('🔊 Audio session reactivated on app resume');
+      // Audio session reconfiguration is only needed on iOS
+      if (Platform.isIOS) {
+        final session = await AudioSession.instance;
+        await session.configure(const AudioSessionConfiguration.music());
+        debugPrint('🔊 Audio session reactivated');
+      }
 
-      // Force broadcast current state (playing or paused) so iOS lock screen
+      // Force broadcast current state (playing or paused) so lock screen
       // controls stay interactive even when paused before locking the screen.
+      // This is needed on all platforms, not just iOS.
       await _audioHandler?.forceBroadcastCurrentState();
     } catch (e) {
       debugPrint('⚠️ Failed to reactivate audio session: $e');
@@ -1459,6 +1461,9 @@ class AudioPlayerService {
       _lastPosition = position;
     }
     _emitIdleVisualizer();
+    // Ensure OS has correct paused state with updated position so lock screen
+    // controls remain interactive after pausing from the app
+    await _audioHandler?.forceBroadcastCurrentState();
     // Save full playback state including queue so user can resume at exact position
     await _stateStore.savePlaybackSnapshot(
       currentTrack: _currentTrack,
