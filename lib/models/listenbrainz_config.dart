@@ -63,6 +63,9 @@ class ListenBrainzConfig {
   }
 }
 
+/// Source of a ListenBrainz recommendation
+enum RecommendationSource { cfRecommendation, lbRadio, freshRelease }
+
 /// A recommendation from ListenBrainz
 class ListenBrainzRecommendation {
   /// MusicBrainz Recording ID
@@ -86,6 +89,9 @@ class ListenBrainzRecommendation {
   /// Whether this track was matched to a Jellyfin library item
   final String? jellyfinTrackId;
 
+  /// Source of this recommendation
+  final RecommendationSource source;
+
   ListenBrainzRecommendation({
     required this.recordingMbid,
     this.trackName,
@@ -94,6 +100,7 @@ class ListenBrainzRecommendation {
     this.releaseMbid,
     required this.score,
     this.jellyfinTrackId,
+    this.source = RecommendationSource.cfRecommendation,
   });
 
   /// Check if this recommendation is in the user's library
@@ -114,6 +121,7 @@ class ListenBrainzRecommendation {
       releaseMbid: releaseMbid,
       score: score,
       jellyfinTrackId: trackId,
+      source: source,
     );
   }
 
@@ -197,4 +205,65 @@ class PopularTrack {
     'length': lengthMs,
     'caa_id': caaId,
   };
+}
+
+/// A fresh release from ListenBrainz (recent releases from artists the user listens to)
+class FreshRelease {
+  final String releaseMbid;
+  final String releaseName;
+  final String artistCreditName;
+  final List<String> artistMbids;
+  final String? releaseDate;
+  final String? releaseGroupPrimaryType;
+  final int? caaId;
+  final String? caaReleaseMbid;
+
+  FreshRelease({
+    required this.releaseMbid,
+    required this.releaseName,
+    required this.artistCreditName,
+    this.artistMbids = const [],
+    this.releaseDate,
+    this.releaseGroupPrimaryType,
+    this.caaId,
+    this.caaReleaseMbid,
+  });
+
+  /// Get cover art URL from Cover Art Archive
+  String? get coverArtUrl {
+    final mbid = caaReleaseMbid ?? releaseMbid;
+    return 'https://coverartarchive.org/release/$mbid/front-250';
+  }
+
+  /// Convert to a ListenBrainzRecommendation for unified display
+  ListenBrainzRecommendation toRecommendation() {
+    return ListenBrainzRecommendation(
+      recordingMbid: releaseMbid,
+      trackName: null,
+      artistName: artistCreditName,
+      albumName: releaseName,
+      releaseMbid: caaReleaseMbid ?? releaseMbid,
+      score: 0.0,
+      source: RecommendationSource.freshRelease,
+    );
+  }
+
+  factory FreshRelease.fromJson(Map<String, dynamic> json) {
+    final artistMbids = json['artist_mbids'];
+    List<String> artistMbidsList = [];
+    if (artistMbids is List) {
+      artistMbidsList = artistMbids.whereType<String>().toList();
+    }
+
+    return FreshRelease(
+      releaseMbid: json['release_mbid'] as String? ?? '',
+      releaseName: json['release_name'] as String? ?? '',
+      artistCreditName: json['artist_credit_name'] as String? ?? '',
+      artistMbids: artistMbidsList,
+      releaseDate: json['release_date'] as String?,
+      releaseGroupPrimaryType: json['release_group_primary_type'] as String?,
+      caaId: (json['caa_id'] as num?)?.toInt(),
+      caaReleaseMbid: json['caa_release_mbid'] as String?,
+    );
+  }
 }

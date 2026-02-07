@@ -1,3 +1,20 @@
+### v6.7.3 - Smarter Discovery Recommendations
+
+**Improved: "Discover New Music" Shelf**
+- **Root Cause**: The CF recommendation endpoint (`/cf/recommendation/user/.../recording`) returned irrelevant tracks that didn't match the user's taste
+- **Fix**: Replaced with two better ListenBrainz sources, fired in parallel:
+  - **LB Radio** (`/explore/lb-radio`): Personalized unlistened recordings via Troi recommendation engine — tracks arrive with full metadata (title/artist/album) from the JSPF response, skipping expensive MusicBrainz enrichment
+  - **Fresh Releases** (`/user/.../fresh_releases`): Recent releases from artists the user actually listens to, shown as album-level discovery items with "New Release" badges
+- **Fallback**: If both new sources return empty, gracefully falls back to the existing CF recommendation path
+- **Caching**: Both sources cached for 6 hours to avoid redundant API calls on repeat home screen visits
+- **UI Badges**: Discovery chips now show source-specific badges — "Discover" with explore icon for LB Radio tracks, "New Release" with new_releases icon for fresh releases
+- **Library Matching**: LB Radio tracks are matched to the Jellyfin library using existing MBID + fuzzy matching logic; fresh releases stay unmatched as external discovery items
+
+**Version**
+- Bumped to 6.7.3+1
+
+---
+
 ### v6.7.2 - Stats, Discovery & Lock Screen Fixes
 
 **Bug Fix: Profile Stats Infinite Loading Spinner**

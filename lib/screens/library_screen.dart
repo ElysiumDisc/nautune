@@ -1982,11 +1982,11 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
         return;
       }
 
-      final matched = await listenBrainz.getRecommendationsWithMatching(
+      final matched = await listenBrainz.getDiscoveryRecommendations(
         jellyfin: widget.appState.jellyfinService,
         libraryId: libraryId,
-        targetMatches: 20,  // Stop when we have 20 matches
-        maxFetch: 50,       // Fetch up to 50 recommendations
+        targetMatches: 20,
+        maxFetch: 50,
       );
 
       debugPrint('🎵 ListenBrainz Discovery: Got ${matched.length} recommendations (${matched.where((r) => r.isInLibrary).length} in library)');
@@ -2051,8 +2051,13 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
     }
 
     // Get recommendations NOT in library (for discovery section)
+    // Only show LB Radio and Fresh Release items — CF recommendations are
+    // excluded because unmatched CF results are usually false negatives
+    // (library tracks that failed fuzzy matching), not true discoveries.
     final notInLibraryRecs = _recommendations
-        ?.where((r) => !r.isInLibrary && r.trackName != null && r.artistName != null)
+        ?.where((r) => !r.isInLibrary && r.artistName != null &&
+            (r.trackName != null || r.albumName != null) &&
+            r.source != RecommendationSource.cfRecommendation)
         .take(10)
         .toList() ?? [];
 
@@ -2130,10 +2135,11 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
               itemBuilder: (context, index) {
                 final rec = notInLibraryRecs[index];
                 return _DiscoveryChip(
-                  trackName: rec.trackName!,
+                  trackName: rec.trackName,
                   artistName: rec.artistName!,
                   albumName: rec.albumName,
                   coverArtUrl: rec.coverArtUrl,
+                  source: rec.source,
                 );
               },
             ),
@@ -2148,20 +2154,26 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
 /// Chip for discovery recommendations (tracks not in library)
 class _DiscoveryChip extends StatelessWidget {
   const _DiscoveryChip({
-    required this.trackName,
+    this.trackName,
     required this.artistName,
     this.albumName,
     this.coverArtUrl,
+    this.source = RecommendationSource.cfRecommendation,
   });
 
-  final String trackName;
+  final String? trackName;
   final String artistName;
   final String? albumName;
   final String? coverArtUrl;
+  final RecommendationSource source;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isFreshRelease = source == RecommendationSource.freshRelease;
+    final badgeIcon = isFreshRelease ? Icons.new_releases : Icons.explore;
+    final badgeText = isFreshRelease ? 'New Release' : 'Discover';
+    final displayName = trackName ?? albumName ?? 'Unknown';
 
     return SizedBox(
       width: 200,
@@ -2210,14 +2222,14 @@ class _DiscoveryChip extends StatelessWidget {
                     Row(
                       children: [
                         Icon(
-                          Icons.explore,
+                          badgeIcon,
                           size: 12,
                           color: theme.colorScheme.primary,
                         ),
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
-                            'Discover',
+                            badgeText,
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: theme.colorScheme.primary,
                               fontSize: 10,
@@ -2228,7 +2240,7 @@ class _DiscoveryChip extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      trackName,
+                      displayName,
                       style: theme.textTheme.titleSmall?.copyWith(fontSize: 12),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,

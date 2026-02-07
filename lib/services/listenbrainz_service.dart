@@ -919,6 +919,316 @@ class ListenBrainzService {
     return allMatched;
   }
 
+  // ===== DISCOVERY RECOMMENDATIONS (LB Radio + Fresh Releases) =====
+
+  /// Get personalized recommendations via LB Radio (Troi)
+  /// Uses the recs prompt to get unlistened tracks
+  Future<List<ListenBrainzRecommendation>> getLBRadioRecommendations({int maxTracks = 25}) async {
+    if (!_initialized || _config == null) return [];
+
+    final username = _config!.username;
+    final cacheKey = 'lb_radio_$username';
+
+    // Check cache first
+    final cached = _getPopularityCache<List<dynamic>>(cacheKey);
+    if (cached != null) {
+      debugPrint('ListenBrainzService: Using cached LB Radio recommendations');
+      return cached.whereType<Map<String, dynamic>>().map((json) {
+        return ListenBrainzRecommendation(
+          recordingMbid: json['recording_mbid'] as String? ?? '',
+          trackName: json['track_name'] as String?,
+          artistName: json['artist_name'] as String?,
+          albumName: json['album_name'] as String?,
+          releaseMbid: json['release_mbid'] as String?,
+          score: (json['score'] as num?)?.toDouble() ?? 0.0,
+          source: RecommendationSource.lbRadio,
+        );
+      }).take(maxTracks).toList();
+    }
+
+    try {
+      final prompt = Uri.encodeComponent('recs:$username::unlistened');
+      final response = await http.get(
+        Uri.parse('$_baseUrl/explore/lb-radio?prompt=$prompt&mode=easy'),
+        headers: {
+          'Authorization': 'Token ${_config!.token}',
+        },
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>?;
+        // Response format: {"payload": {"jspf": {playlist...}, "feedback": [...]}}
+        final payload = data?['payload'] as Map<String, dynamic>?;
+        final jspf = payload?['jspf'] as Map<String, dynamic>?;
+        debugPrint('ListenBrainzService: LB Radio response keys: ${data?.keys.toList()}, payload keys: ${payload?.keys.toList()}');
+        final recs = _parseJspfTracks(jspf, maxTracks);
+
+        if (recs.isNotEmpty) {
+          // Cache as serializable maps
+          _setPopularityCache(cacheKey, recs.map((r) => {
+            'recording_mbid': r.recordingMbid,
+            'track_name': r.trackName,
+            'artist_name': r.artistName,
+            'album_name': r.albumName,
+            'release_mbid': r.releaseMbid,
+            'score': r.score,
+          }).toList());
+        }
+
+        debugPrint('ListenBrainzService: Got ${recs.length} LB Radio recommendations');
+        return recs;
+      } else {
+        debugPrint('ListenBrainzService: LB Radio failed: ${response.statusCode} - ${response.body}');
+        return [];
+      }
+    } on TimeoutException {
+      debugPrint('ListenBrainzService: LB Radio timeout (Troi can be slow)');
+      return [];
+    } catch (e) {
+      debugPrint('ListenBrainzService: LB Radio error: $e');
+      return [];
+    }
+  }
+
+  /// Parse JSPF playlist tracks into recommendations
+  List<ListenBrainzRecommendation> _parseJspfTracks(Map<String, dynamic>? jspf, int maxTracks) {
+    if (jspf == null) return [];
+
+    final playlist = jspf['playlist'] as Map<String, dynamic>?;
+    if (playlist == null) return [];
+
+    final tracks = playlist['track'] as List<dynamic>?;
+    if (tracks == null || tracks.isEmpty) return [];
+
+    final recs = <ListenBrainzRecommendation>[];
+
+    for (final track in tracks.take(maxTracks)) {
+      if (track is! Map<String, dynamic>) continue;
+
+      final title = track['title'] as String?;
+      final creator = track['creator'] as String?;
+      final album = track['album'] as String?;
+
+      // identifier can be a String or List<String> in JSPF
+      String? identifierUrl;
+      final rawIdentifier = track['identifier'];
+      if (rawIdentifier is String) {
+        identifierUrl = rawIdentifier;
+      } else if (rawIdentifier is List && rawIdentifier.isNotEmpty) {
+        identifierUrl = rawIdentifier.first as String?;
+      }
+
+      // Extract recording MBID from identifier URL
+      // Format: https://musicbrainz.org/recording/{mbid}
+      String recordingMbid = '';
+      if (identifierUrl != null && identifierUrl.contains('/recording/')) {
+        recordingMbid = identifierUrl.split('/recording/').last;
+      }
+
+      // Extract release MBID from JSPF extension
+      String? releaseMbid;
+      final ext = track['extension'] as Map<String, dynamic>?;
+      final mbExtension = ext?['https://musicbrainz.org/doc/jspf#track'] as Map<String, dynamic>?;
+      // release_identifier can also be a String or List
+      final rawReleaseId = mbExtension?['release_identifier'];
+      String? releaseIdentifier;
+      if (rawReleaseId is String) {
+        releaseIdentifier = rawReleaseId;
+      } else if (rawReleaseId is List && rawReleaseId.isNotEmpty) {
+        releaseIdentifier = rawReleaseId.first as String?;
+      }
+      if (releaseIdentifier != null && releaseIdentifier.contains('/release/')) {
+        releaseMbid = releaseIdentifier.split('/release/').last;
+      }
+
+      if (recordingMbid.isNotEmpty) {
+        recs.add(ListenBrainzRecommendation(
+          recordingMbid: recordingMbid,
+          trackName: title,
+          artistName: creator,
+          albumName: album,
+          releaseMbid: releaseMbid,
+          score: 0.0,
+          source: RecommendationSource.lbRadio,
+        ));
+      }
+    }
+
+    return recs;
+  }
+
+  /// Get fresh releases from artists the user listens to
+  Future<List<FreshRelease>> getUserFreshReleases({int days = 30}) async {
+    if (!_initialized || _config == null) return [];
+
+    final username = _config!.username;
+    final cacheKey = 'fresh_releases_$username';
+
+    // Check cache first
+    final cached = _getPopularityCache<List<dynamic>>(cacheKey);
+    if (cached != null) {
+      debugPrint('ListenBrainzService: Using cached fresh releases');
+      return cached
+          .whereType<Map<String, dynamic>>()
+          .map((json) => FreshRelease.fromJson(json))
+          .toList();
+    }
+
+    try {
+      final response = await http.get(
+        Uri.parse('$_baseUrl/user/$username/fresh_releases?days=$days&sort=release_date&past=true&future=true'),
+        headers: {
+          'Authorization': 'Token ${_config!.token}',
+        },
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>?;
+        final payload = data?['payload'] as Map<String, dynamic>?;
+        final releases = payload?['releases'] as List<dynamic>? ?? [];
+        debugPrint('ListenBrainzService: Fresh releases response keys: ${data?.keys.toList()}, payload keys: ${payload?.keys.toList()}, releases count: ${releases.length}');
+
+        final freshReleases = releases
+            .whereType<Map<String, dynamic>>()
+            .map((json) => FreshRelease.fromJson(json))
+            .toList();
+
+        if (freshReleases.isNotEmpty) {
+          _setPopularityCache(cacheKey, releases);
+        }
+
+        debugPrint('ListenBrainzService: Got ${freshReleases.length} fresh releases');
+        return freshReleases;
+      } else {
+        debugPrint('ListenBrainzService: Fresh releases failed: ${response.statusCode} - ${response.body}');
+        return [];
+      }
+    } on TimeoutException {
+      debugPrint('ListenBrainzService: Fresh releases timeout');
+      return [];
+    } catch (e) {
+      debugPrint('ListenBrainzService: Fresh releases error: $e');
+      return [];
+    }
+  }
+
+  /// Get discovery recommendations combining LB Radio + Fresh Releases
+  /// Falls back to CF recommendations if both new sources fail
+  Future<List<ListenBrainzRecommendation>> getDiscoveryRecommendations({
+    required JellyfinService jellyfin,
+    required String libraryId,
+    int targetMatches = 20,
+    int maxFetch = 50,
+  }) async {
+    if (!_initialized || _config == null) return [];
+
+    // Fire both sources in parallel
+    final results = await Future.wait([
+      getLBRadioRecommendations(maxTracks: 25),
+      getUserFreshReleases(days: 30),
+    ]);
+
+    final lbRadioRecs = results[0] as List<ListenBrainzRecommendation>;
+    final freshReleases = results[1] as List<FreshRelease>;
+
+    // Convert fresh releases to recommendations, take first 10
+    final freshRecs = freshReleases
+        .take(10)
+        .map((fr) => fr.toRecommendation())
+        .toList();
+
+    debugPrint('ListenBrainzService: Discovery: ${lbRadioRecs.length} LB Radio, ${freshRecs.length} fresh releases');
+
+    // If both empty, fall back to CF recommendations
+    if (lbRadioRecs.isEmpty && freshRecs.isEmpty) {
+      debugPrint('ListenBrainzService: No LB Radio or fresh releases, falling back to CF recommendations');
+      return getRecommendationsWithMatching(
+        jellyfin: jellyfin,
+        libraryId: libraryId,
+        targetMatches: targetMatches,
+        maxFetch: maxFetch,
+      );
+    }
+
+    // Match LB Radio recs to Jellyfin library (reuse existing matching logic)
+    final matchedLbRadio = <ListenBrainzRecommendation>[];
+    for (final rec in lbRadioRecs) {
+      if (rec.artistName == null || rec.trackName == null) {
+        matchedLbRadio.add(rec);
+        continue;
+      }
+
+      List<JellyfinTrack> tracks = await jellyfin.searchTracks(
+        libraryId: libraryId,
+        query: rec.trackName!,
+      );
+
+      if (tracks.isEmpty && rec.albumName != null) {
+        tracks = await jellyfin.searchTracks(
+          libraryId: libraryId,
+          query: rec.albumName!,
+        );
+      }
+
+      if (tracks.isEmpty) {
+        tracks = await jellyfin.searchTracks(
+          libraryId: libraryId,
+          query: rec.artistName!,
+        );
+      }
+
+      bool matched = false;
+      for (final track in tracks) {
+        // MBID match
+        final trackMbid = track.providerIds?['MusicBrainzTrack'];
+        if (trackMbid != null && trackMbid == rec.recordingMbid) {
+          matchedLbRadio.add(rec.withJellyfinMatch(track.id));
+          matched = true;
+          debugPrint('ListenBrainzService: ✓ MBID match for LB Radio "${rec.trackName}"');
+          break;
+        }
+
+        // Fuzzy name match
+        final recTrackLower = rec.trackName!.toLowerCase().trim();
+        final recArtistLower = rec.artistName!.toLowerCase().trim();
+        final trackNameLower = track.name.toLowerCase().trim();
+
+        final nameMatch = trackNameLower == recTrackLower ||
+            (recTrackLower.length >= 8 && trackNameLower.contains(recTrackLower)) ||
+            (trackNameLower.length >= 8 && recTrackLower.contains(trackNameLower));
+
+        final artistMatch = track.artists.any((a) {
+          final artistLower = a.toLowerCase().trim();
+          return artistLower == recArtistLower ||
+              (recArtistLower.length >= 6 && artistLower.contains(recArtistLower)) ||
+              (artistLower.length >= 6 && recArtistLower.contains(artistLower));
+        });
+
+        if (nameMatch && artistMatch) {
+          matchedLbRadio.add(rec.withJellyfinMatch(track.id));
+          matched = true;
+          debugPrint('ListenBrainzService: ✓ Name match for LB Radio "${rec.trackName}"');
+          break;
+        }
+      }
+
+      if (!matched) {
+        matchedLbRadio.add(rec);
+      }
+    }
+
+    // Combine: LB Radio first, then fresh releases (unmatched, album-level discovery)
+    final combined = <ListenBrainzRecommendation>[
+      ...matchedLbRadio,
+      ...freshRecs,
+    ];
+
+    final matchCount = combined.where((r) => r.isInLibrary).length;
+    debugPrint('ListenBrainzService: Discovery final: ${combined.length} total, $matchCount in library');
+
+    return combined;
+  }
+
   /// Get user's recent listens from ListenBrainz
   Future<List<Map<String, dynamic>>> getRecentListens({int count = 25}) async {
     if (!_initialized || _config == null) {
