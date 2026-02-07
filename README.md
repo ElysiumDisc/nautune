@@ -542,6 +542,14 @@ Nautune follows a clean data structure on Linux for easy backups and management:
 
 ---
 
+## 🎬 Videos
+
+<video src="screenshots/nautune-screencast.webm" width="800" controls muted>Your browser does not support the video tag.</video>
+
+*More videos coming soon — features, easter eggs, and UI effects.*
+
+---
+
 ## 📸 Screenshots
 
 ### Linux / Desktop
