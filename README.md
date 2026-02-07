@@ -544,8 +544,9 @@ Nautune follows a clean data structure on Linux for easy backups and management:
 
 ## 🎬 Videos
 
-[![Nautune Screencast](screenshots/linux-ipad1.png)](https://github.com/ElysiumDisc/nautune/raw/main/screenshots/nautune-screencast.webm)
-*Click to watch — more videos coming soon showcasing features, easter eggs, and UI effects.*
+<video src="https://github.com/user-attachments/assets/cd390e17-ae31-4b8f-805a-d4abcab63256" width="800" controls muted></video>
+
+*More videos coming soon showcasing features, easter eggs, and UI effects.*
 
 ---
 
