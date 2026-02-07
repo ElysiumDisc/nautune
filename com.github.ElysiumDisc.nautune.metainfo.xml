@@ -60,6 +60,18 @@
   </categories>
 
   <releases>
+    <release version="6.7.2" date="2026-02-06">
+      <description>
+        <p>v6.7.2: Stats, Discovery &amp; Lock Screen Fixes</p>
+        <ul>
+          <li>Fix: Profile stats infinite loading spinner (added timeout and guaranteed loading state reset)</li>
+          <li>Fix: Total listening hours no longer inflated (uses actual listening time instead of track duration x play count)</li>
+          <li>Fix: Top artists now include all played tracks, not just top 1000</li>
+          <li>Fix: ListenBrainz "Discover New Music" no longer shows tracks already in your library</li>
+          <li>Fix: Lock screen controls no longer greyed out after pausing in-app</li>
+        </ul>
+      </description>
+    </release>
     <release version="6.7.1" date="2026-02-06">
       <description>
         <p>v6.7.1: Infinite Radio Fix</p>
