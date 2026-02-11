@@ -132,12 +132,12 @@ class SyncPlayProvider extends ChangeNotifier {
 
     // Create service if not exists or session changed
     if (_syncPlayService == null && !_isInitializing) {
+      _isInitializing = true;
       _createServiceAsync(session);
     }
   }
 
   Future<void> _createServiceAsync(JellyfinSession session) async {
-    _isInitializing = true;
 
     // Fetch the user's profile image tag
     try {

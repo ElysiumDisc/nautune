@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -15,7 +17,7 @@ import 'jellyfin_waveform.dart';
 
 /// Compact control surface that mirrors the full player while staying unobtrusive.
 /// Also handles SyncPlay Sailors who don't have local audio playing.
-class NowPlayingBar extends StatelessWidget {
+class NowPlayingBar extends StatefulWidget {
   const NowPlayingBar({
     super.key,
     required this.audioService,
@@ -24,6 +26,37 @@ class NowPlayingBar extends StatelessWidget {
 
   final AudioPlayerService audioService;
   final NautuneAppState appState;
+
+  @override
+  State<NowPlayingBar> createState() => _NowPlayingBarState();
+}
+
+class _NowPlayingBarState extends State<NowPlayingBar> {
+  StreamSubscription<String>? _errorSubscription;
+
+  AudioPlayerService get audioService => widget.audioService;
+  NautuneAppState get appState => widget.appState;
+
+  @override
+  void initState() {
+    super.initState();
+    _errorSubscription = audioService.playbackErrorStream.listen((message) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _errorSubscription?.cancel();
+    super.dispose();
+  }
 
   void _openFullPlayer(BuildContext context, {bool isSailorMode = false}) {
     Navigator.of(context).push(
@@ -276,13 +309,23 @@ class NowPlayingBar extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                               ),
                               const SizedBox(height: 2),
-                              Text(
-                                _subtitleFor(track),
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                              Row(
+                                children: [
+                                  if (audioService.infiniteRadioEnabled) ...[
+                                    Icon(Icons.radio, size: 12, color: theme.colorScheme.primary),
+                                    const SizedBox(width: 4),
+                                  ],
+                                  Expanded(
+                                    child: Text(
+                                      _subtitleFor(track),
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),

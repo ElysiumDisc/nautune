@@ -112,6 +112,8 @@ class PlaybackState {
     this.useListMode = false,
     // Now Playing layout
     this.nowPlayingLayout = NowPlayingLayout.classic,
+    // Nav tab order
+    this.navTabOrder = const [0, 1, 2, 3, 4],
   });
 
   final String? currentTrackId;
@@ -163,6 +165,8 @@ class PlaybackState {
   final bool useListMode;
   // Now Playing layout
   final NowPlayingLayout nowPlayingLayout;
+  // Nav tab order
+  final List<int> navTabOrder;
 
   bool get hasTrack => currentTrackId != null;
 
@@ -207,6 +211,7 @@ class PlaybackState {
     int? gridSize,
     bool? useListMode,
     NowPlayingLayout? nowPlayingLayout,
+    List<int>? navTabOrder,
   }) {
     return PlaybackState(
       currentTrackId: currentTrackId ?? this.currentTrackId,
@@ -249,6 +254,7 @@ class PlaybackState {
       gridSize: gridSize ?? this.gridSize,
       useListMode: useListMode ?? this.useListMode,
       nowPlayingLayout: nowPlayingLayout ?? this.nowPlayingLayout,
+      navTabOrder: navTabOrder ?? this.navTabOrder,
     );
   }
 
@@ -294,6 +300,7 @@ class PlaybackState {
       'gridSize': gridSize,
       'useListMode': useListMode,
       'nowPlayingLayout': nowPlayingLayout.name,
+      'navTabOrder': navTabOrder,
     };
   }
 
@@ -351,6 +358,10 @@ class PlaybackState {
       gridSize: (json['gridSize'] as num?)?.toInt() ?? 2,
       useListMode: json['useListMode'] as bool? ?? false,
       nowPlayingLayout: NowPlayingLayoutExtension.fromString(json['nowPlayingLayout'] as String?),
+      navTabOrder: (json['navTabOrder'] as List<dynamic>?)
+              ?.map((e) => (e as num).toInt())
+              .toList() ??
+          const [0, 1, 2, 3, 4],
     );
   }
 
@@ -398,6 +409,7 @@ class PlaybackState {
       gridSize: gridSize, // Preserve grid size preference
       useListMode: useListMode, // Preserve list mode preference
       nowPlayingLayout: nowPlayingLayout, // Preserve Now Playing layout
+      navTabOrder: navTabOrder, // Preserve nav tab order
     );
   }
 

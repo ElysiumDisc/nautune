@@ -1461,6 +1461,42 @@ class JellyfinClient {
     }
   }
 
+  /// Report session capabilities to the server.
+  /// POST /Sessions/Capabilities/Full
+  /// This tells the server that this client supports remote control,
+  /// enabling Helm Mode commands to be pushed via WebSocket.
+  Future<void> reportCapabilities(JellyfinCredentials credentials) async {
+    final uri = _buildUri('/Sessions/Capabilities/Full');
+    final body = jsonEncode({
+      'PlayableMediaTypes': ['Audio'],
+      'SupportedCommands': [
+        'PlayState',
+        'Play',
+        'Seek',
+        'NextTrack',
+        'PreviousTrack',
+        'SetVolume',
+        'Mute',
+        'Unmute',
+        'ToggleMute',
+      ],
+      'SupportsMediaControl': true,
+      'SupportsPersistentIdentifier': true,
+    });
+
+    final response = await _robustClient.post(
+      uri,
+      headers: _defaultHeaders(credentials),
+      body: body,
+    );
+
+    if (response.statusCode != 200 && response.statusCode != 204) {
+      throw JellyfinRequestException(
+        'Failed to report capabilities: ${response.statusCode}',
+      );
+    }
+  }
+
   /// Clear the HTTP cache (ETag/Last-Modified)
   void clearHttpCache() {
     _robustClient.clearCache();

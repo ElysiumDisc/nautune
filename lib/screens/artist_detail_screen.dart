@@ -13,6 +13,7 @@ import '../jellyfin/jellyfin_track.dart';
 import '../services/listenbrainz_service.dart';
 import '../widgets/jellyfin_image.dart';
 import '../widgets/now_playing_bar.dart';
+import '../widgets/track_context_menu.dart';
 import 'album_detail_screen.dart';
 
 /// Top-level function for compute() - extracts colors from image bytes in isolate
@@ -482,6 +483,71 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
               onPressed: () => Navigator.of(context).pop(),
             ),
             actions: [
+              // Artist Radio button
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: IconButton(
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surface.withValues(alpha: 0.7),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.radio, size: 20),
+                  ),
+                  tooltip: 'Start Radio',
+                  onPressed: () async {
+                    try {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Starting artist radio...'),
+                          duration: Duration(seconds: 1),
+                        ),
+                      );
+
+                      final mixTracks = await _appState.jellyfinService.getInstantMix(
+                        itemId: widget.artist.id,
+                        limit: 50,
+                      );
+
+                      if (mixTracks.isEmpty) {
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('No similar tracks found'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                        return;
+                      }
+
+                      _appState.audioPlayerService.setInfiniteRadioEnabled(true);
+                      await _appState.audioPlayerService.playTrack(
+                        mixTracks.first,
+                        queueContext: mixTracks,
+                      );
+
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Radio started (${mixTracks.length} tracks)'),
+                          duration: const Duration(seconds: 2),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    } catch (e) {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Failed to start radio: $e'),
+                          backgroundColor: Theme.of(context).colorScheme.error,
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ),
               // Instant Mix button
               Padding(
                 padding: const EdgeInsets.only(right: 8),
@@ -1229,6 +1295,12 @@ class _TopTrackTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
           onTap: onTap,
+          onLongPress: () => showTrackContextMenu(
+            context: context,
+            track: track,
+            appState: appState,
+            showGoToArtist: false,
+          ),
           borderRadius: BorderRadius.circular(12),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
@@ -1371,6 +1443,12 @@ class _LibraryTrackTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
           onTap: onTap,
+          onLongPress: () => showTrackContextMenu(
+            context: context,
+            track: track,
+            appState: appState,
+            showGoToArtist: false,
+          ),
           borderRadius: BorderRadius.circular(12),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),

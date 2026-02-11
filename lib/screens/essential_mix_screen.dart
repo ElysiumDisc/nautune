@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' show min, cos, sin, pi;
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -998,14 +999,11 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
         errorBuilder: (context, error, stackTrace) => _buildPlaceholderArt(theme),
       );
     } else {
-      artworkImage = Image.network(
-        artworkUrl,
+      artworkImage = CachedNetworkImage(
+        imageUrl: artworkUrl,
         fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) => _buildPlaceholderArt(theme),
-        loadingBuilder: (context, child, loadingProgress) {
-          if (loadingProgress == null) return child;
-          return _buildPlaceholderArt(theme, isLoading: true);
-        },
+        errorWidget: (context, url, error) => _buildPlaceholderArt(theme),
+        placeholder: (context, url) => _buildPlaceholderArt(theme, isLoading: true),
       );
     }
 

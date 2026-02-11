@@ -1192,6 +1192,38 @@ class JellyfinService {
     );
   }
 
+  /// Get a single artist by ID
+  Future<JellyfinArtist> getArtist(String artistId) async {
+    final client = _client;
+    if (client == null) throw StateError('Not connected');
+    final session = _session;
+    if (session == null) throw StateError('No session');
+
+    final json = await client.fetchItem(
+      session.credentials,
+      itemId: artistId,
+    );
+
+    if (json == null) throw StateError('Artist not found');
+    return JellyfinArtist.fromJson(json);
+  }
+
+  /// Get a single album by ID
+  Future<JellyfinAlbum> getAlbum(String albumId) async {
+    final client = _client;
+    if (client == null) throw StateError('Not connected');
+    final session = _session;
+    if (session == null) throw StateError('No session');
+
+    final json = await client.fetchItem(
+      session.credentials,
+      itemId: albumId,
+    );
+
+    if (json == null) throw StateError('Album not found');
+    return JellyfinAlbum.fromJson(json);
+  }
+
   /// Get most played albums for a library
   Future<List<JellyfinAlbum>> getMostPlayedAlbums({
     required String libraryId,

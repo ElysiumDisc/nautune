@@ -29,6 +29,7 @@ import 'services/playback_state_store.dart';
 import 'services/playlist_sync_queue.dart';
 import 'services/app_icon_service.dart';
 import 'services/power_mode_service.dart';
+import 'services/remote_control_service.dart';
 import 'services/tray_service.dart';
 
 // Import SessionProvider - this is new
@@ -124,6 +125,7 @@ class NautuneAppState extends ChangeNotifier {
   late final DownloadService _downloadService;
   CarPlayService? _carPlayService;
   TrayService? _trayService;
+  RemoteControlService? _remoteControlService;
   StreamSubscription<bool>? _connectivitySubscription;
   StreamSubscription<JellyfinTrack?>? _trayTrackSubscription;
   StreamSubscription<bool>? _trayPlayingSubscription;
@@ -131,6 +133,7 @@ class NautuneAppState extends ChangeNotifier {
   bool _connectivityMonitorInitialized = false;
   Map<String, double> _libraryScrollOffsets = {};
   int _restoredLibraryTabIndex = 0;
+  List<int> _navTabOrder = const [0, 1, 2, 3, 4];
   bool _showVolumeBar = true;
   bool _crossfadeEnabled = false;
   int _crossfadeDurationSeconds = 3;
@@ -334,6 +337,9 @@ class NautuneAppState extends ChangeNotifier {
         // Start periodic analytics sync for the new session
         _startPeriodicSyncTimer();
 
+        // Start remote control WebSocket for Helm Mode
+        _startRemoteControl(session);
+
         _loadLibraries();
         if (session.selectedLibraryId != null) {
           _loadLibraryDependentContent(forceRefresh: true);
@@ -342,6 +348,9 @@ class NautuneAppState extends ChangeNotifier {
         // Session cleared - stop periodic sync
         _stopPeriodicSyncTimer();
         _clearLibraryCaches();
+        // Disconnect remote control
+        _remoteControlService?.dispose();
+        _remoteControlService = null;
       }
     }
   }
@@ -425,6 +434,7 @@ class NautuneAppState extends ChangeNotifier {
   SortOption get artistSortBy => _artistSortBy;
   SortOrder get artistSortOrder => _artistSortOrder;
   int get initialLibraryTabIndex => _restoredLibraryTabIndex;
+  List<int> get navTabOrder => _navTabOrder;
   double? scrollOffsetFor(String key) => _libraryScrollOffsets[key];
   String? get selectedLibraryId => _session?.selectedLibraryId;
   JellyfinLibrary? get selectedLibrary {
@@ -828,6 +838,12 @@ class NautuneAppState extends ChangeNotifier {
     unawaited(_playbackStateStore.saveUiState(libraryTabIndex: index));
   }
 
+  void updateNavTabOrder(List<int> order) {
+    _navTabOrder = List<int>.from(order);
+    unawaited(_playbackStateStore.saveUiState(navTabOrder: order));
+    notifyListeners();
+  }
+
   void updateScrollOffset(String key, double offset) {
     _libraryScrollOffsets[key] = offset;
     unawaited(
@@ -987,6 +1003,7 @@ class NautuneAppState extends ChangeNotifier {
       _infiniteRadioEnabled = storedPlaybackState.infiniteRadioEnabled;
       _cacheTtlMinutes = storedPlaybackState.cacheTtlMinutes;
       _restoredLibraryTabIndex = storedPlaybackState.libraryTabIndex;
+      _navTabOrder = List<int>.from(storedPlaybackState.navTabOrder);
       _gaplessPlaybackEnabled = storedPlaybackState.gaplessPlaybackEnabled;
       _streamingQuality = storedPlaybackState.streamingQuality;
       _visualizerEnabled = storedPlaybackState.visualizerEnabled;
@@ -1064,6 +1081,8 @@ class NautuneAppState extends ChangeNotifier {
           _startBootstrapSync(storedSession);
           // Sync analytics in background on startup
           unawaited(_syncAnalyticsToServer());
+          // Start remote control WebSocket for Helm Mode
+          _startRemoteControl(storedSession);
         } else {
           debugPrint('Skipping bootstrap sync: offline at startup');
         }
@@ -1296,8 +1315,31 @@ class NautuneAppState extends ChangeNotifier {
         debugPrint('SessionProvider.logout failed: $error');
       }
     }
+    // Disconnect remote control WebSocket
+    _remoteControlService?.dispose();
+    _remoteControlService = null;
+
     await _teardownDemoMode();
     notifyListeners();
+  }
+
+  /// Start the persistent WebSocket for receiving remote control commands
+  /// (Helm Mode). Only connects for real, non-demo, online sessions.
+  void _startRemoteControl(JellyfinSession session) {
+    if (session.isDemo) return;
+
+    final client = _jellyfinService.jellyfinClient;
+    if (client == null) return;
+
+    _remoteControlService?.dispose();
+    _remoteControlService = RemoteControlService(
+      client: client,
+      credentials: session.credentials,
+      deviceId: session.deviceId,
+      jellyfinService: _jellyfinService,
+      audioPlayerService: _audioPlayerService,
+    );
+    _remoteControlService!.connect();
   }
 
   void clearError() {
@@ -2579,6 +2621,7 @@ class NautuneAppState extends ChangeNotifier {
     _demoModeProvider?.removeListener(_onDemoModeChanged);
     _sessionProvider?.removeListener(_onSessionChanged);
     _carPlayService?.dispose();
+    _remoteControlService?.dispose();
     super.dispose();
   }
 

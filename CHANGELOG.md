@@ -1,3 +1,56 @@
+### v6.8.0 - Artist Radio, Recently Played & Reorderable Nav
+
+**New Feature: Artist Radio**
+- Start radio from any artist page via the new radio icon in the app bar
+- Uses Jellyfin's Instant Mix API to seed 50 similar tracks, then enables Infinite Radio for continuous playback
+- Radio indicator chip shows in the full player and a small radio icon appears in the now playing bar when active
+
+**New Feature: Recently Played Screen**
+- Full listening history screen accessible via "View All" on the Recently Played shelf
+- Events grouped by day (Today, Yesterday, This Week, Older) with relative timestamps
+- Tap to play, long-press for context menu (Play Next, Add to Queue, Instant Mix, etc.)
+- Powered by local ListeningAnalyticsService data (up to 200 events)
+
+**New Feature: Reorderable Navigation Tabs**
+- Long-press the bottom navigation bar to reorder tabs via drag-and-drop
+- Order persists across app restarts via Hive storage
+- Index mapping ensures correct tab content regardless of visual position
+
+**New Feature: Track Context Menu (Reusable)**
+- Extracted common track actions into `showTrackContextMenu()` widget
+- Available on artist detail screen (long-press any track), recently played screen, and existing screens
+- Options: Play Next, Add to Queue, Add to Playlist, Instant Mix, Go to Artist, Go to Album, Fleet Mode support
+
+**Performance: Image Caching**
+- Replaced `Image.network()` with `CachedNetworkImage` on 4 screens that were bypassing the cache:
+  - Library screen (ListenBrainz discovery cards)
+  - Genre detail screen (album grid) — now uses `JellyfinImage` for proper auth + caching
+  - Essential Mix screen (artwork display)
+  - Network screen (radio station images)
+
+**Reliability Fixes**
+- **SyncPlay race condition**: Moved `_isInitializing = true` before the async call to prevent duplicate service creation
+- **Gapless transition errors**: Added `playbackErrorStream` to AudioPlayerService — errors now surface as SnackBars via NowPlayingBar instead of silent `debugPrint` logging
+- **SyncPlay join delay**: Replaced hardcoded 500ms `Future.delayed` with event-based `addPostFrameCallback`
+
+**Helm Mode Overhaul**
+- **Fixed**: Helm Mode now actually works — remote control commands are delivered via persistent WebSocket instead of being silently dropped by the server
+- **RemoteControlService**: New persistent WebSocket connection to `/socket` that makes Nautune a fully controllable Jellyfin client
+- **Session Capabilities**: Nautune now registers capabilities with the server at startup (`POST /Sessions/Capabilities/Full`), enabling server-pushed Playstate, Play, and GeneralCommand messages
+- **Incoming Commands**: Supports Play/Pause, Next/Previous, Seek, Stop, Rewind, FastForward, SetVolume, PlayNow/PlayNext/PlayLast
+- **Moved to Library Screen**: Helm Mode button (sailing icon) moved from the full player to the library screen app bar — no longer requires active playback to access
+- **Demo/Offline Guard**: Helm Mode button is hidden in demo and offline modes
+
+**API Additions**
+- Added `JellyfinService.getArtist(id)` and `JellyfinService.getAlbum(id)` for single-item lookups
+- Added `AudioPlayerService.infiniteRadioEnabled` getter
+- Added `JellyfinClient.reportCapabilities()` for session capability registration
+
+**Version**
+- Bumped to 6.8.0+1
+
+---
+
 ### v6.7.3 - Smarter Discovery Recommendations
 
 **Improved: "Discover New Music" Shelf**

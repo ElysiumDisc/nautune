@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -17,9 +18,12 @@ import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../models/download_item.dart';
 import '../repositories/music_repository.dart';
+import '../services/haptic_service.dart';
+import '../services/helm_service.dart';
 import '../services/listenbrainz_service.dart';
 import '../services/share_service.dart';
 import '../services/smart_playlist_service.dart';
+import '../widgets/helm_mode_selector.dart';
 import '../models/listenbrainz_config.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/jellyfin_image.dart';
@@ -37,6 +41,7 @@ import 'relax_mode_screen.dart';
 import 'network_screen.dart';
 import 'playlist_detail_screen.dart';
 import 'profile_screen.dart';
+import 'recently_played_screen.dart';
 import 'settings_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
@@ -59,6 +64,18 @@ class _LibraryScreenState extends State<LibraryScreen>
   final ScrollController _albumsScrollController = ScrollController();
   final ScrollController _playlistsScrollController = ScrollController();
   int _currentTabIndex = _homeTabIndex;
+
+  // Tab definitions: (icon, label) indexed by content position
+  static const _tabDefs = <({IconData icon, String label})>[
+    (icon: Icons.library_music, label: 'Library'),
+    (icon: Icons.favorite_outline, label: 'Favorites'),
+    (icon: Icons.home_outlined, label: 'Home'),
+    (icon: Icons.queue_music, label: 'Playlists'),
+    (icon: Icons.search, label: 'Search'),
+  ];
+
+  List<int> _tabOrder = const [0, 1, 2, 3, 4];
+  HelmService? _helmService;
   
   // Provider-based state
   NautuneAppState? _appState;
@@ -96,6 +113,7 @@ class _LibraryScreenState extends State<LibraryScreen>
       _previousOfflineMode = currentAppState.isOfflineMode;
       _previousNetworkAvailable = currentAppState.networkAvailable;
       _hasInitialized = true;
+      _tabOrder = List<int>.from(currentAppState.navTabOrder);
 
       // Restore saved tab index after build completes
       final savedTabIndex = currentAppState.initialLibraryTabIndex;
@@ -424,6 +442,33 @@ class _LibraryScreenState extends State<LibraryScreen>
                   icon: const Icon(Icons.library_books_outlined),
                   onPressed: () => appState.clearLibrarySelection(),
                 ),
+              if (!appState.isDemoMode && !appState.isOfflineMode)
+                Builder(
+                  builder: (ctx) {
+                    final isHelmActive = _helmService?.isActive ?? false;
+                    return IconButton(
+                      icon: Icon(
+                        Icons.sailing,
+                        color: isHelmActive ? theme.colorScheme.primary : null,
+                      ),
+                      tooltip: 'Helm Mode',
+                      onPressed: () {
+                        final jellyfinService = appState.jellyfinService;
+                        final client = jellyfinService.jellyfinClient;
+                        final session = jellyfinService.session;
+                        if (client == null || session == null) return;
+
+                        _helmService ??= HelmService(
+                          client: client,
+                          credentials: session.credentials,
+                          ownDeviceId: session.deviceId,
+                        );
+
+                        HelmModeSelector.show(ctx, _helmService!);
+                      },
+                    );
+                  },
+                ),
               IconButton(
                 icon: const Icon(Icons.person_outline),
                 tooltip: 'Profile & Stats',
@@ -505,34 +550,30 @@ class _LibraryScreenState extends State<LibraryScreen>
           bottomNavigationBar: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              NavigationBar(
-                selectedIndex: _currentTabIndex,
-                onDestinationSelected: (index) {
-                  setState(() => _currentTabIndex = index);
-                  _tabController.animateTo(index);
-                },
-                destinations: [
-                  const NavigationDestination(
-                    icon: Icon(Icons.library_music),
-                    label: 'Library',
-                  ),
-                  const NavigationDestination(
-                    icon: Icon(Icons.favorite_outline),
-                    label: 'Favorites',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(appState.isOfflineMode ? Icons.download : Icons.home_outlined),
-                    label: appState.isOfflineMode ? 'Downloads' : 'Home',
-                  ),
-                  const NavigationDestination(
-                    icon: Icon(Icons.queue_music),
-                    label: 'Playlists',
-                  ),
-                  const NavigationDestination(
-                    icon: Icon(Icons.search),
-                    label: 'Search',
-                  ),
-                ],
+              GestureDetector(
+                onLongPress: () => _showReorderSheet(context),
+                child: NavigationBar(
+                  selectedIndex: _tabOrder.indexOf(_currentTabIndex),
+                  onDestinationSelected: (visualIndex) {
+                    final contentIndex = _tabOrder[visualIndex];
+                    setState(() => _currentTabIndex = contentIndex);
+                    _tabController.animateTo(contentIndex);
+                  },
+                  destinations: _tabOrder.map((contentIndex) {
+                    final def = _tabDefs[contentIndex];
+                    // Special case for tab 2: dynamic icon/label based on offline mode
+                    if (contentIndex == 2) {
+                      return NavigationDestination(
+                        icon: Icon(appState.isOfflineMode ? Icons.download : def.icon),
+                        label: appState.isOfflineMode ? 'Downloads' : def.label,
+                      );
+                    }
+                    return NavigationDestination(
+                      icon: Icon(def.icon),
+                      label: def.label,
+                    );
+                  }).toList(),
+                ),
               ),
               NowPlayingBar(
                 audioService: appState.audioPlayerService,
@@ -543,6 +584,81 @@ class _LibraryScreenState extends State<LibraryScreen>
         ),
       ),
     );
+      },
+    );
+  }
+
+  void _showReorderSheet(BuildContext context) {
+    HapticService.mediumTap();
+    final reorderList = List<int>.from(_tabOrder);
+    final appState = _appState;
+
+    showModalBottomSheet(
+      context: context,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: Row(
+                      children: [
+                        Text(
+                          'Reorder Tabs',
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () {
+                            Navigator.pop(sheetContext);
+                            setState(() {
+                              _tabOrder = reorderList;
+                            });
+                            appState?.updateNavTabOrder(reorderList);
+                          },
+                          child: const Text('Done'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  ReorderableListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: reorderList.length,
+                    onReorder: (oldIndex, newIndex) {
+                      setSheetState(() {
+                        if (newIndex > oldIndex) newIndex--;
+                        final item = reorderList.removeAt(oldIndex);
+                        reorderList.insert(newIndex, item);
+                      });
+                    },
+                    itemBuilder: (context, index) {
+                      final contentIndex = reorderList[index];
+                      final def = _tabDefs[contentIndex];
+                      final label = (contentIndex == 2 && (appState?.isOfflineMode ?? false))
+                          ? 'Downloads'
+                          : def.label;
+                      final icon = (contentIndex == 2 && (appState?.isOfflineMode ?? false))
+                          ? Icons.download
+                          : def.icon;
+                      return ListTile(
+                        key: ValueKey(contentIndex),
+                        leading: Icon(icon),
+                        title: Text(label),
+                        trailing: const Icon(Icons.drag_handle),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            );
+          },
+        );
       },
     );
   }
@@ -1745,12 +1861,14 @@ class _RecentlyPlayedShelf extends StatelessWidget {
     required this.isLoading,
     required this.onPlay,
     required this.onRefresh,
+    required this.appState,
   });
 
   final List<JellyfinTrack>? tracks;
   final bool isLoading;
   final void Function(JellyfinTrack) onPlay;
   final VoidCallback onRefresh;
+  final NautuneAppState appState;
 
   @override
   Widget build(BuildContext context) {
@@ -1760,10 +1878,34 @@ class _RecentlyPlayedShelf extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _ShelfHeader(
-          title: 'Recently Played',
-          onRefresh: onRefresh,
-          isLoading: isLoading,
+        Row(
+          children: [
+            Expanded(
+              child: _ShelfHeader(
+                title: 'Recently Played',
+                onRefresh: onRefresh,
+                isLoading: isLoading,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 8, top: 16),
+              child: TextButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => RecentlyPlayedScreen(appState: appState),
+                    ),
+                  );
+                },
+                child: Text(
+                  'View All',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
         SizedBox(
           height: 140,
@@ -2187,10 +2329,10 @@ class _DiscoveryChip extends StatelessWidget {
               SizedBox(
                 width: 80,
                 height: 100,
-                child: Image.network(
-                  coverArtUrl!,
+                child: CachedNetworkImage(
+                  imageUrl: coverArtUrl!,
                   fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) => Container(
+                  errorWidget: (context, url, error) => Container(
                     color: theme.colorScheme.surfaceContainerHigh,
                     child: Icon(
                       Icons.album,
@@ -3785,6 +3927,7 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
           _RecentlyPlayedShelf(
             tracks: recentlyPlayed,
             isLoading: recentlyPlayedLoading,
+            appState: widget.appState,
             onPlay: (track) {
               final queue = recentlyPlayed ?? const <JellyfinTrack>[];
               widget.appState.audioPlayerService.playTrack(

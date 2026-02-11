@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -825,14 +826,11 @@ class _NetworkScreenState extends State<NetworkScreen>
         decoration: BoxDecoration(
           border: Border.all(color: Colors.white24),
         ),
-        child: Image.network(
-          _currentChannel!.imageUrl!,
+        child: CachedNetworkImage(
+          imageUrl: _currentChannel!.imageUrl!,
           fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) => _buildPlaceholderArt(),
-          loadingBuilder: (context, child, loadingProgress) {
-            if (loadingProgress == null) return child;
-            return _buildPlaceholderArt(isLoading: true);
-          },
+          errorWidget: (context, url, error) => _buildPlaceholderArt(),
+          placeholder: (context, url) => _buildPlaceholderArt(isLoading: true),
         ),
       );
     }

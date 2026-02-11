@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_genre.dart';
+import '../widgets/jellyfin_image.dart';
 import 'album_detail_screen.dart';
 
 class GenreDetailScreen extends StatefulWidget {
@@ -200,14 +201,12 @@ class _AlbumCard extends StatelessWidget {
             AspectRatio(
               aspectRatio: 1,
               child: album.primaryImageTag != null
-                  ? Image.network(
-                      appState.buildImageUrl(
-                        itemId: album.id,
-                        tag: album.primaryImageTag,
-                        maxWidth: 400,
-                      ),
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) => Image.asset(
+                  ? JellyfinImage(
+                      itemId: album.id,
+                      imageTag: album.primaryImageTag,
+                      maxWidth: 400,
+                      boxFit: BoxFit.cover,
+                      errorBuilder: (context, url, error) => Image.asset(
                         'assets/no_album_art.png',
                         fit: BoxFit.cover,
                       ),

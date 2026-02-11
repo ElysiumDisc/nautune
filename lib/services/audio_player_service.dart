@@ -171,6 +171,7 @@ class AudioPlayerService {
   final StreamController<double> _volumeController = StreamController<double>.broadcast();
   final StreamController<bool> _shuffleController = StreamController<bool>.broadcast();
   final StreamController<List<double>> _visualizerController = StreamController<List<double>>.broadcast();
+  final StreamController<String> _playbackErrorController = StreamController<String>.broadcast();
   final _frequencyBandsController = BehaviorSubject<FrequencyBands>.seeded(FrequencyBands.zero);
   StreamSubscription<AudioInterruptionEvent>? _interruptionSubscription;
   StreamSubscription<void>? _becomingNoisySubscription;
@@ -204,6 +205,8 @@ class AudioPlayerService {
   void setCrossfadeDuration(int seconds) {
     _crossfadeDurationSeconds = seconds.clamp(0, 10);
   }
+
+  bool get infiniteRadioEnabled => _infiniteRadioEnabled;
 
   void setInfiniteRadioEnabled(bool enabled) {
     _infiniteRadioEnabled = enabled;
@@ -446,6 +449,7 @@ class AudioPlayerService {
   Stream<Duration> get sleepTimerStream => _sleepTimerController.stream;
   Stream<FrequencyBands> get frequencyBandsStream => _frequencyBandsController.stream;
   Stream<LoopState> get loopStateStream => _loopStateController.stream;
+  Stream<String> get playbackErrorStream => _playbackErrorController.stream;
 
   /// A stream that combines position, buffered position, and duration into a single snapshot.
   /// This is the "Silver Bullet" for smooth progress bars.
@@ -892,6 +896,7 @@ class AudioPlayerService {
         }
       } catch (e) {
         debugPrint('❌ Gapless transition failed: $e');
+        _playbackErrorController.add('Track transition failed, retrying...');
         // Recovery: reactivate audio session and try to play next track
         if (_currentIndex + 1 < _queue.length) {
           _currentIndex++;
@@ -913,6 +918,7 @@ class AudioPlayerService {
             );
           } catch (retryError) {
             debugPrint('❌ Recovery also failed: $retryError');
+            _playbackErrorController.add('Playback failed. Skipping track.');
             await stop();
           }
         } else {
@@ -2890,6 +2896,7 @@ class AudioPlayerService {
     _visualizerController.close();
     _sleepTimerController.close();
     _frequencyBandsController.close();
+    _playbackErrorController.close();
   }
 }
 

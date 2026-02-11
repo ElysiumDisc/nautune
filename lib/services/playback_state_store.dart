@@ -168,6 +168,7 @@ class PlaybackStateStore {
     int? gridSize,
     bool? useListMode,
     NowPlayingLayout? nowPlayingLayout,
+    List<int>? navTabOrder,
   }) async {
     await update((state) {
       final mergedOffsets = Map<String, double>.from(state.scrollOffsets);
@@ -203,6 +204,7 @@ class PlaybackStateStore {
         gridSize: gridSize ?? state.gridSize,
         useListMode: useListMode ?? state.useListMode,
         nowPlayingLayout: nowPlayingLayout ?? state.nowPlayingLayout,
+        navTabOrder: navTabOrder ?? state.navTabOrder,
       );
     });
   }

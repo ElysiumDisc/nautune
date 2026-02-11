@@ -10,7 +10,7 @@
 - **Popular Tracks**: Artist pages show top 5 most popular tracks globally with dynamic accent colors, album pages highlight popular songs with flame icons (powered by ListenBrainz)
 - **Artist Page Redesign**: Dynamic gradient backgrounds extracted from artist artwork, expandable bio cards, compact album grid layout
 - **Fleet Mode**: Real-time synchronized playback across devices - listen together with friends via QR code or share link (formerly Collaborative Playlists)
-- **Helm Mode**: Remote control any other Nautune instance on the same Jellyfin server via the Sessions API
+- **Helm Mode**: Remote control any other Nautune instance on the same Jellyfin server — persistent WebSocket makes both devices fully controllable via the Jellyfin Sessions API
 - **Custom Color Theme**: Create your own theme with primary/secondary color picker
 - **Alternate App Icons**: Choose between Classic (purple), Sunset (orange), Crimson (red), and Emerald (green) icons across all platforms
 - **10-Band Equalizer** (Linux): Full graphic EQ with 12 presets (Rock, Pop, Jazz, Classical, and more)
@@ -26,6 +26,9 @@
 - **Global Search**: Unified search across your entire library with instant results
 - **Smart Offline Mode**: Persistent offline preference, auto-detects airplane mode, seamless downloaded content playback
 - **A-B Repeat Loop**: Set loop markers on downloaded/cached tracks to repeat a section (long-press with haptic feedback on iOS, or use the A-B Loop button on desktop). Save loops for later recall.
+- **Artist Radio**: Start radio from any artist page — seeds 50 similar tracks with continuous Infinite Radio
+- **Recently Played**: Full listening history screen with day-grouped events, tap to play, long-press for context menu
+- **Reorderable Nav Tabs**: Long-press the bottom bar to drag-and-drop reorder tabs — persists across restarts
 - **Infinite Radio**: Auto-generates similar tracks when your queue runs low — toggle from the full player's more options menu
 - **High-Fidelity Playback**: Native backends for Linux and iOS ensuring bit-perfect audio
 - **CarPlay Support**: Take your Jellyfin library on the road with CarPlay interface
@@ -587,7 +590,7 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
 | Feature | Platform | Status |
 |---------|----------|--------|
 | Android Build | Android | 🔜 Planned |
-| Helm Mode (Remote Control) | All | ✅ Complete (v6.7) |
+| Helm Mode (Remote Control) | All | ✅ Complete (v6.7, fixed v6.8) |
 | Fleet Mode (SyncPlay) | All | ✅ Complete (v6.7) |
 | Flatpak Packaging | Linux | ✅ Complete (v6.7) |
 | Additional Visualizers | All | ✅ Complete |

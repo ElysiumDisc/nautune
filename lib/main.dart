@@ -369,8 +369,8 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
       _deferredSyncPlayGroupId = null;
       debugPrint('🔗 Processing deferred join for group: $groupId');
 
-      // Small delay to ensure UI is ready
-      Future.delayed(const Duration(milliseconds: 500), () {
+      // Wait for UI frame to ensure widgets are ready
+      WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           _handleSyncPlayJoin(groupId);
         }

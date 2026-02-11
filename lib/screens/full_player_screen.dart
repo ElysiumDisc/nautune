@@ -25,9 +25,7 @@ import '../services/haptic_service.dart';
 import '../services/ios_fft_service.dart';
 import '../services/saved_loops_service.dart';
 import '../services/share_service.dart';
-import '../services/helm_service.dart';
 import '../widgets/add_to_playlist_dialog.dart';
-import '../widgets/helm_mode_selector.dart';
 import '../widgets/visualizers/visualizer_factory.dart';
 import '../widgets/jellyfin_image.dart';
 import '../widgets/jellyfin_waveform.dart';
@@ -136,8 +134,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   bool _showingVisualizerInArtwork = false;
   String? _lastTrackIdForVisualizerReset; // Track ID to detect track changes
 
-  // Helm Mode (remote control)
-  HelmService? _helmService;
 
   @override
   void initState() {
@@ -1567,35 +1563,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                 tooltip: 'Mini Player',
                                 onPressed: _switchToMiniPlayer,
                               ),
-                            // Helm Mode Button (remote control)
-                            Builder(
-                              builder: (context) {
-                                final isHelmActive = _helmService?.isActive ?? false;
-                                return IconButton(
-                                  icon: Icon(
-                                    Icons.sailing,
-                                    color: isHelmActive
-                                        ? theme.colorScheme.primary
-                                        : null,
-                                  ),
-                                  tooltip: 'Helm Mode',
-                                  onPressed: () {
-                                    final jellyfinService = _appState.jellyfinService;
-                                    final client = jellyfinService.jellyfinClient;
-                                    final session = jellyfinService.session;
-                                    if (client == null || session == null) return;
-
-                                    _helmService ??= HelmService(
-                                      client: client,
-                                      credentials: session.credentials,
-                                      ownDeviceId: session.deviceId,
-                                    );
-
-                                    HelmModeSelector.show(context, _helmService!);
-                                  },
-                                );
-                              },
-                            ),
                             // Sleep Timer Button
                             StreamBuilder<Duration>(
                               stream: _audioService.sleepTimerStream,
@@ -2119,6 +2086,32 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
+
+                        // Radio indicator
+                        if (_appState.audioPlayerService.infiniteRadioEnabled) ...[
+                          const SizedBox(height: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.radio, size: 14, color: theme.colorScheme.onPrimaryContainer),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'RADIO',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: theme.colorScheme.onPrimaryContainer,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
 
                         const SizedBox(height: 8),
 
@@ -2757,32 +2750,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                         ),
 
                       const SizedBox(height: 16),
-
-                      // Helm Mode banner
-                      if (_helmService?.isActive == true)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.primaryContainer,
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.sailing, size: 16, color: theme.colorScheme.onPrimaryContainer),
-                                const SizedBox(width: 6),
-                                Text(
-                                  'Controlling: ${_helmService!.activeTarget!.deviceName}',
-                                  style: theme.textTheme.labelMedium?.copyWith(
-                                    color: theme.colorScheme.onPrimaryContainer,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
 
                       // Playback Controls
                       Row(
