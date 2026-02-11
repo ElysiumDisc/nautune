@@ -150,7 +150,11 @@ class RemoteControlService extends ChangeNotifier {
           break;
 
         default:
-          // Ignore unrecognized messages (Sessions, UserDataChanged, etc.)
+          if (messageType != null &&
+              !const {'Sessions', 'UserDataChanged', 'LibraryChanged', 'ScheduledTasksInfo', 'ActivityLogEntry'}
+                  .contains(messageType)) {
+            debugPrint('RemoteControl: Unhandled message type: $messageType');
+          }
           break;
       }
     } catch (e) {

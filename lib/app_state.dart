@@ -338,7 +338,10 @@ class NautuneAppState extends ChangeNotifier {
         _startPeriodicSyncTimer();
 
         // Start remote control WebSocket for Helm Mode
-        _startRemoteControl(session);
+        // (only after full initialization to avoid race with initialize())
+        if (_initialized) {
+          _startRemoteControl(session);
+        }
 
         _loadLibraries();
         if (session.selectedLibraryId != null) {

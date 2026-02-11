@@ -39,7 +39,9 @@
 - **Session Capabilities**: Nautune now registers capabilities with the server at startup (`POST /Sessions/Capabilities/Full`), enabling server-pushed Playstate, Play, and GeneralCommand messages
 - **Incoming Commands**: Supports Play/Pause, Next/Previous, Seek, Stop, Rewind, FastForward, SetVolume, PlayNow/PlayNext/PlayLast
 - **Moved to Library Screen**: Helm Mode button (sailing icon) moved from the full player to the library screen app bar — no longer requires active playback to access
+- **Transport Controls**: Helm Mode bottom sheet now shows full transport controls (play/pause, next, previous) with progress bar — control remote playback without starting local playback
 - **Demo/Offline Guard**: Helm Mode button is hidden in demo and offline modes
+- **Race Condition Fix**: Fixed RemoteControlService being disposed during initialization when both `_onSessionChanged` and `initialize()` tried to start it
 
 **API Additions**
 - Added `JellyfinService.getArtist(id)` and `JellyfinService.getAlbum(id)` for single-item lookups

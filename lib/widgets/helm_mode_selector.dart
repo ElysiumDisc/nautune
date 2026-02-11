@@ -32,7 +32,12 @@ class _HelmModeSelectorState extends State<HelmModeSelector> {
   void initState() {
     super.initState();
     widget.helmService.addListener(_onUpdate);
-    widget.helmService.discoverTargets();
+    if (widget.helmService.isActive) {
+      // Already connected — refresh target state for latest now-playing info
+      widget.helmService.refreshTarget();
+    } else {
+      widget.helmService.discoverTargets();
+    }
   }
 
   @override
@@ -169,13 +174,15 @@ class _HelmModeSelectorState extends State<HelmModeSelector> {
         trailing: const Icon(Icons.sailing),
         onTap: () {
           widget.helmService.activateHelm(target);
-          Navigator.of(context).pop();
+          // Stay on the sheet to show transport controls
         },
       ),
     );
   }
 
   Widget _buildActiveTarget(BuildContext context, ThemeData theme, HelmSession target) {
+    final onContainer = theme.colorScheme.onPrimaryContainer;
+
     return Card(
       color: theme.colorScheme.primaryContainer,
       child: Padding(
@@ -183,38 +190,126 @@ class _HelmModeSelectorState extends State<HelmModeSelector> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Header: device name
             Row(
               children: [
-                Icon(Icons.sailing, color: theme.colorScheme.onPrimaryContainer),
+                Icon(Icons.sailing, color: onContainer),
                 const SizedBox(width: 8),
-                Text(
-                  'Controlling: ${target.deviceName}',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: theme.colorScheme.onPrimaryContainer,
-                    fontWeight: FontWeight.bold,
+                Expanded(
+                  child: Text(
+                    target.deviceName,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: onContainer,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
               ],
             ),
+
+            // Now playing info
             if (target.hasNowPlaying) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               Text(
                 target.nowPlayingItemName ?? '',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onPrimaryContainer,
+                style: theme.textTheme.bodyLarge?.copyWith(
+                  color: onContainer,
+                  fontWeight: FontWeight.w600,
                 ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
               if (target.nowPlayingArtist != null)
                 Text(
                   target.nowPlayingArtist!,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: onContainer.withValues(alpha: 0.7),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+
+              // Progress bar
+              if (target.runtimeTicks > 0) ...[
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Text(
+                      _formatDuration(target.position),
+                      style: theme.textTheme.labelSmall?.copyWith(color: onContainer.withValues(alpha: 0.7)),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: LinearProgressIndicator(
+                        value: (target.positionTicks / target.runtimeTicks).clamp(0.0, 1.0),
+                        backgroundColor: onContainer.withValues(alpha: 0.2),
+                        valueColor: AlwaysStoppedAnimation<Color>(onContainer),
+                        minHeight: 3,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _formatDuration(target.runtime),
+                      style: theme.textTheme.labelSmall?.copyWith(color: onContainer.withValues(alpha: 0.7)),
+                    ),
+                  ],
+                ),
+              ],
+
+              // Transport controls
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    icon: Icon(Icons.skip_previous, color: onContainer),
+                    onPressed: () => widget.helmService.helmPrevious(),
+                    tooltip: 'Previous',
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filled(
+                    icon: Icon(
+                      target.isPaused ? Icons.play_arrow : Icons.pause,
+                      color: theme.colorScheme.primaryContainer,
+                      size: 32,
+                    ),
+                    style: IconButton.styleFrom(
+                      backgroundColor: onContainer,
+                    ),
+                    onPressed: () => widget.helmService.helmTogglePlayPause(),
+                    tooltip: target.isPaused ? 'Play' : 'Pause',
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: Icon(Icons.skip_next, color: onContainer),
+                    onPressed: () => widget.helmService.helmNext(),
+                    tooltip: 'Next',
+                  ),
+                ],
+              ),
+            ],
+
+            // Nothing playing state
+            if (!target.hasNowPlaying) ...[
+              const SizedBox(height: 12),
+              Center(
+                child: Text(
+                  'Nothing playing on ${target.deviceName}',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: onContainer.withValues(alpha: 0.6),
                   ),
                 ),
+              ),
             ],
           ],
         ),
       ),
     );
+  }
+
+  String _formatDuration(Duration d) {
+    final minutes = d.inMinutes;
+    final seconds = d.inSeconds % 60;
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 }

@@ -75,7 +75,8 @@ class HelmService extends ChangeNotifier {
     _targetController.add(target);
     notifyListeners();
 
-    // Start adaptive polling: 3s when playing, 10s when idle
+    // Immediately fetch the latest state, then start periodic polling
+    _refreshTargetState();
     _startAdaptivePolling();
 
     debugPrint('Helm: Activated control of ${target.deviceName}');
@@ -104,6 +105,8 @@ class HelmService extends ChangeNotifier {
   }
 
   /// Refresh the target's now-playing state from /Sessions.
+  Future<void> refreshTarget() => _refreshTargetState();
+
   Future<void> _refreshTargetState() async {
     if (_activeTarget == null) return;
 
@@ -140,6 +143,7 @@ class HelmService extends ChangeNotifier {
         sessionId: _activeTarget!.sessionId,
         command: 'Unpause',
       );
+      debugPrint('Helm: Sent Unpause to ${_activeTarget!.deviceName}');
     } catch (e) {
       debugPrint('Helm: Play failed: $e');
     }
@@ -153,6 +157,7 @@ class HelmService extends ChangeNotifier {
         sessionId: _activeTarget!.sessionId,
         command: 'Pause',
       );
+      debugPrint('Helm: Sent Pause to ${_activeTarget!.deviceName}');
     } catch (e) {
       debugPrint('Helm: Pause failed: $e');
     }
@@ -177,6 +182,7 @@ class HelmService extends ChangeNotifier {
         command: 'Seek',
         seekPositionTicks: ticks,
       );
+      debugPrint('Helm: Sent Seek to ${_activeTarget!.deviceName}');
     } catch (e) {
       debugPrint('Helm: Seek failed: $e');
     }
@@ -190,6 +196,7 @@ class HelmService extends ChangeNotifier {
         sessionId: _activeTarget!.sessionId,
         command: 'NextTrack',
       );
+      debugPrint('Helm: Sent NextTrack to ${_activeTarget!.deviceName}');
     } catch (e) {
       debugPrint('Helm: Next failed: $e');
     }
@@ -203,6 +210,7 @@ class HelmService extends ChangeNotifier {
         sessionId: _activeTarget!.sessionId,
         command: 'PreviousTrack',
       );
+      debugPrint('Helm: Sent PreviousTrack to ${_activeTarget!.deviceName}');
     } catch (e) {
       debugPrint('Helm: Previous failed: $e');
     }

@@ -10,7 +10,7 @@
 - **Popular Tracks**: Artist pages show top 5 most popular tracks globally with dynamic accent colors, album pages highlight popular songs with flame icons (powered by ListenBrainz)
 - **Artist Page Redesign**: Dynamic gradient backgrounds extracted from artist artwork, expandable bio cards, compact album grid layout
 - **Fleet Mode**: Real-time synchronized playback across devices - listen together with friends via QR code or share link (formerly Collaborative Playlists)
-- **Helm Mode**: Remote control any other Nautune instance on the same Jellyfin server — persistent WebSocket makes both devices fully controllable via the Jellyfin Sessions API
+- **Helm Mode**: Remote control any other Nautune instance on the same Jellyfin server — full transport controls (play/pause, skip, progress bar) without needing local playback, powered by persistent WebSocket via the Jellyfin Sessions API
 - **Custom Color Theme**: Create your own theme with primary/secondary color picker
 - **Alternate App Icons**: Choose between Classic (purple), Sunset (orange), Crimson (red), and Emerald (green) icons across all platforms
 - **10-Band Equalizer** (Linux): Full graphic EQ with 12 presets (Rock, Pop, Jazz, Classical, and more)
