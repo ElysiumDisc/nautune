@@ -6,6 +6,7 @@ import '../jellyfin/jellyfin_track.dart';
 import '../providers/syncplay_provider.dart';
 import '../services/haptic_service.dart';
 import '../widgets/add_to_playlist_dialog.dart';
+import '../widgets/track_info_sheet.dart';
 import '../screens/album_detail_screen.dart';
 import '../screens/artist_detail_screen.dart';
 
@@ -222,6 +223,18 @@ void showTrackContextMenu({
                   }
                 },
               ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('Track Info'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                showModalBottomSheet(
+                  context: parentContext,
+                  isScrollControlled: true,
+                  builder: (_) => TrackInfoSheet(track: track),
+                );
+              },
+            ),
           ],
         ),
       );

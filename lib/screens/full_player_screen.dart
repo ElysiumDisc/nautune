@@ -2260,7 +2260,17 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                   .where((a) => a.id == track.albumId)
                                   .firstOrNull;
 
-                              // If not found and we have downloads, create a synthetic album from downloads
+                              // If not found in cache and we're online, fetch from server
+                              if (album == null && !_appState.isOfflineMode) {
+                                try {
+                                  album = await _appState.jellyfinService
+                                      .getAlbum(track.albumId!);
+                                } catch (_) {
+                                  // Fall through to downloads fallback
+                                }
+                              }
+
+                              // If still not found, try to create from downloads
                               if (album == null) {
                                 final downloads = _appState
                                     .downloadService
@@ -2296,7 +2306,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text(
-                                      'Album "${track.album}" not available offline',
+                                      'Album "${track.album}" not available',
                                     ),
                                     duration: const Duration(seconds: 2),
                                   ),

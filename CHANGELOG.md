@@ -1,3 +1,30 @@
+### v6.9.0 - Live Search, Queue Undo & Track Info
+
+**New Feature: Live Search with Debounce**
+- Search results now appear as you type — no need to press Enter
+- Uses 300ms debounce to avoid excessive API calls while typing
+- Pressing Enter still triggers an immediate search (cancels pending debounce)
+- Works across all search modes: online, offline, and demo
+
+**New Feature: Queue Undo**
+- Swiping a track from the queue now has a fully working UNDO action
+- Tapping UNDO in the snackbar re-inserts the track at its original position
+- New `insertIntoQueue()` method on AudioPlayerService handles index-aware re-insertion
+- Previous snackbar is cleared when a new track is removed (no stale undo actions)
+
+**New Feature: Track Info Bottom Sheet**
+- Long-press any track → "Track Info" option in context menu
+- Displays detailed audio metadata in a draggable bottom sheet:
+  - **Audio Quality**: Quality summary badge, codec, container, bitrate (kbps), sample rate (kHz), bit depth, channel layout
+  - **Track Info**: Title, album, artist, track/disc number, duration, genres, play count
+  - **External IDs**: MusicBrainz IDs (Track, Album, Artist) — tap to copy
+- Available everywhere the track context menu appears (library, albums, artists, recently played)
+
+**Version**
+- Bumped to 6.9.0+1
+
+---
+
 ### v6.8.0 - Artist Radio, Recently Played & Reorderable Nav
 
 **New Feature: Artist Radio**

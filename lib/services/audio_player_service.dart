@@ -1862,6 +1862,29 @@ class AudioPlayerService {
     ));
   }
 
+  /// Insert a track at a specific index in the queue (used for undo)
+  void insertIntoQueue(int index, JellyfinTrack track) {
+    if (index < 0) index = 0;
+    if (index > _queue.length) index = _queue.length;
+
+    _queue.insert(index, track);
+
+    // Adjust current index if insertion is before or at current position
+    if (index <= _currentIndex) {
+      _currentIndex++;
+    }
+
+    _clearPreload();
+    _queueController.add(_queue);
+    _audioHandler?.updateNautuneQueue(_queue);
+
+    unawaited(_stateStore.savePlaybackSnapshot(
+      queue: _queue,
+      currentQueueIndex: _currentIndex,
+      currentTrack: _currentTrack,
+    ));
+  }
+
   /// Add track(s) to play immediately after the current track
   /// This is the "Play Next" feature - inserts at currentIndex + 1
   void playNext(List<JellyfinTrack> tracks) {

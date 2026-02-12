@@ -221,14 +221,17 @@ class _QueueScreenState extends State<QueueScreen> {
                       return true;
                     },
                     onDismissed: (direction) {
+                      final removedTrack = track;
+                      final removedIndex = index;
                       audioService.removeFromQueue(index);
+                      ScaffoldMessenger.of(context).clearSnackBars();
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
-                          content: Text('${track.name} removed from queue'),
+                          content: Text('${removedTrack.name} removed from queue'),
                           action: SnackBarAction(
                             label: 'UNDO',
                             onPressed: () {
-                              // TODO: Implement undo
+                              audioService.insertIntoQueue(removedIndex, removedTrack);
                             },
                           ),
                         ),

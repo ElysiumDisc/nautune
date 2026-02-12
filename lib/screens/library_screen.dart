@@ -27,6 +27,7 @@ import '../widgets/helm_mode_selector.dart';
 import '../models/listenbrainz_config.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/jellyfin_image.dart';
+import '../utils/debouncer.dart';
 import '../widgets/now_playing_bar.dart';
 import '../widgets/skeleton_loader.dart';
 import '../widgets/sync_status_indicator.dart';
@@ -4785,6 +4786,7 @@ class _SearchTab extends StatefulWidget {
 
 class _SearchTabState extends State<_SearchTab> {
   final TextEditingController _controller = TextEditingController();
+  final Debouncer _debouncer = Debouncer();
   List<String> _recentQueries = [];
   String _lastQuery = '';
   bool _isLoading = false;
@@ -4808,6 +4810,7 @@ class _SearchTabState extends State<_SearchTab> {
 
   @override
   void dispose() {
+    _debouncer.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -5056,7 +5059,13 @@ class _SearchTabState extends State<_SearchTab> {
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
           child: TextField(
             controller: _controller,
-            onSubmitted: _performSearch,
+            onChanged: (value) {
+              _debouncer.run(() => _performSearch(value));
+            },
+            onSubmitted: (value) {
+              _debouncer.cancel();
+              _performSearch(value);
+            },
             textInputAction: TextInputAction.search,
             decoration: InputDecoration(
               prefixIcon: const Icon(Icons.search),

@@ -23,7 +23,8 @@
 - **Track Sharing**: Share downloaded audio files via AirDrop (iOS) or file manager (Linux)
 - **Storage Management**: Separate views for downloads vs cache with accurate stats
 - **Listening Analytics**: Heatmaps, streaks, and weekly comparisons
-- **Global Search**: Unified search across your entire library with instant results
+- **Live Search**: Results appear as you type with 300ms debounce — no Enter key required
+- **Track Info Sheet**: Long-press any track to view detailed audio metadata (codec, bitrate, sample rate, bit depth, MusicBrainz IDs)
 - **Smart Offline Mode**: Persistent offline preference, auto-detects airplane mode, seamless downloaded content playback
 - **A-B Repeat Loop**: Set loop markers on downloaded/cached tracks to repeat a section (long-press with haptic feedback on iOS, or use the A-B Loop button on desktop). Save loops for later recall.
 - **Artist Radio**: Start radio from any artist page — seeds 50 similar tracks with continuous Infinite Radio
