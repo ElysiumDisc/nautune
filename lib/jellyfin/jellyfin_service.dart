@@ -20,7 +20,7 @@ class JellyfinService {
   Duration _cacheTtl = const Duration(minutes: 2);
 
   /// Maximum number of entries per cache map to prevent memory bloat
-  static const int _maxCacheSize = 100;
+  static const int _maxCacheSize = 500;
 
   JellyfinClient? _client;
   JellyfinSession? _session;

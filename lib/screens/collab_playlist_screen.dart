@@ -376,30 +376,14 @@ class _CollabPlaylistScreenState extends State<CollabPlaylistScreen> {
         final track = provider.queue[index];
         final isCurrentTrack = index == provider.currentTrackIndex;
 
-        // Wrap with AnimatedSwitcher for smooth transitions
-        return AnimatedSwitcher(
-          key: ValueKey('switcher_${track.playlistItemId}'),
-          duration: const Duration(milliseconds: 300),
-          switchInCurve: Curves.easeInOut,
-          switchOutCurve: Curves.easeInOut,
-          transitionBuilder: (child, animation) {
-            return FadeTransition(
-              opacity: animation,
-              child: SizeTransition(
-                sizeFactor: animation,
-                child: child,
-              ),
-            );
-          },
-          child: CollabQueueItem(
-            key: ValueKey(track.playlistItemId),
-            track: track,
-            index: index,
-            serverUrl: serverUrl,
-            isCurrentTrack: isCurrentTrack,
-            onTap: () => provider.playTrackAtIndex(index),
-            onRemove: () => provider.removeFromQueue(track.playlistItemId),
-          ),
+        return CollabQueueItem(
+          key: ValueKey(track.playlistItemId),
+          track: track,
+          index: index,
+          serverUrl: serverUrl,
+          isCurrentTrack: isCurrentTrack,
+          onTap: () => provider.playTrackAtIndex(index),
+          onRemove: () => provider.removeFromQueue(track.playlistItemId),
         );
       },
     );

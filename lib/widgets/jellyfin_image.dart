@@ -138,9 +138,14 @@ class _JellyfinImageState extends State<JellyfinImage> {
   }
 
   Widget _buildNetworkImage(BuildContext context, NautuneAppState appState) {
-    // Determine optimal dimensions for request
-    final requestWidth = widget.maxWidth ?? (widget.width != null ? (widget.width! * 2).toInt() : 400);
-    final requestHeight = widget.maxHeight ?? (widget.height != null ? (widget.height! * 2).toInt() : null);
+    // Determine optimal dimensions for request, accounting for device pixel ratio
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    final requestWidth = widget.maxWidth != null
+        ? (widget.maxWidth! * dpr).toInt()
+        : (widget.width != null ? (widget.width! * 2).toInt() : 400);
+    final requestHeight = widget.maxHeight != null
+        ? (widget.maxHeight! * dpr).toInt()
+        : (widget.height != null ? (widget.height! * 2).toInt() : null);
 
     final imageUrl = appState.jellyfinService.buildImageUrl(
       itemId: widget.itemId,

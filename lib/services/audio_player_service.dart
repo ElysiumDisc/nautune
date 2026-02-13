@@ -107,6 +107,9 @@ class AudioPlayerService {
   // Track if current playback is from local file (download or cache)
   bool _isCurrentTrackLocal = false;
 
+  // Cancellable waveform extraction subscription
+  StreamSubscription? _waveformExtractionSub;
+
   // Pre-loading support for gapless playback
   JellyfinTrack? _preloadedTrack;
   bool _isPreloading = false;
@@ -913,22 +916,28 @@ class AudioPlayerService {
           unawaited(_smartPreCacheUpcoming(_queue, _currentIndex));
 
           // Restart FFT for the new track during gapless transition
-          if (Platform.isIOS && _isCurrentTrackLocal) {
-            // Get the local file path for the new track
-            final cachedFile = await _audioCacheService.getCachedFile(nextTrack.id);
-            if (cachedFile != null) {
-              await IOSFFTService.instance.stopCapture();
-              IOSFFTService.instance.resetUrl();
-              await IOSFFTService.instance.setAudioUrl('file://${cachedFile.path}');
-              await IOSFFTService.instance.startCapture();
-              debugPrint('🎵 iOS FFT: Restarted for gapless transition to ${nextTrack.name}');
+          // Wrapped in try-catch: FFT failures are non-fatal and must not crash playback
+          try {
+            if (Platform.isIOS && _isCurrentTrackLocal) {
+              // Get the local file path for the new track
+              final cachedFile = await _audioCacheService.getCachedFile(nextTrack.id);
+              if (cachedFile != null) {
+                await IOSFFTService.instance.stopCapture();
+                IOSFFTService.instance.resetUrl();
+                await IOSFFTService.instance.setAudioUrl('file://${cachedFile.path}');
+                await IOSFFTService.instance.startCapture();
+                debugPrint('🎵 iOS FFT: Restarted for gapless transition to ${nextTrack.name}');
+              }
+            } else if (Platform.isIOS) {
+              // Streaming track during gapless - cache for FFT in background
+              final (streamUrl, _) = _getStreamUrl(nextTrack);
+              if (streamUrl != null) {
+                _cacheTrackForIOSFFT(nextTrack, streamUrl);
+              }
             }
-          } else if (Platform.isIOS) {
-            // Streaming track during gapless - cache for FFT in background
-            final (streamUrl, _) = _getStreamUrl(nextTrack);
-            if (streamUrl != null) {
-              _cacheTrackForIOSFFT(nextTrack, streamUrl);
-            }
+          } catch (fftError) {
+            debugPrint('⚠️ FFT restart during gapless failed: $fftError');
+            // Non-fatal: playback continues without visualization
           }
 
           // Clear pre-load state
@@ -1222,6 +1231,10 @@ class AudioPlayerService {
     _isShuffleEnabled = fromShuffle;
     _shuffleController.add(_isShuffleEnabled);
 
+    // Cancel any in-flight waveform extraction from the previous track
+    _waveformExtractionSub?.cancel();
+    _waveformExtractionSub = null;
+
     _currentTrack = track;
     _currentTrackController.add(track);
     _cachedDuration = track.duration; // Initialize cached duration from track metadata
@@ -1354,6 +1367,8 @@ class AudioPlayerService {
         if (cachedFile != null && _currentTrack?.id == track.id) {
           _isCurrentTrackLocal = true;
         }
+      }).catchError((e) {
+        debugPrint('Cache: Failed to cache current track: $e');
       }));
     }
 
@@ -1712,10 +1727,16 @@ class AudioPlayerService {
 
       await IOSFFTService.instance.setAudioUrl(filePath);
 
+      // Re-check staleness after await
+      if (_currentTrack?.id != trackId) return;
+
       // Sync to current playback position BEFORE starting capture
       // Use milliseconds for precision
       final currentPosMs = _lastPosition.inMilliseconds.toDouble() / 1000.0;
       await IOSFFTService.instance.syncPosition(currentPosMs);
+
+      // Re-check staleness after await
+      if (_currentTrack?.id != trackId) return;
 
       await IOSFFTService.instance.startCapture();
 
@@ -1764,19 +1785,31 @@ class AudioPlayerService {
   void _extractWaveformForLocalFile(JellyfinTrack track, String filePath) {
     final trackId = track.id;
 
-    WaveformService.instance.hasWaveform(trackId).then((hasWaveform) async {
+    WaveformService.instance.hasWaveform(trackId).then((hasWaveform) {
       if (hasWaveform) {
         debugPrint('🌊 Waveform: Already exists for ${track.name}');
         return;
       }
 
+      // Cancel any previous waveform extraction
+      _waveformExtractionSub?.cancel();
+
       debugPrint('🌊 Waveform: Extracting for local file: ${track.name}');
-      await for (final _ in WaveformService.instance.extractWaveform(trackId, filePath)) {
-        // Progress updates (silently consume)
-      }
-      debugPrint('🌊 Waveform: Extraction complete for ${track.name}');
+      _waveformExtractionSub = WaveformService.instance.extractWaveform(trackId, filePath).listen(
+        (_) {
+          // Progress updates (silently consume)
+        },
+        onDone: () {
+          debugPrint('🌊 Waveform: Extraction complete for ${track.name}');
+          _waveformExtractionSub = null;
+        },
+        onError: (e) {
+          debugPrint('⚠️ Waveform: Error extracting from local file: $e');
+          _waveformExtractionSub = null;
+        },
+      );
     }).catchError((e) {
-      debugPrint('⚠️ Waveform: Error extracting from local file: $e');
+      debugPrint('⚠️ Waveform: Error checking waveform existence: $e');
     });
   }
 
@@ -2952,6 +2985,7 @@ class AudioPlayerService {
     _sleepTimer?.cancel();
     _interruptionSubscription?.cancel();
     _becomingNoisySubscription?.cancel();
+    _waveformExtractionSub?.cancel();
     _detachListeners();
     _audioHandler?.dispose();
     _player.dispose();

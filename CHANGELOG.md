@@ -1,3 +1,27 @@
+### v7.1.0 - Health Check & Reliability Improvements
+
+**Audio Pipeline Reliability (P0)**
+- Fixed race conditions in background FFT/waveform operations when rapidly skipping tracks — added staleness checks between async operations in `_cacheTrackForIOSFFT`
+- Made waveform extraction cancellable via `StreamSubscription` — previous track's extraction is now cancelled on track change and in `dispose()`
+- Wrapped gapless playback FFT restart in try-catch — FFT visualization failures no longer crash gapless transitions
+- Added `.catchError()` to fire-and-forget track caching — prevents unhandled future errors on disk-full or network failures
+
+**Performance (P1)**
+- Removed `AnimatedSwitcher` wrapper from Fleet Mode queue items — eliminates `FadeTransition` + `SizeTransition` overhead on reorder with 50+ items; `ReorderableListView` provides its own drag animation
+- Fixed WebSocket dead connection detection — `send()` failures now trigger disconnection handling and schedule reconnect instead of silently logging
+
+**Security (P2)**
+- Redacted API tokens from WebSocket debug logs — `api_key` parameter is now masked in connection log output
+
+**Quality of Life (P3)**
+- Increased album metadata cache from 100 to 500 entries — reduces cache misses for large libraries with negligible memory impact
+- Fixed high-DPI image sizing — `maxWidth`/`maxHeight` now multiplied by `devicePixelRatio` to prevent blurry images on retina displays
+
+**Version**
+- Bumped to 7.1.0+1
+
+---
+
 ### v7.0.0 - Submarine Mode, iOS Lock Screen Fix & Performance
 
 **New Feature: Submarine Mode (Ultra Battery Saver)**

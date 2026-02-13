@@ -207,7 +207,7 @@ class SyncPlayWebSocket {
     if (_isDisposed) return;
 
     final wsUrl = _buildWebSocketUrl();
-    debugPrint('SyncPlayWebSocket: Connecting to $wsUrl');
+    debugPrint('SyncPlayWebSocket: Connecting to ${wsUrl.replaceAll(RegExp(r'api_key=[^&]+'), 'api_key=***')}');
 
     try {
       _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
@@ -362,6 +362,10 @@ class SyncPlayWebSocket {
       _channel!.sink.add(jsonStr);
     } catch (error) {
       debugPrint('SyncPlayWebSocket: Failed to send message: $error');
+      _isConnected = false;
+      _connectionStateController.add(false);
+      _stopKeepAlive();
+      _scheduleReconnect();
     }
   }
 
