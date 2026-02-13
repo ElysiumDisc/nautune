@@ -130,6 +130,9 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   bool _showLoopControls = false;
   bool _showLoopButton = false; // Toggle visibility of A-B Loop button (off by default)
 
+  // Cached player snapshot stream (avoid resubscription per build)
+  Stream<PlayerSnapshot>? _playerSnapshotStream;
+
   // Visualizer in album art toggle state
   bool _showingVisualizerInArtwork = false;
   String? _lastTrackIdForVisualizerReset; // Track ID to detect track changes
@@ -149,6 +152,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     _appState = Provider.of<NautuneAppState>(context, listen: false);
     _audioService = _appState.audioService;
     _lyricsService = LyricsService(jellyfinService: _appState.jellyfinService);
+    _playerSnapshotStream ??= _audioService.playerSnapshotStream;
 
     // Set up stream listeners only once
     if (_trackSub == null) {
@@ -1463,7 +1467,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     // Single combined stream instead of 4 nested StreamBuilders
     // Reduces widget rebuilds by ~75% during playback
     return StreamBuilder<PlayerSnapshot>(
-      stream: _audioService.playerSnapshotStream,
+      stream: _playerSnapshotStream,
       initialData: PlayerSnapshot(
         track: _audioService.currentTrack,
         isPlaying: _audioService.isPlaying,

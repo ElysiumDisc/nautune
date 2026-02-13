@@ -15,6 +15,7 @@ import '../services/share_service.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/jellyfin_image.dart';
 import '../widgets/now_playing_bar.dart';
+import '../widgets/track_info_sheet.dart';
 
 /// Top-level function for compute() - extracts colors from image bytes in isolate
 List<int> _extractColorsFromBytes(Uint8List pixels) {
@@ -1140,6 +1141,18 @@ class _TrackTile extends StatelessWidget {
                                       );
                                       break;
                                   }
+                                },
+                              ),
+                              ListTile(
+                                leading: const Icon(Icons.info_outline),
+                                title: const Text('Track Info'),
+                                onTap: () {
+                                  Navigator.pop(sheetContext);
+                                  showModalBottomSheet(
+                                    context: parentContext,
+                                    isScrollControlled: true,
+                                    builder: (_) => TrackInfoSheet(track: track),
+                                  );
                                 },
                               ),
                             ],

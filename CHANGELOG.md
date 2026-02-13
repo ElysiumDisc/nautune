@@ -1,3 +1,21 @@
+### v7.2.0 - Lyrics Sync Fix & Track Info in Album View
+
+**Bug Fix: Lyrics Desynchronization**
+- Fixed lyrics falling out of sync with playback on both iOS and Linux
+- Root cause: `playerSnapshotStream` getter created a new `Rx.combineLatest4` stream on every widget build, causing `StreamBuilder` to unsubscribe and resubscribe every frame instead of receiving live position updates
+- Fix: Cache the stream reference in widget state so `StreamBuilder` subscribes once and receives position events properly
+- Introduced in v6.8.0 when `_positionSub` was removed in favor of `StreamBuilder<PlayerSnapshot>`
+
+**Bug Fix: Track Info Missing from Album View**
+- Added "Track Info" option to the album detail screen's track context menu (the ⋮ button)
+- Previously only available in library, artist, and recently played views via the shared context menu
+- Now consistent across all screens where track actions appear
+
+**Version**
+- Bumped to 7.2.0+1
+
+---
+
 ### v7.1.0 - Health Check & Reliability Improvements
 
 **Audio Pipeline Reliability (P0)**
