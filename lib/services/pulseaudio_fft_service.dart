@@ -4,28 +4,33 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:rxdart/rxdart.dart';
 
-/// FFT implementation (Cooley-Tukey radix-2)
-List<double> _performFFT(List<double> samples) {
-  var n = 512;
-  while (n < samples.length && n < 2048) {
-    n *= 2;
-  }
+// Pre-allocated reusable FFT buffers (avoid GC churn at ~43fps)
+const int _fftSize = 1024;
+const int _fftHalf = _fftSize ~/ 2;
+final Float64List _fftReal = Float64List(_fftSize);
+final Float64List _fftImag = Float64List(_fftSize);
+final Float64List _fftMagnitudes = Float64List(_fftHalf);
 
-  final real = List<double>.filled(n, 0);
-  final imag = List<double>.filled(n, 0);
+/// FFT implementation (Cooley-Tukey radix-2) with pre-allocated buffers
+List<double> _performFFT(List<double> samples) {
+  const n = _fftSize;
+
+  // Zero-fill buffers
+  _fftReal.fillRange(0, n, 0.0);
+  _fftImag.fillRange(0, n, 0.0);
 
   final len = math.min(samples.length, n);
   for (var i = 0; i < len; i++) {
     final window = 0.5 * (1 - math.cos(2 * math.pi * i / (len - 1)));
-    real[i] = samples[i] * window;
+    _fftReal[i] = samples[i] * window;
   }
 
   var j = 0;
   for (var i = 0; i < n - 1; i++) {
     if (i < j) {
-      final tempR = real[i];
-      real[i] = real[j];
-      real[j] = tempR;
+      final tempR = _fftReal[i];
+      _fftReal[i] = _fftReal[j];
+      _fftReal[j] = tempR;
     }
     var k = n >> 1;
     while (k <= j) {
@@ -48,12 +53,12 @@ List<double> _performFFT(List<double> samples) {
     for (var m = 0; m < mmax; m++) {
       for (var i = m; i < n; i += step) {
         final jj = i + mmax;
-        final tempR = wr * real[jj] - wi * imag[jj];
-        final tempI = wr * imag[jj] + wi * real[jj];
-        real[jj] = real[i] - tempR;
-        imag[jj] = imag[i] - tempI;
-        real[i] += tempR;
-        imag[i] += tempI;
+        final tempR = wr * _fftReal[jj] - wi * _fftImag[jj];
+        final tempI = wr * _fftImag[jj] + wi * _fftReal[jj];
+        _fftReal[jj] = _fftReal[i] - tempR;
+        _fftImag[jj] = _fftImag[i] - tempI;
+        _fftReal[i] += tempR;
+        _fftImag[i] += tempI;
       }
       final tempWr = wr;
       wr = wr * wpr - wi * wpi;
@@ -62,14 +67,12 @@ List<double> _performFFT(List<double> samples) {
     mmax = step;
   }
 
-  final magnitudes = <double>[];
-  final halfN = n ~/ 2;
+  const halfN = _fftHalf;
   for (var i = 0; i < halfN; i++) {
-    final mag = math.sqrt(real[i] * real[i] + imag[i] * imag[i]) / halfN;
-    magnitudes.add(mag);
+    _fftMagnitudes[i] = math.sqrt(_fftReal[i] * _fftReal[i] + _fftImag[i] * _fftImag[i]) / halfN;
   }
 
-  return magnitudes;
+  return _fftMagnitudes.toList();
 }
 
 /// Compute RMS average for a range of frequency bins

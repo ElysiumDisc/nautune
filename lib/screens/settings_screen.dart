@@ -25,6 +25,7 @@ import '../services/listenbrainz_service.dart';
 import '../services/rewind_service.dart';
 import '../services/saved_loops_service.dart';
 import '../services/waveform_service.dart';
+import '../widgets/jellyfin_waveform.dart';
 import '../theme/nautune_theme.dart';
 import '../widgets/equalizer_widget.dart';
 import '../widgets/visualizer_picker.dart';
@@ -166,9 +167,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 trailing: Switch(
                   value: appState.visualizerEnabled,
-                  onChanged: (value) {
-                    appState.setVisualizerEnabled(value);
-                  },
+                  onChanged: appState.submarineModeEnabled
+                      ? null
+                      : (value) {
+                          appState.setVisualizerEnabled(value);
+                        },
                 ),
               ),
               if (appState.visualizerEnabled)
@@ -962,9 +965,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   trailing: Switch(
                     value: appState.crossfadeEnabled,
-                    onChanged: (value) {
-                      appState.toggleCrossfade(value);
-                    },
+                    onChanged: appState.submarineModeEnabled
+                        ? null
+                        : (value) {
+                            appState.toggleCrossfade(value);
+                          },
                   ),
                 ),
                 if (appState.crossfadeEnabled)
@@ -1008,9 +1013,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   trailing: Switch(
                     value: appState.gaplessPlaybackEnabled,
-                    onChanged: (value) {
-                      appState.toggleGaplessPlayback(value);
-                    },
+                    onChanged: appState.submarineModeEnabled
+                        ? null
+                        : (value) {
+                            appState.toggleGaplessPlayback(value);
+                          },
                   ),
                 ),
                 ListTile(
@@ -1043,6 +1050,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   padding: EdgeInsets.all(12),
                   child: EqualizerWidget(),
                 ),
+              ],
+            ),
+          ),
+          const _SectionHeader(icon: Icons.directions_boat, title: 'Submarine'),
+          Card(
+            margin: const EdgeInsets.only(bottom: 16),
+            child: Column(
+              children: [
+                SwitchListTile(
+                  secondary: Icon(
+                    Icons.directions_boat,
+                    color: theme.colorScheme.primary,
+                  ),
+                  title: const Text('Submarine Mode'),
+                  subtitle: Text(
+                    appState.submarineModeEnabled
+                        ? 'Active \u2014 running silent, running deep'
+                        : 'Dive deep \u2014 squeeze every last drop of battery',
+                  ),
+                  value: appState.submarineModeEnabled,
+                  onChanged: (value) {
+                    appState.setSubmarineMode(value);
+                  },
+                ),
+                if (appState.submarineModeEnabled) ...[
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _SubmarineDetail(icon: Icons.waves, text: 'Visualizers disabled'),
+                        _SubmarineDetail(icon: Icons.tune, text: 'Crossfade disabled'),
+                        _SubmarineDetail(icon: Icons.music_note, text: 'Gapless playback disabled'),
+                        _SubmarineDetail(icon: Icons.graphic_eq, text: 'Waveform extraction paused'),
+                        _SubmarineDetail(icon: Icons.queue_music, text: 'Pre-caching disabled'),
+                        _SubmarineDetail(icon: Icons.image, text: 'Image pre-loading disabled'),
+                        _SubmarineDetail(icon: Icons.sync, text: 'Reduced sync frequency'),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Streaming quality stays at your preference.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.primary,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                    child: Text(
+                      'Your original settings will be restored when you surface.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1086,6 +1153,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   trailing: PopupMenuButton<int>(
                     initialValue: uiStateProvider.preCacheTrackCount,
+                    enabled: !appState.submarineModeEnabled,
                     onSelected: (int? value) {
                       if (value != null) {
                         uiStateProvider.setPreCacheTrackCount(value);
@@ -1139,10 +1207,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: const Text('Only pre-cache when connected to WiFi'),
                   trailing: Switch(
                     value: uiStateProvider.wifiOnlyCaching,
-                    onChanged: (value) {
-                      uiStateProvider.setWifiOnlyCaching(value);
-                      appState.setWifiOnlyCaching(value);
-                    },
+                    onChanged: appState.submarineModeEnabled
+                        ? null
+                        : (value) {
+                            uiStateProvider.setWifiOnlyCaching(value);
+                            appState.setWifiOnlyCaching(value);
+                          },
                   ),
                 ),
               ],
@@ -1702,6 +1772,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                                 if (confirm == true) {
                                   await AudioCacheService.instance.clearCache();
                                   await WaveformService.instance.clearAllWaveforms();
+                                  TrackWaveform.clearCache();
                                   if (context.mounted) {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(content: Text('All cache cleared')),
@@ -2659,6 +2730,36 @@ class _ColorCircle extends StatelessWidget {
           color: Colors.white.withValues(alpha: 0.2),
           width: 1,
         ),
+      ),
+    );
+  }
+}
+
+class _SubmarineDetail extends StatelessWidget {
+  final IconData icon;
+  final String text;
+
+  const _SubmarineDetail({
+    required this.icon,
+    required this.text,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Text(
+            text,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
       ),
     );
   }

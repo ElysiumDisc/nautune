@@ -438,6 +438,18 @@ class _LibraryScreenState extends State<LibraryScreen>
             ),
             actions: [
               const SyncStatusIndicator(),
+              if (appState.submarineModeEnabled)
+                Tooltip(
+                  message: 'Submarine Mode active',
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Icon(
+                      Icons.directions_boat,
+                      color: theme.colorScheme.primary,
+                      size: 20,
+                    ),
+                  ),
+                ),
               if (selectedId != null)
                 IconButton(
                   icon: const Icon(Icons.library_books_outlined),

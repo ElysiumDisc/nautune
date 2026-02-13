@@ -20,7 +20,7 @@ cp linux/nautune.desktop AppDir/ && \
 cp linux/nautune.png AppDir/ && \
 cd AppDir && ln -s usr/bin/nautune AppRun && cd .. && \
 mkdir -p dist && \
-ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-6.8.0.AppImage
+ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-7.0.0.AppImage
 ```
 
 ### Build Deb Package (Linux)
@@ -109,7 +109,7 @@ Every time you release a new version of Nautune:
 ```bash
 # 1. Make your changes in this repo, commit and push
 cd ~/nautune
-git add . && git commit -m "v6.8.0 - new features" && git push
+git add . && git commit -m "v7.0.0 - new features" && git push
 
 # 2. Update commit hash in flatpak-flutter.yml to the new commit
 git rev-parse HEAD

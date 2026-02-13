@@ -21,6 +21,11 @@ class PlaybackReportingService {
   String _currentPlayMethod = 'DirectPlay';
   Timer? _progressTimer;
   Duration Function()? _positionProvider;
+  Duration _progressInterval = const Duration(seconds: 10);
+
+  void setProgressInterval(Duration interval) {
+    _progressInterval = interval;
+  }
 
   void attachPositionProvider(Duration Function() provider) {
     _positionProvider = provider;
@@ -78,7 +83,7 @@ class PlaybackReportingService {
 
   void _startProgressReporting(JellyfinTrack track) {
     _progressTimer?.cancel();
-    _progressTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+    _progressTimer = Timer.periodic(_progressInterval, (_) {
       final provider = _positionProvider;
       final position = provider != null ? provider() : Duration.zero;
       unawaited(reportPlaybackProgress(track, position, false));

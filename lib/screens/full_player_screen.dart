@@ -5,7 +5,7 @@ import 'dart:ui' as ui show Image, ImageFilter;
 
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
 import 'package:flutter/foundation.dart' show compute;
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide RepeatMode;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:material_color_utilities/material_color_utilities.dart';
@@ -2294,6 +2294,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                 }
                               }
 
+                              if (!context.mounted) return;
                               if (album != null) {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
@@ -2917,22 +2918,19 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                             builder: (context, snapshot) {
                               final repeatMode =
                                   snapshot.data ?? RepeatMode.off;
-                              IconData icon;
-                              Color? color;
+                              final IconData icon;
+                              final Color? color;
 
                               switch (repeatMode) {
                                 case RepeatMode.off:
                                   icon = Icons.repeat;
                                   color = null;
-                                  break;
                                 case RepeatMode.all:
                                   icon = Icons.repeat;
                                   color = theme.colorScheme.primary;
-                                  break;
                                 case RepeatMode.one:
                                   icon = Icons.repeat_one;
                                   color = theme.colorScheme.primary;
-                                  break;
                               }
 
                               return IconButton(

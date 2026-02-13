@@ -30,6 +30,7 @@
 - **Artist Radio**: Start radio from any artist page — seeds 50 similar tracks with continuous Infinite Radio
 - **Recently Played**: Full listening history screen with day-grouped events, tap to play, long-press for context menu
 - **Reorderable Nav Tabs**: Long-press the bottom bar to drag-and-drop reorder tabs — persists across restarts
+- **Submarine Mode**: Ultra battery saver that disables all power-hungry features while keeping music perfect — snapshot/restore preserves your settings, streaming quality stays untouched
 - **Infinite Radio**: Auto-generates similar tracks when your queue runs low — toggle from the full player's more options menu
 - **High-Fidelity Playback**: Native backends for Linux and iOS ensuring bit-perfect audio
 - **CarPlay Support**: Take your Jellyfin library on the road with CarPlay interface

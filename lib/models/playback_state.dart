@@ -106,6 +106,9 @@ class PlaybackState {
     this.wifiOnlyCaching = false,
     // Offline mode
     this.isOfflineMode = false,
+    // Submarine Mode (battery saver)
+    this.submarineModeEnabled = false,
+    this.batterySaverSnapshot,
     // Grid size (2 = compact, 3 = normal, 4 = large)
     this.gridSize = 2,
     // List mode vs grid mode
@@ -159,6 +162,9 @@ class PlaybackState {
   final bool wifiOnlyCaching;
   // Offline mode
   final bool isOfflineMode;
+  // Submarine Mode (battery saver)
+  final bool submarineModeEnabled;
+  final Map<String, dynamic>? batterySaverSnapshot;
   // Grid size (2 = compact, 3 = normal, 4 = large)
   final int gridSize;
   // List mode vs grid mode
@@ -208,6 +214,8 @@ class PlaybackState {
     int? preCacheTrackCount,
     bool? wifiOnlyCaching,
     bool? isOfflineMode,
+    bool? submarineModeEnabled,
+    Map<String, dynamic>? batterySaverSnapshot,
     int? gridSize,
     bool? useListMode,
     NowPlayingLayout? nowPlayingLayout,
@@ -251,6 +259,8 @@ class PlaybackState {
       preCacheTrackCount: preCacheTrackCount ?? this.preCacheTrackCount,
       wifiOnlyCaching: wifiOnlyCaching ?? this.wifiOnlyCaching,
       isOfflineMode: isOfflineMode ?? this.isOfflineMode,
+      submarineModeEnabled: submarineModeEnabled ?? this.submarineModeEnabled,
+      batterySaverSnapshot: batterySaverSnapshot ?? this.batterySaverSnapshot,
       gridSize: gridSize ?? this.gridSize,
       useListMode: useListMode ?? this.useListMode,
       nowPlayingLayout: nowPlayingLayout ?? this.nowPlayingLayout,
@@ -297,6 +307,8 @@ class PlaybackState {
       'preCacheTrackCount': preCacheTrackCount,
       'wifiOnlyCaching': wifiOnlyCaching,
       'isOfflineMode': isOfflineMode,
+      'submarineModeEnabled': submarineModeEnabled,
+      'batterySaverSnapshot': batterySaverSnapshot,
       'gridSize': gridSize,
       'useListMode': useListMode,
       'nowPlayingLayout': nowPlayingLayout.name,
@@ -355,6 +367,8 @@ class PlaybackState {
       preCacheTrackCount: (json['preCacheTrackCount'] as num?)?.toInt() ?? 3,
       wifiOnlyCaching: json['wifiOnlyCaching'] as bool? ?? false,
       isOfflineMode: json['isOfflineMode'] as bool? ?? false,
+      submarineModeEnabled: json['submarineModeEnabled'] as bool? ?? false,
+      batterySaverSnapshot: (json['batterySaverSnapshot'] as Map?)?.cast<String, dynamic>(),
       gridSize: (json['gridSize'] as num?)?.toInt() ?? 2,
       useListMode: json['useListMode'] as bool? ?? false,
       nowPlayingLayout: NowPlayingLayoutExtension.fromString(json['nowPlayingLayout'] as String?),
@@ -406,6 +420,8 @@ class PlaybackState {
       visualizerPosition: visualizerPosition, // Preserve visualizer position
       preCacheTrackCount: preCacheTrackCount, // Preserve smart cache settings
       wifiOnlyCaching: wifiOnlyCaching,
+      submarineModeEnabled: submarineModeEnabled, // Preserve submarine mode
+      batterySaverSnapshot: batterySaverSnapshot, // Preserve snapshot
       gridSize: gridSize, // Preserve grid size preference
       useListMode: useListMode, // Preserve list mode preference
       nowPlayingLayout: nowPlayingLayout, // Preserve Now Playing layout

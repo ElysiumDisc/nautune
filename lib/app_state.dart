@@ -148,6 +148,8 @@ class NautuneAppState extends ChangeNotifier {
   VisualizerPosition _visualizerPosition = VisualizerPosition.controlsBar; // Where visualizer is displayed
   NowPlayingLayout _nowPlayingLayout = NowPlayingLayout.classic; // Now Playing screen layout
   StreamSubscription? _powerModeSub;
+  bool _submarineModeEnabled = false;
+  Map<String, dynamic>? _batterySaverSnapshot;
   SortOption _albumSortBy = SortOption.name;
   SortOrder _albumSortOrder = SortOrder.ascending;
   SortOption _artistSortBy = SortOption.name;
@@ -431,6 +433,7 @@ class NautuneAppState extends ChangeNotifier {
   VisualizerType get visualizerType => _visualizerType;
   VisualizerPosition get visualizerPosition => _visualizerPosition;
   NowPlayingLayout get nowPlayingLayout => _nowPlayingLayout;
+  bool get submarineModeEnabled => _submarineModeEnabled;
   Duration get cacheTtl => Duration(minutes: _cacheTtlMinutes);
   SortOption get albumSortBy => _albumSortBy;
   SortOrder get albumSortOrder => _albumSortOrder;
@@ -785,6 +788,82 @@ class NautuneAppState extends ChangeNotifier {
     debugPrint('📦 WiFi-only caching: $value');
   }
 
+  /// Toggle Submarine Mode (ultra battery saver)
+  void setSubmarineMode(bool enabled) {
+    if (_submarineModeEnabled == enabled) return;
+    _submarineModeEnabled = enabled;
+
+    if (enabled) {
+      // Snapshot current values before overriding
+      _batterySaverSnapshot = {
+        'visualizerEnabledByUser': _visualizerEnabledByUser,
+        'crossfadeEnabled': _crossfadeEnabled,
+        'gaplessPlaybackEnabled': _gaplessPlaybackEnabled,
+        'preCacheTrackCount': _audioPlayerService.preCacheTrackCount,
+      };
+
+      // Override to battery-saving values
+      _visualizerEnabledByUser = _visualizerEnabled;
+      _visualizerEnabled = false;
+      _crossfadeEnabled = false;
+      _audioPlayerService.setCrossfadeEnabled(false);
+      _gaplessPlaybackEnabled = false;
+      _audioPlayerService.setGaplessPlaybackEnabled(false);
+      _audioPlayerService.setPreCacheTrackCount(0);
+
+      // Reduce background work
+      _audioPlayerService.setBatterySaverMode(true);
+      _audioPlayerService.reportingService?.setProgressInterval(
+        const Duration(seconds: 60),
+      );
+
+      // Use longer sync interval
+      _startPeriodicSyncTimer();
+
+      debugPrint('🚢 Submarine Mode: ENGAGED — running silent, running deep');
+    } else {
+      // Restore original values from snapshot
+      final snapshot = _batterySaverSnapshot;
+      if (snapshot != null) {
+        _visualizerEnabledByUser = snapshot['visualizerEnabledByUser'] as bool? ?? true;
+        _visualizerEnabled = _visualizerEnabledByUser;
+        _crossfadeEnabled = snapshot['crossfadeEnabled'] as bool? ?? false;
+        _audioPlayerService.setCrossfadeEnabled(_crossfadeEnabled);
+        _gaplessPlaybackEnabled = snapshot['gaplessPlaybackEnabled'] as bool? ?? true;
+        _audioPlayerService.setGaplessPlaybackEnabled(_gaplessPlaybackEnabled);
+        final preCacheCount = snapshot['preCacheTrackCount'] as int? ?? 3;
+        _audioPlayerService.setPreCacheTrackCount(preCacheCount);
+      }
+
+      // Restore normal intervals
+      _audioPlayerService.setBatterySaverMode(false);
+      _audioPlayerService.reportingService?.setProgressInterval(
+        const Duration(seconds: 10),
+      );
+
+      // Restore normal sync interval
+      _startPeriodicSyncTimer();
+
+      // Clear snapshot (persist empty map to signal "cleared")
+      _batterySaverSnapshot = null;
+
+      debugPrint('🚢 Submarine Mode: SURFACED — all systems restored');
+    }
+
+    notifyListeners();
+
+    unawaited(_playbackStateStore.saveUiState(
+      visualizerEnabled: _visualizerEnabled,
+      crossfadeEnabled: _crossfadeEnabled,
+      gaplessPlaybackEnabled: _gaplessPlaybackEnabled,
+      preCacheTrackCount: _audioPlayerService.preCacheTrackCount,
+      submarineModeEnabled: _submarineModeEnabled,
+      batterySaverSnapshot: _submarineModeEnabled
+          ? _batterySaverSnapshot
+          : <String, dynamic>{}, // empty map = cleared
+    ));
+  }
+
   /// Initialize Low Power Mode listener (iOS only)
   void _initPowerModeListener() {
     // Check INITIAL state - if already in low power mode, disable visualizer
@@ -798,7 +877,12 @@ class NautuneAppState extends ChangeNotifier {
     // Listen for CHANGES
     _powerModeSub = PowerModeService.instance.lowPowerModeStream.listen((isLowPower) {
       if (isLowPower) {
-        // Entering Low Power Mode - save current state and disable visualizer
+        // Entering Low Power Mode - auto-enable Submarine Mode if not already on
+        if (!_submarineModeEnabled) {
+          setSubmarineMode(true);
+          debugPrint('🔋 Submarine Mode auto-enabled by iOS Low Power Mode');
+        }
+        // Also suppress visualizer (redundant if submarine mode is on, but safe)
         if (_visualizerEnabled) {
           _visualizerSuppressedByLowPower = true;
           _visualizerEnabled = false;
@@ -925,17 +1009,20 @@ class NautuneAppState extends ChangeNotifier {
     }
   }
 
-  /// Start periodic analytics sync timer (every 10 minutes)
+  /// Start periodic analytics sync timer (10 min normal, 30 min in submarine mode)
   /// This ensures local plays are regularly pushed to server
   void _startPeriodicSyncTimer() {
     _periodicSyncTimer?.cancel();
-    _periodicSyncTimer = Timer.periodic(const Duration(minutes: 10), (_) {
+    final interval = _submarineModeEnabled
+        ? const Duration(minutes: 30)
+        : const Duration(minutes: 10);
+    _periodicSyncTimer = Timer.periodic(interval, (_) {
       if (_session != null && _networkAvailable && !_isDemoMode) {
-        debugPrint('📊 Periodic sync triggered (every 10 min)');
+        debugPrint('📊 Periodic sync triggered (every ${_submarineModeEnabled ? 30 : 10} min)');
         unawaited(_syncAnalyticsToServer());
       }
     });
-    debugPrint('📊 Started periodic analytics sync timer (10 min interval)');
+    debugPrint('📊 Started periodic analytics sync timer (${interval.inMinutes} min interval)');
   }
 
   /// Stop the periodic sync timer
@@ -1014,6 +1101,8 @@ class NautuneAppState extends ChangeNotifier {
       _visualizerType = storedPlaybackState.visualizerType;
       _visualizerPosition = storedPlaybackState.visualizerPosition;
       _nowPlayingLayout = storedPlaybackState.nowPlayingLayout;
+      _submarineModeEnabled = storedPlaybackState.submarineModeEnabled;
+      _batterySaverSnapshot = storedPlaybackState.batterySaverSnapshot;
       _libraryScrollOffsets =
           Map<String, double>.from(storedPlaybackState.scrollOffsets);
       await _audioPlayerService.hydrateFromPersistence(storedPlaybackState);
@@ -1027,10 +1116,19 @@ class NautuneAppState extends ChangeNotifier {
       _audioPlayerService.setConnectivityService(_connectivityService);
       _jellyfinService.setCacheTtl(Duration(minutes: _cacheTtlMinutes));
 
+      // Restore Submarine Mode battery saver if it was active
+      if (_submarineModeEnabled) {
+        _audioPlayerService.setBatterySaverMode(true);
+        _audioPlayerService.reportingService?.setProgressInterval(
+          const Duration(seconds: 60),
+        );
+        debugPrint('🚢 Submarine Mode restored from persistence');
+      }
+
       // Initialize Low Power Mode listener AFTER visualizer state is restored
       // (so the initial check has the correct _visualizerEnabled value)
       _initPowerModeListener();
-      
+
       // Restore download settings
       _downloadService.loadSettings(
         maxConcurrentDownloads: storedPlaybackState.maxConcurrentDownloads,

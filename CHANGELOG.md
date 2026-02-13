@@ -1,3 +1,46 @@
+### v7.0.0 - Submarine Mode, iOS Lock Screen Fix & Performance
+
+**New Feature: Submarine Mode (Ultra Battery Saver)**
+- New toggle in Settings that aggressively reduces all power-hungry features while keeping music perfect
+- Disables: visualizers, crossfade, gapless playback, waveform extraction, pre-caching, image pre-loading, lyrics prefetch, ListenBrainz scrobbling
+- Reduces: position save interval (1s to 30s), playback reporting (10s to 60s), analytics sync (10min to 30min)
+- Streaming quality stays at your preference — user's audio quality is never overridden
+- Snapshot/restore: your original settings are captured before override and fully restored when you disable
+- Green submarine icon indicator in the app bar when active
+- Affected settings controls grayed out while active (visualizer, crossfade, gapless, pre-cache, WiFi-only cache)
+- Persists across app restarts
+- Works in both online and offline mode
+
+**Fix: iOS Low Power Mode Detection**
+- Added `WidgetsBindingObserver` to `PowerModeService` — now re-checks LPM state when app resumes from background
+- Previously only detected LPM on charge state changes (plugged/unplugged), missing the most common case: user toggles LPM in iOS Settings
+- iOS Low Power Mode now auto-enables Submarine Mode (does not auto-disable on LPM exit)
+- Added error handling to battery state stream listener
+
+**Fix: iOS Lock Screen Play/Pause Graying Out (5 fixes)**
+- Added `forceBroadcastCurrentState()` call after `resume()` — iOS now gets immediate state update
+- Made `_fadeOutAndStop()` async and await `pause()` — sleep timer fade-out now properly notifies iOS
+- Added state broadcast in `stop()` — iOS media controls reflect stopped state
+- Increased gapless transition delay from 50ms to 150ms — prevents iOS from deactivating media session during swap
+- Added state broadcast after audio session reactivation failures — controls don't get stuck on error
+
+**Performance: Stop Timers When Paused**
+- Position save timer now starts only when playing and stops when paused (saves disk I/O)
+- Sleep timer countdown pauses when playback is paused (saves CPU, prevents inaccurate timing)
+
+**Performance: Pre-Allocated FFT Buffers**
+- PulseAudio FFT service now uses pre-allocated `Float64List` buffers instead of creating new `List<double>` every ~23ms
+- Reduces GC pressure during real-time audio visualization
+
+**Performance: Configurable Reporting Interval**
+- Playback reporting service interval now configurable (used by Submarine Mode to reduce from 10s to 60s)
+- Battery-aware position save: 1s normally, 30s in Submarine Mode
+
+**Version**
+- Bumped to 7.0.0+1
+
+---
+
 ### v6.9.0 - Live Search, Queue Undo & Track Info
 
 **New Feature: Live Search with Debounce**

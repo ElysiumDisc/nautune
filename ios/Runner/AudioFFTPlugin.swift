@@ -416,14 +416,14 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 let midEnd = Int(Float(spectrumSize) * 0.20)    // 4-20% (~180-2000Hz)
 
                 // RMS averaging (matches Linux)
-                let bass = self.rmsAverage(self.spectrumBuffer, start: 0, end: max(1, bassEnd)) * 30.0
-                let mid = self.rmsAverage(self.spectrumBuffer, start: bassEnd, end: midEnd) * 40.0
-                let treble = self.rmsAverage(self.spectrumBuffer, start: midEnd, end: spectrumSize) * 80.0
+                let bass = self.rmsAverage(self.spectrumBuffer, start: 0, end: max(1, bassEnd)) * 22.0
+                let mid = self.rmsAverage(self.spectrumBuffer, start: bassEnd, end: midEnd) * 30.0
+                let treble = self.rmsAverage(self.spectrumBuffer, start: midEnd, end: spectrumSize) * 55.0
 
                 // RMS amplitude
                 var rms: Float = 0
                 vDSP_rmsqv(self.processedBuffer, 1, &rms, vDSP_Length(self.fftSize))
-                let amplitude = min(rms * 2.0, 1.0)
+                let amplitude = min(rms * 1.5, 1.0)
 
                 // Mark emit time and send to Flutter
                 self.lastEmitTime = now

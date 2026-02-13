@@ -155,6 +155,9 @@ class AudioPlayerService {
   bool _wifiOnlyCaching = false;
   ConnectivityService? _connectivityService;
 
+  // Battery saver mode (Submarine Mode)
+  bool _batterySaverMode = false;
+
   JellyfinTrack? _currentTrack;
   List<JellyfinTrack> _queue = [];
   int _currentIndex = 0;
@@ -244,6 +247,48 @@ class AudioPlayerService {
 
   int get preCacheTrackCount => _preCacheTrackCount;
   bool get wifiOnlyCaching => _wifiOnlyCaching;
+
+  bool get batterySaverMode => _batterySaverMode;
+
+  void setBatterySaverMode(bool enabled) {
+    _batterySaverMode = enabled;
+    // Restart position save timer with appropriate interval
+    if (_positionSaveTimer != null) {
+      _startPositionSaving();
+    }
+    debugPrint('🔋 Battery saver mode: ${enabled ? "ON" : "OFF"}');
+
+    // When exiting battery saver, trigger waveform extraction for current track
+    if (!enabled && _currentTrack != null && WaveformService.instance.isAvailable) {
+      _triggerWaveformForCurrentTrack();
+    }
+  }
+
+  /// Trigger waveform extraction for the currently playing track.
+  /// Called when exiting battery saver mode to catch up on skipped extractions.
+  void _triggerWaveformForCurrentTrack() async {
+    final track = _currentTrack;
+    if (track == null) return;
+
+    // Check local file sources
+    final localPath = await _downloadService?.getLocalPath(track.id);
+    if (localPath != null) {
+      _extractWaveformForLocalFile(track, localPath);
+      return;
+    }
+    final cachedFile = await _audioCacheService.getCachedFile(track.id);
+    if (cachedFile != null && await cachedFile.exists()) {
+      _extractWaveformForLocalFile(track, cachedFile.path);
+      return;
+    }
+    // Streaming — cache then extract
+    final (streamUrl, _) = _getStreamUrl(track);
+    if (streamUrl != null) {
+      _cacheTrackForWaveform(track, streamUrl);
+    }
+  }
+
+  PlaybackReportingService? get reportingService => _reportingService;
 
   /// Gets the appropriate stream URL based on quality setting.
   /// Returns (url, isDirectStream) tuple.
@@ -806,6 +851,7 @@ class AudioPlayerService {
               await session.configure(const AudioSessionConfiguration.music());
             } catch (e) {
               debugPrint('⚠️ Failed to reactivate audio session for gapless: $e');
+              await _audioHandler?.forceBroadcastCurrentState();
             }
           }
 
@@ -825,7 +871,8 @@ class AudioPlayerService {
 
           // 3.5 Brief yield to ensure OS media controls are fully updated
           // This prevents audio glitch from racing between handler update and player stop
-          await Future.delayed(const Duration(milliseconds: 50));
+          // 150ms gives iOS enough time to process the media session update
+          await Future.delayed(const Duration(milliseconds: 150));
 
           // 4. Stop the old player (AudioHandler is no longer listening to this one)
           await _player.stop();
@@ -858,7 +905,9 @@ class AudioPlayerService {
           }
 
           // Pre-warm album art for upcoming tracks
-          _imagePrewarmService?.prewarmQueueImages(_queue, _currentIndex);
+          if (!_batterySaverMode) {
+            _imagePrewarmService?.prewarmQueueImages(_queue, _currentIndex);
+          }
 
           // Smart pre-cache more upcoming tracks
           unawaited(_smartPreCacheUpcoming(_queue, _currentIndex));
@@ -909,6 +958,7 @@ class AudioPlayerService {
                 debugPrint('🔊 Audio session reactivated for recovery');
               } catch (sessionError) {
                 debugPrint('⚠️ Session reactivation failed: $sessionError');
+                await _audioHandler?.forceBroadcastCurrentState();
               }
             }
             await playTrack(
@@ -1227,7 +1277,9 @@ class AudioPlayerService {
     _clearPreload();
 
     // Pre-warm album art for upcoming tracks in queue
-    _imagePrewarmService?.prewarmQueueImages(_queue, _currentIndex);
+    if (!_batterySaverMode) {
+      _imagePrewarmService?.prewarmQueueImages(_queue, _currentIndex);
+    }
 
     // Update audio handler with current track metadata immediately
     // This is critical for Lock Screen to update BEFORE audio starts
@@ -1366,7 +1418,7 @@ class AudioPlayerService {
       }
 
       // Waveform extraction: Extract for all tracks (local and streaming)
-      if (WaveformService.instance.isAvailable) {
+      if (WaveformService.instance.isAvailable && !_batterySaverMode) {
         if (isLocalFile) {
           // Local file - extract waveform directly if not already exists
           _extractWaveformForLocalFile(track, activeUrl);
@@ -1487,6 +1539,7 @@ class AudioPlayerService {
     HapticService.lightTap();
     await _resumeAndFadeIn();
     await _stateStore.savePlaybackSnapshot(isPlaying: true);
+    await _audioHandler?.forceBroadcastCurrentState();
   }
   
   // Fade helpers
@@ -1679,17 +1732,10 @@ class AudioPlayerService {
     });
   }
 
-  // Track IDs that have waveform extraction pending (prevents duplicate triggers)
-  final Set<String> _waveformExtractionPending = {};
-
-  /// Cache streaming track for waveform extraction
+  /// Cache streaming track for waveform extraction.
+  /// Dedup is handled by AudioCacheService (caching) and WaveformService (extraction).
   void _cacheTrackForWaveform(JellyfinTrack track, String streamUrl) {
     final trackId = track.id;
-
-    // Skip if already pending extraction
-    if (_waveformExtractionPending.contains(trackId)) {
-      return;
-    }
 
     // Skip if waveform already exists
     WaveformService.instance.hasWaveform(trackId).then((hasWaveform) async {
@@ -1698,16 +1744,10 @@ class AudioPlayerService {
         return;
       }
 
-      // Mark as pending
-      _waveformExtractionPending.add(trackId);
-
       debugPrint('🌊 Waveform: Caching track for extraction: ${track.name}');
 
       // Cache the track (this will trigger waveform extraction via audio_cache_service)
       final cachedFile = await _audioCacheService.cacheTrack(track, streamUrl: streamUrl);
-
-      // Remove from pending
-      _waveformExtractionPending.remove(trackId);
 
       if (cachedFile == null) {
         debugPrint('⚠️ Waveform: Cache failed for ${track.name}');
@@ -1716,7 +1756,6 @@ class AudioPlayerService {
 
       debugPrint('🌊 Waveform: Cached, extraction triggered for ${track.name}');
     }).catchError((e) {
-      _waveformExtractionPending.remove(trackId);
       debugPrint('⚠️ Waveform: Error caching for extraction: $e');
     });
   }
@@ -1784,6 +1823,9 @@ class AudioPlayerService {
     
     _emitIdleVisualizer();
     _playingController.add(false);
+
+    // Ensure iOS media controls reflect stopped state
+    await _audioHandler?.forceBroadcastCurrentState();
 
     debugPrint('🛑 Playback stopped and queue cleared');
   }
@@ -2308,7 +2350,10 @@ class AudioPlayerService {
 
   void _startPositionSaving() {
     _positionSaveTimer?.cancel();
-    _positionSaveTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    final interval = _batterySaverMode
+        ? const Duration(seconds: 30)
+        : const Duration(seconds: 1);
+    _positionSaveTimer = Timer.periodic(interval, (_) {
       _saveCurrentPosition();
     });
   }
@@ -2616,6 +2661,7 @@ class AudioPlayerService {
 
   /// Pre-fetch lyrics for the next track at ~50% playback
   void _checkLyricsPrefetch(Duration position) async {
+    if (_batterySaverMode) return;
     if (_lyricsPrefetched || _currentTrack == null || _lyricsService == null) return;
 
     // Use cached duration to avoid async getDuration() call on every position update
@@ -2638,6 +2684,7 @@ class AudioPlayerService {
   /// Check if we should scrobble to ListenBrainz
   /// Scrobbles when track has played for 50% OR 4 minutes, whichever is less
   void _checkListenBrainzScrobble(Duration position) async {
+    if (_batterySaverMode) return;
     if (_hasScrobbled || _currentTrack == null || _trackStartTime == null) return;
 
     final listenBrainz = ListenBrainzService();
@@ -2828,6 +2875,9 @@ class AudioPlayerService {
     debugPrint('😴 Sleep timer started: ${duration.inMinutes} minutes');
 
     _sleepTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      // Pause countdown when playback is paused (saves CPU, prevents inaccurate timing)
+      if (_player.state != PlayerState.playing) return;
+
       _sleepTimeRemaining -= const Duration(seconds: 1);
       _sleepTimerController.add(_sleepTimeRemaining);
 
@@ -2876,7 +2926,7 @@ class AudioPlayerService {
   }
 
   /// Fade out volume and stop playback
-  void _fadeOutAndStop() {
+  Future<void> _fadeOutAndStop() async {
     _sleepTimer?.cancel();
     _sleepTimer = null;
     _sleepTimeRemaining = Duration.zero;
@@ -2886,7 +2936,7 @@ class AudioPlayerService {
 
     // Final fade to zero and pause
     _player.setVolume(0.0);
-    pause();
+    await pause();
 
     // Restore volume for next session
     Future.delayed(const Duration(milliseconds: 500), () {

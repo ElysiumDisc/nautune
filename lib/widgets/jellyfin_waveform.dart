@@ -21,6 +21,10 @@ class TrackWaveform extends StatefulWidget {
   final double width;
   final double height;
 
+  /// Clear the widget-level waveform cache.
+  /// Call when waveform files are deleted (e.g. settings → clear cache).
+  static void clearCache() => _TrackWaveformState._cache.clear();
+
   @override
   State<TrackWaveform> createState() => _TrackWaveformState();
 }
@@ -56,6 +60,7 @@ class _TrackWaveformState extends State<TrackWaveform> {
     _waveformSubscription = WaveformService.instance.onWaveformExtracted.listen((trackId) {
       // Reload if this is our track and we don't have data yet
       if (trackId == widget.trackId && _waveformData == null) {
+        _isLoading = false; // Reset to allow retry (avoids race with in-progress load)
         _loadWaveform();
       }
     });
