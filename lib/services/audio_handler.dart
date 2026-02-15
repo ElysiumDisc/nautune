@@ -6,11 +6,11 @@ import '../jellyfin/jellyfin_track.dart';
 
 class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_service.QueueHandler, audio_service.SeekHandler {
   AudioPlayer _player;
-  final void Function() onPlay;
-  final void Function() onPause;
-  final void Function() onStop;
-  final void Function() onSkipToNext;
-  final void Function() onSkipToPrevious;
+  final Future<void> Function() onPlay;
+  final Future<void> Function() onPause;
+  final Future<void> Function() onStop;
+  final Future<void> Function() onSkipToNext;
+  final Future<void> Function() onSkipToPrevious;
   final void Function(Duration) onSeek;
   
   StreamSubscription? _positionSubscription;
@@ -153,25 +153,24 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
 
   @override
   Future<void> play() async {
-    onPlay();
+    await onPlay();
   }
 
   @override
   Future<void> pause() async {
-    onPause();
+    await onPause();
   }
 
   @override
   Future<void> stop() async {
-    // Fire and forget onStop to prevent deadlocks if reporting hangs
-    onStop();
+    await onStop();
     await super.stop();
   }
 
   @override
   Future<void> skipToNext() async {
     try {
-      onSkipToNext();
+      await onSkipToNext();
     } catch (e) {
       debugPrint('⚠️ Skip to next failed: $e');
     }
@@ -180,7 +179,7 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
   @override
   Future<void> skipToPrevious() async {
     try {
-      onSkipToPrevious();
+      await onSkipToPrevious();
     } catch (e) {
       debugPrint('⚠️ Skip to previous failed: $e');
     }

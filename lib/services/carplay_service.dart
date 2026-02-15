@@ -15,7 +15,6 @@ class CarPlayService {
   bool _isConnected = false;
   StreamSubscription? _playbackSubscription;
   Timer? _refreshDebounceTimer;
-  bool _hasEverConnected = false;
 
   // Pagination limits for CarPlay (prevents performance issues with large libraries)
   static const int _maxItemsPerPage = 100;
@@ -79,22 +78,14 @@ class CarPlayService {
   void _onCarPlayConnect() {
     _isConnected = true;
     debugPrint('🚗 CarPlay connected');
-
-    // Only refresh root template on true first connection
-    // Skip if we've connected before (resuming from background) and user is navigating
-    if (!_hasEverConnected) {
-      _hasEverConnected = true;
+    if (_isAtRootLevel) {
       _refreshRootTemplate();
-    } else if (_navigationDepth == 0) {
-      // Only refresh if user is at root level (not navigating)
-      _refreshRootTemplate();
-    } else {
-      debugPrint('🚗 CarPlay: Skipping refresh - user is navigating (depth: $_navigationDepth)');
     }
   }
   
   void _onCarPlayDisconnect() {
     _isConnected = false;
+    FlutterCarPlayController.templateHistory.clear();
     debugPrint('🚗 CarPlay disconnected');
   }
   
@@ -292,6 +283,7 @@ class CarPlayService {
   }
 
   Future<void> _showAlbums({int offset = 0}) async {
+    _refreshDebounceTimer?.cancel();
     try {
       List<JellyfinAlbum> allAlbums;
 
@@ -375,6 +367,7 @@ class CarPlayService {
   }
 
   Future<void> _showArtists({int offset = 0}) async {
+    _refreshDebounceTimer?.cancel();
     try {
       List<JellyfinArtist> allArtists;
 
@@ -457,6 +450,7 @@ class CarPlayService {
   }
 
   Future<void> _showPlaylists({int offset = 0}) async {
+    _refreshDebounceTimer?.cancel();
     try {
       // In offline mode, playlists are not supported yet
       if (appState.isOfflineMode) {
@@ -536,6 +530,7 @@ class CarPlayService {
   }
 
   Future<void> _showAlbumTracks(String albumId, String albumName) async {
+    _refreshDebounceTimer?.cancel();
     try {
       // getAlbumTracks usually hits API directly or cache, it doesn't set a global loading state
       // but it's a future so we just await it.
@@ -579,6 +574,7 @@ class CarPlayService {
   }
 
   Future<void> _showArtistAlbums(String artistId, String artistName) async {
+    _refreshDebounceTimer?.cancel();
     try {
       List<JellyfinAlbum> albums;
 
@@ -639,6 +635,7 @@ class CarPlayService {
   }
 
   Future<void> _showPlaylistTracks(String playlistId, String playlistName) async {
+    _refreshDebounceTimer?.cancel();
     try {
       final tracks = await appState.getPlaylistTracks(playlistId);
 
@@ -680,6 +677,7 @@ class CarPlayService {
   }
 
   Future<void> _showFavorites({int offset = 0}) async {
+    _refreshDebounceTimer?.cancel();
     try {
       List<JellyfinTrack> allFavorites;
 
@@ -756,6 +754,7 @@ class CarPlayService {
   }
 
   Future<void> _showRecentlyPlayed({int offset = 0}) async {
+    _refreshDebounceTimer?.cancel();
     try {
       // In offline mode, recently played is not available
       if (appState.isOfflineMode) {
@@ -831,6 +830,7 @@ class CarPlayService {
   }
 
   Future<void> _showDownloads({int offset = 0}) async {
+    _refreshDebounceTimer?.cancel();
     try {
       final allDownloads = appState.downloadService.completedDownloads;
 
@@ -893,6 +893,7 @@ class CarPlayService {
   }
 
   Future<void> _showEmptyState(String title, String message) async {
+    _refreshDebounceTimer?.cancel();
     try {
       await FlutterCarplay.push(
         template: CPListTemplate(

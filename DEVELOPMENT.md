@@ -213,3 +213,23 @@ NAUTUNE_TUI_MODE=1 nautune
 ```bash
 flutter run -d linux --dart-define=TUI_MODE=true
 ```
+
+## 🛠 Technical Foundation
+- **Framework**: Flutter (Dart)
+- **Local Storage**: Hive (NoSQL) for high-speed metadata caching
+- **Audio Engine**: Audioplayers with custom platform-specific optimizations
+- **Equalizer**: PulseAudio LADSPA (Linux only)
+- **FFT Processing**: Custom Cooley-Tukey (Linux), Apple Accelerate vDSP (iOS)
+- **Image Processing**: Material Color Utilities for vibrant palette generation
+
+## 📂 File Structure (Linux)
+Nautune follows a clean data structure on Linux for easy backups and management:
+- `~/Documents/nautune/`: Primary application data
+- `~/Documents/nautune/downloads/`: High-quality offline audio files
+- `~/Documents/nautune/downloads/artwork/`: Cached album artwork (stored per-album to save space)
+- `~/Documents/nautune/network/audio/`: Network easter egg offline channels
+- `~/Documents/nautune/network/images/`: Network channel artwork
+- `~/Documents/nautune/charts/`: Frets on Fire cached chart data
+- `~/Documents/nautune/legendary/`: Through the Fire and Flames track and unlock state
+- `~/Documents/nautune/essential/audio/`: Essential Mix offline audio
+- `~/Documents/nautune/waveforms/`: Extracted waveform data for visualization

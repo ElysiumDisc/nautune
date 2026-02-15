@@ -1,3 +1,24 @@
+### v7.2.1 - iOS Lock Screen Desync & CarPlay Browse Fixes
+
+**Bug Fix: iOS Lock Screen Play/Pause Desync**
+- Fixed lock screen play button stopping working after pausing from within the app
+- Root cause: `resume()` did not reactivate the iOS audio session — iOS can deactivate the session when pause originates from the app, causing subsequent lock screen play commands to silently fail
+- Fix: Added audio session reactivation in `resume()` matching the existing pattern in `playTrack()`
+- Also made audio handler callbacks async-aware (`Future<void>`) so iOS audio_service properly awaits player state changes before considering commands handled
+
+**Bug Fix: CarPlay Browse Lists Not Loading on Subsequent Browses**
+- Fixed album/artist/playlist lists failing to load after switching away from CarPlay (Maps) and back, or navigating back to root
+- Root cause 1: Template history was not cleared on CarPlay disconnect — stale `_navigationDepth > 0` caused reconnect to skip the root template refresh
+- Root cause 2: Debounced root refresh timer could race with user-initiated navigation pushes, invalidating templates mid-push
+- Fix: Clear `FlutterCarPlayController.templateHistory` on disconnect so depth resets to 0
+- Fix: Cancel debounce timer at the start of all navigation methods to prevent race conditions
+- Simplified reconnect logic — every connect at root level gets a fresh template regardless of connection history
+
+**Version**
+- Bumped to 7.2.1+1
+
+---
+
 ### v7.2.0 - Lyrics Sync Fix & Track Info in Album View
 
 **Bug Fix: Lyrics Desynchronization**

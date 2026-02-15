@@ -1552,6 +1552,14 @@ class AudioPlayerService {
   
   Future<void> resume() async {
     HapticService.lightTap();
+    if (Platform.isIOS) {
+      try {
+        final session = await AudioSession.instance;
+        await session.configure(const AudioSessionConfiguration.music());
+      } catch (e) {
+        debugPrint('⚠️ Failed to ensure audio session for resume: $e');
+      }
+    }
     await _resumeAndFadeIn();
     await _stateStore.savePlaybackSnapshot(isPlaying: true);
     await _audioHandler?.forceBroadcastCurrentState();
