@@ -433,7 +433,7 @@ class NautuneAppState extends ChangeNotifier {
   VisualizerType get visualizerType => _visualizerType;
   VisualizerPosition get visualizerPosition => _visualizerPosition;
   NowPlayingLayout get nowPlayingLayout => _nowPlayingLayout;
-  bool get submarineModeEnabled => _submarineModeEnabled;
+  bool get submarineModeEnabled => _userWantsOffline || !_networkAvailable;
   Duration get cacheTtl => Duration(minutes: _cacheTtlMinutes);
   SortOption get albumSortBy => _albumSortBy;
   SortOrder get albumSortOrder => _albumSortOrder;
@@ -788,79 +788,82 @@ class NautuneAppState extends ChangeNotifier {
     debugPrint('📦 WiFi-only caching: $value');
   }
 
-  /// Toggle Submarine Mode (ultra battery saver)
-  void setSubmarineMode(bool enabled) {
-    if (_submarineModeEnabled == enabled) return;
-    _submarineModeEnabled = enabled;
+  /// Activate battery-saving features (called automatically when going offline).
+  void _activateSubmarineFeatures() {
+    if (_submarineModeEnabled) return; // Already active
+    _submarineModeEnabled = true;
 
-    if (enabled) {
-      // Snapshot current values before overriding
-      _batterySaverSnapshot = {
-        'visualizerEnabledByUser': _visualizerEnabledByUser,
-        'crossfadeEnabled': _crossfadeEnabled,
-        'gaplessPlaybackEnabled': _gaplessPlaybackEnabled,
-        'preCacheTrackCount': _audioPlayerService.preCacheTrackCount,
-      };
+    // Snapshot current values before overriding
+    _batterySaverSnapshot = {
+      'visualizerEnabledByUser': _visualizerEnabledByUser,
+      'crossfadeEnabled': _crossfadeEnabled,
+      'gaplessPlaybackEnabled': _gaplessPlaybackEnabled,
+      'preCacheTrackCount': _audioPlayerService.preCacheTrackCount,
+    };
 
-      // Override to battery-saving values
-      _visualizerEnabledByUser = _visualizerEnabled;
-      _visualizerEnabled = false;
-      _crossfadeEnabled = false;
-      _audioPlayerService.setCrossfadeEnabled(false);
-      _gaplessPlaybackEnabled = false;
-      _audioPlayerService.setGaplessPlaybackEnabled(false);
-      _audioPlayerService.setPreCacheTrackCount(0);
+    // Override to battery-saving values
+    _visualizerEnabledByUser = _visualizerEnabled;
+    _visualizerEnabled = false;
+    _crossfadeEnabled = false;
+    _audioPlayerService.setCrossfadeEnabled(false);
+    _gaplessPlaybackEnabled = false;
+    _audioPlayerService.setGaplessPlaybackEnabled(false);
+    _audioPlayerService.setPreCacheTrackCount(0);
 
-      // Reduce background work
-      _audioPlayerService.setBatterySaverMode(true);
-      _audioPlayerService.reportingService?.setProgressInterval(
-        const Duration(seconds: 60),
-      );
+    // Reduce background work
+    _audioPlayerService.setBatterySaverMode(true);
+    _audioPlayerService.reportingService?.setProgressInterval(
+      const Duration(seconds: 60),
+    );
 
-      // Use longer sync interval
-      _startPeriodicSyncTimer();
-
-      debugPrint('🚢 Submarine Mode: ENGAGED — running silent, running deep');
-    } else {
-      // Restore original values from snapshot
-      final snapshot = _batterySaverSnapshot;
-      if (snapshot != null) {
-        _visualizerEnabledByUser = snapshot['visualizerEnabledByUser'] as bool? ?? true;
-        _visualizerEnabled = _visualizerEnabledByUser;
-        _crossfadeEnabled = snapshot['crossfadeEnabled'] as bool? ?? false;
-        _audioPlayerService.setCrossfadeEnabled(_crossfadeEnabled);
-        _gaplessPlaybackEnabled = snapshot['gaplessPlaybackEnabled'] as bool? ?? true;
-        _audioPlayerService.setGaplessPlaybackEnabled(_gaplessPlaybackEnabled);
-        final preCacheCount = snapshot['preCacheTrackCount'] as int? ?? 3;
-        _audioPlayerService.setPreCacheTrackCount(preCacheCount);
-      }
-
-      // Restore normal intervals
-      _audioPlayerService.setBatterySaverMode(false);
-      _audioPlayerService.reportingService?.setProgressInterval(
-        const Duration(seconds: 10),
-      );
-
-      // Restore normal sync interval
-      _startPeriodicSyncTimer();
-
-      // Clear snapshot (persist empty map to signal "cleared")
-      _batterySaverSnapshot = null;
-
-      debugPrint('🚢 Submarine Mode: SURFACED — all systems restored');
-    }
-
-    notifyListeners();
+    debugPrint('🚢 Battery saver: ENGAGED — running silent, running deep');
 
     unawaited(_playbackStateStore.saveUiState(
       visualizerEnabled: _visualizerEnabled,
       crossfadeEnabled: _crossfadeEnabled,
       gaplessPlaybackEnabled: _gaplessPlaybackEnabled,
       preCacheTrackCount: _audioPlayerService.preCacheTrackCount,
-      submarineModeEnabled: _submarineModeEnabled,
-      batterySaverSnapshot: _submarineModeEnabled
-          ? _batterySaverSnapshot
-          : <String, dynamic>{}, // empty map = cleared
+      submarineModeEnabled: true,
+      batterySaverSnapshot: _batterySaverSnapshot,
+    ));
+  }
+
+  /// Deactivate battery-saving features (called when coming back online).
+  void _deactivateSubmarineFeatures() {
+    if (!_submarineModeEnabled) return; // Already inactive
+    _submarineModeEnabled = false;
+
+    // Restore original values from snapshot
+    final snapshot = _batterySaverSnapshot;
+    if (snapshot != null) {
+      _visualizerEnabledByUser = snapshot['visualizerEnabledByUser'] as bool? ?? true;
+      _visualizerEnabled = _visualizerEnabledByUser;
+      _crossfadeEnabled = snapshot['crossfadeEnabled'] as bool? ?? false;
+      _audioPlayerService.setCrossfadeEnabled(_crossfadeEnabled);
+      _gaplessPlaybackEnabled = snapshot['gaplessPlaybackEnabled'] as bool? ?? true;
+      _audioPlayerService.setGaplessPlaybackEnabled(_gaplessPlaybackEnabled);
+      final preCacheCount = snapshot['preCacheTrackCount'] as int? ?? 3;
+      _audioPlayerService.setPreCacheTrackCount(preCacheCount);
+    }
+
+    // Restore normal intervals
+    _audioPlayerService.setBatterySaverMode(false);
+    _audioPlayerService.reportingService?.setProgressInterval(
+      const Duration(seconds: 10),
+    );
+
+    // Clear snapshot (persist empty map to signal "cleared")
+    _batterySaverSnapshot = null;
+
+    debugPrint('🚢 Battery saver: SURFACED — all systems restored');
+
+    unawaited(_playbackStateStore.saveUiState(
+      visualizerEnabled: _visualizerEnabled,
+      crossfadeEnabled: _crossfadeEnabled,
+      gaplessPlaybackEnabled: _gaplessPlaybackEnabled,
+      preCacheTrackCount: _audioPlayerService.preCacheTrackCount,
+      submarineModeEnabled: false,
+      batterySaverSnapshot: <String, dynamic>{}, // empty map = cleared
     ));
   }
 
@@ -877,11 +880,10 @@ class NautuneAppState extends ChangeNotifier {
     // Listen for CHANGES
     _powerModeSub = PowerModeService.instance.lowPowerModeStream.listen((isLowPower) {
       if (isLowPower) {
-        // Entering Low Power Mode - auto-enable Submarine Mode if not already on
-        if (!_submarineModeEnabled) {
-          setSubmarineMode(true);
-          debugPrint('🔋 Submarine Mode auto-enabled by iOS Low Power Mode');
-        }
+        // Entering Low Power Mode — activate battery saving features only,
+        // keep network alive so user can still stream
+        _activateSubmarineFeatures();
+        debugPrint('🔋 Battery saver auto-enabled by iOS Low Power Mode');
         // Also suppress visualizer (redundant if submarine mode is on, but safe)
         if (_visualizerEnabled) {
           _visualizerSuppressedByLowPower = true;
@@ -890,7 +892,11 @@ class NautuneAppState extends ChangeNotifier {
           debugPrint('🔋 Visualizer disabled (Low Power Mode)');
         }
       } else {
-        // Exiting Low Power Mode - restore if it was suppressed and user had it ON
+        // Exiting Low Power Mode - only deactivate submarine features if not offline
+        if (!_userWantsOffline && _networkAvailable) {
+          _deactivateSubmarineFeatures();
+        }
+        // Restore visualizer if it was suppressed and user had it ON
         if (_visualizerSuppressedByLowPower && _visualizerEnabledByUser) {
           _visualizerEnabled = true;
           _visualizerSuppressedByLowPower = false;
@@ -965,23 +971,26 @@ class NautuneAppState extends ChangeNotifier {
     // We don't change _userWantsOffline - that's the user's explicit choice
     if (!isOnline && wasOnline) {
       debugPrint('📴 Network lost - app is now effectively offline');
+      _applyOfflineNetworkPolicy();
+      _activateSubmarineFeatures();
       notifyListeners();
       return;
     }
-    
-    // Going online - apply immediately but don't auto-switch offline mode
-    // Let the user manually switch back or let bootstrap sync handle it
+
+    // Going online - restore services only if user doesn't want offline
     if (isOnline && !wasOnline) {
-      debugPrint('📶 Network restored - starting background sync');
-      notifyListeners();
-      
-      final session = _session;
-      if (session != null && !_isDemoMode) {
-        // Start background sync without forcing offline mode change
-        _startBootstrapSync(session);
+      debugPrint('📶 Network restored');
+
+      if (!_userWantsOffline) {
+        debugPrint('📶 User is online — restoring network services');
+        _deactivateSubmarineFeatures();
+        _restoreOnlineNetworkPolicy();
         // Refresh data in background - don't await, don't block UI
         unawaited(_refreshAfterReconnect());
+      } else {
+        debugPrint('📴 User prefers offline — keeping services silenced');
       }
+      notifyListeners();
     } else if (wasOnline != isOnline) {
       notifyListeners();
     }
@@ -1017,7 +1026,7 @@ class NautuneAppState extends ChangeNotifier {
         ? const Duration(minutes: 30)
         : const Duration(minutes: 10);
     _periodicSyncTimer = Timer.periodic(interval, (_) {
-      if (_session != null && _networkAvailable && !_isDemoMode) {
+      if (_session != null && _networkAvailable && !_isDemoMode && !_userWantsOffline) {
         debugPrint('📊 Periodic sync triggered (every ${_submarineModeEnabled ? 30 : 10} min)');
         unawaited(_syncAnalyticsToServer());
       }
@@ -1101,7 +1110,9 @@ class NautuneAppState extends ChangeNotifier {
       _visualizerType = storedPlaybackState.visualizerType;
       _visualizerPosition = storedPlaybackState.visualizerPosition;
       _nowPlayingLayout = storedPlaybackState.nowPlayingLayout;
-      _submarineModeEnabled = storedPlaybackState.submarineModeEnabled;
+      // Submarine mode is now derived from offline state — don't restore the old toggle.
+      // Only restore the snapshot so we can deactivate cleanly if user was offline.
+      _submarineModeEnabled = storedPlaybackState.isOfflineMode;
       _batterySaverSnapshot = storedPlaybackState.batterySaverSnapshot;
       _libraryScrollOffsets =
           Map<String, double>.from(storedPlaybackState.scrollOffsets);
@@ -1140,6 +1151,12 @@ class NautuneAppState extends ChangeNotifier {
 
       // Restore offline mode preference
       _userWantsOffline = storedPlaybackState.isOfflineMode;
+
+      // If user wants offline, disable reporting and prewarming at startup
+      if (_userWantsOffline) {
+        _audioPlayerService.reportingService?.setEnabled(false);
+        _audioPlayerService.setImagePrewarmEnabled(false);
+      }
     } else {
       // No stored state - still need power mode listener for new installs
       _initPowerModeListener();
@@ -1178,14 +1195,14 @@ class NautuneAppState extends ChangeNotifier {
         // Start periodic analytics sync timer (runs every 10 min)
         _startPeriodicSyncTimer();
 
-        if (_networkAvailable) {
+        if (_networkAvailable && !_userWantsOffline) {
           _startBootstrapSync(storedSession);
           // Sync analytics in background on startup
           unawaited(_syncAnalyticsToServer());
           // Start remote control WebSocket for Helm Mode
           _startRemoteControl(storedSession);
         } else {
-          debugPrint('Skipping bootstrap sync: offline at startup');
+          debugPrint('Skipping bootstrap sync: ${_userWantsOffline ? "user wants offline" : "no network"} at startup');
         }
       }
     } catch (error, stackTrace) {
@@ -2631,6 +2648,16 @@ class NautuneAppState extends ChangeNotifier {
     // Persist the user's offline preference
     unawaited(_playbackStateStore.saveUiState(isOfflineMode: _userWantsOffline));
 
+    if (_userWantsOffline) {
+      _applyOfflineNetworkPolicy();
+      _activateSubmarineFeatures();
+    } else {
+      _deactivateSubmarineFeatures();
+      if (_networkAvailable) {
+        _restoreOnlineNetworkPolicy();
+      }
+    }
+
     notifyListeners();
 
     // In demo mode, offline toggle just switches between demo content and offline library view
@@ -2648,12 +2675,62 @@ class NautuneAppState extends ChangeNotifier {
         // Revert to offline if refresh fails
         _userWantsOffline = true;
         unawaited(_playbackStateStore.saveUiState(isOfflineMode: true));
+        _applyOfflineNetworkPolicy();
+        _activateSubmarineFeatures();
         notifyListeners();
       });
 
       // Sync pending playlist actions
       _syncPendingPlaylistActions();
     }
+  }
+
+  /// Shut down all background network activity for offline mode.
+  void _applyOfflineNetworkPolicy() {
+    debugPrint('📴 Applying offline network policy — silencing all background services');
+
+    // Cancel periodic analytics sync
+    _stopPeriodicSyncTimer();
+
+    // Pause playback reporting
+    _audioPlayerService.reportingService?.setEnabled(false);
+
+    // Disable image prewarming
+    _audioPlayerService.setImagePrewarmEnabled(false);
+
+    // Disconnect remote control WebSocket
+    _remoteControlService?.disconnect();
+
+    // Cancel bootstrap sync
+    _bootstrapService.cancelSync();
+  }
+
+  /// Restore all background network activity when coming back online.
+  void _restoreOnlineNetworkPolicy() {
+    debugPrint('📶 Restoring online network policy — re-enabling background services');
+
+    final session = _session;
+    if (session == null || _isDemoMode) return;
+
+    // Restart periodic analytics sync + flush queued analytics
+    _startPeriodicSyncTimer();
+    unawaited(_syncAnalyticsToServer());
+
+    // Re-enable playback reporting + flush queued reports
+    final reportingService = _audioPlayerService.reportingService;
+    if (reportingService != null) {
+      reportingService.setEnabled(true);
+      unawaited(reportingService.flushPendingReports());
+    }
+
+    // Re-enable image prewarming
+    _audioPlayerService.setImagePrewarmEnabled(true);
+
+    // Reconnect remote control WebSocket
+    _startRemoteControl(session);
+
+    // Resume bootstrap sync
+    _startBootstrapSync(session);
   }
 
   Future<void> _syncPendingPlaylistActions() async {

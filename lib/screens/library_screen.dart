@@ -438,13 +438,13 @@ class _LibraryScreenState extends State<LibraryScreen>
             ),
             actions: [
               const SyncStatusIndicator(),
-              if (appState.submarineModeEnabled)
+              if (appState.isOfflineMode)
                 Tooltip(
-                  message: 'Submarine Mode active',
+                  message: 'Offline Mode',
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: Icon(
-                      Icons.directions_boat,
+                      Icons.cloud_off,
                       color: theme.colorScheme.primary,
                       size: 20,
                     ),

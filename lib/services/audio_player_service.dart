@@ -469,6 +469,11 @@ class AudioPlayerService {
       unawaited(applyStoredState(_pendingState!));
     }
   }
+
+  /// Enable or disable image prewarming (called by offline mode gate).
+  void setImagePrewarmEnabled(bool enabled) {
+    _imagePrewarmService?.enabled = enabled;
+  }
   
   // Streams
   final StreamController<JellyfinTrack?> _currentTrackController = BehaviorSubject<JellyfinTrack?>();

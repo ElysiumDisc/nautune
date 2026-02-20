@@ -104,6 +104,21 @@ class HelmService extends ChangeNotifier {
     debugPrint('Helm: Deactivated');
   }
 
+  /// Suspend polling without clearing the target (for offline mode).
+  void suspendPolling() {
+    _pollingTimer?.cancel();
+    _pollingTimer = null;
+    debugPrint('Helm: Polling suspended (offline)');
+  }
+
+  /// Resume polling if a target is active (when coming back online).
+  void resumePolling() {
+    if (_activeTarget != null && _pollingTimer == null) {
+      _startAdaptivePolling();
+      debugPrint('Helm: Polling resumed');
+    }
+  }
+
   /// Refresh the target's now-playing state from /Sessions.
   Future<void> refreshTarget() => _refreshTargetState();
 

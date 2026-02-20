@@ -15,6 +15,9 @@ class CarPlayService {
   bool _isConnected = false;
   StreamSubscription? _playbackSubscription;
   Timer? _refreshDebounceTimer;
+  bool _userHasNavigated = false;
+  DateTime _lastNavigationTime = DateTime(2000);
+  bool _isRefreshing = false;
 
   // Pagination limits for CarPlay (prevents performance issues with large libraries)
   static const int _maxItemsPerPage = 100;
@@ -26,7 +29,16 @@ class CarPlayService {
   /// Returns true if user is at the CarPlay root level (no pushed templates).
   /// Uses the package's own templateHistory as source of truth — it's correctly
   /// maintained on push, pop (back-press), and setRootTemplate.
-  bool get _isAtRootLevel => FlutterCarPlayController.templateHistory.length <= 1;
+  /// Also protects against refreshing while user just navigated (race condition fix).
+  bool get _isAtRootLevel {
+    if (FlutterCarPlayController.templateHistory.length > 1) return false;
+    // If user navigated recently (within 5 seconds), don't treat as root
+    if (_userHasNavigated &&
+        DateTime.now().difference(_lastNavigationTime).inSeconds < 5) {
+      return false;
+    }
+    return true;
+  }
 
   /// Navigation depth derived from templateHistory for debug logging.
   int get _navigationDepth => FlutterCarPlayController.templateHistory.isEmpty
@@ -85,10 +97,19 @@ class CarPlayService {
   
   void _onCarPlayDisconnect() {
     _isConnected = false;
+    _userHasNavigated = false;
+    _isRefreshing = false;
     FlutterCarPlayController.templateHistory.clear();
     debugPrint('🚗 CarPlay disconnected');
   }
   
+  /// Mark that user has navigated, preventing root refresh race conditions.
+  void _markUserNavigation() {
+    _userHasNavigated = true;
+    _lastNavigationTime = DateTime.now();
+    _refreshDebounceTimer?.cancel();
+  }
+
   void _onAppStateChanged() {
     if (_isConnected && _isAtRootLevel) {
       _refreshDebounceTimer?.cancel();
@@ -113,6 +134,7 @@ class CarPlayService {
   
   Future<void> _refreshRootTemplate() async {
     if (!_isInitialized || !_isConnected) return;
+    if (_isRefreshing) return; // Prevent concurrent refreshes
 
     // Don't refresh if user is navigating
     if (_navigationDepth > 0) {
@@ -120,10 +142,11 @@ class CarPlayService {
       return;
     }
 
+    _isRefreshing = true;
     try {
-      // Clear template history before setting root to prevent history accumulation
-      FlutterCarPlayController.templateHistory.clear();
-
+      // Don't clear templateHistory manually — setRootTemplate handles it.
+      // Manual clearing creates a race condition where the nav stack is destroyed
+      // between the user navigating and this refresh completing.
       final rootTemplate = _buildRootTemplate();
       await FlutterCarplay.setRootTemplate(
         rootTemplate: rootTemplate,
@@ -132,6 +155,8 @@ class CarPlayService {
       debugPrint('🔄 CarPlay content refreshed');
     } catch (e) {
       debugPrint('⚠️ CarPlay refresh error: $e');
+    } finally {
+      _isRefreshing = false;
     }
   }
   
@@ -283,7 +308,7 @@ class CarPlayService {
   }
 
   Future<void> _showAlbums({int offset = 0}) async {
-    _refreshDebounceTimer?.cancel();
+    _markUserNavigation();
     try {
       List<JellyfinAlbum> allAlbums;
 
@@ -367,7 +392,7 @@ class CarPlayService {
   }
 
   Future<void> _showArtists({int offset = 0}) async {
-    _refreshDebounceTimer?.cancel();
+    _markUserNavigation();
     try {
       List<JellyfinArtist> allArtists;
 
@@ -450,7 +475,7 @@ class CarPlayService {
   }
 
   Future<void> _showPlaylists({int offset = 0}) async {
-    _refreshDebounceTimer?.cancel();
+    _markUserNavigation();
     try {
       // In offline mode, playlists are not supported yet
       if (appState.isOfflineMode) {
@@ -530,7 +555,7 @@ class CarPlayService {
   }
 
   Future<void> _showAlbumTracks(String albumId, String albumName) async {
-    _refreshDebounceTimer?.cancel();
+    _markUserNavigation();
     try {
       // getAlbumTracks usually hits API directly or cache, it doesn't set a global loading state
       // but it's a future so we just await it.
@@ -574,7 +599,7 @@ class CarPlayService {
   }
 
   Future<void> _showArtistAlbums(String artistId, String artistName) async {
-    _refreshDebounceTimer?.cancel();
+    _markUserNavigation();
     try {
       List<JellyfinAlbum> albums;
 
@@ -635,7 +660,7 @@ class CarPlayService {
   }
 
   Future<void> _showPlaylistTracks(String playlistId, String playlistName) async {
-    _refreshDebounceTimer?.cancel();
+    _markUserNavigation();
     try {
       final tracks = await appState.getPlaylistTracks(playlistId);
 
@@ -677,7 +702,7 @@ class CarPlayService {
   }
 
   Future<void> _showFavorites({int offset = 0}) async {
-    _refreshDebounceTimer?.cancel();
+    _markUserNavigation();
     try {
       List<JellyfinTrack> allFavorites;
 
@@ -754,7 +779,7 @@ class CarPlayService {
   }
 
   Future<void> _showRecentlyPlayed({int offset = 0}) async {
-    _refreshDebounceTimer?.cancel();
+    _markUserNavigation();
     try {
       // In offline mode, recently played is not available
       if (appState.isOfflineMode) {
@@ -830,7 +855,7 @@ class CarPlayService {
   }
 
   Future<void> _showDownloads({int offset = 0}) async {
-    _refreshDebounceTimer?.cancel();
+    _markUserNavigation();
     try {
       final allDownloads = appState.downloadService.completedDownloads;
 
@@ -893,7 +918,7 @@ class CarPlayService {
   }
 
   Future<void> _showEmptyState(String title, String message) async {
-    _refreshDebounceTimer?.cancel();
+    _markUserNavigation();
     try {
       await FlutterCarplay.push(
         template: CPListTemplate(

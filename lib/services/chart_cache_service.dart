@@ -16,6 +16,7 @@ class ChartCacheService extends ChangeNotifier {
   Directory? _cacheDir;
   final Map<String, ChartData> _cache = {};
   bool _initialized = false;
+  static const int _maxMemoryCacheSize = 100;
 
   // Through the Fire and Flames - legendary unlock for perfect scores
   // Bundled in assets - no download needed!
@@ -51,6 +52,7 @@ class ChartCacheService extends ChangeNotifier {
 
       // Load existing charts into memory
       await _loadAllCharts();
+      _trimMemoryCache();
 
       // Load legendary track unlock state
       await _loadLegendaryUnlockState();
@@ -83,6 +85,18 @@ class ChartCacheService extends ChangeNotifier {
     } catch (e) {
       debugPrint('🎮 ChartCache: Error listing charts: $e');
     }
+  }
+
+  /// Trim in-memory cache to max size, keeping most recently generated charts.
+  void _trimMemoryCache() {
+    if (_cache.length <= _maxMemoryCacheSize) return;
+    final sorted = _cache.entries.toList()
+      ..sort((a, b) => b.value.generatedAt.compareTo(a.value.generatedAt));
+    final keysToRemove = sorted.skip(_maxMemoryCacheSize).map((e) => e.key).toList();
+    for (final key in keysToRemove) {
+      _cache.remove(key);
+    }
+    debugPrint('🎮 ChartCache: Trimmed memory cache to $_maxMemoryCacheSize entries');
   }
 
   /// Check if a chart exists for a track

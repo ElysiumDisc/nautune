@@ -57,6 +57,13 @@ class BootstrapService {
   final JellyfinService _jellyfinService;
   final Duration _syncTimeout;
   final int _maxRetries;
+  int _syncGeneration = 0;
+
+  /// Cancel any in-flight sync operations. Future syncs still allowed.
+  void cancelSync() {
+    _syncGeneration++;
+    debugPrint('Bootstrap: Sync cancelled (generation $_syncGeneration)');
+  }
 
   Future<BootstrapSnapshot> loadCachedSnapshot({
     required JellyfinSession session,
@@ -214,13 +221,18 @@ class BootstrapService {
     ValueChanged<Object>? onNetworkLost,
     VoidCallback? onUnauthorized,
   }) {
+    final generation = _syncGeneration;
     unawaited(() async {
       try {
         final result = await _withRetry(fetch);
+        // Abort if sync was cancelled while we were fetching
+        if (_syncGeneration != generation) return;
         await persist(result);
+        if (_syncGeneration != generation) return;
         onNetworkReachable?.call();
         onUpdate?.call(result);
       } catch (error, stackTrace) {
+        if (_syncGeneration != generation) return;
         if (_isUnauthorized(error)) {
           debugPrint('Bootstrap sync for $label unauthorized: $error');
           onUnauthorized?.call();

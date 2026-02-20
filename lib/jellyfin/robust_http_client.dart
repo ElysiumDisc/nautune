@@ -172,8 +172,10 @@ class RobustHttpClient {
       attempt++;
       
       if (attempt < maxRetries) {
-        // Exponential backoff: 1s, 2s, 4s...
-        final delay = Duration(milliseconds: pow(2, attempt).toInt() * 500);
+        // Exponential backoff with up to 30% jitter to prevent thundering herd
+        final baseMs = pow(2, attempt).toInt() * 500;
+        final jitter = (baseMs * 0.3 * Random().nextDouble()).toInt();
+        final delay = Duration(milliseconds: baseMs + jitter);
         debugPrint('⏳ Waiting ${delay.inMilliseconds}ms before retry...');
         await Future.delayed(delay);
       }

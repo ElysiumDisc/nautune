@@ -22,6 +22,21 @@ class PlaybackReportingService {
   Timer? _progressTimer;
   Duration Function()? _positionProvider;
   Duration _progressInterval = const Duration(seconds: 10);
+  bool _enabled = true;
+
+  /// Queued start/stop events recorded while disabled (offline).
+  /// Progress events are skipped (redundant — start/stop capture endpoints).
+  final List<Map<String, dynamic>> _pendingEvents = [];
+
+  /// Enable or disable reporting. When disabled, start/stop events are queued.
+  void setEnabled(bool enabled) {
+    _enabled = enabled;
+    if (!enabled) {
+      _progressTimer?.cancel();
+    }
+  }
+
+  bool get isEnabled => _enabled;
 
   void setProgressInterval(Duration interval) {
     _progressInterval = interval;
@@ -40,16 +55,27 @@ class PlaybackReportingService {
 
     _currentSessionId = sessionId ?? DateTime.now().millisecondsSinceEpoch.toString();
     _currentPlayMethod = playMethod;
-    
+
+    if (!_enabled) {
+      _pendingEvents.add({
+        'type': 'start',
+        'trackId': track.id,
+        'playMethod': playMethod,
+        'sessionId': _currentSessionId,
+      });
+      debugPrint('📡 Playback start queued (offline): ${track.name}');
+      return;
+    }
+
     debugPrint('📡 Reporting to Jellyfin: $serverUrl/Sessions/Playing');
     debugPrint('   Track: ${track.name} (${track.id})');
     debugPrint('   Method: $playMethod');
-    
+
     final url = Uri.parse('$serverUrl/Sessions/Playing');
     final body = {
       'ItemId': track.id,
       // Use PlaySessionId to match the transcoding session we started
-      'PlaySessionId': _currentSessionId, 
+      'PlaySessionId': _currentSessionId,
       'PlayMethod': playMethod,
       'CanSeek': true,
       'IsPaused': false,
@@ -95,6 +121,7 @@ class PlaybackReportingService {
     Duration position,
     bool isPaused,
   ) async {
+    if (!_enabled) return;
     if (_currentSessionId == null || serverUrl.startsWith('demo://')) return;
 
     final url = Uri.parse('$serverUrl/Sessions/Playing/Progress');
@@ -135,8 +162,20 @@ class PlaybackReportingService {
     Duration position,
   ) async {
     _progressTimer?.cancel();
-    
+
     if (_currentSessionId == null || serverUrl.startsWith('demo://')) return;
+
+    if (!_enabled) {
+      _pendingEvents.add({
+        'type': 'stop',
+        'trackId': track.id,
+        'positionTicks': position.inMicroseconds * 10,
+        'sessionId': _currentSessionId,
+      });
+      _currentSessionId = null;
+      debugPrint('📡 Playback stop queued (offline): ${track.name}');
+      return;
+    }
 
     final url = Uri.parse('$serverUrl/Sessions/Playing/Stopped');
     final positionTicks = position.inMicroseconds * 10;
@@ -162,6 +201,58 @@ class PlaybackReportingService {
     } finally {
       _currentSessionId = null;
     }
+  }
+
+  /// Flush queued start/stop events when coming back online.
+  Future<void> flushPendingReports() async {
+    if (_pendingEvents.isEmpty) return;
+
+    debugPrint('📡 Flushing ${_pendingEvents.length} pending playback reports...');
+    final events = List<Map<String, dynamic>>.from(_pendingEvents);
+    _pendingEvents.clear();
+
+    for (final event in events) {
+      try {
+        if (event['type'] == 'start') {
+          final url = Uri.parse('$serverUrl/Sessions/Playing');
+          await httpClient.post(
+            url,
+            headers: {
+              'X-Emby-Token': accessToken,
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'ItemId': event['trackId'],
+              'PlaySessionId': event['sessionId'],
+              'PlayMethod': event['playMethod'],
+              'CanSeek': true,
+              'IsPaused': false,
+              'IsMuted': false,
+              'PositionTicks': 0,
+              'RepeatMode': 'RepeatNone',
+            }),
+          );
+        } else if (event['type'] == 'stop') {
+          final url = Uri.parse('$serverUrl/Sessions/Playing/Stopped');
+          await httpClient.post(
+            url,
+            headers: {
+              'X-Emby-Token': accessToken,
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'ItemId': event['trackId'],
+              'PlaySessionId': event['sessionId'],
+              'PositionTicks': event['positionTicks'],
+              'PlayMethod': 'DirectPlay',
+            }),
+          );
+        }
+      } catch (e) {
+        debugPrint('📡 Failed to flush event: $e');
+      }
+    }
+    debugPrint('📡 Flush complete');
   }
 
   void dispose() {

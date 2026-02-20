@@ -15,12 +15,12 @@ class RelaxModeScreen extends StatefulWidget {
 }
 
 class _RelaxModeScreenState extends State<RelaxModeScreen> {
-  // Audio players for each ambient sound
-  final AudioPlayer _rainPlayer = AudioPlayer();
-  final AudioPlayer _thunderPlayer = AudioPlayer();
-  final AudioPlayer _campfirePlayer = AudioPlayer();
-  final AudioPlayer _wavePlayer = AudioPlayer();
-  final AudioPlayer _loonPlayer = AudioPlayer();
+  // Audio players for each ambient sound — lazy-initialized on first use
+  AudioPlayer? _rainPlayer;
+  AudioPlayer? _thunderPlayer;
+  AudioPlayer? _campfirePlayer;
+  AudioPlayer? _wavePlayer;
+  AudioPlayer? _loonPlayer;
 
   // Volume levels (0.0 to 1.0)
   double _rainVolume = 0.0;
@@ -90,32 +90,21 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
   }
 
   Future<void> _initAudio() async {
-    // Set release mode to loop for continuous ambient playback
-    await _rainPlayer.setReleaseMode(ReleaseMode.loop);
-    await _thunderPlayer.setReleaseMode(ReleaseMode.loop);
-    await _campfirePlayer.setReleaseMode(ReleaseMode.loop);
-    await _wavePlayer.setReleaseMode(ReleaseMode.loop);
-    await _loonPlayer.setReleaseMode(ReleaseMode.loop);
-
-    // Set initial volume to 0
-    await _rainPlayer.setVolume(0.0);
-    await _thunderPlayer.setVolume(0.0);
-    await _campfirePlayer.setVolume(0.0);
-    await _wavePlayer.setVolume(0.0);
-    await _loonPlayer.setVolume(0.0);
-
-    // Load and start playing (at volume 0)
-    await _rainPlayer.setSource(AssetSource('relax/rain.mp3'));
-    await _thunderPlayer.setSource(AssetSource('relax/thunder.mp3'));
-    await _campfirePlayer.setSource(AssetSource('relax/campfire.mp3'));
-    await _wavePlayer.setSource(AssetSource('relax/wave.mp3'));
-    await _loonPlayer.setSource(AssetSource('relax/loon.mp3'));
-
+    // Players are lazy-initialized on first volume > 0
+    // Just mark as ready so UI renders
     if (mounted) {
       setState(() => _initialized = true);
-      // Start tracking only after audio is ready
-      _startTracking();
     }
+  }
+
+  /// Lazy-initialize and start an audio player for an ambient sound.
+  Future<AudioPlayer> _ensurePlayer(AudioPlayer? player, String assetName) async {
+    if (player != null) return player;
+    final p = AudioPlayer();
+    await p.setReleaseMode(ReleaseMode.loop);
+    await p.setVolume(0.0);
+    await p.setSource(AssetSource(assetName));
+    return p;
   }
 
   @override
@@ -136,58 +125,85 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
       );
     }
 
-    // Dispose audio players
-    _rainPlayer.dispose();
-    _thunderPlayer.dispose();
-    _campfirePlayer.dispose();
-    _wavePlayer.dispose();
-    _loonPlayer.dispose();
+    // Dispose audio players (only those that were initialized)
+    _rainPlayer?.dispose();
+    _thunderPlayer?.dispose();
+    _campfirePlayer?.dispose();
+    _wavePlayer?.dispose();
+    _loonPlayer?.dispose();
     super.dispose();
   }
 
-  void _onRainVolumeChanged(double value) {
+  Future<void> _onRainVolumeChanged(double value) async {
     setState(() => _rainVolume = value);
-    _rainPlayer.setVolume(value);
-    if (value > 0 && _rainPlayer.state != PlayerState.playing) {
-      _rainPlayer.resume();
+    if (value > 0) {
+      _rainPlayer = await _ensurePlayer(_rainPlayer, 'relax/rain.mp3');
+      _rainPlayer!.setVolume(value);
+      if (_rainPlayer!.state != PlayerState.playing) _rainPlayer!.resume();
+      _ensureTrackingStarted();
+    } else {
+      _rainPlayer?.setVolume(0);
     }
     HapticService.selectionClick();
   }
 
-  void _onThunderVolumeChanged(double value) {
+  Future<void> _onThunderVolumeChanged(double value) async {
     setState(() => _thunderVolume = value);
-    _thunderPlayer.setVolume(value);
-    if (value > 0 && _thunderPlayer.state != PlayerState.playing) {
-      _thunderPlayer.resume();
+    if (value > 0) {
+      _thunderPlayer = await _ensurePlayer(_thunderPlayer, 'relax/thunder.mp3');
+      _thunderPlayer!.setVolume(value);
+      if (_thunderPlayer!.state != PlayerState.playing) _thunderPlayer!.resume();
+      _ensureTrackingStarted();
+    } else {
+      _thunderPlayer?.setVolume(0);
     }
     HapticService.selectionClick();
   }
 
-  void _onCampfireVolumeChanged(double value) {
+  Future<void> _onCampfireVolumeChanged(double value) async {
     setState(() => _campfireVolume = value);
-    _campfirePlayer.setVolume(value);
-    if (value > 0 && _campfirePlayer.state != PlayerState.playing) {
-      _campfirePlayer.resume();
+    if (value > 0) {
+      _campfirePlayer = await _ensurePlayer(_campfirePlayer, 'relax/campfire.mp3');
+      _campfirePlayer!.setVolume(value);
+      if (_campfirePlayer!.state != PlayerState.playing) _campfirePlayer!.resume();
+      _ensureTrackingStarted();
+    } else {
+      _campfirePlayer?.setVolume(0);
     }
     HapticService.selectionClick();
   }
 
-  void _onWaveVolumeChanged(double value) {
+  Future<void> _onWaveVolumeChanged(double value) async {
     setState(() => _waveVolume = value);
-    _wavePlayer.setVolume(value);
-    if (value > 0 && _wavePlayer.state != PlayerState.playing) {
-      _wavePlayer.resume();
+    if (value > 0) {
+      _wavePlayer = await _ensurePlayer(_wavePlayer, 'relax/wave.mp3');
+      _wavePlayer!.setVolume(value);
+      if (_wavePlayer!.state != PlayerState.playing) _wavePlayer!.resume();
+      _ensureTrackingStarted();
+    } else {
+      _wavePlayer?.setVolume(0);
     }
     HapticService.selectionClick();
   }
 
-  void _onLoonVolumeChanged(double value) {
+  Future<void> _onLoonVolumeChanged(double value) async {
     setState(() => _loonVolume = value);
-    _loonPlayer.setVolume(value);
-    if (value > 0 && _loonPlayer.state != PlayerState.playing) {
-      _loonPlayer.resume();
+    if (value > 0) {
+      _loonPlayer = await _ensurePlayer(_loonPlayer, 'relax/loon.mp3');
+      _loonPlayer!.setVolume(value);
+      if (_loonPlayer!.state != PlayerState.playing) _loonPlayer!.resume();
+      _ensureTrackingStarted();
+    } else {
+      _loonPlayer?.setVolume(0);
     }
     HapticService.selectionClick();
+  }
+
+  /// Start analytics tracking only when at least one sound is active.
+  void _ensureTrackingStarted() {
+    if (_usageTimer == null) {
+      _startTracking();
+    }
   }
 
   @override

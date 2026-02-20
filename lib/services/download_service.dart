@@ -12,6 +12,7 @@ import '../jellyfin/jellyfin_service.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../models/download_item.dart';
 import 'audio_cache_service.dart';
+import 'chart_cache_service.dart';
 import 'connectivity_service.dart';
 import 'notification_service.dart';
 import 'waveform_service.dart';
@@ -30,6 +31,14 @@ class StorageStats {
   final int cacheFileCount;
   final List<String> cachedTrackIds;
 
+  // Waveform stats
+  final int waveformBytes;
+  final int waveformFileCount;
+
+  // Chart stats
+  final int chartBytes;
+  final int chartCount;
+
   StorageStats({
     required this.totalBytes,
     required this.trackCount,
@@ -39,11 +48,17 @@ class StorageStats {
     this.cacheBytes = 0,
     this.cacheFileCount = 0,
     this.cachedTrackIds = const [],
+    this.waveformBytes = 0,
+    this.waveformFileCount = 0,
+    this.chartBytes = 0,
+    this.chartCount = 0,
   });
 
   String get formattedTotal => _formatBytes(totalBytes);
   String get formattedCache => _formatBytes(cacheBytes);
   String get formattedCombined => _formatBytes(totalBytes + cacheBytes);
+  String get formattedWaveforms => _formatBytes(waveformBytes);
+  String get formattedCharts => _formatBytes(chartBytes);
 
   static String _formatBytes(int bytes) {
     if (bytes < 1024) return '$bytes B';
@@ -1396,6 +1411,29 @@ class DownloadService extends ChangeNotifier {
       debugPrint('⚠️ Error getting cache stats: $e');
     }
 
+    // Get waveform stats
+    int waveformBytes = 0;
+    int waveformFileCount = 0;
+    try {
+      final waveformStats = await WaveformService.instance.getStorageStats();
+      waveformBytes = (waveformStats['totalBytes'] as int?) ?? 0;
+      waveformFileCount = (waveformStats['fileCount'] as int?) ?? 0;
+    } catch (e) {
+      debugPrint('⚠️ Error getting waveform stats: $e');
+    }
+
+    // Get chart stats
+    int chartBytes = 0;
+    int chartCount = 0;
+    try {
+      final chartService = ChartCacheService.instance;
+      if (!chartService.isInitialized) await chartService.initialize();
+      chartBytes = await chartService.getTotalStorageBytes();
+      chartCount = chartService.chartCount;
+    } catch (e) {
+      debugPrint('⚠️ Error getting chart stats: $e');
+    }
+
     return StorageStats(
       totalBytes: totalBytes,
       trackCount: trackCount,
@@ -1405,6 +1443,10 @@ class DownloadService extends ChangeNotifier {
       cacheBytes: cacheBytes,
       cacheFileCount: cacheFileCount,
       cachedTrackIds: cachedTrackIds,
+      waveformBytes: waveformBytes,
+      waveformFileCount: waveformFileCount,
+      chartBytes: chartBytes,
+      chartCount: chartCount,
     );
   }
 
@@ -1528,5 +1570,11 @@ class DownloadService extends ChangeNotifier {
   /// Format bytes to human readable string (static utility)
   static String formatBytes(int bytes) {
     return StorageStats._formatBytes(bytes);
+  }
+
+  @override
+  void dispose() {
+    _httpClient.close();
+    super.dispose();
   }
 }

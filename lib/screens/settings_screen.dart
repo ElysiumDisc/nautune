@@ -24,6 +24,7 @@ import '../services/download_service.dart';
 import '../services/listenbrainz_service.dart';
 import '../services/rewind_service.dart';
 import '../services/saved_loops_service.dart';
+import '../services/chart_cache_service.dart';
 import '../services/waveform_service.dart';
 import '../widgets/jellyfin_waveform.dart';
 import '../theme/nautune_theme.dart';
@@ -167,11 +168,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 trailing: Switch(
                   value: appState.visualizerEnabled,
-                  onChanged: appState.submarineModeEnabled
-                      ? null
-                      : (value) {
-                          appState.setVisualizerEnabled(value);
-                        },
+                  onChanged: (value) {
+                    appState.setVisualizerEnabled(value);
+                  },
                 ),
               ),
               if (appState.visualizerEnabled)
@@ -965,11 +964,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   trailing: Switch(
                     value: appState.crossfadeEnabled,
-                    onChanged: appState.submarineModeEnabled
-                        ? null
-                        : (value) {
-                            appState.toggleCrossfade(value);
-                          },
+                    onChanged: (value) {
+                      appState.toggleCrossfade(value);
+                    },
                   ),
                 ),
                 if (appState.crossfadeEnabled)
@@ -1013,11 +1010,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   trailing: Switch(
                     value: appState.gaplessPlaybackEnabled,
-                    onChanged: appState.submarineModeEnabled
-                        ? null
-                        : (value) {
-                            appState.toggleGaplessPlayback(value);
-                          },
+                    onChanged: (value) {
+                      appState.toggleGaplessPlayback(value);
+                    },
                   ),
                 ),
                 ListTile(
@@ -1050,66 +1045,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   padding: EdgeInsets.all(12),
                   child: EqualizerWidget(),
                 ),
-              ],
-            ),
-          ),
-          const _SectionHeader(icon: Icons.directions_boat, title: 'Submarine'),
-          Card(
-            margin: const EdgeInsets.only(bottom: 16),
-            child: Column(
-              children: [
-                SwitchListTile(
-                  secondary: Icon(
-                    Icons.directions_boat,
-                    color: theme.colorScheme.primary,
-                  ),
-                  title: const Text('Submarine Mode'),
-                  subtitle: Text(
-                    appState.submarineModeEnabled
-                        ? 'Active \u2014 running silent, running deep'
-                        : 'Dive deep \u2014 squeeze every last drop of battery',
-                  ),
-                  value: appState.submarineModeEnabled,
-                  onChanged: (value) {
-                    appState.setSubmarineMode(value);
-                  },
-                ),
-                if (appState.submarineModeEnabled) ...[
-                  const Divider(height: 1),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _SubmarineDetail(icon: Icons.waves, text: 'Visualizers disabled'),
-                        _SubmarineDetail(icon: Icons.tune, text: 'Crossfade disabled'),
-                        _SubmarineDetail(icon: Icons.music_note, text: 'Gapless playback disabled'),
-                        _SubmarineDetail(icon: Icons.graphic_eq, text: 'Waveform extraction paused'),
-                        _SubmarineDetail(icon: Icons.queue_music, text: 'Pre-caching disabled'),
-                        _SubmarineDetail(icon: Icons.image, text: 'Image pre-loading disabled'),
-                        _SubmarineDetail(icon: Icons.sync, text: 'Reduced sync frequency'),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Streaming quality stays at your preference.',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.primary,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-                    child: Text(
-                      'Your original settings will be restored when you surface.',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ),
-                ],
               ],
             ),
           ),
@@ -1153,7 +1088,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   trailing: PopupMenuButton<int>(
                     initialValue: uiStateProvider.preCacheTrackCount,
-                    enabled: !appState.submarineModeEnabled,
                     onSelected: (int? value) {
                       if (value != null) {
                         uiStateProvider.setPreCacheTrackCount(value);
@@ -1207,12 +1141,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: const Text('Only pre-cache when connected to WiFi'),
                   trailing: Switch(
                     value: uiStateProvider.wifiOnlyCaching,
-                    onChanged: appState.submarineModeEnabled
-                        ? null
-                        : (value) {
-                            uiStateProvider.setWifiOnlyCaching(value);
-                            appState.setWifiOnlyCaching(value);
-                          },
+                    onChanged: (value) {
+                      uiStateProvider.setWifiOnlyCaching(value);
+                      appState.setWifiOnlyCaching(value);
+                    },
                   ),
                 ),
               ],
@@ -1441,7 +1373,7 @@ class _StorageLimitSlider extends StatelessWidget {
   }
 }
 
-enum _StorageView { downloads, cache, loops }
+enum _StorageView { downloads, cache, loops, waveforms, charts }
 
 class _StorageManagementScreen extends StatefulWidget {
   const _StorageManagementScreen();
@@ -1553,16 +1485,21 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                                 label: 'Cached',
                                 value: '${stats.cacheFileCount} tracks',
                               ),
-                              FutureBuilder<Map<String, dynamic>>(
-                                future: WaveformService.instance.getStorageStats(),
-                                builder: (context, snapshot) {
-                                  final waveformCount = snapshot.data?['fileCount'] ?? 0;
-                                  return _StatItem(
-                                    icon: Icons.waves,
-                                    label: 'Waveforms',
-                                    value: '$waveformCount',
-                                  );
-                                },
+                              _StatItem(
+                                icon: Icons.waves,
+                                label: 'Waveforms',
+                                value: stats.formattedWaveforms,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            children: [
+                              _StatItem(
+                                icon: Icons.gamepad,
+                                label: 'Charts',
+                                value: '${stats.chartCount} (${stats.formattedCharts})',
                               ),
                             ],
                           ),
@@ -1658,19 +1595,23 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
 
                   const SizedBox(height: 16),
 
-                  // Main view toggle: Downloads vs Cache vs Loops
-                  Padding(
+                  // Main view toggle
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: SegmentedButton<_StorageView>(
-                      segments: const [
-                        ButtonSegment(value: _StorageView.downloads, label: Text('Downloads'), icon: Icon(Icons.download)),
-                        ButtonSegment(value: _StorageView.cache, label: Text('Cache'), icon: Icon(Icons.cached)),
-                        ButtonSegment(value: _StorageView.loops, label: Text('Loops'), icon: Icon(Icons.repeat)),
+                    child: Row(
+                      children: [
+                        for (final view in _StorageView.values)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: FilterChip(
+                              selected: _currentView == view,
+                              label: Text(_storageViewLabel(view)),
+                              avatar: Icon(_storageViewIcon(view), size: 18),
+                              onSelected: (_) => setState(() => _currentView = view),
+                            ),
+                          ),
                       ],
-                      selected: {_currentView},
-                      onSelectionChanged: (selection) {
-                        setState(() => _currentView = selection.first);
-                      },
                     ),
                   ),
 
@@ -1809,10 +1750,20 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                     Expanded(
                       child: _buildCacheList(stats, theme),
                     ),
-                  ] else ...[
+                  ] else if (_currentView == _StorageView.loops) ...[
                     // Loops view
                     Expanded(
                       child: _buildLoopsView(theme),
+                    ),
+                  ] else if (_currentView == _StorageView.waveforms) ...[
+                    // Waveforms view
+                    Expanded(
+                      child: _buildWaveformsView(stats, theme),
+                    ),
+                  ] else if (_currentView == _StorageView.charts) ...[
+                    // Charts view
+                    Expanded(
+                      child: _buildChartsView(theme),
                     ),
                   ],
                 ],
@@ -2164,6 +2115,258 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
     if (diff.inDays == 1) return 'Yesterday';
     if (diff.inDays < 7) return '${diff.inDays}d ago';
     return '${date.day}/${date.month}';
+  }
+
+  String _storageViewLabel(_StorageView view) {
+    switch (view) {
+      case _StorageView.downloads: return 'Downloads';
+      case _StorageView.cache: return 'Cache';
+      case _StorageView.loops: return 'Loops';
+      case _StorageView.waveforms: return 'Waveforms';
+      case _StorageView.charts: return 'Charts';
+    }
+  }
+
+  IconData _storageViewIcon(_StorageView view) {
+    switch (view) {
+      case _StorageView.downloads: return Icons.download;
+      case _StorageView.cache: return Icons.cached;
+      case _StorageView.loops: return Icons.repeat;
+      case _StorageView.waveforms: return Icons.waves;
+      case _StorageView.charts: return Icons.gamepad;
+    }
+  }
+
+  Widget _buildWaveformsView(StorageStats stats, ThemeData theme) {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: WaveformService.instance.getStorageStats(),
+      builder: (context, snapshot) {
+        final waveformStats = snapshot.data;
+        final fileCount = waveformStats?['fileCount'] as int? ?? 0;
+
+        return Column(
+          children: [
+            // Clear all waveforms button
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      onPressed: fileCount == 0
+                          ? null
+                          : () async {
+                              final confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: const Text('Clear All Waveforms?'),
+                                  content: Text('This will remove all $fileCount cached waveforms. They will be re-generated when needed.'),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context, false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context, true),
+                                      child: const Text('Clear'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirm == true) {
+                                await WaveformService.instance.clearAllWaveforms();
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('All waveforms cleared')),
+                                  );
+                                  setState(() {});
+                                }
+                              }
+                            },
+                      icon: const Icon(Icons.delete_sweep),
+                      label: const Text('Clear All Waveforms'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                'Waveforms are generated from audio data and cached locally for instant display. They can be safely cleared and will regenerate on next play.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: fileCount == 0
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.waves, size: 64, color: theme.colorScheme.outline),
+                          const SizedBox(height: 16),
+                          Text(
+                            'No cached waveforms',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Play music with the waveform visualizer to generate waveform data',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.outline,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    )
+                  : Center(
+                      child: Text(
+                        '$fileCount waveforms (${stats.formattedWaveforms})',
+                        style: theme.textTheme.titleMedium,
+                      ),
+                    ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildChartsView(ThemeData theme) {
+    final chartService = ChartCacheService.instance;
+
+    return FutureBuilder(
+      future: chartService.isInitialized
+          ? Future.value(true)
+          : chartService.initialize(),
+      builder: (context, _) {
+        final charts = chartService.getAllCharts();
+
+        return Column(
+          children: [
+            // Clear all charts button
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      onPressed: charts.isEmpty
+                          ? null
+                          : () async {
+                              final confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: const Text('Clear All Charts?'),
+                                  content: Text('This will remove all ${charts.length} cached game charts and their scores. This cannot be undone.'),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context, false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context, true),
+                                      child: const Text('Clear'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirm == true) {
+                                await chartService.clearAllCharts();
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('All charts cleared')),
+                                  );
+                                  setState(() {});
+                                }
+                              }
+                            },
+                      icon: const Icon(Icons.delete_sweep),
+                      label: const Text('Clear All Charts'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                'Charts are generated rhythm game patterns for Frets on Fire mode. Clearing them will also reset your high scores.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: charts.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.gamepad, size: 64, color: theme.colorScheme.outline),
+                          const SizedBox(height: 16),
+                          Text(
+                            'No cached charts',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Play Frets on Fire mode to generate rhythm game charts',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.outline,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: charts.length,
+                      itemBuilder: (context, index) {
+                        final chart = charts[index];
+                        return ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: theme.colorScheme.tertiaryContainer,
+                            child: Icon(Icons.music_note, color: theme.colorScheme.onTertiaryContainer),
+                          ),
+                          title: Text(
+                            chart.trackName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            '${chart.artistName} \u2022 Score: ${chart.highScore} \u2022 ${chart.notes.length} notes',
+                          ),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () async {
+                              await chartService.deleteChart(chart.trackId);
+                              if (context.mounted) {
+                                setState(() {});
+                              }
+                            },
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        );
+      },
+    );
   }
 }
 
@@ -2735,35 +2938,6 @@ class _ColorCircle extends StatelessWidget {
   }
 }
 
-class _SubmarineDetail extends StatelessWidget {
-  final IconData icon;
-  final String text;
-
-  const _SubmarineDetail({
-    required this.icon,
-    required this.text,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Icon(icon, size: 16, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 8),
-          Text(
-            text,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _SectionHeader extends StatelessWidget {
   final IconData icon;

@@ -16,6 +16,10 @@ class ImagePrewarmService {
   static const int _maxPrewarmedSize = 500;
   final List<String> _prewarmedOrder = []; // Track insertion order for LRU
   final Set<String> _prewarmedUrls = {};
+  final Map<String, Timer> _cleanupTimers = {}; // Tracked cleanup timers
+
+  /// Whether image prewarming is enabled (disabled in offline mode).
+  bool enabled = true;
 
   ImagePrewarmService({required JellyfinService jellyfinService})
       : _jellyfinService = jellyfinService;
@@ -54,6 +58,7 @@ class ImagePrewarmService {
 
   /// Pre-warm a single image by URL
   void _prewarmImage(String itemId, String imageTag) {
+    if (!enabled) return;
     final imageUrl = _jellyfinService.buildImageUrl(
       itemId: itemId,
       tag: imageTag,
@@ -92,12 +97,14 @@ class ImagePrewarmService {
 
       stream.addListener(listener);
 
-      // Auto-cleanup after timeout
-      Future.delayed(const Duration(seconds: 15), () {
+      // Auto-cleanup after timeout (tracked timer to prevent leaks)
+      _cleanupTimers[imageUrl]?.cancel();
+      _cleanupTimers[imageUrl] = Timer(const Duration(seconds: 15), () {
         if (_prewarmingUrls.contains(imageUrl)) {
           _prewarmingUrls.remove(imageUrl);
           stream.removeListener(listener);
         }
+        _cleanupTimers.remove(imageUrl);
       });
     } catch (e) {
       _prewarmingUrls.remove(imageUrl);
@@ -143,6 +150,10 @@ class ImagePrewarmService {
     _prewarmingUrls.clear();
     _prewarmedUrls.clear();
     _prewarmedOrder.clear();
+    for (final timer in _cleanupTimers.values) {
+      timer.cancel();
+    }
+    _cleanupTimers.clear();
   }
 
   /// Get stats about prewarming

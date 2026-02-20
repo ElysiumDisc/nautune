@@ -1,3 +1,50 @@
+### v7.3.0 - Offline Network Silence, Battery Optimization & Storage Management
+
+**Offline Mode: Complete Network Silence (P0)**
+- Fixed 8 background services that continued making network requests in offline mode — the root cause of iOS cellular usage reports
+- Services now fully silenced: playback reporting (POST every 10s), analytics sync (10-30min), image prewarming (per track), album art loading, Helm polling (3-10s), remote control WebSocket (20s keep-alive), SyncPlay WebSocket, and library bootstrap sync
+- Added centralized offline network gate: `_applyOfflineNetworkPolicy()` / `_restoreOnlineNetworkPolicy()` in AppState
+- Playback reporting service now queues start/stop events while disabled, flushes pending reports on reconnect
+- Bootstrap sync uses generation counter pattern — cancelled syncs abort before persisting stale data
+- Helm service gained `suspendPolling()` / `resumePolling()` — pauses adaptive polling without losing target state
+- Image prewarming service respects `enabled` flag, JellyfinImage widget shows placeholder in offline mode
+
+**Submarine Mode Merged into Offline Mode**
+- Submarine mode is no longer a separate toggle — its battery-saving features activate automatically when offline mode is on (user toggle or network loss)
+- All submarine features (disable visualizers, crossfade, gapless, waveform extraction, pre-caching, etc.) activate/deactivate with offline state
+- Settings restored automatically when going back online — snapshot/restore behavior preserved
+- Removed submarine section from Settings (toggle, detail list, icon indicator)
+- Settings controls (visualizer, crossfade, gapless, pre-cache, WiFi-only) are freely adjustable again when online
+- iOS Low Power Mode activates battery-saving features directly without toggling network state
+
+**Bug Fix: CarPlay Navigation Race Condition**
+- Fixed root template refresh destroying user's navigation stack during browsing
+- Root cause: bootstrap service `notifyListeners()` triggers debounced `_refreshRootTemplate()` which cleared `templateHistory` — if user navigated, their stack was destroyed
+- Fix: Added `_userHasNavigated` flag with 5-second cooldown, `_isRefreshing` guard to prevent concurrent refreshes
+- Removed manual `templateHistory.clear()` from refresh (the API handles this internally)
+- Navigation methods now call `_markUserNavigation()` to protect the stack
+- Flags reset on CarPlay disconnect
+
+**Performance & Battery Fixes**
+- Sleep timer: `Timer.periodic(1s)` now only runs when a sleep timer is actually set, cancelled when it expires
+- Image prewarming: replaced `Future.delayed(15s)` cleanup with tracked `Timer` objects, all cancelled in `clearTracking()`
+- Relax Mode: AudioPlayer instances are now lazy-initialized (nullable, created on first volume > 0), usage timer deferred until sound is active
+- Chart cache: bounded memory cache to 100 entries with LRU eviction on load
+- HTTP retry: added up to 30% random jitter to exponential backoff to prevent thundering herd
+- Download service: HTTP client properly closed in `dispose()`
+
+**Enhanced Storage Management**
+- Expanded from 3 tabs (Downloads, Cache, Loops) to 5 tabs (+ Waveforms, Charts)
+- Switched from SegmentedButton to scrollable FilterChip row for tab navigation
+- Waveforms tab: view count and total size, clear all waveform data
+- Charts tab: list of Frets on Fire charts with track name, artist, score, and notes hit — individual delete and clear all
+- Summary card updated with waveform size and chart stats rows
+
+**Version**
+- Bumped to 7.3.0+1
+
+---
+
 ### v7.2.1 - iOS Lock Screen Desync & CarPlay Browse Fixes
 
 **Bug Fix: iOS Lock Screen Play/Pause Desync**

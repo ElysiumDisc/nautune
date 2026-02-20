@@ -21,16 +21,16 @@
 - **Smart Lyrics**: Multi-source lyrics with sync, caching, and pre-fetching
 - **41 Nautical Milestones**: Earn achievements as you listen
 - **Track Sharing**: Share downloaded audio files via AirDrop (iOS) or file manager (Linux)
-- **Storage Management**: Separate views for downloads vs cache with accurate stats
+- **Storage Management**: Separate views for downloads, cache, loops, waveforms, and charts with accurate stats
 - **Listening Analytics**: Heatmaps, streaks, and weekly comparisons
 - **Live Search**: Results appear as you type with 300ms debounce — no Enter key required
 - **Track Info Sheet**: Long-press any track to view detailed audio metadata (codec, bitrate, sample rate, bit depth, MusicBrainz IDs)
-- **Smart Offline Mode**: Persistent offline preference, auto-detects airplane mode, seamless downloaded content playback
+- **Smart Offline Mode**: Persistent offline preference, auto-detects airplane mode, seamless downloaded content playback, complete network silence (zero background requests)
 - **A-B Repeat Loop**: Set loop markers on downloaded/cached tracks to repeat a section (long-press with haptic feedback on iOS, or use the A-B Loop button on desktop). Save loops for later recall.
 - **Artist Radio**: Start radio from any artist page — seeds 50 similar tracks with continuous Infinite Radio
 - **Recently Played**: Full listening history screen with day-grouped events, tap to play, long-press for context menu
 - **Reorderable Nav Tabs**: Long-press the bottom bar to drag-and-drop reorder tabs — persists across restarts
-- **Submarine Mode**: Ultra battery saver that disables all power-hungry features while keeping music perfect — snapshot/restore preserves your settings, streaming quality stays untouched
+- **Smart Battery Saver**: Automatically disables power-hungry features (visualizers, crossfade, gapless, pre-caching) when offline — snapshot/restore preserves your settings, streaming quality stays untouched
 - **Infinite Radio**: Auto-generates similar tracks when your queue runs low — toggle from the full player's more options menu
 - **High-Fidelity Playback**: Native backends for Linux and iOS ensuring bit-perfect audio
 - **CarPlay Support**: Take your Jellyfin library on the road with CarPlay interface
