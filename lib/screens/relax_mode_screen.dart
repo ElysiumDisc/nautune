@@ -15,12 +15,12 @@ class RelaxModeScreen extends StatefulWidget {
 }
 
 class _RelaxModeScreenState extends State<RelaxModeScreen> {
-  // Audio players for each ambient sound — lazy-initialized on first use
-  AudioPlayer? _rainPlayer;
-  AudioPlayer? _thunderPlayer;
-  AudioPlayer? _campfirePlayer;
-  AudioPlayer? _wavePlayer;
-  AudioPlayer? _loonPlayer;
+  // Audio players for each ambient sound
+  late final AudioPlayer _rainPlayer;
+  late final AudioPlayer _thunderPlayer;
+  late final AudioPlayer _campfirePlayer;
+  late final AudioPlayer _wavePlayer;
+  late final AudioPlayer _loonPlayer;
 
   // Volume levels (0.0 to 1.0)
   double _rainVolume = 0.0;
@@ -90,21 +90,31 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
   }
 
   Future<void> _initAudio() async {
-    // Players are lazy-initialized on first volume > 0
-    // Just mark as ready so UI renders
+    _rainPlayer = AudioPlayer();
+    _thunderPlayer = AudioPlayer();
+    _campfirePlayer = AudioPlayer();
+    _wavePlayer = AudioPlayer();
+    _loonPlayer = AudioPlayer();
+
+    await Future.wait([
+      _rainPlayer.setReleaseMode(ReleaseMode.loop),
+      _thunderPlayer.setReleaseMode(ReleaseMode.loop),
+      _campfirePlayer.setReleaseMode(ReleaseMode.loop),
+      _wavePlayer.setReleaseMode(ReleaseMode.loop),
+      _loonPlayer.setReleaseMode(ReleaseMode.loop),
+    ]);
+
+    await Future.wait([
+      _rainPlayer.setSource(AssetSource('relax/rain.mp3')),
+      _thunderPlayer.setSource(AssetSource('relax/thunder.mp3')),
+      _campfirePlayer.setSource(AssetSource('relax/campfire.mp3')),
+      _wavePlayer.setSource(AssetSource('relax/wave.mp3')),
+      _loonPlayer.setSource(AssetSource('relax/loon.mp3')),
+    ]);
+
     if (mounted) {
       setState(() => _initialized = true);
     }
-  }
-
-  /// Lazy-initialize and start an audio player for an ambient sound.
-  Future<AudioPlayer> _ensurePlayer(AudioPlayer? player, String assetName) async {
-    if (player != null) return player;
-    final p = AudioPlayer();
-    await p.setReleaseMode(ReleaseMode.loop);
-    await p.setVolume(0.0);
-    await p.setSource(AssetSource(assetName));
-    return p;
   }
 
   @override
@@ -125,76 +135,63 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
       );
     }
 
-    // Dispose audio players (only those that were initialized)
-    _rainPlayer?.dispose();
-    _thunderPlayer?.dispose();
-    _campfirePlayer?.dispose();
-    _wavePlayer?.dispose();
-    _loonPlayer?.dispose();
+    // Dispose audio players
+    if (_initialized) {
+      _rainPlayer.dispose();
+      _thunderPlayer.dispose();
+      _campfirePlayer.dispose();
+      _wavePlayer.dispose();
+      _loonPlayer.dispose();
+    }
     super.dispose();
   }
 
-  Future<void> _onRainVolumeChanged(double value) async {
+  void _onRainVolumeChanged(double value) {
     setState(() => _rainVolume = value);
-    if (value > 0) {
-      _rainPlayer = await _ensurePlayer(_rainPlayer, 'relax/rain.mp3');
-      _rainPlayer!.setVolume(value);
-      if (_rainPlayer!.state != PlayerState.playing) _rainPlayer!.resume();
+    _rainPlayer.setVolume(value);
+    if (value > 0 && _rainPlayer.state != PlayerState.playing) {
+      _rainPlayer.resume();
       _ensureTrackingStarted();
-    } else {
-      _rainPlayer?.setVolume(0);
     }
     HapticService.selectionClick();
   }
 
-  Future<void> _onThunderVolumeChanged(double value) async {
+  void _onThunderVolumeChanged(double value) {
     setState(() => _thunderVolume = value);
-    if (value > 0) {
-      _thunderPlayer = await _ensurePlayer(_thunderPlayer, 'relax/thunder.mp3');
-      _thunderPlayer!.setVolume(value);
-      if (_thunderPlayer!.state != PlayerState.playing) _thunderPlayer!.resume();
+    _thunderPlayer.setVolume(value);
+    if (value > 0 && _thunderPlayer.state != PlayerState.playing) {
+      _thunderPlayer.resume();
       _ensureTrackingStarted();
-    } else {
-      _thunderPlayer?.setVolume(0);
     }
     HapticService.selectionClick();
   }
 
-  Future<void> _onCampfireVolumeChanged(double value) async {
+  void _onCampfireVolumeChanged(double value) {
     setState(() => _campfireVolume = value);
-    if (value > 0) {
-      _campfirePlayer = await _ensurePlayer(_campfirePlayer, 'relax/campfire.mp3');
-      _campfirePlayer!.setVolume(value);
-      if (_campfirePlayer!.state != PlayerState.playing) _campfirePlayer!.resume();
+    _campfirePlayer.setVolume(value);
+    if (value > 0 && _campfirePlayer.state != PlayerState.playing) {
+      _campfirePlayer.resume();
       _ensureTrackingStarted();
-    } else {
-      _campfirePlayer?.setVolume(0);
     }
     HapticService.selectionClick();
   }
 
-  Future<void> _onWaveVolumeChanged(double value) async {
+  void _onWaveVolumeChanged(double value) {
     setState(() => _waveVolume = value);
-    if (value > 0) {
-      _wavePlayer = await _ensurePlayer(_wavePlayer, 'relax/wave.mp3');
-      _wavePlayer!.setVolume(value);
-      if (_wavePlayer!.state != PlayerState.playing) _wavePlayer!.resume();
+    _wavePlayer.setVolume(value);
+    if (value > 0 && _wavePlayer.state != PlayerState.playing) {
+      _wavePlayer.resume();
       _ensureTrackingStarted();
-    } else {
-      _wavePlayer?.setVolume(0);
     }
     HapticService.selectionClick();
   }
 
-  Future<void> _onLoonVolumeChanged(double value) async {
+  void _onLoonVolumeChanged(double value) {
     setState(() => _loonVolume = value);
-    if (value > 0) {
-      _loonPlayer = await _ensurePlayer(_loonPlayer, 'relax/loon.mp3');
-      _loonPlayer!.setVolume(value);
-      if (_loonPlayer!.state != PlayerState.playing) _loonPlayer!.resume();
+    _loonPlayer.setVolume(value);
+    if (value > 0 && _loonPlayer.state != PlayerState.playing) {
+      _loonPlayer.resume();
       _ensureTrackingStarted();
-    } else {
-      _loonPlayer?.setVolume(0);
     }
     HapticService.selectionClick();
   }

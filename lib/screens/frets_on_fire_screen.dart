@@ -95,6 +95,13 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   final List<bool> _lanePressed = [false, false, false, false, false];
   final List<DateTime?> _laneHitTime = [null, null, null, null, null];
 
+  // Particle effects
+  final List<_Particle> _hitParticles = [];
+  final List<_Particle> _fireParticles = [];
+  Offset _shakeOffset = Offset.zero;
+  DateTime? _shakeStartTime;
+  double _shakeIntensity = 0;
+
   // FFT spectrum visualizer - each lane acts as a spectrum band
   StreamSubscription? _fftSubscription;
   final List<double> _laneBands = [0.0, 0.0, 0.0, 0.0, 0.0]; // Raw FFT values per lane
@@ -201,6 +208,61 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     // Handle lightning lane auto-hits
     if (_lightningLane != null) {
       _handleLightningLaneAutoHits(currentMs);
+    }
+
+    // Update particles
+    const dt = 0.016; // ~60fps
+    _hitParticles.removeWhere((p) => p.life <= 0);
+    for (final p in _hitParticles) {
+      p.dx *= 0.96;
+      p.dy += 3.0 * dt; // gravity
+      p.fractionalY += p.dy * dt * 30;
+      p.lane += p.dx * dt * 0.3;
+      p.life -= dt / 0.4; // 400ms lifetime
+    }
+
+    // Spawn and update fire particles when streaking
+    if (_showStreakFire) {
+      final fireCount = (2 + (_combo / 15).clamp(0, 4)).round();
+      for (int i = 0; i < fireCount; i++) {
+        _fireParticles.add(_Particle(
+          lane: _random.nextDouble() * 5,
+          fractionalY: 0,
+          dx: (_random.nextDouble() - 0.5) * 0.5,
+          dy: -2.0 - _random.nextDouble() * 2,
+          color: Color.lerp(
+            const Color(0xFFFF6B35),
+            const Color(0xFFFFD700),
+            _random.nextDouble(),
+          )!,
+          life: 1.0,
+          size: 2.0 + _random.nextDouble() * 2,
+        ));
+      }
+      if (_fireParticles.length > 30) {
+        _fireParticles.removeRange(0, _fireParticles.length - 30);
+      }
+    }
+    _fireParticles.removeWhere((p) => p.life <= 0);
+    for (final p in _fireParticles) {
+      p.fractionalY += p.dy * dt * 20;
+      p.lane += p.dx * dt;
+      p.life -= dt / 0.5; // 500ms lifetime
+    }
+
+    // Update screen shake
+    if (_shakeStartTime != null) {
+      final elapsed = DateTime.now().difference(_shakeStartTime!).inMilliseconds;
+      if (elapsed < 300) {
+        final decay = 1.0 - elapsed / 300.0;
+        _shakeOffset = Offset(
+          (_random.nextDouble() * 2 - 1) * _shakeIntensity * decay,
+          (_random.nextDouble() * 2 - 1) * _shakeIntensity * decay,
+        );
+      } else {
+        _shakeOffset = Offset.zero;
+        _shakeStartTime = null;
+      }
     }
 
     // Check for missed notes (past the hit window)
@@ -315,6 +377,29 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     }
 
     _laneHitTime[lane] = DateTime.now();
+
+    // Spawn hit burst particles
+    final particleColor = isPerfect ? const Color(0xFFFFD700) : Colors.white;
+    final count = isPerfect ? 10 : 7;
+    for (int i = 0; i < count; i++) {
+      final angle = _random.nextDouble() * 3.14159 * 2;
+      final speed = 1.5 + _random.nextDouble() * 2.5;
+      _hitParticles.add(_Particle(
+        lane: lane.toDouble(),
+        fractionalY: 0, // hit zone, positioned by painter
+        dx: speed * (angle < 3.14159 ? 1 : -1) * (_random.nextDouble() - 0.3),
+        dy: -speed * 0.5 - _random.nextDouble() * 2,
+        color: isPerfect
+            ? Color.lerp(const Color(0xFFFFD700), Colors.white, _random.nextDouble() * 0.4)!
+            : particleColor,
+        life: 1.0,
+        size: 3.0 + _random.nextDouble() * 2,
+      ));
+    }
+    // Cap hit particles
+    if (_hitParticles.length > 50) {
+      _hitParticles.removeRange(0, _hitParticles.length - 50);
+    }
   }
 
   void _showHitFeedback(int lane, String text, Color color) {
@@ -370,6 +455,13 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   void _triggerMilestone(String text) {
     _milestoneText = text;
     _milestoneFlashController.forward(from: 0);
+
+    // Screen shake based on milestone level
+    double intensity = 3.0;
+    if (text == 'INFERNO!' || text == 'LEGENDARY!') intensity = 5.0;
+    if (text == 'GODLIKE!') intensity = 8.0;
+    _shakeIntensity = intensity;
+    _shakeStartTime = DateTime.now();
   }
 
   void _onLaneTap(int lane) {
@@ -1080,8 +1172,10 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
     return Stack(
       children: [
-        // Note highway
-        _NoteHighway(
+        // Note highway with screen shake
+        Transform.translate(
+          offset: _shakeOffset,
+          child: _NoteHighway(
           chart: _chart!,
           currentTimeMs: _position.inMilliseconds,
           leadTimeMs: _noteLeadTime,
@@ -1097,6 +1191,9 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
           hitFeedbackTime: _hitFeedbackTime,
           hitFeedbackLane: _hitFeedbackLane,
           spectrumBands: _smoothBands,
+          hitParticles: _hitParticles,
+          fireParticles: _fireParticles,
+        ),
         ),
         // Score display with Nautune font
         Positioned(
@@ -1605,6 +1702,25 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   }
 }
 
+class _Particle {
+  double lane; // fractional lane position (0-5)
+  double fractionalY; // offset from hit line
+  double dx, dy;
+  Color color;
+  double life; // 1.0 to 0.0
+  double size;
+
+  _Particle({
+    required this.lane,
+    required this.fractionalY,
+    required this.dx,
+    required this.dy,
+    required this.color,
+    required this.life,
+    required this.size,
+  });
+}
+
 enum GameState {
   selectTrack,
   analyzing,
@@ -1685,6 +1801,8 @@ class _NoteHighway extends StatelessWidget {
   final DateTime? hitFeedbackTime;
   final int? hitFeedbackLane;
   final List<double> spectrumBands;
+  final List<_Particle> hitParticles;
+  final List<_Particle> fireParticles;
 
   const _NoteHighway({
     required this.chart,
@@ -1702,6 +1820,8 @@ class _NoteHighway extends StatelessWidget {
     this.hitFeedbackTime,
     this.hitFeedbackLane,
     this.spectrumBands = const [0.0, 0.0, 0.0, 0.0, 0.0],
+    this.hitParticles = const [],
+    this.fireParticles = const [],
   });
 
   @override
@@ -1747,6 +1867,8 @@ class _NoteHighway extends StatelessWidget {
               hitFeedbackTime: hitFeedbackTime,
               hitFeedbackLane: hitFeedbackLane,
               spectrumBands: spectrumBands,
+              hitParticles: hitParticles,
+              fireParticles: fireParticles,
             ),
             size: Size(constraints.maxWidth, constraints.maxHeight),
           ),
@@ -1773,6 +1895,8 @@ class _NoteHighwayPainter extends CustomPainter {
   final DateTime? hitFeedbackTime;
   final int? hitFeedbackLane;
   final List<double> spectrumBands;
+  final List<_Particle> hitParticles;
+  final List<_Particle> fireParticles;
 
   _NoteHighwayPainter({
     required this.notes,
@@ -1791,10 +1915,27 @@ class _NoteHighwayPainter extends CustomPainter {
     this.hitFeedbackTime,
     this.hitFeedbackLane,
     this.spectrumBands = const [0.0, 0.0, 0.0, 0.0, 0.0],
+    this.hitParticles = const [],
+    this.fireParticles = const [],
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Combo intensity vignette (drawn first, behind everything)
+    if (combo >= 10) {
+      final vignetteAlpha = ((combo - 10) / 40.0).clamp(0.0, 0.3);
+      final vignetteRect = Rect.fromLTWH(0, 0, size.width, size.height);
+      final vignettePaint = Paint()
+        ..shader = RadialGradient(
+          colors: [
+            Colors.transparent,
+            Colors.black.withValues(alpha: vignetteAlpha),
+          ],
+          stops: const [0.5, 1.0],
+        ).createShader(vignetteRect);
+      canvas.drawRect(vignetteRect, vignettePaint);
+    }
+
     // Generate lane colors from theme primary using hue shifts
     // Creates a rainbow spread around the primary color
     final baseHsl = HSLColor.fromColor(primaryColor);
@@ -1952,6 +2093,30 @@ class _NoteHighwayPainter extends CustomPainter {
       }
     }
 
+    // Lane flash on hit - full-height gradient flash
+    for (int lane = 0; lane < 5; lane++) {
+      final hitTime = laneHitTime[lane];
+      if (hitTime != null) {
+        final elapsed = DateTime.now().difference(hitTime).inMilliseconds;
+        if (elapsed < 200) {
+          final flashOpacity = 0.3 * (1.0 - elapsed / 200.0);
+          final laneLeft = lane * laneWidth;
+          final flashRect = Rect.fromLTWH(laneLeft, 0, laneWidth, hitLineY);
+          final laneFlashPaint = Paint()
+            ..shader = LinearGradient(
+              begin: Alignment.bottomCenter,
+              end: Alignment.topCenter,
+              colors: [
+                laneColors[lane].withValues(alpha: flashOpacity),
+                laneColors[lane].withValues(alpha: flashOpacity * 0.3),
+                Colors.transparent,
+              ],
+            ).createShader(flashRect);
+          canvas.drawRect(flashRect, laneFlashPaint);
+        }
+      }
+    }
+
     // Draw lightning lane effect - electrifying with animated sparks!
     if (lightningLane != null) {
       final laneLeft = lightningLane! * laneWidth;
@@ -2076,6 +2241,20 @@ class _NoteHighwayPainter extends CustomPainter {
       final noteY = hitLineY - (progress * hitLineY);
       final noteX = lane * laneWidth + laneWidth / 2;
 
+      // Comet trail behind falling notes (combo >= 5)
+      if (!note.isBonus && combo >= 5) {
+        final trailDots = combo >= 20 ? 4 : 3;
+        final trailColor = laneColors[lane.clamp(0, 4)];
+        for (int t = 1; t <= trailDots; t++) {
+          final trailY = noteY - t * (8.0 * scaleFactor);
+          if (trailY < 0) break;
+          final trailAlpha = 0.3 * (1.0 - t / (trailDots + 1));
+          final trailSize = noteRadius * (1.0 - t * 0.15);
+          notePaint.color = trailColor.withValues(alpha: trailAlpha);
+          canvas.drawCircle(Offset(noteX, trailY), trailSize, notePaint);
+        }
+      }
+
       if (note.isBonus) {
         // Golden bonus note
         const bonusGold = Color(0xFFFFD700);
@@ -2143,6 +2322,26 @@ class _NoteHighwayPainter extends CustomPainter {
         final feedbackY = hitLineY - 50 - yOffset;
         textPainter.paint(canvas, Offset(feedbackX, feedbackY));
       }
+    }
+
+    // Draw hit burst particles
+    final particlePaint = Paint()..style = PaintingStyle.fill;
+    for (final p in hitParticles) {
+      if (p.life <= 0) continue;
+      final px = p.lane * laneWidth + laneWidth / 2;
+      final py = hitLineY + p.fractionalY;
+      particlePaint.color = p.color.withValues(alpha: p.life.clamp(0.0, 1.0));
+      canvas.drawCircle(Offset(px, py), p.size * scaleFactor * p.life, particlePaint);
+    }
+
+    // Draw fire particles rising from hit line
+    for (final p in fireParticles) {
+      if (p.life <= 0) continue;
+      final px = p.lane * laneWidth + laneWidth / 2;
+      final py = hitLineY + p.fractionalY;
+      if (py < 0 || py > size.height) continue;
+      particlePaint.color = p.color.withValues(alpha: (p.life * 0.7).clamp(0.0, 1.0));
+      canvas.drawCircle(Offset(px, py), p.size * scaleFactor * p.life, particlePaint);
     }
   }
 

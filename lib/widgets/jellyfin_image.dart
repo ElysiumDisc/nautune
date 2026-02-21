@@ -138,10 +138,9 @@ class _JellyfinImageState extends State<JellyfinImage> {
   }
 
   Widget _buildNetworkImage(BuildContext context, NautuneAppState appState) {
-    // In offline mode, don't attempt network image loads — show placeholder
-    if (appState.isOfflineMode) {
-      return _buildError(context, 'Offline');
-    }
+    // CachedNetworkImage serves from disk cache first (no network needed).
+    // Only uncached images will attempt a network request, which fails
+    // gracefully via errorWidget when offline.
 
     // Determine optimal dimensions for request, accounting for device pixel ratio
     final dpr = MediaQuery.of(context).devicePixelRatio;

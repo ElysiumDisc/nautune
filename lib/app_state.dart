@@ -1192,8 +1192,10 @@ class NautuneAppState extends ChangeNotifier {
           session: storedSession,
         );
         await _applyBootstrapSnapshot(snapshot);
-        // Start periodic analytics sync timer (runs every 10 min)
-        _startPeriodicSyncTimer();
+        // Start periodic analytics sync timer (runs every 10 min) — only when online
+        if (!_userWantsOffline) {
+          _startPeriodicSyncTimer();
+        }
 
         if (_networkAvailable && !_userWantsOffline) {
           _startBootstrapSync(storedSession);
@@ -2698,8 +2700,8 @@ class NautuneAppState extends ChangeNotifier {
     // Disable image prewarming
     _audioPlayerService.setImagePrewarmEnabled(false);
 
-    // Disconnect remote control WebSocket
-    _remoteControlService?.disconnect();
+    // Disconnect remote control WebSocket (fire-and-forget)
+    unawaited(_remoteControlService?.disconnect());
 
     // Cancel bootstrap sync
     _bootstrapService.cancelSync();

@@ -1758,7 +1758,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                   ] else if (_currentView == _StorageView.waveforms) ...[
                     // Waveforms view
                     Expanded(
-                      child: _buildWaveformsView(stats, theme),
+                      child: _buildWaveformsView(theme),
                     ),
                   ] else if (_currentView == _StorageView.charts) ...[
                     // Charts view
@@ -1902,15 +1902,15 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.cached, size: 64, color: theme.colorScheme.outline),
-            const SizedBox(height: 16),
+            Icon(Icons.cached, size: 48, color: theme.colorScheme.outline),
+            const SizedBox(height: 8),
             Text(
               'No cached tracks',
               style: theme.textTheme.titleMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
             Text(
               'Play music to start pre-caching upcoming tracks',
               style: theme.textTheme.bodySmall?.copyWith(
@@ -2035,15 +2035,15 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.repeat, size: 64, color: theme.colorScheme.outline),
-                          const SizedBox(height: 16),
+                          Icon(Icons.repeat, size: 48, color: theme.colorScheme.outline),
+                          const SizedBox(height: 8),
                           Text(
                             'No saved loops',
                             style: theme.textTheme.titleMedium?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 4),
                           Text(
                             'Create A-B loops in the player and tap "Save Loop"',
                             style: theme.textTheme.bodySmall?.copyWith(
@@ -2137,12 +2137,13 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
     }
   }
 
-  Widget _buildWaveformsView(StorageStats stats, ThemeData theme) {
+  Widget _buildWaveformsView(ThemeData theme) {
     return FutureBuilder<Map<String, dynamic>>(
       future: WaveformService.instance.getStorageStats(),
       builder: (context, snapshot) {
         final waveformStats = snapshot.data;
         final fileCount = waveformStats?['fileCount'] as int? ?? 0;
+        final totalBytes = waveformStats?['totalBytes'] as int? ?? 0;
 
         return Column(
           children: [
@@ -2208,15 +2209,15 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.waves, size: 64, color: theme.colorScheme.outline),
-                          const SizedBox(height: 16),
+                          Icon(Icons.waves, size: 48, color: theme.colorScheme.outline),
+                          const SizedBox(height: 8),
                           Text(
                             'No cached waveforms',
                             style: theme.textTheme.titleMedium?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 4),
                           Text(
                             'Play music with the waveform visualizer to generate waveform data',
                             style: theme.textTheme.bodySmall?.copyWith(
@@ -2229,7 +2230,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                     )
                   : Center(
                       child: Text(
-                        '$fileCount waveforms (${stats.formattedWaveforms})',
+                        '$fileCount waveforms (${_formatBytes(totalBytes)})',
                         style: theme.textTheme.titleMedium,
                       ),
                     ),
@@ -2314,15 +2315,15 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.gamepad, size: 64, color: theme.colorScheme.outline),
-                          const SizedBox(height: 16),
+                          Icon(Icons.gamepad, size: 48, color: theme.colorScheme.outline),
+                          const SizedBox(height: 8),
                           Text(
                             'No cached charts',
                             style: theme.textTheme.titleMedium?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 4),
                           Text(
                             'Play Frets on Fire mode to generate rhythm game charts',
                             style: theme.textTheme.bodySmall?.copyWith(

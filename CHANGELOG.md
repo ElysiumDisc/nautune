@@ -1,3 +1,53 @@
+### v7.4.0 - Long-Press Context Menu, Frets on Fire Visual Upgrade & Offline Navigation
+
+**Long-Press Context Menu**
+- Added long-press gesture with haptic feedback to track tiles in Album Detail, Library (recent tracks), and Full Player screens for quick access to context menus
+
+**Frets on Fire Visual Upgrade**
+- Added particle bursts on note hits, comet trails at combo 5+, lane flash effects, screen shake on milestone achievements, combo intensity vignette, and fire particles rising from hit line during streaks
+
+**Offline-Safe Navigation**
+- "Go to Artist" and "Go to Album" now check the local cache before making API calls, enabling seamless navigation in offline mode
+
+**Bug Fixes & Improvements**
+- Various bug fixes and improvements
+
+**Version**
+- Bumped to 7.4.0+1
+
+---
+
+### v7.3.1 - Bug Fixes
+
+**Bug Fix: Relax Mode Crash**
+- Fixed AudioPlayer crash when dragging ambient sound sliders — lazy initialization caused race conditions where multiple player instances were created simultaneously, fighting over the same audio resource
+- Reverted to eager initialization (all players created on screen load) while keeping the deferred analytics timer optimization
+
+**Bug Fix: CarPlay Disconnect Race Condition**
+- Removed manual `templateHistory.clear()` on CarPlay disconnect that contradicted the navigation stack protection fix in v7.3.0
+- `setRootTemplate()` handles history management internally — manual clearing was the original cause of stack destruction
+
+**Bug Fix: Sync Timer Running in Offline Mode on Startup**
+- Fixed periodic analytics sync timer starting unconditionally at app launch even when user had offline mode enabled
+- Timer now only starts when online, consistent with runtime offline toggle behavior
+
+**Bug Fix: Waveform Storage Stats Display**
+- Fixed crash in Storage Management waveforms tab where stale `StorageStats` parameter was used instead of freshly loaded waveform data
+- Waveform file count and size now display correctly from `WaveformService` stats
+
+**Bug Fix: Album Art Missing in Offline Mode**
+- Fixed album art not displaying in offline mode for downloaded/cached content
+- The offline guard was too aggressive — it blocked `CachedNetworkImage` entirely, preventing it from serving images from disk cache
+- `CachedNetworkImage` now serves from disk cache (no network) and only fails gracefully for truly uncached images
+
+**Bug Fix: Remote Control Disconnect Not Fire-and-Forget**
+- Wrapped async `disconnect()` call in `unawaited()` in offline network policy to prevent potential socket leaks
+
+**Version**
+- Bumped to 7.3.1+1
+
+---
+
 ### v7.3.0 - Offline Network Silence, Battery Optimization & Storage Management
 
 **Offline Mode: Complete Network Silence (P0)**

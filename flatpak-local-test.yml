@@ -112,4 +112,4 @@ modules:
         path: .
       - generated/sources/pubspec.json
     modules:
-      - generated/modules/flutter-sdk-3.38.9.json
+      - generated/modules/flutter-sdk-3.41.2.json

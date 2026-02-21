@@ -99,7 +99,8 @@ class CarPlayService {
     _isConnected = false;
     _userHasNavigated = false;
     _isRefreshing = false;
-    FlutterCarPlayController.templateHistory.clear();
+    // Don't clear templateHistory manually — setRootTemplate handles it.
+    // Manual clearing creates a race condition with reconnect.
     debugPrint('🚗 CarPlay disconnected');
   }
   

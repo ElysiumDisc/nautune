@@ -186,7 +186,12 @@ void showTrackContextMenu({
                 onTap: () async {
                   Navigator.pop(sheetContext);
                   try {
-                    final artist = await appState.jellyfinService.getArtist(track.artistIds.first);
+                    // Try cache first for offline support
+                    final cachedArtist = appState.artists
+                        ?.where((a) => a.id == track.artistIds.first)
+                        .firstOrNull;
+                    final artist = cachedArtist ??
+                        await appState.jellyfinService.getArtist(track.artistIds.first);
                     if (!parentContext.mounted) return;
                     Navigator.of(parentContext).push(
                       MaterialPageRoute(
@@ -208,7 +213,12 @@ void showTrackContextMenu({
                 onTap: () async {
                   Navigator.pop(sheetContext);
                   try {
-                    final album = await appState.jellyfinService.getAlbum(track.albumId!);
+                    // Try cache first for offline support
+                    final cachedAlbum = appState.albums
+                        ?.where((a) => a.id == track.albumId)
+                        .firstOrNull;
+                    final album = cachedAlbum ??
+                        await appState.jellyfinService.getAlbum(track.albumId!);
                     if (!parentContext.mounted) return;
                     Navigator.of(parentContext).push(
                       MaterialPageRoute(
