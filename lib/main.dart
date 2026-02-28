@@ -104,6 +104,10 @@ Future<void> _migrateHiveFiles() async {
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Set global image cache limits to prevent OOM on large libraries
+  PaintingBinding.instance.imageCache.maximumSize = 200;
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 100 * 1024 * 1024; // 100MB
+
   // Initialize app version from package info
   await AppVersion.init();
 

@@ -104,6 +104,9 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
   // FFT spectrum visualizer - each lane acts as a spectrum band
   StreamSubscription? _fftSubscription;
+  StreamSubscription? _positionSubscription;
+  StreamSubscription? _durationSubscription;
+  StreamSubscription? _completeSubscription;
   final List<double> _laneBands = [0.0, 0.0, 0.0, 0.0, 0.0]; // Raw FFT values per lane
   final List<double> _smoothBands = [0.0, 0.0, 0.0, 0.0, 0.0]; // Smoothed for display
   static const double _fftAttack = 0.5; // Fast rise
@@ -119,6 +122,8 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     _chartCache.initialize().then((_) {
       // Check if legendary track is unlocked but not downloaded
       _checkLegendaryDownloadPrompt();
+    }).catchError((e) {
+      debugPrint('ChartCache initialization failed: $e');
     });
 
     // Mark easter egg as discovered for milestone badge
@@ -153,21 +158,30 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       }
     });
 
-    _gamePlayer.onPositionChanged.listen((pos) {
-      if (mounted) {
-        setState(() => _position = pos);
-      }
-    });
+    _positionSubscription = _gamePlayer.onPositionChanged.listen(
+      (pos) {
+        // Update position without setState — the animation frame loop
+        // in _onFrame() already calls setState at ~60fps during gameplay
+        _position = pos;
+      },
+      onError: (e) => debugPrint('Game position stream error: $e'),
+    );
 
-    _gamePlayer.onDurationChanged.listen((dur) {
-      // Duration tracked for reference, not used in UI currently
-    });
+    _durationSubscription = _gamePlayer.onDurationChanged.listen(
+      (dur) {
+        // Duration tracked for reference, not used in UI currently
+      },
+      onError: (e) => debugPrint('Game duration stream error: $e'),
+    );
 
-    _gamePlayer.onPlayerComplete.listen((_) {
-      if (mounted && _gameState == GameState.playing) {
-        _endGame();
-      }
-    });
+    _completeSubscription = _gamePlayer.onPlayerComplete.listen(
+      (_) {
+        if (mounted && _gameState == GameState.playing) {
+          _endGame();
+        }
+      },
+      onError: (e) => debugPrint('Game complete stream error: $e'),
+    );
   }
 
   @override
@@ -179,6 +193,9 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   @override
   void dispose() {
     _stopFFTCapture();
+    _positionSubscription?.cancel();
+    _durationSubscription?.cancel();
+    _completeSubscription?.cancel();
     _noteController.dispose();
     _multiplierPulseController.dispose();
     _milestoneFlashController.dispose();

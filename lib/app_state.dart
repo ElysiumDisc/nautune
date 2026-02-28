@@ -68,6 +68,10 @@ class NautuneAppState extends ChangeNotifier {
     _audioPlayerService.setDownloadService(_downloadService);
     _audioPlayerService.setJellyfinService(_jellyfinService);
     _audioPlayerService.setLocalCacheService(_cacheService);
+    // Share lyrics service with download service for offline lyrics pre-caching
+    if (_audioPlayerService.lyricsService != null) {
+      _downloadService.setLyricsService(_audioPlayerService.lyricsService!);
+    }
     // CarPlay service is only available on iOS; initialize early for CarPlay to work
     // even when app is launched from CarPlay (phone app not open)
     if (Platform.isIOS) {
@@ -973,6 +977,7 @@ class NautuneAppState extends ChangeNotifier {
       debugPrint('📴 Network lost - app is now effectively offline');
       _applyOfflineNetworkPolicy();
       _activateSubmarineFeatures();
+      audioPlayerService.setOfflineMode(true);
       notifyListeners();
       return;
     }
@@ -985,6 +990,7 @@ class NautuneAppState extends ChangeNotifier {
         debugPrint('📶 User is online — restoring network services');
         _deactivateSubmarineFeatures();
         _restoreOnlineNetworkPolicy();
+        audioPlayerService.setOfflineMode(false);
         // Refresh data in background - don't await, don't block UI
         unawaited(_refreshAfterReconnect());
       } else {

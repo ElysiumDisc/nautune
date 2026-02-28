@@ -74,8 +74,8 @@ class _CachedLyrics {
 
   bool get isExpired {
     final age = DateTime.now().difference(cachedAt);
-    // Cache for 7 days, or 1 day if no lyrics found (so we re-check sooner)
-    final maxAge = result != null ? const Duration(days: 7) : const Duration(days: 1);
+    // Cache for 30 days if lyrics found, 3 days if not (lyrics rarely change)
+    final maxAge = result != null ? const Duration(days: 30) : const Duration(days: 3);
     return age > maxAge;
   }
 
@@ -101,12 +101,18 @@ class LyricsService {
   final JellyfinService _jellyfinService;
   Box? _box;
   bool _initialized = false;
+  bool _isOffline = false;
 
   // In-flight requests to prevent duplicate fetches
   final Map<String, Completer<LyricsResult?>> _pendingRequests = {};
 
   LyricsService({required JellyfinService jellyfinService})
       : _jellyfinService = jellyfinService;
+
+  /// Update offline state so cached lyrics are returned even if expired
+  void setOffline(bool offline) {
+    _isOffline = offline;
+  }
 
   /// Initialize the service
   Future<void> initialize() async {
@@ -148,10 +154,10 @@ class LyricsService {
   }
 
   Future<LyricsResult?> _fetchLyricsWithFallback(JellyfinTrack track, String cacheKey) async {
-    // 1. Check cache first
+    // 1. Check cache first (accept expired cache when offline)
     final cached = _getFromCache(cacheKey);
-    if (cached != null && !cached.isExpired) {
-      debugPrint('LyricsService: Cache hit for "${track.name}"');
+    if (cached != null && (!cached.isExpired || _isOffline)) {
+      debugPrint('LyricsService: Cache hit for "${track.name}"${_isOffline && cached.isExpired ? ' (expired, offline fallback)' : ''}');
       return cached.result;
     }
 

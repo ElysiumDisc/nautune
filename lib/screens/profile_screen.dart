@@ -1111,6 +1111,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   const SizedBox(height: 12),
                   _buildListeningInsights(theme),
                   const SizedBox(height: 16),
+                  _buildSoundDNA(theme),
+                  const SizedBox(height: 16),
                   _buildGenreBreakdown(theme),
                   const SizedBox(height: 16),
                   _buildMonthlyComparison(theme),
@@ -1404,6 +1406,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     const emeraldSea = Color(0xFF10B981);
     const goldTreasure = Color(0xFFFFD700);
 
+    final weekChange = _weekComparison;
+
     return Row(
       children: [
         Expanded(
@@ -1413,6 +1417,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             label: 'Total Plays',
             value: _totalPlays > 0 ? _formatNumber(_totalPlays) : '-',
             color: oceanBlue,
+            numericValue: _totalPlays > 0 ? _totalPlays : null,
+            trendPercent: weekChange?.playsChangePercent,
           ),
         ),
         const SizedBox(width: 12),
@@ -1423,6 +1429,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             label: 'Artists Explored',
             value: _uniqueArtistsPlayed > 0 ? _formatNumber(_uniqueArtistsPlayed) : '-',
             color: emeraldSea,
+            numericValue: _uniqueArtistsPlayed > 0 ? _uniqueArtistsPlayed : null,
           ),
         ),
         const SizedBox(width: 12),
@@ -1433,6 +1440,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             label: 'Albums Collected',
             value: _uniqueAlbumsPlayed > 0 ? _formatNumber(_uniqueAlbumsPlayed) : '-',
             color: goldTreasure,
+            numericValue: _uniqueAlbumsPlayed > 0 ? _uniqueAlbumsPlayed : null,
           ),
         ),
       ],
@@ -2303,6 +2311,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     required String label,
     required String value,
     required Color color,
+    int? numericValue,
+    double? trendPercent,
   }) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2338,13 +2348,54 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Icon(icon, color: color, size: 20),
           ),
           const SizedBox(height: 8),
-          Text(
-            value,
-            style: theme.textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: color,
+          numericValue != null
+              ? TweenAnimationBuilder<int>(
+                  tween: IntTween(begin: 0, end: numericValue),
+                  duration: const Duration(milliseconds: 1200),
+                  curve: Curves.easeOutCubic,
+                  builder: (context, animatedValue, child) {
+                    return Text(
+                      _formatNumber(animatedValue),
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: color,
+                      ),
+                    );
+                  },
+                )
+              : Text(
+                  value,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+                ),
+          if (trendPercent != null && trendPercent != 0) ...[
+            const SizedBox(height: 4),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  trendPercent > 0 ? Icons.trending_up : Icons.trending_down,
+                  size: 12,
+                  color: trendPercent > 0
+                      ? Colors.green
+                      : Colors.red.shade300,
+                ),
+                const SizedBox(width: 2),
+                Text(
+                  '${trendPercent > 0 ? '+' : ''}${trendPercent.toStringAsFixed(0)}%',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: trendPercent > 0
+                        ? Colors.green
+                        : Colors.red.shade300,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 10,
+                  ),
+                ),
+              ],
             ),
-          ),
+          ],
           const SizedBox(height: 2),
           Text(
             label,
@@ -2367,36 +2418,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return '${(number / 1000).toStringAsFixed(1)}K';
     }
     return number.toString();
-  }
-
-  Widget _buildPatternItem(
-    ThemeData theme, {
-    required IconData icon,
-    required String label,
-    required String value,
-    required String subtext,
-    required Color color,
-  }) {
-    return Column(
-      children: [
-        Icon(icon, color: color, size: 20),
-        const SizedBox(height: 8),
-        Text(
-          value,
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-        Text(
-          subtext,
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-            fontSize: 10,
-          ),
-        ),
-      ],
-    );
   }
 
   Widget _buildTopContentTabs(ThemeData theme) {
@@ -3282,6 +3303,101 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  Widget _buildSoundDNA(ThemeData theme) {
+    if (_genrePlayCounts == null || _genrePlayCounts!.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final total = _genrePlayCounts!.values.fold(0, (a, b) => a + b);
+    final entries = _genrePlayCounts!.entries.take(5).toList();
+    final colors = [
+      theme.colorScheme.primary,
+      theme.colorScheme.secondary,
+      theme.colorScheme.tertiary,
+      Colors.orange,
+      Colors.purple,
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            theme.colorScheme.primary.withValues(alpha: 0.08),
+            theme.colorScheme.tertiary.withValues(alpha: 0.05),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+            color: theme.colorScheme.primary.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            'Your Sound DNA',
+            style: GoogleFonts.pacifico(
+              fontSize: 16,
+              color: theme.colorScheme.primary,
+            ),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 140,
+            width: 140,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: 1),
+              duration: const Duration(milliseconds: 1500),
+              curve: Curves.easeOutCubic,
+              builder: (context, animValue, child) {
+                return CustomPaint(
+                  size: const Size(140, 140),
+                  painter: _SoundDNAPainter(
+                    entries:
+                        entries.map((e) => e.value / total).toList(),
+                    colors: colors.take(entries.length).toList(),
+                    animationProgress: animValue,
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 12,
+            runSpacing: 4,
+            children: entries.asMap().entries.map((e) {
+              final color = colors[e.key];
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    e.value.key,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildGenreBreakdown(ThemeData theme) {
     if (_statsLoading) {
       return _buildLoadingCard(theme);
@@ -3303,6 +3419,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       Colors.indigo,
     ];
 
+    final entries = _genrePlayCounts!.entries.toList();
+
     return Container(
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
@@ -3310,55 +3428,75 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
       padding: const EdgeInsets.all(16),
       child: Column(
-        children: _genrePlayCounts!.entries.toList().asMap().entries.map((entry) {
-          final index = entry.key;
-          final genre = entry.value.key;
-          final count = entry.value.value;
-          final percentage = count / total;
-          final percentStr = (percentage * 100).toStringAsFixed(1);
-          final color = colors[index % colors.length];
-
-          return Padding(
-            padding: EdgeInsets.only(bottom: index < _genrePlayCounts!.length - 1 ? 12 : 0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Stacked horizontal bar
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox(
+              height: 24,
+              child: Row(
+                children: entries.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final percentage = entry.value.value / total;
+                  return Expanded(
+                    flex: (percentage * 1000).round().clamp(1, 1000),
+                    child: Container(
+                        color: colors[index % colors.length]),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Genre chips
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: entries.asMap().entries.map((entry) {
+              final index = entry.key;
+              final genre = entry.value.key;
+              final count = entry.value.value;
+              final percentage = count / total;
+              final color = colors[index % colors.length];
+              return Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: color.withValues(alpha: 0.4)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Expanded(
-                      child: Text(
-                        genre,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w500,
-                        ),
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                          color: color, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      genre,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
+                    const SizedBox(width: 6),
                     Text(
-                      '$percentStr%',
-                      style: theme.textTheme.bodyMedium?.copyWith(
+                      '${(percentage * 100).toStringAsFixed(0)}%',
+                      style: theme.textTheme.bodySmall?.copyWith(
                         color: color,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: percentage,
-                    backgroundColor: color.withValues(alpha: 0.1),
-                    valueColor: AlwaysStoppedAnimation<Color>(color),
-                    minHeight: 6,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }).toList(),
+              );
+            }).toList(),
+          ),
+        ],
       ),
     );
   }
@@ -3379,7 +3517,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
 
-        if ((_streak != null || _weekComparison != null) && _heatmap != null)
+        // Activity Sparkline (last 28 days)
+        if (_analyticsService != null) ...[
+          const SizedBox(height: 16),
+          _buildActivitySparkline(theme),
+        ],
+
+        if (_heatmap != null)
           const SizedBox(height: 16),
 
         // Listening Heatmap
@@ -3392,6 +3536,60 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _buildRelaxModeStatsCard(theme),
         ],
       ],
+    );
+  }
+
+  Widget _buildActivitySparkline(ThemeData theme) {
+    final analytics = _analyticsService;
+    if (analytics == null) return const SizedBox.shrink();
+
+    final dailyCounts = analytics.getDailyPlayCounts(days: 28);
+    if (dailyCounts.every((c) => c == 0)) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.show_chart,
+                  color: theme.colorScheme.primary, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'Last 4 Weeks',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${dailyCounts.last} today',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 48,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: _SparklinePainter(
+                data: dailyCounts,
+                lineColor: theme.colorScheme.primary,
+                fillColor: theme.colorScheme.primary.withValues(alpha: 0.1),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -4653,11 +4851,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  /// Build Enhanced Listening Patterns with Peak Day and Marathon Sessions
+  /// Build Enhanced Listening Patterns as a compact 3x2 grid
   Widget _buildEnhancedListeningPatterns(ThemeData theme) {
-    final analytics = ListeningAnalyticsService();
-    final discoveryLabel = analytics.getDiscoveryLabel(_discoveryRate);
-
     String formatSessionLength(Duration? d) {
       if (d == null) return '-';
       final mins = d.inMinutes;
@@ -4670,88 +4865,116 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+            theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.15),
+          ],
+        ),
         borderRadius: BorderRadius.circular(16),
       ),
-      child: Column(
+      child: GridView.count(
+        crossAxisCount: 3,
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        mainAxisSpacing: 12,
+        crossAxisSpacing: 12,
+        childAspectRatio: 1.0,
         children: [
-          // First row: Peak Hour, Peak Day, Avg Session
-          Row(
-            children: [
-              Expanded(
-                child: _buildPatternItem(
-                  theme,
-                  icon: Icons.schedule,
-                  label: 'Peak Hour',
-                  value: _peakHour != null ? _formatHour(_peakHour!) : '-',
-                  subtext: 'most active',
-                  color: const Color(0xFF409CFF),
-                ),
-              ),
-              Container(
-                width: 1,
-                height: 60,
-                color: theme.colorScheme.outline.withValues(alpha: 0.2),
-              ),
-              Expanded(
-                child: _buildPatternItem(
-                  theme,
-                  icon: Icons.today,
-                  label: 'Peak Day',
-                  value: _peakDay != null ? ListeningAnalyticsService.getShortDayName(_peakDay!) : '-',
-                  subtext: 'busiest day',
-                  color: const Color(0xFFFFD700),
-                ),
-              ),
-              Container(
-                width: 1,
-                height: 60,
-                color: theme.colorScheme.outline.withValues(alpha: 0.2),
-              ),
-              Expanded(
-                child: _buildPatternItem(
-                  theme,
-                  icon: Icons.timelapse,
-                  label: 'Avg Session',
-                  value: formatSessionLength(_avgSessionLength),
-                  subtext: 'per session',
-                  color: const Color(0xFF7A3DF1),
-                ),
-              ),
-            ],
+          _buildCompactPatternTile(theme,
+            icon: Icons.schedule,
+            label: 'Peak Hour',
+            value: _peakHour != null ? _formatHour(_peakHour!) : '-',
+            color: const Color(0xFF409CFF),
           ),
-          const SizedBox(height: 12),
-          Divider(color: theme.colorScheme.outline.withValues(alpha: 0.1)),
-          const SizedBox(height: 12),
-          // Second row: Discovery, Marathon Sessions
-          Row(
-            children: [
-              Expanded(
-                child: _buildPatternItem(
-                  theme,
-                  icon: Icons.explore,
-                  label: 'Discovery',
-                  value: '${_discoveryRate.toStringAsFixed(0)}%',
-                  subtext: discoveryLabel,
-                  color: const Color(0xFF10B981),
-                ),
+          _buildCompactPatternTile(theme,
+            icon: Icons.today,
+            label: 'Peak Day',
+            value: _peakDay != null
+                ? ListeningAnalyticsService.getShortDayName(_peakDay!)
+                : '-',
+            color: const Color(0xFFFFD700),
+          ),
+          _buildCompactPatternTile(theme,
+            icon: Icons.timelapse,
+            label: 'Avg Session',
+            value: formatSessionLength(_avgSessionLength),
+            color: const Color(0xFF7A3DF1),
+          ),
+          _buildCompactPatternTile(theme,
+            icon: Icons.explore,
+            label: 'Discovery',
+            value: '${_discoveryRate.toStringAsFixed(0)}%',
+            color: const Color(0xFF10B981),
+            progress: _discoveryRate / 100,
+          ),
+          _buildCompactPatternTile(theme,
+            icon: Icons.timer,
+            label: 'Marathons',
+            value: '$_marathonSessions',
+            color: Colors.orange,
+          ),
+          _buildCompactPatternTile(theme,
+            icon: Icons.diversity_3,
+            label: 'Diversity',
+            value: _diversityScore > 0
+                ? '${_diversityScore.toStringAsFixed(0)}%'
+                : '-',
+            color: Colors.pink,
+            progress: _diversityScore > 0 ? _diversityScore / 100 : null,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompactPatternTile(
+    ThemeData theme, {
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+    double? progress,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (progress != null)
+            SizedBox(
+              width: 32,
+              height: 32,
+              child: CircularProgressIndicator(
+                value: progress,
+                strokeWidth: 3,
+                backgroundColor: color.withValues(alpha: 0.15),
+                valueColor: AlwaysStoppedAnimation(color),
               ),
-              Container(
-                width: 1,
-                height: 60,
-                color: theme.colorScheme.outline.withValues(alpha: 0.2),
-              ),
-              Expanded(
-                child: _buildPatternItem(
-                  theme,
-                  icon: Icons.timer,
-                  label: 'Marathons',
-                  value: '$_marathonSessions',
-                  subtext: '2+ hr sessions',
-                  color: Colors.orange,
-                ),
-              ),
-            ],
+            )
+          else
+            Icon(icon, color: color, size: 24),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          Text(
+            label,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontSize: 10,
+            ),
+            textAlign: TextAlign.center,
           ),
         ],
       ),
@@ -4941,6 +5164,106 @@ class _ProfileScreenState extends State<ProfileScreen> {
 }
 
 /// Custom painter for wave divider
+class _SparklinePainter extends CustomPainter {
+  final List<int> data;
+  final Color lineColor;
+  final Color fillColor;
+
+  _SparklinePainter({
+    required this.data,
+    required this.lineColor,
+    required this.fillColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (data.isEmpty) return;
+    final maxVal = data.reduce(math.max).toDouble();
+    if (maxVal == 0) return;
+
+    final points = <Offset>[];
+    for (int i = 0; i < data.length; i++) {
+      final x = (i / (data.length - 1)) * size.width;
+      final y = size.height - (data[i] / maxVal) * (size.height - 4);
+      points.add(Offset(x, y));
+    }
+
+    // Draw filled area
+    final fillPath = Path()..moveTo(0, size.height);
+    for (final p in points) {
+      fillPath.lineTo(p.dx, p.dy);
+    }
+    fillPath.lineTo(size.width, size.height);
+    fillPath.close();
+    canvas.drawPath(fillPath, Paint()..color = fillColor);
+
+    // Draw line
+    final linePath = Path()..moveTo(points.first.dx, points.first.dy);
+    for (int i = 1; i < points.length; i++) {
+      linePath.lineTo(points[i].dx, points[i].dy);
+    }
+    canvas.drawPath(
+      linePath,
+      Paint()
+        ..color = lineColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round,
+    );
+
+    // Dot on last point (today)
+    canvas.drawCircle(points.last, 3, Paint()..color = lineColor);
+  }
+
+  @override
+  bool shouldRepaint(covariant _SparklinePainter old) =>
+      old.data != data || old.lineColor != lineColor;
+}
+
+class _SoundDNAPainter extends CustomPainter {
+  final List<double> entries;
+  final List<Color> colors;
+  final double animationProgress;
+
+  _SoundDNAPainter({
+    required this.entries,
+    required this.colors,
+    required this.animationProgress,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final maxRadius = size.width / 2;
+    const startAngle = -math.pi / 2;
+
+    for (int i = 0; i < entries.length; i++) {
+      final sweepAngle = entries[i] * 2 * math.pi * animationProgress;
+      final ringWidth = maxRadius / (entries.length + 1);
+      final radius = maxRadius - (i * ringWidth);
+
+      final paint = Paint()
+        ..color = colors[i].withValues(alpha: 0.7)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = ringWidth * 0.8
+        ..strokeCap = StrokeCap.round;
+
+      canvas.drawArc(
+        Rect.fromCircle(
+            center: center, radius: radius - ringWidth / 2),
+        startAngle,
+        sweepAngle,
+        false,
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _SoundDNAPainter old) =>
+      old.animationProgress != animationProgress;
+}
+
 class _WavePainter extends CustomPainter {
   final Color color;
 

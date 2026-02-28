@@ -20,6 +20,8 @@ class AudioCacheService {
   CacheManager? _cacheManager;
   final Set<String> _cachingInProgress = {};
   final Map<String, Completer<File?>> _cacheCompleters = {};
+  // In-memory index for O(1) cache lookups (avoids directory scans)
+  final Map<String, String> _pathIndex = {};
   
   // Cache configuration
   static const int _maxCacheSize = 500; // Max number of cached files
@@ -29,7 +31,7 @@ class AudioCacheService {
   /// Initialize the cache manager
   Future<void> initialize() async {
     if (_cacheManager != null) return;
-    
+
     final cacheDir = await _getCacheDirectory();
     _cacheManager = CacheManager(
       Config(
@@ -41,6 +43,27 @@ class AudioCacheService {
       ),
     );
     debugPrint('🎵 AudioCacheService initialized at: $cacheDir');
+    // Build in-memory path index for O(1) cache lookups
+    await _rebuildPathIndex();
+  }
+
+  /// Build in-memory index of cached files (runs once at startup)
+  Future<void> _rebuildPathIndex() async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final cacheDir = Directory(path.join(tempDir.path, _cacheKey));
+      if (await cacheDir.exists()) {
+        await for (final entity in cacheDir.list(recursive: true)) {
+          if (entity is File) {
+            final fileName = path.basename(entity.path);
+            _pathIndex[fileName] = entity.path;
+          }
+        }
+      }
+      debugPrint('🗂️ Cache path index built: ${_pathIndex.length} files');
+    } catch (e) {
+      debugPrint('⚠️ Failed to build cache index: $e');
+    }
   }
   
   Future<String> _getCacheDirectory() async {
@@ -57,28 +80,24 @@ class AudioCacheService {
     if (_cacheManager == null) return null;
 
     try {
-      // Try direct lookup first
+      // Try direct lookup first via CacheManager index
       final fileInfo = await _cacheManager!.getFileFromCache(trackId);
       if (fileInfo != null && await fileInfo.file.exists()) {
         return fileInfo.file;
       }
 
-      // Fallback: scan cache directory for files matching this track ID
-      // This handles cases where files exist but index is out of sync
-      final tempDir = await getTemporaryDirectory();
-      final cacheDir = Directory(path.join(tempDir.path, _cacheKey));
-      if (await cacheDir.exists()) {
-        await for (final entity in cacheDir.list(recursive: true)) {
-          if (entity is File) {
-            final fileName = path.basename(entity.path);
-            // Check if filename contains the track ID (handles hash-based keys too)
-            if (fileName.contains(trackId) || entity.path.contains(trackId)) {
-              if (await entity.exists()) {
-                debugPrint('✅ Found cached file via scan: ${entity.path}');
-                return entity;
-              }
-            }
+      // Fallback: O(1) in-memory path index lookup (replaces directory scan)
+      for (final entry in _pathIndex.entries) {
+        if (entry.key.contains(trackId) || entry.value.contains(trackId)) {
+          final file = File(entry.value);
+          if (await file.exists()) {
+            debugPrint('✅ Found cached file via index: ${entry.value}');
+            return file;
+          } else {
+            // Stale index entry
+            _pathIndex.remove(entry.key);
           }
+          break;
         }
       }
     } catch (e) {
@@ -133,6 +152,8 @@ class AudioCacheService {
     try {
       debugPrint('📥 Caching track: ${track.name}');
       final file = await _cacheManager!.getSingleFile(url, key: trackId);
+      // Update in-memory path index
+      _pathIndex[path.basename(file.path)] = file.path;
       debugPrint('✅ Cached track: ${track.name}');
 
       // Extract waveform in background if not already exists
@@ -263,9 +284,12 @@ class AudioCacheService {
   /// Remove a specific track from cache
   Future<void> removeFromCache(String trackId) async {
     if (_cacheManager == null) return;
-    
+
     try {
       await _cacheManager!.removeFile(trackId);
+      // Remove from in-memory path index
+      _pathIndex.removeWhere((key, value) =>
+          key.contains(trackId) || value.contains(trackId));
       debugPrint('🗑️ Removed from cache: $trackId');
     } catch (e) {
       debugPrint('⚠️ Error removing from cache: $e');
@@ -282,6 +306,8 @@ class AudioCacheService {
       if (_cacheManager != null) {
         await _cacheManager!.emptyCache();
       }
+      // Clear in-memory path index
+      _pathIndex.clear();
 
       // Also manually delete files from all cache directories
       final tempDir = await getTemporaryDirectory();

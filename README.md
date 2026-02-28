@@ -22,7 +22,8 @@
 - **41 Nautical Milestones**: Earn achievements as you listen
 - **Track Sharing**: Share downloaded audio files via AirDrop (iOS) or file manager (Linux)
 - **Storage Management**: Separate views for downloads, cache, loops, waveforms, and charts with accurate stats
-- **Listening Analytics**: Heatmaps, streaks, and weekly comparisons
+- **Listening Analytics**: Heatmaps, streaks, weekly comparisons, 28-day activity sparkline, and animated stat counters with trend indicators
+- **Your Sound DNA**: Concentric arc visualization of your top genres with animated rendering
 - **Live Search**: Results appear as you type with 300ms debounce — no Enter key required
 - **Track Info Sheet**: Long-press any track to view detailed audio metadata (codec, bitrate, sample rate, bit depth, MusicBrainz IDs)
 - **Smart Offline Mode**: Persistent offline preference, auto-detects airplane mode, seamless downloaded content playback, complete network silence (zero background requests)
@@ -32,7 +33,7 @@
 - **Reorderable Nav Tabs**: Long-press the bottom bar to drag-and-drop reorder tabs — persists across restarts
 - **Smart Battery Saver**: Automatically disables power-hungry features (visualizers, crossfade, gapless, pre-caching) when offline — snapshot/restore preserves your settings, streaming quality stays untouched
 - **Infinite Radio**: Auto-generates similar tracks when your queue runs low — toggle from the full player's more options menu
-- **High-Fidelity Playback**: Native backends for Linux and iOS ensuring bit-perfect audio
+- **High-Fidelity Playback**: Native backends for Linux and iOS ensuring bit-perfect audio with optimized position tracking, double-buffered visualizer rendering, and reactive network quality adaptation
 - **CarPlay Support**: Take your Jellyfin library on the road with CarPlay interface
 - **Personalized Home**: Discover, On This Day, and For You recommendation shelves
 

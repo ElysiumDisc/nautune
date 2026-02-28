@@ -13,6 +13,7 @@ import '../jellyfin/jellyfin_track.dart';
 import '../models/download_item.dart';
 import 'audio_cache_service.dart';
 import 'chart_cache_service.dart';
+import 'lyrics_service.dart';
 import 'connectivity_service.dart';
 import 'notification_service.dart';
 import 'waveform_service.dart';
@@ -72,6 +73,7 @@ class DownloadService extends ChangeNotifier {
   final JellyfinService jellyfinService;
   final NotificationService? _notificationService;
   ConnectivityService? _connectivityService;
+  LyricsService? _lyricsService;
   final Map<String, DownloadItem> _downloads = {};
   final List<String> _downloadQueue = [];
   bool _isDownloading = false;
@@ -277,6 +279,11 @@ class DownloadService extends ChangeNotifier {
   /// Set the connectivity service for WiFi-only checks
   void setConnectivityService(ConnectivityService service) {
     _connectivityService = service;
+  }
+
+  /// Set the lyrics service for pre-caching lyrics on download
+  void setLyricsService(LyricsService service) {
+    _lyricsService = service;
   }
 
   /// Check if downloads are paused due to mobile data
@@ -524,8 +531,33 @@ class DownloadService extends ChangeNotifier {
     }
   }
 
+  /// Remove stale .tmp files left by interrupted downloads
+  Future<void> _cleanupStaleTmpFiles() async {
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
+      final Directory downloadsDir;
+      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+        downloadsDir = Directory(
+          '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads',
+        );
+      } else {
+        downloadsDir = Directory('${docsDir.path}/downloads');
+      }
+      if (!await downloadsDir.exists()) return;
+      await for (final entity in downloadsDir.list()) {
+        if (entity is File && entity.path.endsWith('.tmp')) {
+          debugPrint('Cleaning up stale tmp file: ${entity.path}');
+          await entity.delete();
+        }
+      }
+    } catch (e) {
+      debugPrint('Error cleaning up tmp files: $e');
+    }
+  }
+
   /// Verify all downloaded files exist and clean up orphaned references
   Future<void> verifyAndCleanupDownloads() async {
+    await _cleanupStaleTmpFiles();
     debugPrint('Verifying download files...');
     final toRemove = <String>{};  // Use Set to prevent duplicates
     bool pathsUpdated = false;
@@ -982,22 +1014,24 @@ class DownloadService extends ChangeNotifier {
         _downloads[trackId] = item.copyWith(localPath: correctPath);
       }
 
-      final file = File(correctPath);
-      final sink = file.openWrite();
+      // Write to temp file first, then atomic rename to prevent corrupt partial files
+      final tmpPath = '$correctPath.tmp';
+      final tmpFile = File(tmpPath);
+      final sink = tmpFile.openWrite();
       final totalBytes = response.contentLength ?? 0;
       int downloadedBytes = 0;
 
       await for (final chunk in response.stream) {
         sink.add(chunk);
         downloadedBytes += chunk.length;
-        
+
         final progress = totalBytes > 0 ? downloadedBytes / totalBytes : 0.0;
         _downloads[trackId] = _downloads[trackId]!.copyWith(
           progress: progress,
           totalBytes: totalBytes,
           downloadedBytes: downloadedBytes,
         );
-        
+
         // Use throttled notify for progress updates (max 2Hz), immediate notify on completion
         if (progress == 1.0) {
           notifyListeners();
@@ -1009,6 +1043,8 @@ class DownloadService extends ChangeNotifier {
       }
 
       await sink.close();
+      // Atomic rename: only moves the file to final path after fully written
+      await tmpFile.rename(correctPath);
 
       // Extract actual duration from downloaded file
       JellyfinTrack updatedTrack = item.track;
@@ -1036,6 +1072,13 @@ class DownloadService extends ChangeNotifier {
       // Download artist images for offline use
       await _downloadArtistImages(updatedTrack);
 
+      // Pre-cache lyrics for offline playback
+      if (_lyricsService != null) {
+        unawaited(_lyricsService!.getLyrics(updatedTrack).then((_) {}).catchError(
+          (e) { debugPrint('Lyrics pre-cache failed for ${updatedTrack.name}: $e'); },
+        ));
+      }
+
       // Extract waveform in background
       if (WaveformService.instance.isAvailable) {
         unawaited(WaveformService.instance.extractWaveformInBackground(
@@ -1050,6 +1093,11 @@ class DownloadService extends ChangeNotifier {
       debugPrint('Download completed: ${updatedTrack.name} ($extension)');
     } catch (e) {
       debugPrint('Download failed for ${item.track.name}: $e');
+      // Clean up partial temp file on failure
+      try {
+        final tmpFile = File('${item.localPath}.tmp');
+        if (await tmpFile.exists()) await tmpFile.delete();
+      } catch (_) {}
       _downloads[trackId] = item.copyWith(
         status: DownloadStatus.failed,
         errorMessage: e.toString(),

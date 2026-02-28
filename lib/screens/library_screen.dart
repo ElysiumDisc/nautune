@@ -255,10 +255,9 @@ class _LibraryScreenState extends State<LibraryScreen>
       );
     }
     
-    return AnimatedBuilder(
-      animation: appState,
-      builder: (context, _) {
-        final libraries = appState.libraries;
+    // Provider.of<NautuneAppState>(context, listen: true) in didChangeDependencies
+    // already triggers rebuilds on appState changes — no AnimatedBuilder needed.
+    final libraries = appState.libraries;
         final isLoadingLibraries = appState.isLoadingLibraries;
         final libraryError = appState.librariesError;
         final selectedId = appState.selectedLibraryId;
@@ -596,8 +595,6 @@ class _LibraryScreenState extends State<LibraryScreen>
           ),
         ),
       ),
-    );
-      },
     );
   }
 

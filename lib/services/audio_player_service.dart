@@ -70,8 +70,14 @@ class FrequencyBands {
 class AudioPlayerService {
   static const int _visualizerBarCount = 24;
 
-  // Pre-allocated array for visualizer to avoid per-frame allocations
-  final List<double> _visualizerBars = List<double>.filled(_visualizerBarCount, 0.0);
+  // Double-buffer strategy for visualizer: write to one buffer, emit the other.
+  // Eliminates per-frame List.from() allocation.
+  final Float64List _vizBufferA = Float64List(_visualizerBarCount);
+  final Float64List _vizBufferB = Float64List(_visualizerBarCount);
+  bool _useVizBufferA = true;
+  // Pre-allocated idle frame (all zeros) reused across calls
+  static final List<double> _idleVisualizerFrame =
+      List<double>.unmodifiable(List<double>.filled(_visualizerBarCount, 0.0));
 
   AudioPlayer _player = AudioPlayer();
   AudioPlayer _nextPlayer = AudioPlayer();
@@ -83,6 +89,8 @@ class AudioPlayerService {
   LocalCacheService? _cacheService;
   PlayStatsAggregate _playStats = PlayStatsAggregate();
   Duration _accumulatedTime = Duration.zero;
+  DateTime? _lastListenTimeRecord;
+  int _lastThresholdCheckMs = 0;
   double _volume = 1.0;
   double _lastVolume = 1.0;      // For detecting volume changes
   double _volumePulse = 0.0;     // Decays when volume changes (creates pulse effect)
@@ -124,6 +132,7 @@ class AudioPlayerService {
 
   // Lyrics service for pre-fetching lyrics
   LyricsService? _lyricsService;
+  LyricsService? get lyricsService => _lyricsService;
   bool _lyricsPrefetched = false;
 
   // ListenBrainz scrobbling tracking
@@ -157,6 +166,7 @@ class AudioPlayerService {
   int _preCacheTrackCount = 3;  // 0 = off, 3, 5, or 10
   bool _wifiOnlyCaching = false;
   ConnectivityService? _connectivityService;
+  StreamSubscription<bool>? _connectivitySubscription;
 
   // Battery saver mode (Submarine Mode)
   bool _batterySaverMode = false;
@@ -236,6 +246,11 @@ class AudioPlayerService {
 
   void setConnectivityService(ConnectivityService service) {
     _connectivityService = service;
+    // Subscribe to connectivity changes for immediate quality adaptation
+    _connectivitySubscription?.cancel();
+    _connectivitySubscription = service.onStatusChange.listen((_) {
+      _updateNetworkType(service);
+    });
   }
 
   void setPreCacheTrackCount(int count) {
@@ -374,13 +389,13 @@ class AudioPlayerService {
     }
   }
 
-  /// Refresh cached network type if stale
+  /// Refresh cached network type if stale (fallback for stream-based updates)
   void _refreshNetworkTypeIfNeeded() {
     final now = DateTime.now();
     final lastCheck = _lastNetworkCheck;
 
-    // Check every 30 seconds
-    if (lastCheck != null && now.difference(lastCheck).inSeconds < 30) {
+    // Check every 10 seconds (primary updates come from connectivity stream)
+    if (lastCheck != null && now.difference(lastCheck).inSeconds < 10) {
       return;
     }
 
@@ -468,6 +483,11 @@ class AudioPlayerService {
     if (_pendingState != null && !_hasRestored) {
       unawaited(applyStoredState(_pendingState!));
     }
+  }
+
+  /// Update offline state for lyrics caching (returns expired cache when offline)
+  void setOfflineMode(bool offline) {
+    _lyricsService?.setOffline(offline);
   }
 
   /// Enable or disable image prewarming (called by offline mode gate).
@@ -723,19 +743,25 @@ class AudioPlayerService {
       if (player.state == PlayerState.playing) {
         _emitVisualizerFrame(position);
       }
-      // Check A-B loop boundary
+      // Check A-B loop boundary (needs every tick for tight enforcement)
       _checkLoopBoundary(position);
-      // Check if we should start crossfade
-      _checkCrossfadeTrigger(position);
-      // Check if we should pre-load next track
-      _checkPreloadTrigger(position);
-      // Pre-fetch lyrics for next track at ~50% playback
-      _checkLyricsPrefetch(position);
-      // Check ListenBrainz scrobble threshold
-      _checkListenBrainzScrobble(position);
-      // Sync iOS FFT shadow player position (every second, with ms precision)
-      if (Platform.isIOS && position.inMilliseconds % 1000 < 50) {
-        IOSFFTService.instance.syncPosition(position.inMilliseconds / 1000.0);
+
+      // Threshold-based checks only need to run ~once per second
+      final posMs = position.inMilliseconds;
+      if (posMs - _lastThresholdCheckMs >= 1000) {
+        _lastThresholdCheckMs = posMs;
+        // Check if we should start crossfade
+        _checkCrossfadeTrigger(position);
+        // Check if we should pre-load next track
+        _checkPreloadTrigger(position);
+        // Pre-fetch lyrics for next track at ~50% playback
+        _checkLyricsPrefetch(position);
+        // Check ListenBrainz scrobble threshold
+        _checkListenBrainzScrobble(position);
+        // Sync iOS FFT shadow player position
+        if (Platform.isIOS) {
+          IOSFFTService.instance.syncPosition(posMs / 1000.0);
+        }
       }
     });
 
@@ -777,6 +803,7 @@ class AudioPlayerService {
       }
       
       if (isPlaying) {
+        _lastListenTimeRecord = DateTime.now();
         _startPositionSaving();
         unawaited(_stateStore.savePlaybackSnapshot(isPlaying: true));
       } else {
@@ -875,12 +902,13 @@ class AudioPlayerService {
           // BEFORE stopping the old one. This prevents the OS from seeing a "Stop" state.
           _audioHandler?.updatePlayer(_nextPlayer);
           final offlineArtUri = await _getOfflineArtworkUri(nextTrack.id);
-          _audioHandler?.updateNautuneMediaItem(nextTrack, offlineArtUri: offlineArtUri);
 
-          // 3.5 Brief yield to ensure OS media controls are fully updated
-          // This prevents audio glitch from racing between handler update and player stop
-          // 150ms gives iOS enough time to process the media session update
-          await Future.delayed(const Duration(milliseconds: 150));
+          // 3.5 Wait for media session to process the update before stopping old player.
+          // Uses a Completer that resolves when updateNautuneMediaItem broadcasts,
+          // with a 500ms timeout fallback for safety.
+          final updateFuture = _audioHandler?.awaitMediaSessionUpdate();
+          _audioHandler?.updateNautuneMediaItem(nextTrack, offlineArtUri: offlineArtUri);
+          if (updateFuture != null) await updateFuture;
 
           // 4. Stop the old player (AudioHandler is no longer listening to this one)
           await _player.stop();
@@ -2335,7 +2363,9 @@ class AudioPlayerService {
     final baseAmplitude = 0.15 + (_trackIntensity * 0.35);
     final volumeMultiplier = baseAmplitude + (_volume * 0.5) + (_volumePulse * 0.2);
 
-    // Reuse pre-allocated array instead of List.generate() to avoid per-frame allocations
+    // Double-buffer: write to current buffer, emit it, then swap for next frame
+    final writeBuffer = _useVizBufferA ? _vizBufferA : _vizBufferB;
+
     for (int index = 0; index < _visualizerBarCount; index++) {
       // Different frequencies for bass/mid/treble regions
       final freq = index < 8 ? 0.3 : (index < 16 ? 0.7 : 1.2);
@@ -2345,20 +2375,21 @@ class AudioPlayerService {
       // Bass region (0-7) gets genre-based emphasis
       final bassBoost = index < 8 ? _bassEmphasis * 0.4 : 0.0;
       final value = ((wave * 0.7) + (ripple * 0.3) + bassBoost) * volumeMultiplier;
-      _visualizerBars[index] = value.clamp(0.0, 1.0);
+      writeBuffer[index] = value.clamp(0.0, 1.0);
     }
 
     if (hasVisualizerListeners) {
-      // Pass a copy of the list to avoid mutation issues in stream listeners
-      _visualizerController.add(List<double>.from(_visualizerBars));
+      // Emit buffer reference directly -- next frame writes to the other buffer
+      _visualizerController.add(writeBuffer);
+      _useVizBufferA = !_useVizBufferA;
     }
 
-    // Extract frequency bands with genre emphasis using pre-allocated array
+    // Extract frequency bands with genre emphasis
     if (hasFrequencyListeners) {
       // Calculate bass (indices 0-7)
       double bassSum = 0.0;
       for (int i = 0; i < 8; i++) {
-        bassSum += _visualizerBars[i];
+        bassSum += writeBuffer[i];
       }
       final rawBass = bassSum / 8;
       final bass = (rawBass + _bassEmphasis * 0.2).clamp(0.0, 1.0);
@@ -2366,14 +2397,14 @@ class AudioPlayerService {
       // Calculate mid (indices 8-15)
       double midSum = 0.0;
       for (int i = 8; i < 16; i++) {
-        midSum += _visualizerBars[i];
+        midSum += writeBuffer[i];
       }
       final mid = (midSum / 8).clamp(0.0, 1.0);
 
       // Calculate treble (indices 16-23)
       double trebleSum = 0.0;
       for (int i = 16; i < 24; i++) {
-        trebleSum += _visualizerBars[i];
+        trebleSum += writeBuffer[i];
       }
       final treble = (trebleSum / 8).clamp(0.0, 1.0);
 
@@ -2387,7 +2418,7 @@ class AudioPlayerService {
 
   void _emitIdleVisualizer() {
     if (_visualizerController.hasListener) {
-      _visualizerController.add(List<double>.filled(_visualizerBarCount, 0));
+      _visualizerController.add(_idleVisualizerFrame);
     }
     if (_frequencyBandsController.hasListener) {
       _frequencyBandsController.add(FrequencyBands.zero);
@@ -2398,7 +2429,7 @@ class AudioPlayerService {
     _positionSaveTimer?.cancel();
     final interval = _batterySaverMode
         ? const Duration(seconds: 30)
-        : const Duration(seconds: 1);
+        : const Duration(seconds: 5);
     _positionSaveTimer = Timer.periodic(interval, (_) {
       _saveCurrentPosition();
     });
@@ -2449,10 +2480,17 @@ class AudioPlayerService {
 
     final position = await _player.getCurrentPosition();
     if (position != null) {
-      // Track listen time
+      // Track listen time using actual elapsed time instead of fixed interval
       if (isPlaying) {
-        _playStats.addListenTime(_currentTrack!.id, const Duration(seconds: 1));
-        _accumulatedTime += const Duration(seconds: 1);
+        final now = DateTime.now();
+        final elapsed = _lastListenTimeRecord != null
+            ? now.difference(_lastListenTimeRecord!)
+            : (_batterySaverMode
+                ? const Duration(seconds: 30)
+                : const Duration(seconds: 5));
+        _lastListenTimeRecord = now;
+        _playStats.addListenTime(_currentTrack!.id, elapsed);
+        _accumulatedTime += elapsed;
         // Save every minute
         if (_accumulatedTime.inSeconds >= 60) {
           _accumulatedTime = Duration.zero;
@@ -2999,6 +3037,7 @@ class AudioPlayerService {
     _interruptionSubscription?.cancel();
     _becomingNoisySubscription?.cancel();
     _waveformExtractionSub?.cancel();
+    _connectivitySubscription?.cancel();
     _detachListeners();
     _audioHandler?.dispose();
     _player.dispose();
@@ -3016,6 +3055,7 @@ class AudioPlayerService {
     _visualizerController.close();
     _sleepTimerController.close();
     _frequencyBandsController.close();
+    _loopStateController.close();
     _playbackErrorController.close();
   }
 }

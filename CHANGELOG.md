@@ -1,3 +1,26 @@
+### v7.5.0 - Audio Performance Deep Dive & Profile Stats UI Refresh
+
+**Audio Performance Optimizations**
+- Reduced position save frequency from 1s to 5s with accurate elapsed-time tracking, cutting disk writes by 80% during playback
+- Throttled position handler checks (crossfade, preload, lyrics prefetch, scrobble) to ~1Hz instead of every position tick, reducing CPU overhead on the hot path
+- Implemented double-buffer strategy for visualizer frame emission using Float64List, eliminating per-frame list allocations and reducing GC pressure
+- Added in-memory path index to audio cache service, replacing O(n) recursive directory scans with O(1) lookups for faster gapless preloads
+- Switched network quality adaptation from 30s polling to reactive ConnectivityService stream subscription for 1-3s response to WiFi/cellular transitions
+- Made gapless transition timeout platform-aware: 750ms on iOS (needs more time for audio session), 300ms on Android (faster media session updates)
+
+**Profile Stats UI Refresh**
+- Added animated count-up stat counters on key metric cards (Total Plays, Artists Explored, Albums Collected) with easeOutCubic animation
+- Added weekly trend indicators with up/down arrows and percentage change on Total Plays card
+- Added 28-day activity sparkline chart showing daily play trends with gradient fill in the Listening Activity section
+- Replaced genre breakdown linear progress bars with a horizontal stacked bar and proportionally-sized genre chips
+- Added "Your Sound DNA" concentric arc visualization showing top 5 genres as animated rings
+- Redesigned listening patterns from 3+2 row layout with dividers to a compact 3x2 grid with mini circular progress indicators for Discovery and Diversity metrics
+
+**Version**
+- Bumped to 7.5.0+1
+
+---
+
 ### v7.4.0 - Long-Press Context Menu, Frets on Fire Visual Upgrade & Offline Navigation
 
 **Long-Press Context Menu**

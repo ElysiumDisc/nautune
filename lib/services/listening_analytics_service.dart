@@ -858,6 +858,24 @@ class ListeningAnalyticsService extends ChangeNotifier {
     return maxCount > 0 ? maxDay : null;
   }
 
+  /// Get play counts for each of the last [days] days, ordered chronologically.
+  /// Index 0 = oldest day, last index = today.
+  List<int> getDailyPlayCounts({int days = 28}) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final counts = List<int>.filled(days, 0);
+
+    for (final event in _events) {
+      final eventDay = DateTime(
+          event.timestamp.year, event.timestamp.month, event.timestamp.day);
+      final daysAgo = today.difference(eventDay).inDays;
+      if (daysAgo >= 0 && daysAgo < days) {
+        counts[days - 1 - daysAgo]++;
+      }
+    }
+    return counts;
+  }
+
   /// Get the day name for a day index (0=Monday, 6=Sunday)
   static String getDayName(int dayIndex) {
     const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
