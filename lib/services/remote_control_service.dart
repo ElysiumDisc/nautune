@@ -298,6 +298,16 @@ class RemoteControlService extends ChangeNotifier {
       case 'ToggleMute':
         debugPrint('RemoteControl: $name not yet implemented');
         break;
+
+      case 'VolumeUp':
+        final current = _audioPlayerService.volume;
+        _audioPlayerService.setVolume((current + 0.05).clamp(0.0, 1.0));
+        break;
+
+      case 'VolumeDown':
+        final current = _audioPlayerService.volume;
+        _audioPlayerService.setVolume((current - 0.05).clamp(0.0, 1.0));
+        break;
     }
   }
 

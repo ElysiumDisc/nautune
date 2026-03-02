@@ -15,7 +15,6 @@ class PlaybackStateStore {
   static const _boxName = 'nautune_playback';
   static const _key = 'state';
 
-  Completer<void>? _activeLock;
   Box? _cachedBox;
 
   /// Get or open the Hive box, keeping a cached reference to avoid repeated opens
@@ -81,26 +80,30 @@ class PlaybackStateStore {
 
   Future<void> save(PlaybackState state) => _persist(state);
 
+  // Queue of pending update operations for true serialized access
+  Future<void> _updateChain = Future.value();
+
   Future<void> update(PlaybackState Function(PlaybackState) transform) async {
-    // Simple mutex to prevent race conditions during read-modify-write cycles
-    if (_activeLock != null) {
-      try {
-        await _activeLock!.future.timeout(const Duration(seconds: 2));
-      } catch (e) {
-        debugPrint('Hive update lock timeout - proceeding');
-        _activeLock = null;
-      }
-    }
-    final lock = Completer<void>();
-    _activeLock = lock;
+    // Chain updates to ensure serialized read-modify-write access
+    // Each update waits for the previous one to complete
+    final completer = Completer<void>();
+    final previousChain = _updateChain;
+    _updateChain = completer.future;
 
     try {
+      // Wait for any previous update to finish (with timeout safety)
+      await previousChain.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () {
+          debugPrint('Hive update chain timeout - proceeding');
+        },
+      );
+
       final current = await _loadOrDefault();
       final updated = transform(current);
       await _persist(updated);
     } finally {
-      _activeLock = null;
-      lock.complete();
+      completer.complete();
     }
   }
 

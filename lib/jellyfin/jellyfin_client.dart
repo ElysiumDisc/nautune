@@ -32,8 +32,8 @@ class JellyfinClient {
   final String deviceId;
   final RobustHttpClient _robustClient;
   
-  // For backward compatibility
-  http.Client get httpClient => http.Client();
+  // For backward compatibility - returns the underlying client (not a new one)
+  http.Client get httpClient => _robustClient.client;
 
   Uri _buildUri(String path, [Map<String, dynamic>? query]) {
     return Uri.parse(serverUrl).resolve(path).replace(queryParameters: query);

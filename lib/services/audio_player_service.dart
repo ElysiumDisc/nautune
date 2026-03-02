@@ -182,6 +182,7 @@ class AudioPlayerService {
 
   // A-B Loop state
   LoopState _loopState = LoopState.empty;
+  bool _isLoopSeeking = false; // Guard to prevent seek thrashing at loop boundary
   final _loopStateController = BehaviorSubject<LoopState>.seeded(LoopState.empty);
 
   final StreamController<double> _volumeController = StreamController<double>.broadcast();
@@ -594,9 +595,13 @@ class AudioPlayerService {
     final currentMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
     final adjustedVolume = (_volume * currentMultiplier).clamp(0.0, 1.0);
 
+    // Apply ReplayGain to both main and preloaded player
+    final nextTrack = _preloadedTrack;
+    final nextMultiplier = nextTrack?.replayGainMultiplier ?? 1.0;
+    final nextAdjustedVolume = (_volume * nextMultiplier).clamp(0.0, 1.0);
     await Future.wait([
       _player.setVolume(adjustedVolume),
-      _nextPlayer.setVolume(_volume),
+      _nextPlayer.setVolume(nextAdjustedVolume),
     ]);
     unawaited(_stateStore.savePlaybackSnapshot(volume: _volume));
   }
@@ -1797,10 +1802,15 @@ class AudioPlayerService {
   /// Cache streaming track for waveform extraction.
   /// Dedup is handled by AudioCacheService (caching) and WaveformService (extraction).
   void _cacheTrackForWaveform(JellyfinTrack track, String streamUrl) {
+    unawaited(_cacheTrackForWaveformAsync(track, streamUrl));
+  }
+
+  Future<void> _cacheTrackForWaveformAsync(JellyfinTrack track, String streamUrl) async {
     final trackId = track.id;
 
-    // Skip if waveform already exists
-    WaveformService.instance.hasWaveform(trackId).then((hasWaveform) async {
+    try {
+      // Skip if waveform already exists
+      final hasWaveform = await WaveformService.instance.hasWaveform(trackId);
       if (hasWaveform) {
         debugPrint('🌊 Waveform: Already exists for ${track.name}');
         return;
@@ -1817,9 +1827,9 @@ class AudioPlayerService {
       }
 
       debugPrint('🌊 Waveform: Cached, extraction triggered for ${track.name}');
-    }).catchError((e) {
+    } catch (e) {
       debugPrint('⚠️ Waveform: Error caching for extraction: $e');
-    });
+    }
   }
 
   /// Extract waveform directly from a local file (downloaded or cached)
@@ -2439,9 +2449,6 @@ class AudioPlayerService {
     _positionSaveTimer?.cancel();
   }
   
-  /// Track being recorded (to avoid double-recording)
-  JellyfinTrack? _trackBeingRecorded;
-
   /// Record actual listening time for the current track to analytics.
   /// Call this when: track ends, user skips, user stops, new track starts.
   void _recordActualListeningTime() {
@@ -2449,13 +2456,11 @@ class AudioPlayerService {
     final startTime = _trackStartTime;
 
     // Only record if we have a valid track and start time
+    // _trackStartTime is nulled after recording, preventing double-recording
     if (track == null || startTime == null) return;
 
-    // Prevent double-recording the same track instance
-    if (_trackBeingRecorded?.id == track.id && _trackBeingRecorded == track) {
-      return;
-    }
-    _trackBeingRecorded = track;
+    // Clear start time immediately to prevent duplicate recording
+    _trackStartTime = null;
 
     // Calculate actual listening time
     final now = DateTime.now();
@@ -2469,10 +2474,6 @@ class AudioPlayerService {
     ));
 
     debugPrint('🎵 Recorded actual listen time: ${actualDurationMs ~/ 1000}s for "${track.name}"');
-
-    // Clear start time to prevent duplicate recording
-    _trackStartTime = null;
-    _trackBeingRecorded = null;
   }
 
   Future<void> _saveCurrentPosition() async {
@@ -2538,12 +2539,15 @@ class AudioPlayerService {
   /// Check if position has reached loop end and seek back to start
   void _checkLoopBoundary(Duration position) {
     if (!_loopState.isActive || !_loopState.hasValidLoop) return;
+    if (_isLoopSeeking) return; // Prevent seek thrashing
 
     // Check if we've passed the loop end point
     if (position >= _loopState.end!) {
-      // Seek back to loop start
+      _isLoopSeeking = true;
       debugPrint('🔁 Loop: Reached end, seeking to start');
-      unawaited(seek(_loopState.start!));
+      unawaited(seek(_loopState.start!).whenComplete(() {
+        _isLoopSeeking = false;
+      }));
     }
   }
 
@@ -2691,28 +2695,51 @@ class AudioPlayerService {
   Future<void> _completeCrossfadeTransition(JellyfinTrack nextTrack, int nextIndex) async {
     if (_crossfadePlayer == null) return;
 
-    // Stop current player
+    // Stop old main player (already faded out)
     await _player.stop();
-    await _player.setVolume(_volume); // Reset volume
 
-    // Swap players: move crossfade player's source to main player
-    // This is done by stopping the crossfade player and letting the normal
-    // playback flow handle the next track
-    await _crossfadePlayer!.stop();
+    // SWAP: crossfade player becomes the new main player
+    _detachListeners();
+
+    // Update AudioHandler to listen to the crossfade player (now main)
+    _audioHandler?.updatePlayer(_crossfadePlayer!);
+    final offlineArtUri = await _getOfflineArtworkUri(nextTrack.id);
+    _audioHandler?.updateNautuneMediaItem(nextTrack, offlineArtUri: offlineArtUri);
+
+    // Swap the references
+    final oldPlayer = _player;
+    _player = _crossfadePlayer!;
+    _crossfadePlayer = oldPlayer; // Reuse old player for next crossfade
+
+    // Re-attach listeners to the new main player
+    _attachPlayerListeners(_player);
 
     // Update track info
     _currentIndex = nextIndex;
     _currentTrack = nextTrack;
     _currentTrackController.add(_currentTrack);
+    _analyzeTrackForVisualizer(nextTrack);
 
-    // Play the next track normally (already loaded in crossfade player)
-    await playTrack(
-      nextTrack,
-      queueContext: _queue,
-      fromShuffle: _isShuffleEnabled,
-    );
+    // Explicitly emit playing state
+    _playingController.add(true);
+    _lastPlayingState = true;
+
+    // Reset scrobble/timing state for new track
+    _hasScrobbled = false;
+    _trackStartTime = DateTime.now();
+    _lyricsPrefetched = false;
+    unawaited(ListenBrainzService().submitNowPlaying(nextTrack));
+
+    // Update duration from metadata
+    if (nextTrack.duration != null) {
+      _durationController.add(nextTrack.duration);
+    }
 
     _isCrossfading = false;
+    _preloadedTrack = null;
+
+    // Force OS media controls update
+    await _audioHandler?.forcePlayingState();
 
     debugPrint('✅ Crossfade complete → ${nextTrack.name}');
   }
@@ -2926,7 +2953,7 @@ class AudioPlayerService {
   void _clearPreload() {
     _preloadedTrack = null;
     _preloadedTrackIsLocal = false;
-    _nextPlayer.stop();
+    unawaited(_nextPlayer.stop());
   }
   
   // ========== AUDIO CACHE METHODS ==========
@@ -2965,11 +2992,12 @@ class AudioPlayerService {
       _sleepTimeRemaining -= const Duration(seconds: 1);
       _sleepTimerController.add(_sleepTimeRemaining);
 
-      // Start fade-out in last 30 seconds
+      // Start fade-out in last 30 seconds (apply ReplayGain normalization)
       if (_sleepTimeRemaining.inSeconds <= 30 && _sleepTimeRemaining.inSeconds > 0) {
         final fadeProgress = _sleepTimeRemaining.inSeconds / 30.0;
         final fadedVolume = _preSleepVolume * fadeProgress;
-        _player.setVolume(fadedVolume.clamp(0.0, 1.0));
+        final replayGainMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
+        _player.setVolume((fadedVolume * replayGainMultiplier).clamp(0.0, 1.0));
       }
 
       // Timer complete
@@ -3018,16 +3046,19 @@ class AudioPlayerService {
     _isSleepTimerByTracks = false;
     _sleepTimerController.add(Duration.zero);
 
-    // Final fade to zero and pause
-    _player.setVolume(0.0);
+    // Final fade to zero and pause (apply ReplayGain)
+    final replayGainMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
+    await _player.setVolume((0.0 * replayGainMultiplier).clamp(0.0, 1.0));
     await pause();
 
-    // Restore volume for next session
-    Future.delayed(const Duration(milliseconds: 500), () {
-      setVolume(_preSleepVolume);
-    });
+    // Restore volume for next session (guarded against disposed state)
+    final savedVolume = _preSleepVolume;
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (_currentTrack != null || _queue.isNotEmpty) {
+      await setVolume(savedVolume);
+    }
 
-    debugPrint('😴 Sleep timer: Playback stopped, volume restored to $_preSleepVolume');
+    debugPrint('😴 Sleep timer: Playback stopped, volume restored to $savedVolume');
   }
 
   void dispose() {

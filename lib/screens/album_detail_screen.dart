@@ -12,6 +12,7 @@ import '../jellyfin/jellyfin_track.dart';
 import '../models/listenbrainz_config.dart' show PopularTrack;
 import '../services/listenbrainz_service.dart';
 import '../services/haptic_service.dart';
+import '../services/palette_cache_service.dart';
 import '../services/share_service.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/jellyfin_image.dart';
@@ -62,9 +63,8 @@ class AlbumDetailScreen extends StatefulWidget {
 }
 
 class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
-  // Static LRU cache for palette colors - shared with FullPlayerScreen
-  static final Map<String, List<Color>> _paletteCache = {};
-  static const int _maxCacheSize = 50;
+  // Shared palette cache - shared with FullPlayerScreen
+  static final _paletteCache = PaletteCacheService.instance;
 
   bool _isLoading = false;
   Object? _error;
@@ -123,7 +123,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
     // Check cache first - avoids expensive color extraction
     final cacheKey = '${widget.album.id}-$tag';
-    final cached = _paletteCache[cacheKey];
+    final cached = _paletteCache.get(cacheKey);
     if (cached != null) {
       if (mounted) {
         setState(() {
@@ -170,11 +170,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
       // Cache the extracted colors
       if (colors.isNotEmpty) {
-        if (_paletteCache.length >= _maxCacheSize) {
-          final oldestKey = _paletteCache.keys.first;
-          _paletteCache.remove(oldestKey);
-        }
-        _paletteCache[cacheKey] = colors;
+        _paletteCache.put(cacheKey, colors);
       }
 
       if (mounted && colors.isNotEmpty) {

@@ -130,13 +130,15 @@ class SyncPlayService extends ChangeNotifier {
 
   // For auto-rejoin on reconnect
   String? _lastGroupId;
-  bool _wasCaption = false;
+  bool _wasCaptain = false;
   bool _isRejoining = false;
 
   // Pass-the-baton: track when WE initiated a play command
   bool _pendingPlayFromUs = false;
 
-  // Track attribution map (playlistItemId -> user info)
+  // Track attribution map (playlistItemId/trackId -> user info)
+  // Bounded to 500 entries to prevent unbounded growth
+  static const int _maxAttributions = 500;
   final Map<String, _UserAttribution> _trackAttributions = {};
 
   // Getters
@@ -229,7 +231,7 @@ class SyncPlayService extends ChangeNotifier {
   Future<void> _joinGroupInternal(String groupId, {required bool isCaptain}) async {
     // Store for auto-rejoin on reconnect
     _lastGroupId = groupId;
-    _wasCaption = isCaptain;
+    _wasCaptain = isCaptain;
 
     // Connect WebSocket FIRST to receive join broadcasts
     await _connectWebSocket();
@@ -269,9 +271,9 @@ class SyncPlayService extends ChangeNotifier {
         participants: [
           ...group.participants,
           // Check both userId and deviceId for multi-device support
-          if (!group.participants.any((p) => p.userId == _userId && p.oderId == _deviceId))
+          if (!group.participants.any((p) => p.userId == _userId && p.orderId == _deviceId))
             SyncPlayParticipant(
-              oderId: _deviceId,
+              orderId: _deviceId,
               userId: _userId,
               username: _username,
               userImageTag: _userImageTag,
@@ -297,7 +299,7 @@ class SyncPlayService extends ChangeNotifier {
 
       // Clear auto-rejoin info - user explicitly left
       _lastGroupId = null;
-      _wasCaption = false;
+      _wasCaptain = false;
 
       _currentSession = null;
       _trackAttributions.clear();
@@ -330,7 +332,7 @@ class SyncPlayService extends ChangeNotifier {
       for (final group in _availableGroups) {
         debugPrint('SyncPlay Group ${group.groupName}: ${group.participants.length} participants');
         for (final p in group.participants) {
-          debugPrint('  - ${p.username} (${p.userId}) imageTag: ${p.userImageTag}, device: ${p.oderId}');
+          debugPrint('  - ${p.username} (${p.userId}) imageTag: ${p.userImageTag}, device: ${p.orderId}');
         }
       }
 
@@ -365,7 +367,7 @@ class SyncPlayService extends ChangeNotifier {
 
       if (isCurrentUser) {
         enriched.add(SyncPlayParticipant(
-          oderId: _deviceId,
+          orderId: _deviceId,
           userId: _userId,
           username: _username,
           userImageTag: _userImageTag,
@@ -398,6 +400,7 @@ class SyncPlayService extends ChangeNotifier {
           imageTag: _userImageTag,
         );
       }
+      _evictOldAttributions();
 
       await _client.queue(
         credentials: _credentials,
@@ -446,11 +449,19 @@ class SyncPlayService extends ChangeNotifier {
         playlistItemIds: [playlistItemId],
       );
 
-      // Optimistically update local queue
+      // Optimistically update local queue with index adjustment
+      final oldQueue = _currentSession!.queue;
+      final removedIndex = oldQueue.indexWhere((t) => t.playlistItemId == playlistItemId);
+      final newQueue = oldQueue.where((t) => t.playlistItemId != playlistItemId).toList();
+      var newTrackIndex = _currentSession!.currentTrackIndex;
+      if (removedIndex >= 0 && removedIndex < newTrackIndex) {
+        newTrackIndex--;
+      } else if (removedIndex == newTrackIndex && newQueue.isNotEmpty) {
+        newTrackIndex = newTrackIndex.clamp(0, newQueue.length - 1);
+      }
       _currentSession = _currentSession!.copyWith(
-        queue: _currentSession!.queue
-            .where((t) => t.playlistItemId != playlistItemId)
-            .toList(),
+        queue: newQueue,
+        currentTrackIndex: newTrackIndex,
       );
       _notifySessionChanged();
 
@@ -544,11 +555,14 @@ class SyncPlayService extends ChangeNotifier {
   Future<void> play() async {
     if (_currentSession == null) return;
 
+    // Save previous state for rollback on failure
+    final previousSession = _currentSession;
+
     try {
       // Mark that WE are initiating this play (pass the baton)
       _pendingPlayFromUs = true;
 
-      // When user presses play, they become captain
+      // When user presses play, they become captain (optimistic)
       _currentSession = _currentSession!.copyWith(
         role: SyncPlayRole.captain,
         isPaused: false,
@@ -558,7 +572,10 @@ class SyncPlayService extends ChangeNotifier {
       await _client.unpause(credentials: _credentials);
     } catch (e) {
       _pendingPlayFromUs = false;
-      debugPrint('Failed to play: $e');
+      // Roll back optimistic update on failure
+      _currentSession = previousSession;
+      _notifySessionChanged();
+      debugPrint('Failed to play (rolled back): $e');
       rethrow;
     }
   }
@@ -775,7 +792,7 @@ class SyncPlayService extends ChangeNotifier {
   /// Attempt to rejoin the last group after WebSocket reconnection
   Future<void> _attemptAutoRejoin() async {
     final groupIdToRejoin = _lastGroupId;
-    final wasCaptain = _wasCaption;
+    final wasCaptain = _wasCaptain;
 
     if (_isRejoining || groupIdToRejoin == null) return;
 
@@ -813,7 +830,7 @@ class SyncPlayService extends ChangeNotifier {
             groupName: 'Fleet Mode',
             participants: [
               SyncPlayParticipant(
-                oderId: _deviceId,
+                orderId: _deviceId,
                 userId: _userId,
                 username: _username,
                 userImageTag: _userImageTag,
@@ -855,7 +872,7 @@ class SyncPlayService extends ChangeNotifier {
         // Max attempts reached or group cleared - group likely no longer exists
         debugPrint('Max rejoin attempts reached or group cleared, giving up');
         _lastGroupId = null;
-        _wasCaption = false;
+        _wasCaptain = false;
         _rejoinAttempts = 0;
         _currentSession = null;
         _trackAttributions.clear();
@@ -863,9 +880,8 @@ class SyncPlayService extends ChangeNotifier {
         _notifySessionChanged(immediate: true);
       }
     } finally {
-      if (_rejoinAttempts == 0 || _rejoinAttempts >= _maxRejoinAttempts) {
-        _isRejoining = false;
-      }
+      // Always reset the flag to prevent deadlocking auto-rejoin
+      _isRejoining = false;
     }
   }
 
@@ -967,7 +983,7 @@ class SyncPlayService extends ChangeNotifier {
         queue: [],
         currentTrackIndex: -1,
         positionTicks: message.positionTicks ?? 0,
-        role: _wasCaption ? SyncPlayRole.captain : SyncPlayRole.sailor,
+        role: _wasCaptain ? SyncPlayRole.captain : SyncPlayRole.sailor,
       );
       _notifySessionChanged();
       // Continue to process the rest of the message
@@ -981,13 +997,13 @@ class SyncPlayService extends ChangeNotifier {
 
     // Also ensure we're in the participants list (we might have been dropped)
     // Check both userId and deviceId for multi-device support
-    final selfInList = participants.any((p) => p.userId == _userId && p.oderId == _deviceId);
+    final selfInList = participants.any((p) => p.userId == _userId && p.orderId == _deviceId);
     final updatedParticipants = selfInList
         ? participants
         : [
             ...participants,
             SyncPlayParticipant(
-              oderId: _deviceId,
+              orderId: _deviceId,
               userId: _userId,
               username: _username,
               userImageTag: _userImageTag,
@@ -1089,7 +1105,7 @@ class SyncPlayService extends ChangeNotifier {
       // Jellyfin only sends user ID, create minimal participant
       // and refresh group to get full details
       final participant = SyncPlayParticipant(
-        oderId: '',
+        orderId: '',
         userId: userId,
         username: userId, // Will be updated after refresh
         isGroupLeader: false,
@@ -1474,7 +1490,7 @@ class SyncPlayService extends ChangeNotifier {
     if (reason == 'GroupDestroyed' || reason == 'LibraryAccessDenied') {
       debugPrint('Group was destroyed or access denied, clearing session');
       _lastGroupId = null;
-      _wasCaption = false;
+      _wasCaptain = false;
       _currentSession = null;
       _trackAttributions.clear();
       _notifySessionChanged();
@@ -1509,7 +1525,7 @@ class SyncPlayService extends ChangeNotifier {
           queue: [],
           currentTrackIndex: -1,
           positionTicks: message.positionTicks ?? 0,
-          role: _wasCaption ? SyncPlayRole.captain : SyncPlayRole.sailor,
+          role: _wasCaptain ? SyncPlayRole.captain : SyncPlayRole.sailor,
         );
       } else {
         _currentSession = _currentSession!.copyWith(
@@ -1613,12 +1629,13 @@ class SyncPlayService extends ChangeNotifier {
 
     _lastPingTime = DateTime.now();
     try {
+      // Send average RTT estimate (not epoch timestamp)
       await _client.ping(
         credentials: _credentials,
-        ping: _lastPingTime!.millisecondsSinceEpoch,
+        ping: averageRtt,
       );
 
-      // Calculate RTT
+      // Calculate RTT from this ping
       final rtt = DateTime.now().difference(_lastPingTime!).inMilliseconds;
       _updateRtt(rtt);
 
@@ -1681,6 +1698,13 @@ class SyncPlayService extends ChangeNotifier {
     _error = null;
   }
 
+  /// Evict oldest attributions if map exceeds max size
+  void _evictOldAttributions() {
+    while (_trackAttributions.length > _maxAttributions) {
+      _trackAttributions.remove(_trackAttributions.keys.first);
+    }
+  }
+
   void _notifySessionChanged({bool immediate = false}) {
     if (immediate) {
       _sessionDebouncer.cancel();
@@ -1699,7 +1723,7 @@ class SyncPlayService extends ChangeNotifier {
   }
 
   /// Get user attribution for a track
-  String? getTrackAddedBy(String playlistItemId) {
+  String? getTrackAddedBy(String playlistItemId, {String? trackId}) {
     // First check session queue
     final session = _currentSession;
     if (session != null) {
@@ -1710,8 +1734,10 @@ class SyncPlayService extends ChangeNotifier {
       }
     }
 
-    // Fall back to local attribution cache
-    return _trackAttributions[playlistItemId]?.username;
+    // Fall back to local attribution cache - try playlistItemId first, then trackId
+    final attr = _trackAttributions[playlistItemId] ??
+        (trackId != null ? _trackAttributions[trackId] : null);
+    return attr?.username;
   }
 
   /// Get the share link for the current session

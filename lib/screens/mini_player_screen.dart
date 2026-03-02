@@ -12,6 +12,7 @@ import 'package:window_manager/window_manager.dart';
 import '../app_state.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../services/audio_player_service.dart';
+import '../services/palette_cache_service.dart';
 import '../widgets/jellyfin_image.dart';
 import '../widgets/jellyfin_waveform.dart';
 
@@ -81,9 +82,8 @@ class MiniPlayerScreen extends StatefulWidget {
 }
 
 class _MiniPlayerScreenState extends State<MiniPlayerScreen> with WindowListener {
-  // Static LRU cache for palette colors - avoids re-extracting for frequently played albums
-  static final Map<String, List<Color>> _paletteCache = {};
-  static const int _maxCacheSize = 50;
+  // Shared palette cache - avoids re-extracting for frequently played albums
+  static final _paletteCache = PaletteCacheService.instance;
   
   List<Color>? _paletteColors;
   StreamSubscription? _trackSub;
@@ -183,7 +183,7 @@ class _MiniPlayerScreenState extends State<MiniPlayerScreen> with WindowListener
 
     // Check cache first - avoids expensive color extraction for repeat plays
     final cacheKey = '$itemId-$imageTag';
-    final cached = _paletteCache[cacheKey];
+    final cached = _paletteCache.get(cacheKey);
     if (cached != null) {
       if (mounted) {
         setState(() {
@@ -269,12 +269,7 @@ class _MiniPlayerScreenState extends State<MiniPlayerScreen> with WindowListener
 
       // Cache the extracted colors for future use
       if (selectedColors.isNotEmpty) {
-        // Evict oldest entries if cache is full (simple FIFO eviction)
-        if (_paletteCache.length >= _maxCacheSize) {
-          final oldestKey = _paletteCache.keys.first;
-          _paletteCache.remove(oldestKey);
-        }
-        _paletteCache[cacheKey] = selectedColors;
+        _paletteCache.put(cacheKey, selectedColors);
       }
 
       if (mounted) {

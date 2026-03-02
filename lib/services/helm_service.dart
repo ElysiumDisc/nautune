@@ -41,10 +41,6 @@ class HelmService extends ChangeNotifier {
   /// Whether a discovery scan is in progress.
   bool get isDiscovering => _isDiscovering;
 
-  /// Stream for UI to react to target state changes.
-  final _targetController = StreamController<HelmSession?>.broadcast();
-  Stream<HelmSession?> get targetStream => _targetController.stream;
-
   /// Discover other Nautune instances on the server.
   Future<void> discoverTargets() async {
     _isDiscovering = true;
@@ -72,7 +68,6 @@ class HelmService extends ChangeNotifier {
   /// Activate helm mode — start controlling a remote session.
   void activateHelm(HelmSession target) {
     _activeTarget = target;
-    _targetController.add(target);
     notifyListeners();
 
     // Immediately fetch the latest state, then start periodic polling
@@ -98,7 +93,6 @@ class HelmService extends ChangeNotifier {
     _pollingTimer?.cancel();
     _pollingTimer = null;
     _activeTarget = null;
-    _targetController.add(null);
     notifyListeners();
 
     debugPrint('Helm: Deactivated');
@@ -123,25 +117,37 @@ class HelmService extends ChangeNotifier {
   Future<void> refreshTarget() => _refreshTargetState();
 
   Future<void> _refreshTargetState() async {
-    if (_activeTarget == null) return;
+    // Capture to local to avoid null-after-await race condition
+    final target = _activeTarget;
+    if (target == null) return;
 
     try {
       final sessions = await _client.fetchSessions(_credentials);
+      // Re-check after await in case deactivateHelm() was called
+      if (_activeTarget == null) return;
+
       final match = sessions.firstWhere(
-        (s) => s['Id'] == _activeTarget!.sessionId,
+        (s) => s['Id'] == target.sessionId,
         orElse: () => <String, dynamic>{},
       );
 
       if (match.isNotEmpty) {
         final oldPaused = _activeTarget!.isPaused;
-        _activeTarget = HelmSession.fromSessionJson(match);
-        _targetController.add(_activeTarget);
-        notifyListeners();
+        final updated = HelmSession.fromSessionJson(match);
+        // Only notify if state actually changed (equality check)
+        if (_activeTarget != updated) {
+          _activeTarget = updated;
+          notifyListeners();
+        }
 
         // Adjust polling rate when play/pause state changes
-        if (_activeTarget!.isPaused != oldPaused) {
+        if (updated.isPaused != oldPaused) {
           _startAdaptivePolling();
         }
+      } else {
+        // Target session disappeared from server - deactivate
+        debugPrint('Helm: Target session disappeared, deactivating');
+        deactivateHelm();
       }
     } catch (e) {
       debugPrint('Helm: Failed to refresh target state: $e');
@@ -151,36 +157,45 @@ class HelmService extends ChangeNotifier {
   // ============ Remote Commands ============
 
   Future<void> helmPlay() async {
-    if (_activeTarget == null) return;
+    final target = _activeTarget;
+    if (target == null) return;
     try {
       await _client.sendPlaystateCommand(
         _credentials,
-        sessionId: _activeTarget!.sessionId,
+        sessionId: target.sessionId,
         command: 'Unpause',
       );
-      debugPrint('Helm: Sent Unpause to ${_activeTarget!.deviceName}');
+      // Optimistic update
+      _activeTarget = target.copyWith(isPaused: false);
+      notifyListeners();
+      debugPrint('Helm: Sent Unpause to ${target.deviceName}');
     } catch (e) {
       debugPrint('Helm: Play failed: $e');
     }
   }
 
   Future<void> helmPause() async {
-    if (_activeTarget == null) return;
+    final target = _activeTarget;
+    if (target == null) return;
     try {
       await _client.sendPlaystateCommand(
         _credentials,
-        sessionId: _activeTarget!.sessionId,
+        sessionId: target.sessionId,
         command: 'Pause',
       );
-      debugPrint('Helm: Sent Pause to ${_activeTarget!.deviceName}');
+      // Optimistic update
+      _activeTarget = target.copyWith(isPaused: true);
+      notifyListeners();
+      debugPrint('Helm: Sent Pause to ${target.deviceName}');
     } catch (e) {
       debugPrint('Helm: Pause failed: $e');
     }
   }
 
   Future<void> helmTogglePlayPause() async {
-    if (_activeTarget == null) return;
-    if (_activeTarget!.isPaused) {
+    final target = _activeTarget;
+    if (target == null) return;
+    if (target.isPaused) {
       await helmPlay();
     } else {
       await helmPause();
@@ -188,44 +203,47 @@ class HelmService extends ChangeNotifier {
   }
 
   Future<void> helmSeek(Duration position) async {
-    if (_activeTarget == null) return;
+    final target = _activeTarget;
+    if (target == null) return;
     try {
       final ticks = position.inMicroseconds * 10;
       await _client.sendPlaystateCommand(
         _credentials,
-        sessionId: _activeTarget!.sessionId,
+        sessionId: target.sessionId,
         command: 'Seek',
         seekPositionTicks: ticks,
       );
-      debugPrint('Helm: Sent Seek to ${_activeTarget!.deviceName}');
+      debugPrint('Helm: Sent Seek to ${target.deviceName}');
     } catch (e) {
       debugPrint('Helm: Seek failed: $e');
     }
   }
 
   Future<void> helmNext() async {
-    if (_activeTarget == null) return;
+    final target = _activeTarget;
+    if (target == null) return;
     try {
       await _client.sendPlaystateCommand(
         _credentials,
-        sessionId: _activeTarget!.sessionId,
+        sessionId: target.sessionId,
         command: 'NextTrack',
       );
-      debugPrint('Helm: Sent NextTrack to ${_activeTarget!.deviceName}');
+      debugPrint('Helm: Sent NextTrack to ${target.deviceName}');
     } catch (e) {
       debugPrint('Helm: Next failed: $e');
     }
   }
 
   Future<void> helmPrevious() async {
-    if (_activeTarget == null) return;
+    final target = _activeTarget;
+    if (target == null) return;
     try {
       await _client.sendPlaystateCommand(
         _credentials,
-        sessionId: _activeTarget!.sessionId,
+        sessionId: target.sessionId,
         command: 'PreviousTrack',
       );
-      debugPrint('Helm: Sent PreviousTrack to ${_activeTarget!.deviceName}');
+      debugPrint('Helm: Sent PreviousTrack to ${target.deviceName}');
     } catch (e) {
       debugPrint('Helm: Previous failed: $e');
     }
@@ -233,11 +251,12 @@ class HelmService extends ChangeNotifier {
 
   /// Send specific items to play on the remote session.
   Future<void> helmPlayItems(List<String> itemIds, {int? startIndex}) async {
-    if (_activeTarget == null) return;
+    final target = _activeTarget;
+    if (target == null) return;
     try {
       await _client.sendPlayCommand(
         _credentials,
-        sessionId: _activeTarget!.sessionId,
+        sessionId: target.sessionId,
         itemIds: itemIds,
         startIndex: startIndex,
       );
@@ -249,7 +268,6 @@ class HelmService extends ChangeNotifier {
   @override
   void dispose() {
     _pollingTimer?.cancel();
-    _targetController.close();
     super.dispose();
   }
 }

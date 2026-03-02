@@ -395,10 +395,10 @@ class SyncPlayWebSocket {
   }
 
   /// Dispose of all resources
-  void dispose() {
+  Future<void> dispose() async {
     // Set disposed flag FIRST to prevent race conditions
     _isDisposed = true;
-    disconnect();
+    await disconnect();
     _messageController.close();
     _connectionStateController.close();
   }
@@ -482,7 +482,7 @@ extension SyncPlayMessageExtensions on SyncPlayMessage {
     final userId = joinedUserId;
     if (userId != null) {
       return SyncPlayParticipant(
-        oderId: '', // Not provided by server
+        orderId: '', // Not provided by server
         userId: userId,
         username: userId, // Will need to fetch from sessions
         isGroupLeader: false,

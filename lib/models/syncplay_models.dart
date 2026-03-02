@@ -27,7 +27,7 @@ class SyncPlayGroup {
       if (item is String) {
         // Just a user ID - create minimal participant
         participants.add(SyncPlayParticipant(
-          oderId: '',
+          orderId: '',
           userId: item,
           username: item, // Will be updated when we fetch user details
           isGroupLeader: false,
@@ -88,7 +88,7 @@ class SyncPlayGroup {
 /// Represents a participant in a SyncPlay session
 class SyncPlayParticipant {
   const SyncPlayParticipant({
-    required this.oderId,
+    required this.orderId,
     required this.userId,
     required this.username,
     this.userImageTag,
@@ -97,7 +97,7 @@ class SyncPlayParticipant {
     this.isReady = true,
   });
 
-  final String oderId; // Unique order ID for this participant instance
+  final String orderId; // Unique order ID for this participant instance
   final String userId;
   final String username;
   final String? userImageTag;
@@ -107,7 +107,7 @@ class SyncPlayParticipant {
 
   factory SyncPlayParticipant.fromJson(Map<String, dynamic> json) {
     return SyncPlayParticipant(
-      oderId: json['OderId'] as String? ?? json['UserId'] as String? ?? '',
+      orderId: json['OrderId'] as String? ?? json['UserId'] as String? ?? '',
       userId: json['UserId'] as String? ?? '',
       username: json['UserName'] as String? ?? 'Unknown',
       userImageTag: json['UserImageTag'] as String?,
@@ -118,7 +118,7 @@ class SyncPlayParticipant {
   }
 
   Map<String, dynamic> toJson() => {
-    'OderId': oderId,
+    'OrderId': orderId,
     'UserId': userId,
     'UserName': username,
     'UserImageTag': userImageTag,
@@ -128,7 +128,7 @@ class SyncPlayParticipant {
   };
 
   SyncPlayParticipant copyWith({
-    String? oderId,
+    String? orderId,
     String? userId,
     String? username,
     String? userImageTag,
@@ -137,7 +137,7 @@ class SyncPlayParticipant {
     bool? isReady,
   }) {
     return SyncPlayParticipant(
-      oderId: oderId ?? this.oderId,
+      orderId: orderId ?? this.orderId,
       userId: userId ?? this.userId,
       username: username ?? this.username,
       userImageTag: userImageTag ?? this.userImageTag,

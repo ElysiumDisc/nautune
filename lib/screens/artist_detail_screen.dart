@@ -11,6 +11,7 @@ import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../services/listenbrainz_service.dart';
+import '../services/palette_cache_service.dart';
 import '../widgets/jellyfin_image.dart';
 import '../widgets/now_playing_bar.dart';
 import '../widgets/track_context_menu.dart';
@@ -81,9 +82,8 @@ enum TrackSortOption {
 }
 
 class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
-  // Static LRU cache for palette colors
-  static final Map<String, List<Color>> _paletteCache = {};
-  static const int _maxCacheSize = 50;
+  // Shared palette cache
+  static final _paletteCache = PaletteCacheService.instance;
 
   bool _isLoading = false;
   Object? _error;
@@ -252,7 +252,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
 
     // Check cache first
     final cacheKey = '${widget.artist.id}-$tag';
-    final cached = _paletteCache[cacheKey];
+    final cached = _paletteCache.get(cacheKey);
     if (cached != null) {
       if (mounted) {
         setState(() {
@@ -299,11 +299,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
 
       // Cache the extracted colors
       if (colors.isNotEmpty) {
-        if (_paletteCache.length >= _maxCacheSize) {
-          final oldestKey = _paletteCache.keys.first;
-          _paletteCache.remove(oldestKey);
-        }
-        _paletteCache[cacheKey] = colors;
+        _paletteCache.put(cacheKey, colors);
       }
 
       if (mounted && colors.isNotEmpty) {

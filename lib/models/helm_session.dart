@@ -70,5 +70,21 @@ class HelmSession {
   }
 
   @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HelmSession &&
+          sessionId == other.sessionId &&
+          deviceName == other.deviceName &&
+          nowPlayingItemName == other.nowPlayingItemName &&
+          nowPlayingArtist == other.nowPlayingArtist &&
+          isPaused == other.isPaused &&
+          positionTicks == other.positionTicks &&
+          runtimeTicks == other.runtimeTicks;
+
+  @override
+  int get hashCode => Object.hash(sessionId, deviceName, nowPlayingItemName,
+      nowPlayingArtist, isPaused, positionTicks, runtimeTicks);
+
+  @override
   String toString() => 'HelmSession($deviceName, $clientName, $userName)';
 }

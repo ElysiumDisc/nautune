@@ -40,7 +40,7 @@ class SyncPlayProvider extends ChangeNotifier {
   final AudioCacheService _audioCacheService = AudioCacheService.instance;
   SyncPlayService? _syncPlayService;
   StreamSubscription<SyncPlaySession?>? _sessionSubscription;
-  StreamSubscription<List<SyncPlayParticipant>>? _participantsSubscription;
+  // _participantsSubscription removed: participant updates come through sessionStream
   StreamSubscription<SyncPlayCommand>? _playbackCommandSubscription;
   StreamSubscription<ConnectionQuality>? _connectionQualitySubscription;
   StreamSubscription<ReconnectionState>? _reconnectionSubscription;
@@ -276,14 +276,10 @@ class SyncPlayProvider extends ChangeNotifier {
           // Medium drift (200-500ms) — adjust playback rate to catch up gradually
           final behind = currentPos.inMilliseconds < command.position!.inMilliseconds;
           await _audioPlayerService.setPlaybackRate(behind ? 1.02 : 0.98);
-          // Schedule rate restore when within 50ms
+          // Always restore rate to 1.0 after correction window
           Future.delayed(const Duration(milliseconds: 500), () async {
-            final newDiff = (_audioPlayerService.currentPosition.inMilliseconds -
-                    (command.position!.inMilliseconds + 500))
-                .abs();
-            if (newDiff < 50) {
-              await _audioPlayerService.setPlaybackRate(1.0);
-            }
+            if (_syncPlayService == null) return; // Guard against disposed state
+            await _audioPlayerService.setPlaybackRate(1.0);
           });
         }
       }
@@ -300,8 +296,7 @@ class SyncPlayProvider extends ChangeNotifier {
   void _cleanup() {
     _sessionSubscription?.cancel();
     _sessionSubscription = null;
-    _participantsSubscription?.cancel();
-    _participantsSubscription = null;
+    // _participantsSubscription was unused - removed
     _playbackCommandSubscription?.cancel();
     _playbackCommandSubscription = null;
     _connectionQualitySubscription?.cancel();

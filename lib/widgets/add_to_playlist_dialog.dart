@@ -175,27 +175,29 @@ Future<void> _createPlaylistWithItems(
   );
 
   if (result == true && nameController.text.isNotEmpty && context.mounted) {
+    final name = nameController.text;
+    nameController.dispose(); // Dispose controller to prevent leak
     try {
       await appState.createPlaylist(
-        name: nameController.text,
+        name: name,
         itemIds: itemIds,
       );
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Created "${nameController.text}" with ${itemIds.length} tracks'),
+            content: Text('Created "$name" with ${itemIds.length} tracks'),
             backgroundColor: Colors.green,
           ),
         );
       }
     } catch (e) {
       if (context.mounted) {
-        final isOfflineError = e.toString().contains('Offline') || 
+        final isOfflineError = e.toString().contains('Offline') ||
                                e.toString().contains('queued');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              isOfflineError 
+              isOfflineError
                 ? 'Offline: Playlist will be created when online'
                 : 'Failed to create playlist: $e'
             ),
@@ -204,6 +206,8 @@ Future<void> _createPlaylistWithItems(
         );
       }
     }
+  } else {
+    nameController.dispose(); // Dispose on cancel too
   }
 }
 

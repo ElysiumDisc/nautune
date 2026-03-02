@@ -1,3 +1,50 @@
+### v7.6.0 - Deep Bug Hunt, Performance Hardening & SyncPlay/Helm Reliability
+
+**Audio Pipeline Fixes**
+- Fixed critical HTTP client leak — `httpClient` getter was creating a new `http.Client()` on every call instead of reusing the shared RobustHttpClient
+- Fixed `markFavorite`, `getFavoriteAlbums`, `getFavoriteTracks` each creating a new JellyfinClient per call, bypassing the shared ETag cache
+- Fixed ETag cache LRU eviction from O(n) List to O(1) LinkedHashSet
+- Renamed `TimeoutException` to `HttpTimeoutException` to avoid shadowing `dart:async`
+- Fixed crossfade transition — rewrote to swap players instead of stopping both and replaying from scratch, eliminating audible gap/glitch
+- Fixed `_nextPlayer` not receiving ReplayGain-adjusted volume in `setVolume`
+- Fixed sleep timer fade not applying ReplayGain normalization multiplier
+- Fixed A-B loop seek thrashing with `_isLoopSeeking` guard
+- Fixed `_clearPreload` fire-and-forget player stop — now uses `unawaited()` for explicit intent
+- Refactored waveform cache from `.then().catchError()` anti-pattern to proper `async/await`
+- Replaced broken Hive mutex (race-prone Completer) with chained futures for serialized read-modify-write
+
+**Helm Mode (Remote Control) Hardening**
+- Fixed async race conditions — all methods now capture `_activeTarget` to local variable before await
+- Added session disappearance detection — auto-deactivates helm when target session vanishes
+- Added `operator ==` and `hashCode` to HelmSession, preventing unnecessary UI rebuilds every 3s poll
+- Added optimistic state updates for play/pause commands
+- Removed dead `_targetController`/`targetStream` code
+- Fixed memory leak — added `_helmService.dispose()` in library screen
+- Added session-change detection to recreate HelmService when switching target devices
+- Connected `suspendPolling()`/`resumePolling()` to connectivity changes
+- Fixed `Provider.of<NautuneAppState>(context, listen: true)` to `listen: false` — eliminated full-tree rebuilds on every app state change
+
+**Fleet Mode (SyncPlay) Reliability**
+- Fixed `oderId` typo throughout models, service, and WebSocket — renamed to `orderId`
+- Fixed `_wasCaption` typo — renamed to `_wasCaptain`
+- Fixed auto-rejoin deadlock — `_isRejoining` now always resets in `finally` block
+- Fixed `play()` — saves previous session for rollback on failure
+- Fixed `removeFromQueue` — adjusts `currentTrackIndex` when tracks before/at current position are removed
+- Fixed ping sending epoch milliseconds instead of `averageRtt`
+- Fixed `getTrackAddedBy` — tries both `playlistItemId` and `trackId` for attribution lookup
+- Added bounded attribution growth (`_maxAttributions = 500`) with FIFO eviction
+- Fixed drift correction — always restores playback rate to 1.0 after correction (was conditional)
+- Changed WebSocket `dispose()` to `Future<void>` with `await disconnect()` to prevent StateError
+- Removed unused `_participantsSubscription` field
+
+**UI Performance & Bug Fixes**
+- Removed `UniqueKey()` from FullPlayerScreen navigation — was destroying and recreating the entire widget tree on every open
+- Fixed `TextEditingController` leak in add-to-playlist dialog — added proper `dispose()` on both success and cancel paths
+- Added `VolumeUp`/`VolumeDown` handlers to remote control service (were advertised in capabilities but not handled)
+- Created shared `PaletteCacheService` singleton — 4 screens (FullPlayer, MiniPlayer, AlbumDetail, ArtistDetail) now share one palette cache instead of maintaining 4 independent copies, reducing memory usage ~4x
+
+---
+
 ### v7.5.0 - Audio Performance Deep Dive & Profile Stats UI Refresh
 
 **Audio Performance Optimizations**

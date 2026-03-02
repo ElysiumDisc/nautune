@@ -77,7 +77,8 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   List<int> _tabOrder = const [0, 1, 2, 3, 4];
   HelmService? _helmService;
-  
+  String? _helmSessionDeviceId; // Track which session the helm service was created for
+
   // Provider-based state
   NautuneAppState? _appState;
   bool? _previousOfflineMode;
@@ -106,8 +107,9 @@ class _LibraryScreenState extends State<LibraryScreen>
   void didChangeDependencies() {
     super.didChangeDependencies();
     
-    // Get appState with listening enabled for reactive updates
-    final currentAppState = Provider.of<NautuneAppState>(context, listen: true);
+    // Use listen: false to avoid rebuilding entire library on every app state change
+    // Individual widgets should use context.select() for specific properties they need
+    final currentAppState = Provider.of<NautuneAppState>(context, listen: false);
     
     if (!_hasInitialized) {
       _appState = currentAppState;
@@ -136,12 +138,20 @@ class _LibraryScreenState extends State<LibraryScreen>
         debugPrint('🔄 LibraryScreen: Connectivity changed (offline: $_previousOfflineMode -> $currentOfflineMode, network: $_previousNetworkAvailable -> $currentNetworkAvailable)');
         _previousOfflineMode = currentOfflineMode;
         _previousNetworkAvailable = currentNetworkAvailable;
+        // Suspend/resume helm polling based on connectivity
+        if (!currentNetworkAvailable || currentOfflineMode) {
+          _helmService?.suspendPolling();
+        } else {
+          _helmService?.resumePolling();
+        }
       }
     }
   }
 
   @override
   void dispose() {
+    _helmService?.dispose();
+    _helmService = null;
     _tabController.removeListener(_handleTabChange);
     _tabController.dispose();
     _albumsScrollController.dispose();
@@ -470,11 +480,16 @@ class _LibraryScreenState extends State<LibraryScreen>
                         final session = jellyfinService.session;
                         if (client == null || session == null) return;
 
-                        _helmService ??= HelmService(
-                          client: client,
-                          credentials: session.credentials,
-                          ownDeviceId: session.deviceId,
-                        );
+                        // Recreate if session changed (prevents stale credentials)
+                        if (_helmService == null || _helmSessionDeviceId != session.deviceId) {
+                          _helmService?.dispose();
+                          _helmService = HelmService(
+                            client: client,
+                            credentials: session.credentials,
+                            ownDeviceId: session.deviceId,
+                          );
+                          _helmSessionDeviceId = session.deviceId;
+                        }
 
                         HelmModeSelector.show(ctx, _helmService!);
                       },

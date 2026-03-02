@@ -20,15 +20,18 @@ class RobustHttpClient {
   }) : _client = client ?? http.Client();
 
   final http.Client _client;
+  /// Expose underlying client for backward compatibility (avoid creating new clients)
+  http.Client get client => _client;
   final int maxRetries;
   final Duration baseTimeout;
   final bool enableEtagCache;
   final int maxCacheSize;
 
   // ETag cache: URL -> {etag, lastModified, body}
-  // LRU eviction is applied when cache exceeds maxCacheSize
+  // Uses LinkedHashMap for O(1) LRU eviction (access order)
   final Map<String, _CachedResponse> _etagCache = {};
-  final List<String> _cacheOrder = []; // Track insertion order for LRU
+  // Track insertion order for LRU using a Set for O(1) removal
+  final _cacheOrder = <String>{}; // LinkedHashSet for O(1) add/remove
 
   /// GET request with retry and optional ETag caching
   Future<http.Response> get(
@@ -55,7 +58,7 @@ class RobustHttpClient {
     return _executeWithRetry(
       () => _client.get(uri, headers: effectiveHeaders).timeout(
         timeout ?? baseTimeout,
-        onTimeout: () => throw TimeoutException('Request timed out', timeout ?? baseTimeout),
+        onTimeout: () => throw HttpTimeoutException('Request timed out', timeout ?? baseTimeout),
       ),
       uri: uri,
       useCache: useCache,
@@ -76,7 +79,7 @@ class RobustHttpClient {
         body: body is String ? body : (body != null ? jsonEncode(body) : null),
       ).timeout(
         timeout ?? baseTimeout,
-        onTimeout: () => throw TimeoutException('Request timed out', timeout ?? baseTimeout),
+        onTimeout: () => throw HttpTimeoutException('Request timed out', timeout ?? baseTimeout),
       ),
       uri: uri,
       useCache: false,
@@ -92,7 +95,7 @@ class RobustHttpClient {
     return _executeWithRetry(
       () => _client.delete(uri, headers: headers).timeout(
         timeout ?? baseTimeout,
-        onTimeout: () => throw TimeoutException('Request timed out', timeout ?? baseTimeout),
+        onTimeout: () => throw HttpTimeoutException('Request timed out', timeout ?? baseTimeout),
       ),
       uri: uri,
       useCache: false,
@@ -158,7 +161,7 @@ class RobustHttpClient {
         lastError = 'Server error: ${response.statusCode}';
         debugPrint('⚠️ Retry $attempt/$maxRetries: $lastError');
         
-      } on TimeoutException catch (e) {
+      } on HttpTimeoutException catch (e) {
         lastError = e;
         debugPrint('⚠️ Timeout retry $attempt/$maxRetries: $uri');
       } on http.ClientException catch (e) {
@@ -182,7 +185,7 @@ class RobustHttpClient {
     }
 
     // All retries exhausted - provide user-friendly error
-    if (lastError is TimeoutException) {
+    if (lastError is HttpTimeoutException) {
       throw ServerSlowException(
         'Server is taking too long to respond. Check your connection or try again later.',
         uri: uri,
@@ -198,7 +201,7 @@ class RobustHttpClient {
 
   /// Add entry to cache with LRU eviction
   void _addToCache(String url, _CachedResponse response) {
-    // If already in cache, update and move to end (most recently used)
+    // If already in cache, update (remove+re-add moves to end of iteration order)
     if (_etagCache.containsKey(url)) {
       _cacheOrder.remove(url);
       _cacheOrder.add(url);
@@ -208,7 +211,8 @@ class RobustHttpClient {
 
     // Evict oldest entries if at capacity
     while (_etagCache.length >= maxCacheSize && _cacheOrder.isNotEmpty) {
-      final oldest = _cacheOrder.removeAt(0);
+      final oldest = _cacheOrder.first;
+      _cacheOrder.remove(oldest);
       _etagCache.remove(oldest);
     }
 
@@ -270,14 +274,14 @@ class RobustHttpException implements Exception {
 }
 
 /// Timeout exception for clearer error messages
-class TimeoutException implements Exception {
+class HttpTimeoutException implements Exception {
   final String message;
   final Duration timeout;
 
-  TimeoutException(this.message, this.timeout);
+  HttpTimeoutException(this.message, this.timeout);
 
   @override
-  String toString() => 'TimeoutException: $message (after ${timeout.inSeconds}s)';
+  String toString() => 'HttpTimeoutException: $message (after ${timeout.inSeconds}s)';
 }
 
 /// User-friendly exception for slow server responses

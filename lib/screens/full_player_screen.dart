@@ -22,6 +22,7 @@ import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../services/audio_player_service.dart';
 import '../services/haptic_service.dart';
+import '../services/palette_cache_service.dart';
 import '../services/ios_fft_service.dart';
 import '../services/saved_loops_service.dart';
 import '../services/share_service.dart';
@@ -105,9 +106,8 @@ class FullPlayerScreen extends StatefulWidget {
 
 class _FullPlayerScreenState extends State<FullPlayerScreen>
     with SingleTickerProviderStateMixin {
-  // Static LRU cache for palette colors - avoids re-extracting for frequently played albums
-  static final Map<String, List<Color>> _paletteCache = {};
-  static const int _maxCacheSize = 50;
+  // Shared palette cache - avoids redundant color extraction across screens
+  static final _paletteCache = PaletteCacheService.instance;
 
   StreamSubscription? _trackSub;
   late TabController _tabController;
@@ -213,7 +213,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
 
     // Check cache first - avoids expensive color extraction for repeat plays
     final cacheKey = '$itemId-$imageTag';
-    final cached = _paletteCache[cacheKey];
+    final cached = _paletteCache.get(cacheKey);
     if (cached != null) {
       if (mounted) {
         setState(() {
@@ -300,14 +300,9 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
         ];
       }
 
-      // Cache the extracted colors for future use
+      // Cache the extracted colors in shared cache for reuse across screens
       if (selectedColors.isNotEmpty) {
-        // Evict oldest entries if cache is full (simple FIFO eviction)
-        if (_paletteCache.length >= _maxCacheSize) {
-          final oldestKey = _paletteCache.keys.first;
-          _paletteCache.remove(oldestKey);
-        }
-        _paletteCache[cacheKey] = selectedColors;
+        _paletteCache.put(cacheKey, selectedColors);
       }
 
       if (mounted) {

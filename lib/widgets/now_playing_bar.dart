@@ -62,7 +62,6 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => FullPlayerScreen(
-          key: UniqueKey(), // Force fresh build
           sailorMode: isSailorMode,
         ),
       ),

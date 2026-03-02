@@ -853,19 +853,17 @@ class JellyfinService {
     
     debugPrint('🔵 markFavorite called: itemId=$itemId, shouldBeFavorite=$shouldBeFavorite');
     
-    final client = JellyfinClient(
-      serverUrl: session.serverUrl,
-      httpClient: _httpClient,
-      deviceId: session.deviceId,
-    );
+    // Reuse existing _client instead of creating a new JellyfinClient per call
+    final activeClient = _client;
+    if (activeClient == null) throw Exception('Client not initialized');
 
     if (shouldBeFavorite) {
       // Add to favorites - POST request (correct endpoint)
       final addPath = '/Users/${session.credentials.userId}/FavoriteItems/$itemId';
       debugPrint('🔵 Adding favorite - Sending POST to $addPath');
-      
+
       try {
-        final response = await client.request(
+        final response = await activeClient.request(
           method: 'POST',
           path: addPath,
           credentials: session.credentials,
@@ -880,30 +878,30 @@ class JellyfinService {
       // Remove from favorites - DELETE request (correct endpoint)
       final deletePath = '/Users/${session.credentials.userId}/FavoriteItems/$itemId';
       debugPrint('🔵 Removing favorite - Sending DELETE to $deletePath');
-      
+
       try {
-        final response = await client.request(
+        final response = await activeClient.request(
           method: 'DELETE',
           path: deletePath,
           credentials: session.credentials,
         );
         debugPrint('✅ Delete favorite response: $response');
-        
+
         // VERIFY: Fetch the item again to confirm it was unfavorited
         debugPrint('🔍 Verifying item was actually unfavorited...');
         final verifyPath = '/Users/${session.credentials.userId}/Items/$itemId';
-        final verifyResponse = await client.request(
+        final verifyResponse = await activeClient.request(
           method: 'GET',
           path: verifyPath,
           credentials: session.credentials,
         );
         final actualIsFavorite = verifyResponse['UserData']?['IsFavorite'] ?? false;
         debugPrint('🔍 Server confirms IsFavorite=$actualIsFavorite');
-        
+
         if (actualIsFavorite) {
           throw Exception('Failed to unfavorite: Server still shows as favorite!');
         }
-        
+
         debugPrint('✅ Successfully removed item $itemId from Jellyfin favorites');
       } catch (e) {
         debugPrint('❌ Failed to remove favorite: $e');
@@ -919,14 +917,10 @@ class JellyfinService {
   Future<List<JellyfinAlbum>> getFavoriteAlbums() async {
     final session = _session;
     if (session == null) return [];
+    final activeClient = _client;
+    if (activeClient == null) return [];
 
-    final client = JellyfinClient(
-      serverUrl: session.serverUrl,
-      httpClient: _httpClient,
-      deviceId: session.deviceId,
-    );
-
-    final response = await client.request(
+    final response = await activeClient.request(
       method: 'GET',
       path: '/Users/${session.credentials.userId}/Items',
       credentials: session.credentials,
@@ -946,14 +940,10 @@ class JellyfinService {
   Future<List<JellyfinTrack>> getFavoriteTracks() async {
     final session = _session;
     if (session == null) return [];
+    final activeClient = _client;
+    if (activeClient == null) return [];
 
-    final client = JellyfinClient(
-      serverUrl: session.serverUrl,
-      httpClient: _httpClient,
-      deviceId: session.deviceId,
-    );
-
-    final response = await client.request(
+    final response = await activeClient.request(
       method: 'GET',
       path: '/Users/${session.credentials.userId}/Items',
       credentials: session.credentials,
@@ -1375,9 +1365,10 @@ class JellyfinService {
       return;
     }
 
-    // Evict oldest entries if at capacity
+    // Evict oldest entries if at capacity (use .first instead of removeAt(0) for Sets)
     while (cache.length >= _maxCacheSize && cacheOrder.isNotEmpty) {
-      final oldest = cacheOrder.removeAt(0);
+      final oldest = cacheOrder.first;
+      cacheOrder.remove(oldest);
       cache.remove(oldest);
     }
 

@@ -20,7 +20,7 @@ cp linux/nautune.desktop AppDir/ && \
 cp linux/nautune.png AppDir/ && \
 cd AppDir && ln -s usr/bin/nautune AppRun && cd .. && \
 mkdir -p dist && \
-ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-7.5.0.AppImage
+ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-7.6.0.AppImage
 ```
 
 ### Build Deb Package (Linux)
@@ -267,11 +267,12 @@ flutter run -d linux --dart-define=TUI_MODE=true
 
 ## 🛠 Technical Foundation
 - **Framework**: Flutter (Dart)
-- **Local Storage**: Hive (NoSQL) for high-speed metadata caching
-- **Audio Engine**: Audioplayers with custom platform-specific optimizations
+- **Local Storage**: Hive (NoSQL) for high-speed metadata caching, serialized via chained futures
+- **Audio Engine**: Audioplayers with custom platform-specific optimizations, crossfade via player swapping
+- **HTTP**: RobustHttpClient with retry, ETag cache (O(1) LRU eviction via LinkedHashSet)
 - **Equalizer**: PulseAudio LADSPA (Linux only)
 - **FFT Processing**: Custom Cooley-Tukey (Linux), Apple Accelerate vDSP (iOS)
-- **Image Processing**: Material Color Utilities for vibrant palette generation
+- **Image Processing**: Material Color Utilities for vibrant palette generation, shared PaletteCacheService singleton across all screens
 
 ## 📂 File Structure (Linux)
 Nautune follows a clean data structure on Linux for easy backups and management:
