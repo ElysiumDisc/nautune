@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui show Image, ImageFilter;
 
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart' hide RepeatMode;
 import 'package:flutter/rendering.dart';
@@ -116,8 +117,9 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   String? _lyricsSource; // Track where lyrics came from
   late AudioPlayerService _audioService;
   late NautuneAppState _appState;
-  late LyricsService _lyricsService;
+  LyricsService? _lyricsService;
   List<Color>? _paletteColors;
+  double? _cachedAvgLuminance; // Cached luminance from _paletteColors
 
   // Lyrics scrolling state
   final ScrollController _lyricsScrollController = ScrollController();
@@ -151,7 +153,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     // Get services from Provider
     _appState = Provider.of<NautuneAppState>(context, listen: false);
     _audioService = _appState.audioService;
-    _lyricsService = LyricsService(jellyfinService: _appState.jellyfinService);
+    _lyricsService ??= LyricsService(jellyfinService: _appState.jellyfinService);
     _playerSnapshotStream ??= _audioService.playerSnapshotStream;
 
     // Set up stream listeners only once
@@ -207,6 +209,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     if (imageTag == null || imageTag.isEmpty) {
       setState(() {
         _paletteColors = null;
+        _cachedAvgLuminance = null;
       });
       return;
     }
@@ -218,6 +221,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
       if (mounted) {
         setState(() {
           _paletteColors = cached;
+          _cachedAvgLuminance = _computeAvgLuminance(cached);
         });
       }
       return;
@@ -226,6 +230,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     // Clear old colors immediately to prevent showing stale gradient
     setState(() {
       _paletteColors = null;
+      _cachedAvgLuminance = null;
     });
 
     try {
@@ -248,7 +253,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
           tag: imageTag,
           maxWidth: 100,
         );
-        imageProvider = NetworkImage(
+        imageProvider = CachedNetworkImageProvider(
           imageUrl,
           headers: _appState.jellyfinService.imageHeaders(),
         );
@@ -308,11 +313,22 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
       if (mounted) {
         setState(() {
           _paletteColors = selectedColors;
+          _cachedAvgLuminance = _computeAvgLuminance(selectedColors);
         });
       }
     } catch (e) {
       debugPrint('Failed to extract colors: $e');
     }
+  }
+
+  static double? _computeAvgLuminance(List<Color>? colors) {
+    if (colors == null || colors.isEmpty) return null;
+    final colorsToCheck = colors.take(2).toList();
+    double total = 0;
+    for (final c in colorsToCheck) {
+      total += c.computeLuminance();
+    }
+    return total / colorsToCheck.length;
   }
 
   Future<void> _switchToMiniPlayer() async {
@@ -795,7 +811,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     });
 
     try {
-      final result = await _lyricsService.getLyrics(track);
+      final result = await _lyricsService?.getLyrics(track);
 
       List<_LyricLine>? parsedLyrics;
       String? source;
@@ -833,7 +849,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     });
 
     try {
-      final result = await _lyricsService.refreshLyrics(track);
+      final result = await _lyricsService?.refreshLyrics(track);
 
       List<_LyricLine>? parsedLyrics;
       String? source;
@@ -916,6 +932,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     final theme = Theme.of(context);
     final loopState = _audioService.loopState;
     final savedLoopsService = SavedLoopsService();
+    final savedLoopsFuture = savedLoopsService.initialize().then((_) => savedLoopsService.getLoopsForTrack(track.id));
 
     showModalBottomSheet(
       context: context,
@@ -1012,7 +1029,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
 
               // Show saved loops for this track if any
               FutureBuilder(
-                future: savedLoopsService.initialize().then((_) => savedLoopsService.getLoopsForTrack(track.id)),
+                future: savedLoopsFuture,
                 builder: (context, snapshot) {
                   final savedLoops = snapshot.data ?? [];
                   if (savedLoops.isEmpty) return const SizedBox.shrink();
@@ -1319,26 +1336,14 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
       return theme.colorScheme.onSurface.withValues(alpha: alpha);
     }
 
-    // Compute average luminance from palette colors
-    if (_paletteColors == null || _paletteColors!.isEmpty) {
+    final avgLuminance = _cachedAvgLuminance;
+    if (avgLuminance == null) {
       return theme.colorScheme.onSurface.withValues(alpha: alpha);
     }
 
-    // Calculate average luminance of the first 2 colors (most prominent)
-    double totalLuminance = 0;
-    final colorsToCheck = _paletteColors!.take(2).toList();
-    for (final color in colorsToCheck) {
-      totalLuminance += color.computeLuminance();
-    }
-    final avgLuminance = totalLuminance / colorsToCheck.length;
-
-    // WCAG recommendation: use dark text on light backgrounds, light text on dark backgrounds
-    // Threshold of 0.5 is standard for luminance-based contrast decisions
     if (avgLuminance > 0.5) {
-      // Light background - use dark text
       return Colors.black.withValues(alpha: alpha * 0.87);
     } else {
-      // Dark background - use light text
       return Colors.white.withValues(alpha: alpha);
     }
   }
@@ -1500,7 +1505,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
             newFavoriteStatus ? 'Added to favorites' : 'Removed from favorites',
           ),
           duration: const Duration(seconds: 2),
-          backgroundColor: Colors.green,
+          backgroundColor: Theme.of(context).colorScheme.primary,
         ),
       );
     } catch (e) {
@@ -2056,9 +2061,20 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                             JellyfinArtist? artist;
 
                             try {
-                              // First, search in already loaded artists
+                              // First, try direct ID-based lookup from track metadata
+                              final artistId = track.artistIds.isNotEmpty
+                                  ? track.artistIds.first
+                                  : null;
                               var artists = _appState.artists ?? [];
-                              artist = artists
+
+                              if (artistId != null) {
+                                artist = artists
+                                    .where((a) => a.id == artistId)
+                                    .firstOrNull;
+                              }
+
+                              // Fall back to name-based search
+                              artist ??= artists
                                   .where(
                                     (a) =>
                                         a.name.toLowerCase() ==
@@ -2073,7 +2089,12 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                   await _appState.loadMoreArtists();
                                   artists = _appState.artists ?? [];
 
-                                  artist = artists
+                                  if (artistId != null) {
+                                    artist = artists
+                                        .where((a) => a.id == artistId)
+                                        .firstOrNull;
+                                  }
+                                  artist ??= artists
                                       .where(
                                         (a) =>
                                             a.name.toLowerCase() ==
@@ -2733,7 +2754,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                           : 'Removed from favorites',
                                     ),
                                     duration: const Duration(seconds: 2),
-                                    backgroundColor: Colors.green,
+                                    backgroundColor: Theme.of(context).colorScheme.primary,
                                   ),
                                 );
                               } catch (e) {

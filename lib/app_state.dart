@@ -169,7 +169,6 @@ class NautuneAppState extends ChangeNotifier {
 
   bool _initialized = false;
   JellyfinSession? _session;
-  final bool _isAuthenticating = false;
   Object? _lastError;
   bool _isLoadingLibraries = false;
   Object? _librariesError;
@@ -180,6 +179,7 @@ class NautuneAppState extends ChangeNotifier {
   bool _isLoadingMoreAlbums = false;
   bool _hasMoreAlbums = true;
   int _albumsPage = 0;
+  int _albumsLoadId = 0;
   static const int _albumsPageSize = 50;
   
   bool _isLoadingArtists = false;
@@ -283,7 +283,6 @@ class NautuneAppState extends ChangeNotifier {
     if (_session != newSession) {
       debugPrint('[NautuneAppState] Updating local session. New Lib ID: ${newSession?.selectedLibraryId}');
       _session = newSession;
-      notifyListeners();
 
       // If the new session is a demo session, prefer demo provider data and avoid
       // triggering network loads which may overwrite demo collections before the
@@ -366,7 +365,6 @@ class NautuneAppState extends ChangeNotifier {
 
   // --- End of _onSessionChanged ---
 
-  bool get isAuthenticating => _isAuthenticating;
   JellyfinSession? get session => _session;
   Object? get lastError => _lastError;
   bool get isLoadingLibraries => _isLoadingLibraries;
@@ -421,7 +419,7 @@ class NautuneAppState extends ChangeNotifier {
   /// Get the appropriate repository based on offline mode.
   /// Returns OfflineRepository when offline, OnlineRepository when online.
   MusicRepository get repository => RepositoryFactory.create(
-        isOfflineMode: _userWantsOffline,
+        isOfflineMode: isOfflineMode,
         jellyfinService: _jellyfinService,
         downloadService: _downloadService,
       );
@@ -1947,6 +1945,7 @@ class NautuneAppState extends ChangeNotifier {
     _albumsError = null;
     _isLoadingAlbums = true;
     _albumsPage = 0;
+    _albumsLoadId++;
     _hasMoreAlbums = true;
     notifyListeners();
 
@@ -2011,6 +2010,7 @@ class NautuneAppState extends ChangeNotifier {
     }
 
     _isLoadingMoreAlbums = true;
+    final loadId = _albumsLoadId;
     notifyListeners();
 
     try {
@@ -2022,11 +2022,14 @@ class NautuneAppState extends ChangeNotifier {
         sortBy: _albumSortBy,
         sortOrder: _albumSortOrder,
       );
-      
+
+      // Discard results if sort/load changed while awaiting
+      if (_albumsLoadId != loadId) return;
+
       if (newAlbums.isEmpty || newAlbums.length < _albumsPageSize) {
         _hasMoreAlbums = false;
       }
-      
+
       _albums = [..._albums!, ...newAlbums];
     } catch (error) {
       debugPrint('Error loading more albums: $error');
@@ -2808,6 +2811,8 @@ class NautuneAppState extends ChangeNotifier {
     _sessionProvider?.removeListener(_onSessionChanged);
     _carPlayService?.dispose();
     _remoteControlService?.dispose();
+    _audioPlayerService.dispose();
+    _trayService?.dispose();
     super.dispose();
   }
 

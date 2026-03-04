@@ -1613,8 +1613,11 @@ class AudioPlayerService {
     const stepDuration = Duration(milliseconds: 50);
     final startVolume = _volume;
     final currentMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
+    final fadeTrack = _currentTrack;
 
     for (int i = 0; i < steps; i++) {
+      // Abort fade if track changed mid-fade
+      if (_currentTrack != fadeTrack) return;
       final vol = startVolume * (1.0 - ((i + 1) / steps));
       await _player.setVolume((vol * currentMultiplier).clamp(0.0, 1.0));
       await Future.delayed(stepDuration);

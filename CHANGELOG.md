@@ -1,3 +1,53 @@
+### v7.7.0 - Deep Quality Audit: Bug Fixes, Performance Hardening & Code Architecture
+
+**Critical Bug Fixes**
+- Fixed LibraryScreen reactivity — `Provider.of` was using `listen: false`, causing album/artist lists not to load, offline toggle delays, and airplane mode not reflecting
+- Fixed alphabet scrollbar aspect ratio mismatch — itemHeight used `/ 0.75` but grid uses `childAspectRatio: 0.7`
+- Fixed alphabet scrollbar SliverPadding drift in grid mode — added 16px correction per group
+- Fixed alphabet accent normalization mismatch — sections now use the same `normalizeToBaseLetter` as the scrollbar
+- Fixed `DownloadService._loadDownloads` crash — unsafe `as int` cast replaced with safe `as num?` pattern
+- Fixed `OfflineRepository.getArtistAlbums` — was comparing artist UUIDs against display names (always failed)
+- Fixed `ConnectivityService.onStatusChange` stream dying silently on `OSError` (Linux interface down)
+- Fixed SyncPlay playback rate stuck at 1.02/0.98x after session cleanup — now resets to 1.0
+
+**Performance**
+- Replaced raw `NetworkImage` with `CachedNetworkImageProvider` for palette extraction in full player, album, and artist screens
+- Replaced double `StreamBuilder` in `NowPlayingBar` with single `StreamBuilder<PlayerSnapshot>`
+- Cached `_getAdaptiveTextColor()` luminance — no longer recomputes every ~250ms during playback
+- Fixed `FullPlayerScreen` creating new `LyricsService` on every `didChangeDependencies` — guarded with `??=`
+- Fixed `_showLoopOptionsSheet` FutureBuilder reconstructing future on every build
+- Merged double `notifyListeners()` in `_onSessionChanged`
+
+**Logic & Correctness**
+- Fixed `repository` getter using `_userWantsOffline` instead of `isOfflineMode` — offline repository now activates when network drops
+- Fixed `_fadeOutAndPause` race with rapid track skips — aborts fade if track changed mid-fade
+- Fixed download progress stuck at 0% when server omits `Content-Length` — now shows indeterminate progress
+- Fixed `loadMoreAlbums` potential data duplication on concurrent sort change — added load ID counter
+- Fixed artist navigation in FullPlayerScreen — uses artist ID for direct lookup before falling back to name search
+
+**Memory Leak & Dispose**
+- Added `_audioPlayerService.dispose()` and `_trayService?.dispose()` to `NautuneAppState.dispose()`
+
+**Dead Code Cleanup**
+- Removed unused `_RecentTab` class (~260 lines), dead `_onPlaylistsScroll` method, commented-out offline block
+- Removed dead `_isAuthenticating` field from app state
+- Removed dead `getArtworkPath` method from download service
+
+**UI Quality & Theme Consistency**
+- Replaced hardcoded `Colors.red.shade300`, `Colors.green`, `Colors.red`, `Colors.grey.shade600` with theme colors throughout
+- Added text overflow handling to error states
+- Extracted duplicate `_extractColorsFromBytes` to shared `lib/utils/color_utils.dart`
+- Added Tooltip to offline mode wave icon
+
+**Code Architecture**
+- Split `library_screen.dart` (6030 lines) into modular `part` files:
+  - `tabs/albums_tab.dart`, `tabs/artists_tab.dart`, `tabs/favorites_tab.dart`, `tabs/genres_tab.dart`
+  - `tabs/home_tab.dart`, `tabs/playlists_tab.dart`, `tabs/search_tab.dart`
+  - `widgets/alphabet_scrollbar.dart`
+- Main file reduced from 6030 to 1322 lines
+
+---
+
 ### v7.6.0 - Deep Bug Hunt, Performance Hardening & SyncPlay/Helm Reliability
 
 **Audio Pipeline Fixes**

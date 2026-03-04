@@ -22,7 +22,13 @@ class ConnectivityService {
 
   /// Emits [true] when the internet appears reachable and [false] otherwise.
   Stream<bool> get onStatusChange => _connectivity.onConnectivityChanged
-      .asyncMap((results) => _probeConnection(_extractPrimaryResult(results)));
+      .asyncMap((results) async {
+        try {
+          return await _probeConnection(_extractPrimaryResult(results));
+        } catch (_) {
+          return false;
+        }
+      });
 
   /// Performs an immediate connectivity check.
   Future<bool> hasNetworkConnection() async {

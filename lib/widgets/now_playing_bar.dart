@@ -81,25 +81,21 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
       return _buildSailorBar(context, theme, syncPlay);
     }
 
-    // Normal mode: Show audio player track
-    return StreamBuilder<JellyfinTrack?>(
-      stream: audioService.currentTrackStream,
-      initialData: audioService.currentTrack,
-      builder: (context, trackSnapshot) {
-        final track = trackSnapshot.data ?? audioService.currentTrack;
+    // Normal mode: Show audio player track using single snapshot stream
+    return StreamBuilder<PlayerSnapshot>(
+      stream: audioService.playerSnapshotStream,
+      initialData: PlayerSnapshot(
+        track: audioService.currentTrack,
+        isPlaying: false,
+      ),
+      builder: (context, snapshot) {
+        final data = snapshot.data;
+        final track = data?.track ?? audioService.currentTrack;
         if (track == null) {
           return const SizedBox.shrink();
         }
-
-        return StreamBuilder<bool>(
-          stream: audioService.playingStream,
-          initialData: false,
-          builder: (context, playingSnapshot) {
-            final isPlaying = playingSnapshot.data ?? false;
-
-            return _buildNormalBar(context, theme, track, isPlaying);
-          },
-        );
+        final isPlaying = data?.isPlaying ?? false;
+        return _buildNormalBar(context, theme, track, isPlaying);
       },
     );
   }

@@ -153,7 +153,7 @@ class OfflineRepository implements MusicRepository {
     // Find all albums by this artist
     for (final download in downloads) {
       final track = download.track;
-      if (track.artists.contains(artistId) || track.displayArtist == artistId) {
+      if (track.artistIds.contains(artistId) || track.artists.contains(artistId) || track.displayArtist == artistId) {
         final albumId = track.albumId ?? 'unknown';
         final albumName = track.album ?? 'Unknown Album';
 

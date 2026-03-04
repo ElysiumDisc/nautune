@@ -445,13 +445,13 @@ class DownloadService extends ChangeNotifier {
           // Fix duration loading logic
           int? runTimeTicks;
           if (itemData['runTimeTicks'] != null) {
-            runTimeTicks = itemData['runTimeTicks'] as int;
+            runTimeTicks = (itemData['runTimeTicks'] as num?)?.toInt();
           } else if (itemData['trackDuration'] != null) {
             // Legacy format: was stored as milliseconds
             // Need to convert to ticks (1 ms = 10,000 ticks)
             // But previous code might have multiplied by 10 (micros) or other errors
             // Apply heuristic healing if the value seems impossibly large (e.g. > 24 hours)
-            int val = (itemData['trackDuration'] as int);
+            int val = (itemData['trackDuration'] as num?)?.toInt() ?? 0;
             
             // If it was already stored as ticks in the duration field by mistake
             if (val > 360000000000) { // > 10 hours
@@ -805,17 +805,6 @@ class DownloadService extends ChangeNotifier {
     }
   }
 
-  Future<String?> getArtworkPath(String trackId) async {
-    // Return cached artwork path if it exists
-    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      final path = 'downloads/artwork/$trackId.jpg';
-      if (await File(path).exists()) {
-        return path;
-      }
-    }
-    return null;
-  }
-
   Future<File?> getArtworkFile(String trackId) async {
     // Look up the track to get its albumId (artwork is stored by album, not track)
     final item = _downloads[trackId];
@@ -1025,7 +1014,8 @@ class DownloadService extends ChangeNotifier {
         sink.add(chunk);
         downloadedBytes += chunk.length;
 
-        final progress = totalBytes > 0 ? downloadedBytes / totalBytes : 0.0;
+        // Use -1.0 for indeterminate progress when Content-Length is unknown
+        final progress = totalBytes > 0 ? downloadedBytes / totalBytes : -1.0;
         _downloads[trackId] = _downloads[trackId]!.copyWith(
           progress: progress,
           totalBytes: totalBytes,

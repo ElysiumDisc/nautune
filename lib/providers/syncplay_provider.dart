@@ -313,9 +313,12 @@ class SyncPlayProvider extends ChangeNotifier {
     _isLoading = false;
     _isCreating = false;
     _isJoining = false;
+    _isInitializing = false;
     _error = null;
     _connectionQuality = ConnectionQuality.disconnected;
     _reconnectionState = ReconnectionState.idle;
+    // Reset playback rate in case drift correction was active
+    _audioPlayerService.setPlaybackRate(1.0);
     notifyListeners();
   }
 
