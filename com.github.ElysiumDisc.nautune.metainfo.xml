@@ -60,6 +60,24 @@
   </categories>
 
   <releases>
+    <release version="7.7.0" date="2026-03-04">
+      <description>
+        <p>v7.7.0: Deep Quality Audit — Bug Fixes, Performance Hardening &amp; Code Architecture</p>
+        <ul>
+          <li>Fix: Library screen reactivity restored — albums/artists now load immediately</li>
+          <li>Fix: Alphabet scrollbar accuracy — correct aspect ratio and padding alignment</li>
+          <li>Fix: Offline artist albums now match by ID instead of display name</li>
+          <li>Fix: Connectivity stream no longer dies silently on Linux network interface changes</li>
+          <li>Fix: SyncPlay playback rate resets properly after session cleanup</li>
+          <li>Performance: Cached network images for palette extraction, single StreamBuilder in now playing bar</li>
+          <li>Performance: Cached luminance computation, guarded LyricsService initialization</li>
+          <li>Fix: Offline repository activates when network drops, not just on manual toggle</li>
+          <li>Fix: Download progress shows indeterminate when server omits Content-Length</li>
+          <li>Replaced hardcoded colors with theme system throughout</li>
+          <li>Split library_screen.dart (6030 lines) into modular architecture (8 focused files)</li>
+        </ul>
+      </description>
+    </release>
     <release version="6.7.2" date="2026-02-06">
       <description>
         <p>v6.7.2: Stats, Discovery &amp; Lock Screen Fixes</p>
