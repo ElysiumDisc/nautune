@@ -13,7 +13,6 @@ class CarPlayService {
   final FlutterCarplay _carplay = FlutterCarplay();
   bool _isInitialized = false;
   bool _isConnected = false;
-  StreamSubscription? _playbackSubscription;
   Timer? _refreshDebounceTimer;
   bool _userHasNavigated = false;
   DateTime _lastNavigationTime = DateTime(2000);
@@ -60,11 +59,6 @@ class CarPlayService {
   }
   
   void _setupListeners() {
-    // Listen to playback state changes for Now Playing updates
-    _playbackSubscription = appState.audioPlayerService.currentTrackStream.listen(
-      _onPlaybackChanged,
-    );
-    
     // Listen for CarPlay connection events using the correct API
     _carplay.addListenerOnConnectionChange((ConnectionStatusTypes status) {
       switch (status) {
@@ -119,17 +113,6 @@ class CarPlayService {
           _refreshRootTemplate();
         }
       });
-    }
-  }
-  
-  void _onPlaybackChanged(JellyfinTrack? track) {
-    if (track != null && _isConnected) {
-      updateNowPlaying(
-        trackId: track.id,
-        title: track.name,
-        artist: track.displayArtist,
-        album: track.album,
-      );
     }
   }
   
@@ -311,6 +294,9 @@ class CarPlayService {
   Future<void> _showAlbums({int offset = 0}) async {
     _markUserNavigation();
     try {
+      // Pop current page before pushing replacement (avoids stacking pages)
+      if (offset > 0) await FlutterCarplay.pop(animated: false);
+
       List<JellyfinAlbum> allAlbums;
 
       // In offline mode, get albums from downloaded content
@@ -342,6 +328,8 @@ class CarPlayService {
           allAlbums = appState.albums ?? [];
         }
       }
+
+      if (!_isConnected) return;
 
       if (allAlbums.isEmpty) {
         await _showEmptyState('Albums', 'No albums available');
@@ -395,6 +383,9 @@ class CarPlayService {
   Future<void> _showArtists({int offset = 0}) async {
     _markUserNavigation();
     try {
+      // Pop current page before pushing replacement (avoids stacking pages)
+      if (offset > 0) await FlutterCarplay.pop(animated: false);
+
       List<JellyfinArtist> allArtists;
 
       // In offline mode, get artists from downloaded content
@@ -426,6 +417,8 @@ class CarPlayService {
           allArtists = appState.artists ?? [];
         }
       }
+
+      if (!_isConnected) return;
 
       if (allArtists.isEmpty) {
         await _showEmptyState('Artists', 'No artists available');
@@ -478,6 +471,9 @@ class CarPlayService {
   Future<void> _showPlaylists({int offset = 0}) async {
     _markUserNavigation();
     try {
+      // Pop current page before pushing replacement (avoids stacking pages)
+      if (offset > 0) await FlutterCarplay.pop(animated: false);
+
       // In offline mode, playlists are not supported yet
       if (appState.isOfflineMode) {
         await _showEmptyState('Playlists', 'Playlists not available offline');
@@ -505,6 +501,8 @@ class CarPlayService {
         await appState.refreshPlaylists();
         allPlaylists = appState.playlists ?? [];
       }
+
+      if (!_isConnected) return;
 
       if (allPlaylists.isEmpty) {
         await _showEmptyState('Playlists', 'No playlists available');
@@ -561,6 +559,7 @@ class CarPlayService {
       // getAlbumTracks usually hits API directly or cache, it doesn't set a global loading state
       // but it's a future so we just await it.
       final tracks = await appState.getAlbumTracks(albumId);
+      if (!_isConnected) return;
 
       if (tracks.isEmpty) {
         await _showEmptyState(albumName, 'No tracks in this album');
@@ -615,22 +614,11 @@ class CarPlayService {
           );
           albums = allAlbums.where((album) => album.artists.contains(artistName)).toList();
         }
+        if (!_isConnected) return;
       } else {
-        // If we don't have data and aren't loading, trigger load and wait
-        if (appState.albums == null && !appState.isLoadingAlbums) {
-          await appState.refreshAlbums();
-        } else if (appState.isLoadingAlbums) {
-          // If already loading, wait for it to finish
-          await _waitFor(() => !appState.isLoadingAlbums);
-        }
-
-        final albumsList = appState.albums ?? [];
-        albums = albumsList.where((album) {
-          if (album.artistIds.contains(artistId)) {
-            return true;
-          }
-          return album.artists.contains(artistName);
-        }).toList();
+        // Use server-side filtering instead of loading all albums and filtering client-side
+        albums = await appState.jellyfinService.loadAlbumsByArtist(artistId: artistId);
+        if (!_isConnected) return;
       }
 
       if (albums.isEmpty) {
@@ -664,6 +652,7 @@ class CarPlayService {
     _markUserNavigation();
     try {
       final tracks = await appState.getPlaylistTracks(playlistId);
+      if (!_isConnected) return;
 
       if (tracks.isEmpty) {
         await _showEmptyState(playlistName, 'No tracks in this playlist');
@@ -705,6 +694,9 @@ class CarPlayService {
   Future<void> _showFavorites({int offset = 0}) async {
     _markUserNavigation();
     try {
+      // Pop current page before pushing replacement (avoids stacking pages)
+      if (offset > 0) await FlutterCarplay.pop(animated: false);
+
       List<JellyfinTrack> allFavorites;
 
       // In offline mode, get favorites from downloaded content
@@ -721,6 +713,8 @@ class CarPlayService {
 
         allFavorites = appState.favoriteTracks ?? [];
       }
+
+      if (!_isConnected) return;
 
       if (allFavorites.isEmpty) {
         await _showEmptyState('Favorites', 'No favorite tracks yet');
@@ -782,6 +776,9 @@ class CarPlayService {
   Future<void> _showRecentlyPlayed({int offset = 0}) async {
     _markUserNavigation();
     try {
+      // Pop current page before pushing replacement (avoids stacking pages)
+      if (offset > 0) await FlutterCarplay.pop(animated: false);
+
       // In offline mode, recently played is not available
       if (appState.isOfflineMode) {
         await _showEmptyState('Recently Played', 'Not available offline');
@@ -797,6 +794,8 @@ class CarPlayService {
       }
 
       final allRecent = appState.recentlyPlayedTracks ?? [];
+
+      if (!_isConnected) return;
 
       if (allRecent.isEmpty) {
         await _showEmptyState('Recently Played', 'No listening history yet');
@@ -858,6 +857,9 @@ class CarPlayService {
   Future<void> _showDownloads({int offset = 0}) async {
     _markUserNavigation();
     try {
+      // Pop current page before pushing replacement (avoids stacking pages)
+      if (offset > 0) await FlutterCarplay.pop(animated: false);
+
       final allDownloads = appState.downloadService.completedDownloads;
 
       if (allDownloads.isEmpty) {
@@ -948,19 +950,8 @@ class CarPlayService {
     }
   }
 
-  void updateNowPlaying({
-    required String trackId,
-    required String title,
-    required String artist,
-    String? album,
-  }) {
-    // Now Playing info is handled by audio_service plugin automatically
-    // This method is kept for API compatibility and potential future extensions
-  }
-  
   void dispose() {
     _refreshDebounceTimer?.cancel();
-    _playbackSubscription?.cancel();
     _carplay.removeListenerOnConnectionChange();
     appState.removeListener(_onAppStateChanged);
   }

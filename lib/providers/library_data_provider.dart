@@ -325,7 +325,7 @@ class LibraryDataProvider extends ChangeNotifier {
         _hasMoreAlbums = false;
       }
 
-      _albums = [..._albums!, ...newAlbums];
+      _albums = List.of(_albums!)..addAll(newAlbums);
     } catch (error) {
       debugPrint('LibraryDataProvider: Error loading more albums: $error');
       _albumsPage--; // Revert page on error
@@ -414,7 +414,7 @@ class LibraryDataProvider extends ChangeNotifier {
         _hasMoreArtists = false;
       }
 
-      _artists = [..._artists!, ...newArtists];
+      _artists = List.of(_artists!)..addAll(newArtists);
     } catch (error) {
       debugPrint('LibraryDataProvider: Error loading more artists: $error');
       _artistsPage--; // Revert page on error

@@ -707,6 +707,12 @@ class DownloadService extends ChangeNotifier {
 
       final response = await http.get(Uri.parse(artworkUrl));
       if (response.statusCode == 200) {
+        // Validate response is actually an image before caching
+        final contentType = response.headers['content-type'] ?? '';
+        if (!contentType.startsWith('image/')) {
+          debugPrint('Artwork response is not an image ($contentType), skipping');
+          return;
+        }
         await file.writeAsBytes(response.bodyBytes);
         debugPrint('Artwork cached for album: $albumId');
       }

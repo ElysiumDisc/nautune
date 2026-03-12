@@ -152,6 +152,10 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
   /// Returns immediately if no update is pending, with a platform-aware timeout.
   /// iOS needs more time for audio session configuration; Android is faster.
   Future<void> awaitMediaSessionUpdate() {
+    // Complete any previous pending completer to avoid orphaned awaiters
+    if (_mediaUpdateCompleter != null && !_mediaUpdateCompleter!.isCompleted) {
+      _mediaUpdateCompleter!.complete();
+    }
     _mediaUpdateCompleter = Completer<void>();
     final timeout = Platform.isIOS
         ? const Duration(milliseconds: 750)

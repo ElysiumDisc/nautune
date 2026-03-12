@@ -618,6 +618,7 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
 | Android Build | Android | 🔜 Planned |
 | Helm Mode (Remote Control) | All | ✅ Complete (v6.7, fixed v6.8, hardened v7.6-7.7) |
 | Fleet Mode (SyncPlay) | All | ✅ Complete (v6.7, hardened v7.6-7.7) |
+| CarPlay Overhaul | iOS | ✅ Complete (v7.3, hardened v8.0) |
 | Flatpak Packaging | Linux | ✅ Complete (v6.7) |
 | Additional Visualizers | All | ✅ Complete |
 

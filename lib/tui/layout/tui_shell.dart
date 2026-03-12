@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -60,6 +61,7 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
   bool _isSearchMode = false;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
 
   // Help overlay state
   bool _showHelp = false;
@@ -72,6 +74,10 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
 
   // Piano overlay state
   bool _showPiano = false;
+
+  // Stream subscriptions from _loadInitialData
+  StreamSubscription? _queueSubscription;
+  StreamSubscription? _trackColorSubscription;
 
   // Animation ticker for color lerp
   late Ticker _colorTicker;
@@ -126,7 +132,7 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
     _artistListState.setItems(artists);
 
     // Listen to queue changes
-    appState.audioPlayerService.queueStream.listen((queue) {
+    _queueSubscription = appState.audioPlayerService.queueStream.listen((queue) {
       if (mounted) {
         setState(() {
           _queueListState.setItems(queue);
@@ -135,7 +141,7 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
     });
 
     // Listen to track changes for color extraction
-    appState.audioPlayerService.currentTrackStream.listen((track) {
+    _trackColorSubscription = appState.audioPlayerService.currentTrackStream.listen((track) {
       if (mounted && track != null) {
         _extractColorFromTrack(track, appState);
       }
@@ -150,8 +156,11 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
 
   @override
   void dispose() {
+    _queueSubscription?.cancel();
+    _trackColorSubscription?.cancel();
     _colorTicker.dispose();
     _focusNode.dispose();
+    _searchFocusNode.dispose();
     _keyBindings.dispose();
     _albumListState.dispose();
     _artistListState.dispose();
@@ -314,6 +323,7 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
             Expanded(
               child: TextField(
                 controller: _searchController,
+                focusNode: _searchFocusNode,
                 autofocus: true,
                 style: TuiTextStyles.normal,
                 decoration: InputDecoration(
@@ -353,8 +363,9 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
       return;
     }
 
-    // Handle search mode separately
-    if (_isSearchMode) {
+    // Handle search mode separately - guard against Enter key race condition
+    // (onSubmitted may have already set _isSearchMode = false before this fires)
+    if (_isSearchMode || _searchFocusNode.hasFocus) {
       if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
         setState(() {
           _isSearchMode = false;
@@ -460,6 +471,11 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
           _isSearchMode = true;
           _selectedSection = TuiSidebarItem.search;
           _focus = TuiFocus.content;
+          _searchController.clear();
+        });
+        // Explicitly request focus for the search field after rebuild
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _searchFocusNode.requestFocus();
         });
         break;
 

@@ -1,3 +1,35 @@
+### v8.0.0 - Deep Bug Hunt, CarPlay Overhaul & Cross-Platform Reliability
+
+**TUI Search Fix**
+- Fixed broken search in TUI mode — `autofocus: true` was unreliable when parent `KeyboardListener` held focus
+- Added dedicated `_searchFocusNode` with explicit `requestFocus()` via `addPostFrameCallback` after search mode activation
+- Fixed search controller not being cleared when entering search mode
+- Fixed Enter key race condition — `onSubmitted` could set `_isSearchMode = false` before the key handler fired, causing double-processing
+- Fixed stream subscription leaks in `tui_shell.dart` — `queueStream` and `currentTrackStream` listeners now properly tracked and cancelled in `dispose()`
+
+**iOS Piano Audio Fix**
+- Fixed piano easter egg producing no sound on iOS/macOS
+- Root cause: `AudioPlayer` instances in the synth pool had no `AudioContext` configured — iOS requires explicit audio session category
+- Fix: Added `AVAudioSessionCategory.playback` with `mixWithOthers` option so piano doesn't interrupt music playback
+
+**CarPlay Overhaul (4 Fixes)**
+- Replaced client-side artist album filtering with server-side `loadAlbumsByArtist()` API call — eliminates downloading entire album library just to show one artist's albums
+- Fixed "Load More" pagination stacking templates on the nav stack — now pops current page before pushing replacement via `FlutterCarplay.pop(animated: false)`
+- Removed dead `updateNowPlaying()` no-op method and its `_onPlaybackChanged` listener + `_playbackSubscription` — Now Playing is handled by `audio_service` automatically
+- Added `if (!_isConnected) return;` guards after every async data-fetching gap — prevents pushing templates to a disconnected CarPlay session
+
+**Audio Handler Fix**
+- Fixed `awaitMediaSessionUpdate()` Completer race condition — rapid calls orphaned previous awaiters indefinitely
+- Now completes any pending Completer before creating a new one
+
+**Download Service Fix**
+- Added Content-Type validation for artwork caching — prevents saving HTML error pages as image files when server returns errors
+
+**Performance**
+- Fixed pagination performance in library data provider — replaced `[..._albums!, ...newAlbums]` spread operator (O(n) copy) with `List.of(_albums!)..addAll(newAlbums)` for both albums and artists
+
+---
+
 ### v7.9.0 - Piano Easter Egg & TUI Piano Overlay
 
 **New Feature: Piano Easter Egg**

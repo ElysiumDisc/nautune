@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -36,6 +37,20 @@ class PianoSynthService {
       final player = AudioPlayer();
       await player.setReleaseMode(ReleaseMode.stop);
       _players.add(player);
+    }
+
+    // On iOS/macOS, configure audio context so piano can actually produce sound.
+    // Uses playback category with mixWithOthers so it won't interrupt music.
+    if (Platform.isIOS || Platform.isMacOS) {
+      final context = AudioContext(
+        iOS: AudioContextIOS(
+          category: AVAudioSessionCategory.playback,
+          options: {AVAudioSessionOptions.mixWithOthers},
+        ),
+      );
+      for (final player in _players) {
+        await player.setAudioContext(context);
+      }
     }
   }
 
