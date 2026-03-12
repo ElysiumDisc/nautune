@@ -73,7 +73,7 @@ class _TuiPianoOverlayState extends State<TuiPianoOverlay> {
 
   Future<void> _initSynth() async {
     await _synth.init();
-    _synth.preloadRange(_octaveBase, 24);
+    await _synth.preloadRange(_octaveBase, 24);
     if (mounted) {
       setState(() => _initialized = true);
     }

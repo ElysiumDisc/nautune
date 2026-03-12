@@ -5,6 +5,8 @@ import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 /// Programmatic piano synthesizer using additive synthesis + ADSR envelope.
 /// Generates WAV audio in-memory (no asset files needed).
@@ -28,11 +30,18 @@ class PianoSynthService {
 
   // Cache generated WAV bytes per MIDI note
   final Map<int, Uint8List> _noteCache = {};
+  // Cache file paths for written WAV files
+  String? _tempDir;
+  final Map<int, String> _fileCache = {};
 
   bool _disposed = false;
 
-  /// Initialize the player pool.
+  /// Initialize the player pool and temp directory for WAV files.
   Future<void> init() async {
+    final dir = await getTemporaryDirectory();
+    _tempDir = p.join(dir.path, 'piano_synth');
+    await Directory(_tempDir!).create(recursive: true);
+
     for (int i = 0; i < _poolSize; i++) {
       final player = AudioPlayer();
       await player.setReleaseMode(ReleaseMode.stop);
@@ -54,28 +63,43 @@ class PianoSynthService {
     }
   }
 
-  /// Play a note by MIDI number (e.g., 60 = C4).
-  Future<void> playNote(int midiNote) async {
-    if (_disposed || _players.isEmpty) return;
-
+  /// Get or create a WAV temp file for a note, returning its path.
+  Future<String> _getOrCreateNoteFile(int midiNote) async {
+    if (_fileCache.containsKey(midiNote)) return _fileCache[midiNote]!;
     final wav = _noteCache[midiNote] ?? _generateNoteWav(midiNote);
     _noteCache[midiNote] = wav;
+    final filePath = p.join(_tempDir!, 'note_$midiNote.wav');
+    await File(filePath).writeAsBytes(wav);
+    _fileCache[midiNote] = filePath;
+    return filePath;
+  }
+
+  /// Play a note by MIDI number (e.g., 60 = C4).
+  Future<void> playNote(int midiNote) async {
+    if (_disposed || _players.isEmpty || _tempDir == null) return;
+
+    final filePath = await _getOrCreateNoteFile(midiNote);
 
     final player = _players[_nextPlayer];
     _nextPlayer = (_nextPlayer + 1) % _poolSize;
 
     try {
       await player.stop();
-      await player.play(BytesSource(wav));
+      await player.play(DeviceFileSource(filePath, mimeType: 'audio/wav'));
     } catch (e) {
       debugPrint('PianoSynthService: Error playing note $midiNote: $e');
     }
   }
 
-  /// Pre-generate and cache WAV data for a range of notes.
-  void preloadRange(int startMidi, int count) {
+  /// Pre-generate and cache WAV data + temp files for a range of notes.
+  Future<void> preloadRange(int startMidi, int count) async {
     for (int i = startMidi; i < startMidi + count; i++) {
       _noteCache[i] = _generateNoteWav(i);
+      if (_tempDir != null) {
+        final filePath = p.join(_tempDir!, 'note_$i.wav');
+        await File(filePath).writeAsBytes(_noteCache[i]!);
+        _fileCache[i] = filePath;
+      }
     }
   }
 
@@ -201,5 +225,12 @@ class PianoSynthService {
     }
     _players.clear();
     _noteCache.clear();
+    _fileCache.clear();
+    if (_tempDir != null) {
+      try {
+        final dir = Directory(_tempDir!);
+        if (await dir.exists()) await dir.delete(recursive: true);
+      } catch (_) {}
+    }
   }
 }

@@ -382,7 +382,7 @@ A playable synth keyboard inspired by [upiano](https://github.com/eliasdorneles/
 
 ### Storage
 
-Piano generates all audio in-memory — no files are stored on disk.
+Piano generates audio programmatically and writes WAV files to a temporary directory for playback. Temp files are cleaned up when the piano screen is closed.
 
 
 ### Keyboard Bindings

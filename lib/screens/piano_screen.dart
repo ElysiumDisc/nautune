@@ -68,7 +68,7 @@ class _PianoScreenState extends State<PianoScreen> {
   Future<void> _initSynth() async {
     await _synth.init();
     // Preload 2 octaves starting at current base
-    _synth.preloadRange(_octaveBase, 24);
+    await _synth.preloadRange(_octaveBase, 24);
     if (mounted) {
       setState(() => _initialized = true);
     }

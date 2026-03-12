@@ -1,3 +1,14 @@
+### v8.0.1 - iOS Piano Audio Fix
+
+**Bug Fix: Piano Silent on iOS**
+- Fixed piano easter egg producing no sound on iOS
+- Root cause: `audioplayers` converts `BytesSource` to a temp file without a `.wav` extension — AVFoundation can't identify the format without the extension hint, resulting in silence
+- Fix: Write generated WAV bytes to temp files with `.wav` extension during preload, play via `DeviceFileSource` with explicit `mimeType: 'audio/wav'` instead of `BytesSource`
+- Notes are eagerly written to disk during `preloadRange` so there's no file I/O on keypress
+- Temp files cleaned up on dispose
+
+---
+
 ### v8.0.0 - Deep Bug Hunt, CarPlay Overhaul & Cross-Platform Reliability
 
 **TUI Search Fix**
@@ -7,10 +18,9 @@
 - Fixed Enter key race condition — `onSubmitted` could set `_isSearchMode = false` before the key handler fired, causing double-processing
 - Fixed stream subscription leaks in `tui_shell.dart` — `queueStream` and `currentTrackStream` listeners now properly tracked and cancelled in `dispose()`
 
-**iOS Piano Audio Fix**
-- Fixed piano easter egg producing no sound on iOS/macOS
-- Root cause: `AudioPlayer` instances in the synth pool had no `AudioContext` configured — iOS requires explicit audio session category
-- Fix: Added `AVAudioSessionCategory.playback` with `mixWithOthers` option so piano doesn't interrupt music playback
+**iOS Piano Audio Fix (partial — fully fixed in v8.0.1)**
+- Added `AVAudioSessionCategory.playback` with `mixWithOthers` option to piano AudioPlayer pool
+- This was necessary but not sufficient — the real root cause (missing `.wav` extension on temp files) was fixed in v8.0.1
 
 **CarPlay Overhaul (4 Fixes)**
 - Replaced client-side artist album filtering with server-side `loadAlbumsByArtist()` API call — eliminates downloading entire album library just to show one artist's albums

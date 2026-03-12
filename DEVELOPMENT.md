@@ -20,7 +20,7 @@ cp linux/nautune.desktop AppDir/ && \
 cp linux/nautune.png AppDir/ && \
 cd AppDir && ln -s usr/bin/nautune AppRun && cd .. && \
 mkdir -p dist && \
-ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.0.0.AppImage
+ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.0.1.AppImage
 ```
 
 ### Build Deb Package (Linux)
