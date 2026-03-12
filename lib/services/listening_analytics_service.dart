@@ -309,6 +309,8 @@ class ListeningAnalyticsService extends ChangeNotifier {
   static const _networkDiscoveredKey = 'network_discovered';
   static const _essentialMixDiscoveredKey = 'essential_mix_discovered';
   static const _fretsOnFireDiscoveredKey = 'frets_on_fire_discovered';
+  static const _pianoDiscoveredKey = 'piano_discovered';
+  static const _pianoStatsKey = 'piano_stats';
 
   Box? _box;
   List<PlayEvent> _events = [];
@@ -316,6 +318,9 @@ class ListeningAnalyticsService extends ChangeNotifier {
   bool _networkDiscovered = false;
   bool _essentialMixDiscovered = false;
   bool _fretsOnFireDiscovered = false;
+  bool _pianoDiscovered = false;
+  int _pianoTotalNotes = 0;
+  int _pianoTotalSessionMs = 0;
   bool _initialized = false;
 
   /// Singleton instance
@@ -343,6 +348,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
       await _loadNetworkDiscovered();
       await _loadEssentialMixDiscovered();
       await _loadFretsOnFireDiscovered();
+      await _loadPianoStats();
       _initialized = true;
       debugPrint('ListeningAnalyticsService: Initialized with ${_events.length} events');
     } catch (e) {
@@ -360,6 +366,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
         _saveRelaxModeStats(),
         _saveNetworkDiscovered(),
         _saveEssentialMixDiscovered(),
+        _savePianoStats(),
       ]);
       debugPrint('ListeningAnalyticsService: Analytics saved');
     } catch (e) {
@@ -491,6 +498,68 @@ class ListeningAnalyticsService extends ChangeNotifier {
     _fretsOnFireDiscovered = true;
     await _saveFretsOnFireDiscovered();
     debugPrint('ListeningAnalyticsService: Frets on Fire easter egg discovered!');
+  }
+
+  // Piano Easter Egg discovery and stats tracking
+  Future<void> _loadPianoStats() async {
+    _pianoDiscovered = _box?.get(_pianoDiscoveredKey) as bool? ?? false;
+    final raw = _box?.get(_pianoStatsKey);
+    if (raw != null) {
+      try {
+        final Map<String, dynamic> json;
+        if (raw is String) {
+          json = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+        } else if (raw is Map) {
+          json = Map<String, dynamic>.from(raw);
+        } else {
+          return;
+        }
+        _pianoTotalNotes = json['totalNotes'] as int? ?? 0;
+        _pianoTotalSessionMs = json['totalSessionMs'] as int? ?? 0;
+      } catch (e) {
+        debugPrint('ListeningAnalyticsService: Error loading piano stats: $e');
+      }
+    }
+  }
+
+  Future<void> _savePianoStats() async {
+    if (_box == null) return;
+    await _box!.put(_pianoDiscoveredKey, _pianoDiscovered);
+    await _box!.put(_pianoStatsKey, jsonEncode({
+      'totalNotes': _pianoTotalNotes,
+      'totalSessionMs': _pianoTotalSessionMs,
+    }));
+    notifyListeners();
+  }
+
+  /// Check if Piano easter egg has been discovered
+  bool get pianoDiscovered => _pianoDiscovered;
+
+  /// Get piano total notes played
+  int get pianoTotalNotes => _pianoTotalNotes;
+
+  /// Get piano total session time
+  Duration get pianoTotalSessionTime => Duration(milliseconds: _pianoTotalSessionMs);
+
+  /// Mark Piano easter egg as discovered (for milestone)
+  Future<void> markPianoDiscovered() async {
+    if (_pianoDiscovered) return;
+    _pianoDiscovered = true;
+    await _savePianoStats();
+    debugPrint('ListeningAnalyticsService: Piano easter egg discovered!');
+  }
+
+  /// Record a piano session
+  Future<void> recordPianoSession({
+    required int notesPlayed,
+    required Duration sessionDuration,
+  }) async {
+    if (!_initialized) return;
+    _pianoTotalNotes += notesPlayed;
+    _pianoTotalSessionMs += sessionDuration.inMilliseconds;
+    _pianoDiscovered = true;
+    await _savePianoStats();
+    debugPrint('ListeningAnalyticsService: Recorded piano session ($notesPlayed notes, ${sessionDuration.inSeconds}s)');
   }
 
   Future<void> _loadEvents() async {
@@ -1413,6 +1482,16 @@ class ListeningAnalyticsService extends ChangeNotifier {
         targetValue: 1,
         currentValue: _fretsOnFireDiscovered ? 1 : 0,
       ),
+
+      // Piano milestone - Synth easter egg
+      ListeningMilestone(
+        id: 'piano',
+        name: 'Virtuoso',
+        description: 'Discover the hidden Piano',
+        iconType: IconType.special,
+        targetValue: 1,
+        currentValue: _pianoDiscovered ? 1 : 0,
+      ),
     ];
 
     return ListeningMilestones(all: milestones);
@@ -1511,6 +1590,9 @@ class ListeningAnalyticsService extends ChangeNotifier {
       'network_discovered': _networkDiscovered,
       'essential_mix_discovered': _essentialMixDiscovered,
       'frets_on_fire_discovered': _fretsOnFireDiscovered,
+      'piano_discovered': _pianoDiscovered,
+      'piano_total_notes': _pianoTotalNotes,
+      'piano_total_session_ms': _pianoTotalSessionMs,
     });
   }
 
@@ -1601,14 +1683,29 @@ class ListeningAnalyticsService extends ChangeNotifier {
         _fretsOnFireDiscovered = true;
       }
 
+      // Import piano stats (keep true/higher values)
+      final pianoDiscovered = jsonData['piano_discovered'] as bool?;
+      if (pianoDiscovered == true) {
+        _pianoDiscovered = true;
+      }
+      final importedPianoNotes = jsonData['piano_total_notes'] as int? ?? 0;
+      if (importedPianoNotes > _pianoTotalNotes) {
+        _pianoTotalNotes = importedPianoNotes;
+      }
+      final importedPianoMs = jsonData['piano_total_session_ms'] as int? ?? 0;
+      if (importedPianoMs > _pianoTotalSessionMs) {
+        _pianoTotalSessionMs = importedPianoMs;
+      }
+
       // Save all imported data
-      if (importedCount > 0 || relaxJson != null || networkDiscovered == true || essentialMixDiscovered == true || fretsOnFireDiscovered == true) {
+      if (importedCount > 0 || relaxJson != null || networkDiscovered == true || essentialMixDiscovered == true || fretsOnFireDiscovered == true || pianoDiscovered == true) {
         await Future.wait([
           _saveEvents(),
           _saveRelaxModeStats(),
           _saveNetworkDiscovered(),
           _saveEssentialMixDiscovered(),
           _saveFretsOnFireDiscovered(),
+          _savePianoStats(),
         ]);
         debugPrint('ListeningAnalyticsService: Imported $importedCount events');
       }

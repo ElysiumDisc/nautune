@@ -14,7 +14,9 @@ import '../tui_keybindings.dart';
 import '../tui_metrics.dart';
 import '../tui_theme.dart';
 import '../widgets/tui_box.dart';
+import '../widgets/tui_command_palette.dart';
 import '../widgets/tui_help_overlay.dart';
+import '../widgets/tui_piano_overlay.dart';
 import '../widgets/tui_list.dart';
 import 'tui_content_pane.dart';
 import 'tui_lyrics_pane.dart';
@@ -61,6 +63,15 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
 
   // Help overlay state
   bool _showHelp = false;
+
+  // Command palette state
+  bool _showCommandPalette = false;
+
+  // Visualizer state (persisted via Hive in status bar)
+  bool _showVisualizer = true;
+
+  // Piano overlay state
+  bool _showPiano = false;
 
   // Animation ticker for color lerp
   late Ticker _colorTicker;
@@ -196,7 +207,7 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
                         ),
                       ),
                       // Status bar
-                      const TuiStatusBar(),
+                      TuiStatusBar(showVisualizer: _showVisualizer),
                     ],
                   ),
                 ),
@@ -208,6 +219,31 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
                     child: GestureDetector(
                       onTap: () => setState(() => _showHelp = false),
                       child: const TuiHelpOverlay(),
+                    ),
+                  ),
+                // Command palette overlay
+                if (_showCommandPalette)
+                  Positioned.fill(
+                    child: TuiCommandPalette(
+                      onAction: (action) {
+                        setState(() => _showCommandPalette = false);
+                        _focusNode.requestFocus();
+                        _handleAction(action);
+                      },
+                      onDismiss: () {
+                        setState(() => _showCommandPalette = false);
+                        _focusNode.requestFocus();
+                      },
+                    ),
+                  ),
+                // Piano overlay
+                if (_showPiano)
+                  Positioned.fill(
+                    child: TuiPianoOverlay(
+                      onDismiss: () {
+                        setState(() => _showPiano = false);
+                        _focusNode.requestFocus();
+                      },
                     ),
                   ),
                 // Resize handle (bottom-right corner)
@@ -304,6 +340,16 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
       if (event is KeyDownEvent) {
         setState(() => _showHelp = false);
       }
+      return;
+    }
+
+    // Command palette handles its own keys
+    if (_showCommandPalette) {
+      return;
+    }
+
+    // Piano overlay handles its own keys
+    if (_showPiano) {
       return;
     }
 
@@ -512,6 +558,21 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
       case TuiAction.clearLoop:
         audioService.clearLoop();
         break;
+
+      // Visualizer toggle
+      case TuiAction.toggleVisualizer:
+        _handleToggleVisualizer();
+        break;
+
+      // Command palette
+      case TuiAction.commandPalette:
+        setState(() => _showCommandPalette = !_showCommandPalette);
+        break;
+
+      // Piano
+      case TuiAction.togglePiano:
+        setState(() => _showPiano = !_showPiano);
+        break;
     }
   }
 
@@ -590,6 +651,12 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
       audioService.reorderQueue(index, index + 1);
       _queueListState.moveDown();
     }
+  }
+
+  void _handleToggleVisualizer() {
+    setState(() {
+      _showVisualizer = !_showVisualizer;
+    });
   }
 
   void _handleCycleSection() {

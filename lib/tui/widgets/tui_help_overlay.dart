@@ -167,8 +167,11 @@ class TuiHelpOverlay extends StatelessWidget {
   static const List<_KeyBinding> _otherBindings = [
     _KeyBinding('/', 'Search'),
     _KeyBinding('f', 'Toggle favorite'),
+    _KeyBinding('v', 'Toggle spectrum visualizer'),
     _KeyBinding('T', 'Cycle theme'),
+    _KeyBinding('Ctrl+K', 'Command palette'),
     _KeyBinding('?', 'Show/hide help'),
+    _KeyBinding('P', 'Open Piano'),
     _KeyBinding('X', 'Full reset (stop + clear)'),
     _KeyBinding('q', 'Quit'),
     _KeyBinding('Drag tab bar', 'Move window'),

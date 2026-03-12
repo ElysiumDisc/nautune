@@ -1,0 +1,190 @@
+import 'dart:async';
+import 'dart:math';
+import 'dart:typed_data';
+
+import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart';
+
+/// Programmatic piano synthesizer using additive synthesis + ADSR envelope.
+/// Generates WAV audio in-memory (no asset files needed).
+/// Uses a pool of AudioPlayer instances for polyphony (round-robin).
+class PianoSynthService {
+  static const int _sampleRate = 44100;
+  static const int _channels = 1;
+  static const int _bitsPerSample = 16;
+  static const double _noteDuration = 0.8; // seconds
+
+  // ADSR envelope parameters (in seconds)
+  static const double _attack = 0.005;
+  static const double _decay = 0.1;
+  static const double _sustainLevel = 0.6;
+  static const double _release = 0.2;
+
+  // Player pool for polyphony
+  static const int _poolSize = 6;
+  final List<AudioPlayer> _players = [];
+  int _nextPlayer = 0;
+
+  // Cache generated WAV bytes per MIDI note
+  final Map<int, Uint8List> _noteCache = {};
+
+  bool _disposed = false;
+
+  /// Initialize the player pool.
+  Future<void> init() async {
+    for (int i = 0; i < _poolSize; i++) {
+      final player = AudioPlayer();
+      await player.setReleaseMode(ReleaseMode.stop);
+      _players.add(player);
+    }
+  }
+
+  /// Play a note by MIDI number (e.g., 60 = C4).
+  Future<void> playNote(int midiNote) async {
+    if (_disposed || _players.isEmpty) return;
+
+    final wav = _noteCache[midiNote] ?? _generateNoteWav(midiNote);
+    _noteCache[midiNote] = wav;
+
+    final player = _players[_nextPlayer];
+    _nextPlayer = (_nextPlayer + 1) % _poolSize;
+
+    try {
+      await player.stop();
+      await player.play(BytesSource(wav));
+    } catch (e) {
+      debugPrint('PianoSynthService: Error playing note $midiNote: $e');
+    }
+  }
+
+  /// Pre-generate and cache WAV data for a range of notes.
+  void preloadRange(int startMidi, int count) {
+    for (int i = startMidi; i < startMidi + count; i++) {
+      _noteCache[i] = _generateNoteWav(i);
+    }
+  }
+
+  /// Convert MIDI note number to frequency in Hz.
+  /// A4 (MIDI 69) = 440 Hz.
+  static double midiToFrequency(int midiNote) {
+    return 440.0 * pow(2.0, (midiNote - 69) / 12.0);
+  }
+
+  /// Generate a complete WAV file as Uint8List for a single note.
+  Uint8List _generateNoteWav(int midiNote) {
+    final frequency = midiToFrequency(midiNote);
+    final numSamples = (_sampleRate * _noteDuration).toInt();
+    final pcmData = Int16List(numSamples);
+
+    for (int i = 0; i < numSamples; i++) {
+      final t = i / _sampleRate;
+
+      // Additive synthesis: fundamental + harmonics
+      double sample = 0.0;
+      sample += sin(2 * pi * frequency * t); // fundamental
+      sample += 0.5 * sin(2 * pi * frequency * 2 * t); // 2nd harmonic
+      sample += 0.25 * sin(2 * pi * frequency * 3 * t); // 3rd harmonic
+
+      // ADSR envelope
+      final envelope = _envelope(t);
+      sample *= envelope;
+
+      // Normalize and convert to 16-bit
+      final clamped = (sample * 0.4 * 32767).round().clamp(-32768, 32767);
+      pcmData[i] = clamped;
+    }
+
+    return _buildWav(pcmData);
+  }
+
+  /// ADSR envelope function.
+  double _envelope(double t) {
+    if (t < _attack) {
+      return t / _attack;
+    } else if (t < _attack + _decay) {
+      final decayProgress = (t - _attack) / _decay;
+      return 1.0 - decayProgress * (1.0 - _sustainLevel);
+    } else if (t < _noteDuration - _release) {
+      return _sustainLevel;
+    } else {
+      final releaseProgress = (t - (_noteDuration - _release)) / _release;
+      return _sustainLevel * (1.0 - releaseProgress).clamp(0.0, 1.0);
+    }
+  }
+
+  /// Build a WAV file from PCM samples.
+  Uint8List _buildWav(Int16List samples) {
+    final dataSize = samples.length * 2; // 16-bit = 2 bytes per sample
+    final fileSize = 44 + dataSize; // 44-byte header + data
+
+    final buffer = ByteData(fileSize);
+    var offset = 0;
+
+    // RIFF header
+    buffer.setUint8(offset++, 0x52); // R
+    buffer.setUint8(offset++, 0x49); // I
+    buffer.setUint8(offset++, 0x46); // F
+    buffer.setUint8(offset++, 0x46); // F
+    buffer.setUint32(offset, fileSize - 8, Endian.little);
+    offset += 4;
+    buffer.setUint8(offset++, 0x57); // W
+    buffer.setUint8(offset++, 0x41); // A
+    buffer.setUint8(offset++, 0x56); // V
+    buffer.setUint8(offset++, 0x45); // E
+
+    // fmt sub-chunk
+    buffer.setUint8(offset++, 0x66); // f
+    buffer.setUint8(offset++, 0x6D); // m
+    buffer.setUint8(offset++, 0x74); // t
+    buffer.setUint8(offset++, 0x20); // ' '
+    buffer.setUint32(offset, 16, Endian.little); // sub-chunk size
+    offset += 4;
+    buffer.setUint16(offset, 1, Endian.little); // PCM format
+    offset += 2;
+    buffer.setUint16(offset, _channels, Endian.little);
+    offset += 2;
+    buffer.setUint32(offset, _sampleRate, Endian.little);
+    offset += 4;
+    buffer.setUint32(
+      offset,
+      _sampleRate * _channels * _bitsPerSample ~/ 8,
+      Endian.little,
+    ); // byte rate
+    offset += 4;
+    buffer.setUint16(
+      offset,
+      _channels * _bitsPerSample ~/ 8,
+      Endian.little,
+    ); // block align
+    offset += 2;
+    buffer.setUint16(offset, _bitsPerSample, Endian.little);
+    offset += 2;
+
+    // data sub-chunk
+    buffer.setUint8(offset++, 0x64); // d
+    buffer.setUint8(offset++, 0x61); // a
+    buffer.setUint8(offset++, 0x74); // t
+    buffer.setUint8(offset++, 0x61); // a
+    buffer.setUint32(offset, dataSize, Endian.little);
+    offset += 4;
+
+    // PCM data
+    for (final sample in samples) {
+      buffer.setInt16(offset, sample, Endian.little);
+      offset += 2;
+    }
+
+    return buffer.buffer.asUint8List();
+  }
+
+  /// Release all resources.
+  Future<void> dispose() async {
+    _disposed = true;
+    for (final player in _players) {
+      await player.stop();
+      await player.dispose();
+    }
+    _players.clear();
+    _noteCache.clear();
+  }
+}

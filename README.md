@@ -15,11 +15,13 @@
 - **Alternate App Icons**: Choose between Classic (purple), Sunset (orange), Crimson (red), and Emerald (green) icons across all platforms
 - **10-Band Equalizer** (Linux): Full graphic EQ with 12 presets (Rock, Pop, Jazz, Classical, and more)
 - **5 Audio Visualizers**: Ocean Waves, Spectrum Bars, Mirror Bars, Radial, and Psychedelic styles
+- **TUI Spectrum Visualizer**: ASCII spectrum analyzer in TUI mode — real-time `▁▂▃▅▇█` bars driven by PulseAudio FFT with peak tracking and gravity decay
 - **Real-Time FFT**: True audio-reactive visualization using PulseAudio (Linux) and MTAudioProcessingTap (iOS)
+- **MPRIS Integration**: Linux desktop media key support, GNOME/KDE widgets, and KDE Connect — automatic via audio_service
 - **Smart Playlists**: Tag-aware mood playlists (Chill, Energetic, Melancholy, Upbeat) using actual file tags
 - **Smart Pre-Cache**: Configurable pre-caching of current and upcoming tracks (3, 5, or 10) with WiFi-only option
 - **Smart Lyrics**: Multi-source lyrics with sync, caching, and pre-fetching
-- **41 Nautical Milestones**: Earn achievements as you listen
+- **42 Nautical Milestones**: Earn achievements as you listen
 - **Track Sharing**: Share downloaded audio files via AirDrop (iOS) or file manager (Linux)
 - **Storage Management**: Separate views for downloads, cache, loops, waveforms, and charts with accurate stats
 - **Listening Analytics**: Heatmaps, streaks, weekly comparisons, 28-day activity sparkline, and animated stat counters with trend indicators
@@ -349,6 +351,40 @@ An ambient sound mixer for focus or relaxation, inspired by [ebithril/relax-play
 - **"Calm Waters" Milestone**: Unlock a badge for discovering Relax Mode
 
 
+## 🎹 Piano (Easter Egg)
+
+A playable synth keyboard inspired by [upiano](https://github.com/eliasdorneles/upiano). Generates audio in-memory using additive synthesis — no asset files or new dependencies.
+
+### How to Access
+
+**GUI:**
+1. Go to **Library** tab
+2. Search for **"piano"**
+3. Tap the **"Piano"** card that appears
+
+**TUI:**
+- Press `P` to open the ASCII piano overlay
+- Or use the command palette (`Ctrl+K`) and search "Piano"
+
+### Features
+
+- **Programmatic Synthesis**: Additive synthesis (fundamental + 2nd/3rd harmonics) with ADSR envelope, 16-bit PCM WAV at 44.1kHz
+- **6-Voice Polyphony**: Round-robin AudioPlayer pool for simultaneous notes
+- **Visual Keyboard**: 2-octave piano with touch/click support and accent-color press highlighting
+- **Desktop Keyboard Mapping** (upiano-style):
+  - Lower octave: `A W S E D F T G Y H U J` → C C# D D# E F F# G G# A A# B
+  - Upper octave: `K O L P ; ' ] \` → C C# D D# E F F# G
+- **Octave Shifting**: Navigate C2–C6 with octave up/down buttons (GUI) or `,`/`.` keys (TUI)
+- **Works Everywhere**: Fully offline — available in online, offline, demo, and airplane modes
+- **TUI Overlay**: ASCII piano with box-drawing art, key highlights, and keyboard mapping reference
+- **Stats Tracking**: Total notes played and session time displayed in Profile
+- **"Virtuoso" Milestone**: Unlock a badge for discovering the Piano
+
+### Storage
+
+Piano generates all audio in-memory — no files are stored on disk.
+
+
 ### Keyboard Bindings
 
 **Navigation**
@@ -401,7 +437,10 @@ An ambient sound mixer for focus or relaxation, inspired by [ebithril/relax-play
 |-----|--------|
 | `/` | Enter search mode |
 | `f` | Toggle favorite on track |
+| `v` | Toggle spectrum visualizer |
 | `T` | Cycle through themes |
+| `P` | Open Piano overlay |
+| `Ctrl+K` | Open command palette (fuzzy search all commands) |
 | `?` | Show/hide help overlay |
 | `X` | Full reset (stop + clear) |
 | `q` | Quit |
@@ -415,6 +454,9 @@ An ambient sound mixer for focus or relaxation, inspired by [ebithril/relax-play
 - **Window Dragging**: Drag the tab bar to reposition the window
 - **Tab Bar**: Top navigation with section tabs and now-playing indicator
 - **Sidebar Navigation**: Browse Albums, Artists, Queue, Lyrics, or Search
+- **ASCII Spectrum Visualizer**: 32-bar, 2-row real-time spectrum analyzer in the status bar using Unicode block elements (`▁▂▃▅▇█`), with peak tracking, gravity decay, and color gradient from accent to primary — toggle with `v`
+- **Command Palette**: Fuzzy-searchable command overlay (Ctrl+K) with 34 commands across 7 categories — type to filter, arrow keys to navigate, Enter to execute
+- **MPRIS Support**: System media keys, GNOME/KDE media widgets, and KDE Connect integration work automatically on Linux
 - **Help Overlay**: Press `?` to see all keybindings organized by category
 - **Vim-Style Movement**: Familiar keybindings with multi-key sequence support
 - **Letter Jumping**: `a/A` to jump between letter groups in sorted lists

@@ -241,7 +241,39 @@ Now you can:
 
 <img src="screenshots/tui.png" width="600" alt="Nautune TUI Mode">
 
-A terminal-inspired interface for keyboard-driven music browsing, inspired by [jellyfin-tui](https://github.com/dhonus/jellyfin-tui).
+A terminal-inspired interface for keyboard-driven music browsing, inspired by [jellyfin-tui](https://github.com/dhonus/jellyfin-tui) with spectrum visualizer and command palette inspired by [cliamp](https://github.com/bjarneo/cliamp).
+
+### TUI Architecture
+
+```
+lib/tui/
+├── tui_app.dart                    # Entry point, login check
+├── tui_keybindings.dart            # Vim-style key parser (54 actions)
+├── tui_theme.dart                  # 10 themes + manager + color extraction
+├── tui_metrics.dart                # Character-based sizing
+├── layout/
+│   ├── tui_shell.dart              # Main layout, focus, key dispatch
+│   ├── tui_sidebar.dart            # Left nav (Albums, Artists, Queue, Lyrics, Search)
+│   ├── tui_content_pane.dart       # Main content area
+│   ├── tui_status_bar.dart         # Bottom bar: visualizer + now playing + hints
+│   ├── tui_tab_bar.dart            # Top section tabs
+│   └── tui_lyrics_pane.dart        # Lyrics display
+└── widgets/
+    ├── tui_spectrum_visualizer.dart # ASCII spectrum analyzer (PulseAudio FFT)
+    ├── tui_command_palette.dart     # Fuzzy-searchable command overlay (Ctrl+K)
+    ├── tui_piano_overlay.dart       # ASCII piano keyboard overlay (P)
+    ├── tui_help_overlay.dart        # Static keybinding reference (?)
+    ├── tui_progress_bar.dart        # ASCII progress + volume bars
+    ├── tui_box.dart                 # Box-drawing borders
+    ├── tui_list.dart                # Scrollable list with cursor
+    └── tui_text.dart                # Monospace text
+```
+
+### Key TUI Widgets
+
+- **TuiSpectrumVisualizer**: Subscribes to `PulseAudioFFTService.fftStream` (or falls back to metadata-driven bands). Renders 32 bars × 2 rows using `▁▂▃▄▅▆▇█` characters with peak tracking and gravity decay. Toggle with `v`.
+- **TuiCommandPalette**: 34 commands with fuzzy matching on name/description/category/shortcut. Sorted by match quality. `Ctrl+K` to open, arrow keys to navigate, Enter to execute.
+- **MPRIS**: Automatic via `audio_service` — system media keys, GNOME/KDE widgets, KDE Connect all work out of the box on Linux.
 
 ### Launching TUI Mode
 

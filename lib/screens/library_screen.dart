@@ -40,6 +40,7 @@ import 'essential_mix_screen.dart';
 import 'frets_on_fire_screen.dart';
 import 'relax_mode_screen.dart';
 import 'network_screen.dart';
+import 'piano_screen.dart';
 import 'playlist_detail_screen.dart';
 import 'profile_screen.dart';
 import 'recently_played_screen.dart';

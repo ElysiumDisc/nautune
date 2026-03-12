@@ -383,6 +383,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   ChartCacheService? _chartCacheService;
   FretsOnFireStats? _fretsOnFireStats;
 
+  // Piano stats
+  bool _pianoDiscovered = false;
+  int _pianoTotalNotes = 0;
+  Duration _pianoTotalTime = Duration.zero;
+
   @override
   void initState() {
     super.initState();
@@ -392,6 +397,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _loadNetworkStats();
     _loadEssentialMixStats();
     _loadFretsOnFireStats();
+    _loadPianoStats();
     _loadLibraryOverview();
   }
 
@@ -437,6 +443,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() {
       _fretsOnFireStats = _chartCacheService!.getAggregateStats();
     });
+  }
+
+  void _loadPianoStats() {
+    final analytics = ListeningAnalyticsService();
+    if (analytics.isInitialized) {
+      setState(() {
+        _pianoDiscovered = analytics.pianoDiscovered;
+        _pianoTotalNotes = analytics.pianoTotalNotes;
+        _pianoTotalTime = analytics.pianoTotalSessionTime;
+      });
+    }
   }
 
   @override
@@ -1036,6 +1053,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   // Frets on Fire Rhythm Game Stats (if any games played)
                   if (_fretsOnFireStats != null && _fretsOnFireStats!.totalPlayCount > 0) ...[
                     _buildFretsOnFireStatsSection(theme),
+                    const SizedBox(height: 12),
+                  ],
+
+                  // Piano Stats (if discovered)
+                  if (_pianoDiscovered && _pianoTotalNotes > 0) ...[
+                    _buildPianoStatsSection(theme),
                     const SizedBox(height: 12),
                   ],
 
@@ -2252,6 +2275,101 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildPianoStatsSection(ThemeData theme) {
+    const pianoBlue = Color(0xFF4FC3F7);
+    const pianoDark = Color(0xFF0A1A2E);
+
+    final totalMinutes = _pianoTotalTime.inMinutes;
+    final timeStr = totalMinutes >= 60
+        ? '${totalMinutes ~/ 60}h ${totalMinutes % 60}m'
+        : '${totalMinutes}m';
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [pianoDark, Color(0xFF0A2040)],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: pianoBlue.withValues(alpha: 0.4),
+          width: 1.5,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      pianoBlue.withValues(alpha: 0.3),
+                      pianoBlue.withValues(alpha: 0.1),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: pianoBlue.withValues(alpha: 0.5)),
+                ),
+                child: const Icon(Icons.piano, color: pianoBlue, size: 24),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Piano',
+                      style: GoogleFonts.pacifico(
+                        fontSize: 18,
+                        color: pianoBlue,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Synth Keyboard',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.white54,
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _buildFireStatItem(
+                theme,
+                '$_pianoTotalNotes',
+                'Notes Played',
+                Icons.music_note,
+                pianoBlue,
+              ),
+              _buildFireStatItem(
+                theme,
+                timeStr,
+                'Session Time',
+                Icons.timer,
+                pianoBlue,
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 

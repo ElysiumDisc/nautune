@@ -48,6 +48,12 @@ enum TuiAction {
   setLoopStart,
   setLoopEnd,
   clearLoop,
+  // Visualizer toggle
+  toggleVisualizer,
+  // Command palette
+  commandPalette,
+  // Piano
+  togglePiano,
 }
 
 /// Vim-style key binding handler with multi-key sequence support.
@@ -133,6 +139,13 @@ class TuiKeyBindings extends ChangeNotifier {
     if (key == LogicalKeyboardKey.tab) {
       _resetSequence();
       return TuiAction.cycleSection;
+    }
+
+    // Handle Ctrl+K for command palette
+    if (key == LogicalKeyboardKey.keyK &&
+        HardwareKeyboard.instance.isControlPressed) {
+      _resetSequence();
+      return TuiAction.commandPalette;
     }
 
     // Handle character keys for vim bindings
@@ -271,6 +284,14 @@ class TuiKeyBindings extends ChangeNotifier {
         return TuiAction.setLoopEnd;
       case r'\':
         return TuiAction.clearLoop;
+
+      // Visualizer toggle
+      case 'v':
+        return TuiAction.toggleVisualizer;
+
+      // Piano
+      case 'P':
+        return TuiAction.togglePiano;
 
       default:
         return TuiAction.none;

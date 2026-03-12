@@ -19,6 +19,7 @@ class _SearchTabState extends State<_SearchTab> {
   bool _showNetworkEasterEgg = false;
   bool _showEssentialEasterEgg = false;
   bool _showFireEasterEgg = false;
+  bool _showPianoEasterEgg = false;
   List<JellyfinAlbum> _albumResults = const [];
   List<JellyfinArtist> _artistResults = const [];
   List<JellyfinTrack> _trackResults = const [];
@@ -107,6 +108,7 @@ class _SearchTabState extends State<_SearchTab> {
         _showNetworkEasterEgg = false;
         _showEssentialEasterEgg = false;
         _showFireEasterEgg = false;
+        _showPianoEasterEgg = false;
       });
       return;
     }
@@ -118,6 +120,7 @@ class _SearchTabState extends State<_SearchTab> {
       _showNetworkEasterEgg = lowerQuery.contains('network');
       _showEssentialEasterEgg = lowerQuery.contains('essential');
       _showFireEasterEgg = lowerQuery.contains('fire') || lowerQuery.contains('frets');
+      _showPianoEasterEgg = lowerQuery.contains('piano');
     });
     unawaited(_rememberQuery(trimmed));
 
@@ -399,7 +402,8 @@ class _SearchTabState extends State<_SearchTab> {
                       _showRelaxEasterEgg ||
                       _showNetworkEasterEgg ||
                       _showEssentialEasterEgg ||
-                      _showFireEasterEgg;
+                      _showFireEasterEgg ||
+                      _showPianoEasterEgg;
 
     if (!hasResults) {
       return Center(
@@ -426,6 +430,9 @@ class _SearchTabState extends State<_SearchTab> {
         // Easter egg: Frets on Fire card
         if (_showFireEasterEgg)
           _buildFretsOnFireCard(theme),
+        // Easter egg: Piano card
+        if (_showPianoEasterEgg)
+          _buildPianoCard(theme),
         // Artists section
         if (_artistResults.isNotEmpty) ...[
           _buildSectionHeader(theme, 'Artists', Icons.person, _artistResults.length),
@@ -535,6 +542,28 @@ class _SearchTabState extends State<_SearchTab> {
         trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.white54),
         onTap: () => Navigator.of(context).push(
           MaterialPageRoute(builder: (context) => const FretsOnFireScreen()),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPianoCard(ThemeData theme) {
+    return Card(
+      color: const Color(0xFF1A1A2E),
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: const Icon(Icons.piano, color: Colors.white),
+        title: const Text(
+          'Piano',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        subtitle: const Text(
+          'Playable synth keyboard',
+          style: TextStyle(color: Colors.white70),
+        ),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.white54),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (context) => const PianoScreen()),
         ),
       ),
     );

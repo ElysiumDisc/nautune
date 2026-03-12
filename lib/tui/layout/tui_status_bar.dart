@@ -7,10 +7,13 @@ import '../../models/loop_state.dart';
 import '../../services/audio_player_service.dart';
 import '../tui_theme.dart';
 import '../widgets/tui_progress_bar.dart';
+import '../widgets/tui_spectrum_visualizer.dart';
 
 /// The bottom status bar showing now playing info and controls hint.
 class TuiStatusBar extends StatelessWidget {
-  const TuiStatusBar({super.key});
+  const TuiStatusBar({super.key, this.showVisualizer = true});
+
+  final bool showVisualizer;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +37,17 @@ class TuiStatusBar extends StatelessWidget {
                 overflow: TextOverflow.clip,
                 maxLines: 1,
               ),
-              const SizedBox(height: 4),
+              // Spectrum visualizer (between divider and now playing)
+              if (showVisualizer) ...[
+                const SizedBox(height: 2),
+                TuiSpectrumVisualizer(
+                  audioService: audioService,
+                  barCount: 32,
+                  height: 2,
+                ),
+                const SizedBox(height: 2),
+              ] else
+                const SizedBox(height: 4),
               // Now playing row
               _NowPlayingRow(audioService: audioService),
               const SizedBox(height: 4),
@@ -175,15 +188,9 @@ class _ControlsHint extends StatelessWidget {
           const SizedBox(width: 12),
           _hint('+/-', 'vol'),
           const SizedBox(width: 12),
-          _hint('r/t', 'seek'),
+          _hint('v', 'visualizer'),
           const SizedBox(width: 12),
-          _hint('f', 'fav'),
-          const SizedBox(width: 12),
-          _hint('[/]', 'loop A/B'),
-          const SizedBox(width: 12),
-          _hint(r'\', 'clear loop'),
-          const SizedBox(width: 12),
-          _hint('T', 'theme'),
+          _hint('Ctrl+K', 'commands'),
           const SizedBox(width: 12),
           _hint('?', 'help'),
           const SizedBox(width: 12),
