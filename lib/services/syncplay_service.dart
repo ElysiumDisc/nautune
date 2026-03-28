@@ -328,17 +328,32 @@ class SyncPlayService extends ChangeNotifier {
         _availableGroups[i] = group.copyWith(participants: enrichedParticipants);
       }
 
-      // Debug: log participant details
-      for (final group in _availableGroups) {
-        debugPrint('SyncPlay Group ${group.groupName}: ${group.participants.length} participants');
-        for (final p in group.participants) {
-          debugPrint('  - ${p.username} (${p.userId}) imageTag: ${p.userImageTag}, device: ${p.orderId}');
-        }
-      }
-
       _groupsController.add(_availableGroups);
     } catch (e) {
       debugPrint('Failed to refresh SyncPlay groups: $e');
+    }
+  }
+
+  /// Refresh only the current group's participants (avoids fetching all groups).
+  /// Used when a user joins to get their full profile data.
+  Future<void> _refreshCurrentGroupParticipants() async {
+    final currentGroupId = _currentSession?.group.groupId;
+    if (currentGroupId == null) return;
+
+    try {
+      final groups = await _client.getGroups(credentials: _credentials);
+      final currentGroup = groups.where((g) => g.groupId == currentGroupId).firstOrNull;
+      if (currentGroup == null || _currentSession == null) return;
+
+      final enrichedParticipants = await _enrichParticipants(currentGroup.participants);
+      if (_currentSession != null && enrichedParticipants.isNotEmpty) {
+        _currentSession = _currentSession!.copyWith(
+          group: _currentSession!.group.copyWith(participants: enrichedParticipants),
+        );
+        _notifySessionChanged();
+      }
+    } catch (e) {
+      debugPrint('SyncPlay: Failed to refresh current group participants: $e');
     }
   }
 
@@ -351,19 +366,12 @@ class SyncPlayService extends ChangeNotifier {
   Future<List<SyncPlayParticipant>> _enrichParticipants(List<SyncPlayParticipant> participants) async {
     final enriched = <SyncPlayParticipant>[];
 
-    debugPrint('SyncPlay: Enriching ${participants.length} participants');
-    debugPrint('SyncPlay: Current user - username: $_username, userId: $_userId, imageTag: $_userImageTag');
-
     for (final p in participants) {
-      debugPrint('SyncPlay: Checking participant - username: ${p.username}, userId: ${p.userId}');
-
       // Check if this is the current user (by matching username)
       // Jellyfin returns usernames, not user IDs, in the participants list
       final isCurrentUser = p.username == _username ||
                             p.userId == _username ||
                             p.userId == _userId;
-
-      debugPrint('SyncPlay: Is current user? $isCurrentUser (p.username=${p.username} == _username=$_username ? ${p.username == _username})');
 
       if (isCurrentUser) {
         enriched.add(SyncPlayParticipant(
@@ -1121,27 +1129,8 @@ class SyncPlayService extends ChangeNotifier {
         _participantsController.add(participants);
       }
 
-      // Refresh to get full participant info including imageTag
-      final currentGroupId = _currentSession?.group.groupId;
-      refreshGroups().then((_) {
-        // Find our group and update participants with full data (including imageTag)
-        if (_currentSession != null && currentGroupId != null) {
-          final updatedGroup = _availableGroups.firstWhere(
-            (g) => g.groupId == currentGroupId,
-            orElse: () => _currentSession!.group,
-          );
-
-          if (updatedGroup.participants.isNotEmpty) {
-            _currentSession = _currentSession?.copyWith(
-              group: _currentSession!.group.copyWith(
-                participants: updatedGroup.participants,
-              ),
-            );
-            _notifySessionChanged();
-            debugPrint('SyncPlay: Updated participants with full profile data');
-          }
-        }
-      });
+      // Refresh only our current group to get full participant info
+      _refreshCurrentGroupParticipants();
     }
   }
 

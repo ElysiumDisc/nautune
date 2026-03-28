@@ -336,6 +336,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       artwork = JellyfinImage(
         itemId: album.id,
         imageTag: tag,
+        albumId: album.id,
         maxWidth: 800,
         boxFit: BoxFit.cover,
         errorBuilder: (context, url, error) => const _TritonArtwork(),

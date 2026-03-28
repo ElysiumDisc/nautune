@@ -1,3 +1,41 @@
+### v8.0.2 - Offline Mode, WiFi-Only Downloads, Helm & Fleet Fixes
+
+**Helm Mode & Fleet/SyncPlay Improvements**
+- Fixed WebSocket `.ready` hanging indefinitely if server accepts TCP but never completes handshake — now times out after 10 seconds and triggers reconnect (both RemoteControl and SyncPlay WebSockets)
+- Fixed sequential track resolution in `_handlePlayCommand` — now resolves all item IDs in parallel via `Future.wait` instead of one-by-one
+- Fixed potential duplicate WebSocket connections from concurrent `_establishConnection()` calls — added `_isConnecting` guard inside the method itself (both RemoteControl and SyncPlay)
+- Optimized participant refresh on user join — now only fetches and enriches the current group instead of all groups
+- Removed excessive per-participant debug logging in SyncPlay enrichment (4 debugPrint calls per participant)
+- Implemented Mute/Unmute/ToggleMute remote commands (previously logged as unimplemented)
+
+---
+
+### Offline Mode & WiFi-Only Download Fixes
+
+**Bug Fix: Album Art Missing in Offline Mode**
+- Album art was not displayed in album view when starting the app in airplane mode
+- Root cause: `JellyfinImage` widget only checked for offline artwork via `trackId`, but album views only had `albumId` — downloaded artwork files at `downloads/artwork/{albumId}.jpg` were never checked
+- Fix: Added `albumId` parameter to `JellyfinImage` with direct album-level artwork lookup via new `DownloadService.getArtworkFileByAlbumId()` method
+- Applied to `_AlbumCard`, `_AlbumListTile`, `_MiniAlbumCard`, and album detail screen
+
+**Bug Fix: Network Retry Errors When Offline**
+- App would attempt network requests and show retry/connection errors even in airplane mode
+- Root cause (1): `_loadLibraries()` always called `_jellyfinService.loadLibraries()` directly, bypassing the offline repository — tapping "Retry" on the offline banner triggered 3 retries with exponential backoff before failing
+- Root cause (2): At startup in airplane mode, cached online data was displayed but `_loadLibraryDependentContent()` was never called — `OfflineRepository` was never consulted
+- Fix: Added `isOfflineMode` guard in `_loadLibraries()` to use repository pattern; added offline content loading at startup via `_loadLibraryDependentContent()`
+
+**Bug Fix: Favorites Tab Broken When Offline**
+- Favorites tab showed loading spinner or error when offline instead of downloaded favorite tracks
+- Root cause: `_loadFavorites()` always called `_jellyfinService.getFavoriteTracks()` directly — no offline check
+- Fix: Added `isOfflineMode` guard using `repository.getFavoriteTracks()` which returns downloaded tracks with `isFavorite == true`
+
+**Bug Fix: WiFi-Only Downloads Toggle Had No Effect**
+- Downloads proceeded over cellular data even when the WiFi-only toggle was enabled
+- Root cause: `DownloadService.setConnectivityService()` was never called — `_connectivityService` was always null, causing `_canProceedWithDownload()` to always return true
+- Fix: Added missing `_downloadService.setConnectivityService(_connectivityService)` call during app initialization
+
+---
+
 ### v8.0.1 - iOS Piano Audio Fix
 
 **Bug Fix: Piano Silent on iOS**

@@ -53,8 +53,6 @@ class RemoteControlService extends ChangeNotifier {
   Future<void> connect() async {
     if (_isConnected || _isConnecting || _isDisposed) return;
 
-    _isConnecting = true;
-
     try {
       // Register capabilities first so the server knows we accept commands
       await _client.reportCapabilities(_credentials);
@@ -64,22 +62,19 @@ class RemoteControlService extends ChangeNotifier {
       // Continue anyway — WebSocket might still work
     }
 
-    try {
-      await _establishConnection();
-    } finally {
-      _isConnecting = false;
-    }
+    await _establishConnection();
   }
 
   Future<void> _establishConnection() async {
-    if (_isDisposed) return;
+    if (_isDisposed || _isConnecting) return;
+    _isConnecting = true;
 
     final wsUrl = _buildWebSocketUrl();
     debugPrint('RemoteControl: Connecting to WebSocket...');
 
     try {
       _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
-      await _channel!.ready;
+      await _channel!.ready.timeout(const Duration(seconds: 10));
 
       _isConnected = true;
       _reconnectAttempts = 0;
@@ -100,6 +95,8 @@ class RemoteControlService extends ChangeNotifier {
       if (!_isDisposed) {
         _scheduleReconnect();
       }
+    } finally {
+      _isConnecting = false;
     }
   }
 
@@ -232,12 +229,11 @@ class RemoteControlService extends ChangeNotifier {
     debugPrint('RemoteControl: Play command: $playCommand, ${itemIds.length} items');
 
     try {
-      // Resolve item IDs to tracks
-      final tracks = <JellyfinTrack>[];
-      for (final id in itemIds) {
-        final track = await _jellyfinService.getTrack(id);
-        if (track != null) tracks.add(track);
-      }
+      // Resolve item IDs to tracks in parallel
+      final results = await Future.wait(
+        itemIds.map((id) => _jellyfinService.getTrack(id)),
+      );
+      final tracks = results.whereType<JellyfinTrack>().toList();
 
       if (tracks.isEmpty) return;
 
@@ -292,11 +288,17 @@ class RemoteControlService extends ChangeNotifier {
         }
         break;
 
-      // Mute/unmute would need volume tracking; log for now
       case 'Mute':
+        _audioPlayerService.setVolume(0.0);
+        break;
+
       case 'Unmute':
+        _audioPlayerService.setVolume(1.0);
+        break;
+
       case 'ToggleMute':
-        debugPrint('RemoteControl: $name not yet implemented');
+        final muted = _audioPlayerService.volume == 0.0;
+        _audioPlayerService.setVolume(muted ? 1.0 : 0.0);
         break;
 
       case 'VolumeUp':
@@ -370,7 +372,6 @@ class RemoteControlService extends ChangeNotifier {
 
     _reconnectTimer = Timer(delay, () async {
       _reconnectAttempts++;
-      _isConnecting = false; // Allow re-entry
       await _establishConnection();
     });
   }

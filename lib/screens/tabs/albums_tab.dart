@@ -400,6 +400,7 @@ class _AlbumListTile extends StatelessWidget {
               ? JellyfinImage(
                   itemId: album.id,
                   imageTag: album.primaryImageTag,
+                  albumId: album.id,
                   boxFit: BoxFit.cover,
                   errorBuilder: (context, url, error) => Image.asset(
                     'assets/no_album_art.png',
@@ -466,6 +467,7 @@ class _MiniAlbumCard extends StatelessWidget {
                       ? JellyfinImage(
                           itemId: album.id,
                           imageTag: album.primaryImageTag,
+                          albumId: album.id,
                           maxWidth: 400,
                           boxFit: BoxFit.cover,
                           errorBuilder: (context, url, error) => Image.asset(
@@ -559,6 +561,7 @@ class _AlbumCard extends StatelessWidget {
                     ? JellyfinImage(
                         itemId: album.id,
                         imageTag: album.primaryImageTag,
+                        albumId: album.id,
                         boxFit: BoxFit.cover,
                         errorBuilder: (context, url, error) => Image.asset(
                           'assets/no_album_art.png',

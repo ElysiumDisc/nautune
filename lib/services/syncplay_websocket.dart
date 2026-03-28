@@ -193,18 +193,13 @@ class SyncPlayWebSocket {
       return;
     }
 
-    _isConnecting = true;
     _reconnectAttempts = 0;
-
-    try {
-      await _establishConnection();
-    } finally {
-      _isConnecting = false;
-    }
+    await _establishConnection();
   }
 
   Future<void> _establishConnection() async {
-    if (_isDisposed) return;
+    if (_isDisposed || _isConnecting) return;
+    _isConnecting = true;
 
     final wsUrl = _buildWebSocketUrl();
     debugPrint('SyncPlayWebSocket: Connecting to ${wsUrl.replaceAll(RegExp(r'api_key=[^&]+'), 'api_key=***')}');
@@ -212,8 +207,8 @@ class SyncPlayWebSocket {
     try {
       _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
 
-      // Wait for connection to be established
-      await _channel!.ready;
+      // Wait for connection to be established (with timeout to prevent hangs)
+      await _channel!.ready.timeout(const Duration(seconds: 10));
 
       _isConnected = true;
       if (!_isDisposed) {
@@ -241,6 +236,8 @@ class SyncPlayWebSocket {
         _connectionStateController.add(false);
         _scheduleReconnect();
       }
+    } finally {
+      _isConnecting = false;
     }
   }
 
@@ -344,9 +341,9 @@ class SyncPlayWebSocket {
     final delay = Duration(seconds: 1 << _reconnectAttempts);
     debugPrint('SyncPlayWebSocket: Reconnecting in ${delay.inSeconds}s (attempt ${_reconnectAttempts + 1})');
 
-    _reconnectTimer = Timer(delay, () async {
+    _reconnectTimer = Timer(delay, () {
       _reconnectAttempts++;
-      await _establishConnection();
+      _establishConnection();
     });
   }
 

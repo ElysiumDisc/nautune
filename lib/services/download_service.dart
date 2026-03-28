@@ -825,6 +825,15 @@ class DownloadService extends ChangeNotifier {
     return null;
   }
 
+  /// Get artwork file directly by album ID (for album-level offline lookup).
+  /// Unlike getArtworkFile(trackId), this does not require a track download entry.
+  Future<File?> getArtworkFileByAlbumId(String albumId) async {
+    final path = await _getArtworkPath(albumId);
+    final file = File(path);
+    if (await file.exists()) return file;
+    return null;
+  }
+
   Future<void> _simulateDemoDownload(JellyfinTrack track) async {
     if (_downloads[track.id]?.isCompleted ?? false) {
       return;

@@ -18,8 +18,9 @@ class JellyfinImage extends StatefulWidget {
     this.boxFit = BoxFit.cover,
     this.errorBuilder,
     this.placeholderBuilder,
-    this.trackId, // Optional: for offline album artwork lookup
+    this.trackId, // Optional: for offline album artwork lookup via track
     this.artistId, // Optional: for offline artist image lookup
+    this.albumId, // Optional: for offline album artwork lookup by album ID
   });
 
   final String itemId;
@@ -33,6 +34,7 @@ class JellyfinImage extends StatefulWidget {
   final Widget Function(BuildContext context, String url)? placeholderBuilder;
   final String? trackId; // If provided, will check for downloaded album artwork first
   final String? artistId; // If provided, will check for downloaded artist image first
+  final String? albumId; // If provided, will check for downloaded album artwork by album ID
 
   @override
   State<JellyfinImage> createState() => _JellyfinImageState();
@@ -40,6 +42,7 @@ class JellyfinImage extends StatefulWidget {
 
 class _JellyfinImageState extends State<JellyfinImage> {
   Future<File?>? _artistImageFuture;
+  Future<File?>? _albumArtworkFuture;
   Future<File?>? _artworkFuture;
 
   @override
@@ -53,6 +56,7 @@ class _JellyfinImageState extends State<JellyfinImage> {
     super.didUpdateWidget(oldWidget);
     // Only recreate futures if the relevant IDs change
     if (oldWidget.artistId != widget.artistId ||
+        oldWidget.albumId != widget.albumId ||
         oldWidget.trackId != widget.trackId) {
       _initFutures();
     }
@@ -62,6 +66,9 @@ class _JellyfinImageState extends State<JellyfinImage> {
     final appState = Provider.of<NautuneAppState>(context, listen: false);
     if (widget.artistId != null) {
       _artistImageFuture = appState.downloadService.getArtistImageFile(widget.artistId!);
+    }
+    if (widget.albumId != null) {
+      _albumArtworkFuture = appState.downloadService.getArtworkFileByAlbumId(widget.albumId!);
     }
     if (widget.trackId != null) {
       _artworkFuture = appState.downloadService.getArtworkFile(widget.trackId!);
@@ -107,6 +114,26 @@ class _JellyfinImageState extends State<JellyfinImage> {
             }
             return _buildError(context, 'No offline image available');
           }
+          return _buildNetworkImage(context, appState);
+        },
+      );
+    }
+
+    // If albumId is provided, try to load downloaded album artwork by album ID
+    if (widget.albumId != null) {
+      return FutureBuilder<File?>(
+        future: _albumArtworkFuture,
+        builder: (context, snapshot) {
+          if (snapshot.hasData && snapshot.data != null) {
+            return Image.file(
+              snapshot.data!,
+              width: widget.width,
+              height: widget.height,
+              fit: widget.boxFit,
+              errorBuilder: (context, error, stackTrace) => _buildNetworkImage(context, appState),
+            );
+          }
+          // No offline album artwork - fall back to network image
           return _buildNetworkImage(context, appState);
         },
       );

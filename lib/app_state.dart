@@ -1129,6 +1129,7 @@ class NautuneAppState extends ChangeNotifier {
       _audioPlayerService.setPreCacheTrackCount(storedPlaybackState.preCacheTrackCount);
       _audioPlayerService.setWifiOnlyCaching(storedPlaybackState.wifiOnlyCaching);
       _audioPlayerService.setConnectivityService(_connectivityService);
+      _downloadService.setConnectivityService(_connectivityService);
       _jellyfinService.setCacheTtl(Duration(minutes: _cacheTtlMinutes));
 
       // Restore Submarine Mode battery saver if it was active
@@ -1209,6 +1210,14 @@ class NautuneAppState extends ChangeNotifier {
           _startRemoteControl(storedSession);
         } else {
           debugPrint('Skipping bootstrap sync: ${_userWantsOffline ? "user wants offline" : "no network"} at startup');
+          // When starting offline, load content from offline repository
+          // instead of showing stale cached online data
+          if (isOfflineMode) {
+            _applyOfflineNetworkPolicy();
+            _activateSubmarineFeatures();
+            audioPlayerService.setOfflineMode(true);
+            unawaited(_loadLibraryDependentContent(forceRefresh: true));
+          }
         }
       }
     } catch (error, stackTrace) {
@@ -1706,6 +1715,18 @@ class NautuneAppState extends ChangeNotifier {
     if (_isDemoMode) {
       final library = _demoContent?.library;
       _libraries = library != null ? [library] : <JellyfinLibrary>[];
+      _isLoadingLibraries = false;
+      notifyListeners();
+      return;
+    }
+
+    if (isOfflineMode) {
+      // In offline mode, keep existing library data from cache;
+      // fall back to offline repository if empty
+      if (_libraries == null || _libraries!.isEmpty) {
+        _libraries = await repository.getLibraries();
+      }
+      _librariesError = null;
       _isLoadingLibraries = false;
       notifyListeners();
       return;
@@ -2301,6 +2322,19 @@ class NautuneAppState extends ChangeNotifier {
       );
       _isLoadingFavorites = false;
       notifyListeners();
+      return;
+    }
+
+    if (isOfflineMode) {
+      try {
+        _favoriteTracks = await repository.getFavoriteTracks();
+      } catch (error) {
+        _favoritesError = error;
+        _favoriteTracks = null;
+      } finally {
+        _isLoadingFavorites = false;
+        notifyListeners();
+      }
       return;
     }
 
