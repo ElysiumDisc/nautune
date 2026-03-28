@@ -598,6 +598,8 @@ Once connected:
 <img src="screenshots/ios7.jpg" width="250" alt="Nautune on iOS">
 <img src="screenshots/ios8.png" width="250" alt="Relax Mode">
 <img src="screenshots/ios9.jpg" width="250" alt="Nautune on iOS">
+<img src="screenshots/ios10.png" width="250" alt="Piano on iOS">
+<img src="screenshots/ios11.png" width="250" alt="Piano on iOS">
 
 ### CarPlay
 <img src="screenshots/carplay3.png" width="300" alt="Nautune CarPlay">
