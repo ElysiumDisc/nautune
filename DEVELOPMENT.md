@@ -1,5 +1,20 @@
 
 
+### Bumping the App Version
+
+Two files must be updated together when bumping the version:
+
+1. **`pubspec.yaml`** — the `version:` field (e.g., `version: 8.0.2+1`)
+2. **`lib/app_version.dart`** — the `_version` fallback string (e.g., `'8.0.2+1'`)
+
+Both must match. `pubspec.yaml` is what Flutter/fastforge reads at build time. `app_version.dart` is the runtime fallback if `PackageInfo` fails.
+
+```bash
+# Example: bump from 8.0.1 to 8.0.2
+sed -i 's/version: 8.0.1+1/version: 8.0.2+1/' pubspec.yaml
+sed -i "s/8.0.1+1/8.0.2+1/" lib/app_version.dart
+```
+
 ### Run in Debug Mode
 ```bash
 flutter run -d linux --debug
@@ -20,7 +35,7 @@ cp linux/nautune.desktop AppDir/ && \
 cp linux/nautune.png AppDir/ && \
 cd AppDir && ln -s usr/bin/nautune AppRun && cd .. && \
 mkdir -p dist && \
-ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.0.1.AppImage
+ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.0.2.AppImage
 ```
 
 ### Build Deb Package (Linux)
