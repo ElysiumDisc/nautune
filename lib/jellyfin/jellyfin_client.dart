@@ -31,9 +31,33 @@ class JellyfinClient {
   final String serverUrl;
   final String deviceId;
   final RobustHttpClient _robustClient;
-  
+
   // For backward compatibility - returns the underlying client (not a new one)
   http.Client get httpClient => _robustClient.client;
+
+  /// Safely decode a JSON map response, throwing a descriptive error on failure.
+  Map<String, dynamic> _decodeJsonMap(http.Response response) {
+    try {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } on FormatException {
+      throw Exception(
+        'Invalid JSON response (status ${response.statusCode}): '
+        '${response.body.length > 200 ? response.body.substring(0, 200) : response.body}',
+      );
+    }
+  }
+
+  /// Safely decode a JSON list response, throwing a descriptive error on failure.
+  List<dynamic> _decodeJsonList(http.Response response) {
+    try {
+      return jsonDecode(response.body) as List<dynamic>;
+    } on FormatException {
+      throw Exception(
+        'Invalid JSON response (status ${response.statusCode}): '
+        '${response.body.length > 200 ? response.body.substring(0, 200) : response.body}',
+      );
+    }
+  }
 
   Uri _buildUri(String path, [Map<String, dynamic>? query]) {
     return Uri.parse(serverUrl).resolve(path).replace(queryParameters: query);
@@ -48,7 +72,7 @@ class JellyfinClient {
       stopwatch.stop();
       
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final data = _decodeJsonMap(response);
         return ServerHealth(
           isHealthy: true,
           latencyMs: stopwatch.elapsedMilliseconds,
@@ -88,7 +112,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final data = _decodeJsonMap(response);
     final accessToken = data['AccessToken'] as String?;
     final user = data['User'] as Map<String, dynamic>?;
 
@@ -115,7 +139,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as List<dynamic>;
+    final data = _decodeJsonList(response);
     return data
         .whereType<Map<String, dynamic>>()
         .map(JellyfinUser.fromJson)
@@ -136,7 +160,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final data = _decodeJsonMap(response);
     return JellyfinUser.fromJson(data);
   }
 
@@ -161,7 +185,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -207,7 +231,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -245,7 +269,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -278,7 +302,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -316,7 +340,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -372,7 +396,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -415,7 +439,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -459,7 +483,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -500,7 +524,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -537,7 +561,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -578,7 +602,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -618,7 +642,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -652,7 +676,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -689,7 +713,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -764,7 +788,7 @@ class JellyfinClient {
       return {};
     }
 
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    return _decodeJsonMap(response);
   }
 
   /// Fetches genres for a library
@@ -794,7 +818,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items.whereType<Map<String, dynamic>>().toList();
@@ -824,7 +848,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items.whereType<Map<String, dynamic>>().toList();
@@ -856,7 +880,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items.whereType<Map<String, dynamic>>().toList();
@@ -885,7 +909,7 @@ class JellyfinClient {
       );
     }
 
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    return _decodeJsonMap(response);
   }
 
   /// Fetches most played items (tracks, albums, or artists)
@@ -924,7 +948,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items.whereType<Map<String, dynamic>>().toList();
@@ -956,7 +980,7 @@ class JellyfinClient {
 
     if (response.statusCode != 200) return 0;
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     return (data?['TotalRecordCount'] as int?) ?? 0;
   }
 
@@ -992,7 +1016,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     // Filter by play count client-side (Jellyfin doesn't have a MaxPlayCount filter)
@@ -1031,7 +1055,7 @@ class JellyfinClient {
       );
     }
 
-    return jsonDecode(response.body) as Map<String, dynamic>?;
+    return response.body.isNotEmpty ? _decodeJsonMap(response) : null;
   }
 
   Future<List<JellyfinTrack>> fetchRecentlyAddedTracks({
@@ -1062,7 +1086,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -1105,7 +1129,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items
@@ -1119,47 +1143,66 @@ class JellyfinClient {
         .toList();
   }
 
-  /// Fetch all tracks from a library with genre information for smart playlists
+  /// Fetch all tracks from a library with genre information for smart playlists.
+  /// Uses pagination to avoid loading thousands of items in a single request.
   Future<List<JellyfinTrack>> fetchAllTracks({
     required JellyfinCredentials credentials,
     required String libraryId,
     int limit = 5000,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
-      'ParentId': libraryId,
-      'IncludeItemTypes': 'Audio',
-      'Recursive': 'true',
-      'SortBy': 'Random',
-      'Limit': '$limit',
-      'Fields':
-          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Genres,Tags',
-      'EnableImageTypes': 'Primary,Thumb',
-      'EnableUserData': 'true',
-    });
+    const pageSize = 500;
+    final allTracks = <JellyfinTrack>[];
+    var startIndex = 0;
 
-    final response = await _robustClient.get(
-      uri,
-      headers: _defaultHeaders(credentials),
-    );
+    while (allTracks.length < limit) {
+      final batchLimit = (limit - allTracks.length).clamp(0, pageSize);
+      final uri = _buildUri('/Users/${credentials.userId}/Items', {
+        'ParentId': libraryId,
+        'IncludeItemTypes': 'Audio',
+        'Recursive': 'true',
+        'SortBy': 'Random',
+        'Limit': '$batchLimit',
+        'StartIndex': '$startIndex',
+        'Fields':
+            'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Genres,Tags',
+        'EnableImageTypes': 'Primary,Thumb',
+        'EnableUserData': 'true',
+      });
 
-    if (response.statusCode != 200) {
-      throw JellyfinRequestException(
-        'Unable to fetch all tracks: ${response.statusCode}',
+      final response = await _robustClient.get(
+        uri,
+        headers: _defaultHeaders(credentials),
       );
+
+      if (response.statusCode != 200) {
+        throw JellyfinRequestException(
+          'Unable to fetch all tracks: ${response.statusCode}',
+        );
+      }
+
+      final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
+      final items = data?['Items'] as List<dynamic>? ?? const [];
+
+      if (items.isEmpty) break; // No more items on the server
+
+      final tracks = items
+          .whereType<Map<String, dynamic>>()
+          .map((json) => JellyfinTrack.fromJson(
+                json,
+                serverUrl: serverUrl,
+                token: credentials.accessToken,
+                userId: credentials.userId,
+              ))
+          .toList();
+
+      allTracks.addAll(tracks);
+      startIndex += items.length;
+
+      // If we got fewer items than requested, we've reached the end
+      if (items.length < batchLimit) break;
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>?;
-    final items = data?['Items'] as List<dynamic>? ?? const [];
-
-    return items
-        .whereType<Map<String, dynamic>>()
-        .map((json) => JellyfinTrack.fromJson(
-              json,
-              serverUrl: serverUrl,
-              token: credentials.accessToken,
-              userId: credentials.userId,
-            ))
-        .toList();
+    return allTracks;
   }
 
   /// Fetch lyrics for a track
@@ -1186,8 +1229,7 @@ class JellyfinClient {
     }
 
     try {
-      final data = jsonDecode(response.body) as Map<String, dynamic>?;
-      return data;
+      return response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     } catch (e) {
       debugPrint('⚠️ Failed to parse lyrics: $e');
       return null;
@@ -1219,7 +1261,7 @@ class JellyfinClient {
 
       if (response.statusCode == 200) {
         debugPrint('✅ Marked item $itemId as played');
-        return jsonDecode(response.body) as Map<String, dynamic>?;
+        return response.body.isNotEmpty ? _decodeJsonMap(response) : null;
       } else {
         debugPrint('⚠️ Failed to mark played: ${response.statusCode}');
         return null;
@@ -1272,7 +1314,7 @@ class JellyfinClient {
       );
 
       if (response.statusCode == 200) {
-        return jsonDecode(response.body) as Map<String, dynamic>?;
+        return response.body.isNotEmpty ? _decodeJsonMap(response) : null;
       } else if (response.statusCode == 404) {
         return null; // Item not found
       } else {
@@ -1307,7 +1349,7 @@ class JellyfinClient {
       );
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>?;
+        final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
         final items = data?['Items'] as List<dynamic>? ?? [];
 
         final result = <String, Map<String, dynamic>>{};
@@ -1353,7 +1395,7 @@ class JellyfinClient {
       );
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>?;
+        final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
         final items = data?['Items'] as List<dynamic>? ?? [];
 
         final result = <String, Map<String, dynamic>>{};
@@ -1397,7 +1439,7 @@ class JellyfinClient {
       );
     }
 
-    final data = jsonDecode(response.body) as List<dynamic>? ?? [];
+    final data = response.body.isNotEmpty ? _decodeJsonList(response) : <dynamic>[];
     return data.whereType<Map<String, dynamic>>().toList();
   }
 

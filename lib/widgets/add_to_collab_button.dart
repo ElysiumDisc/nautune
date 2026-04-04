@@ -83,12 +83,14 @@ class _AddToCollabButtonState extends State<AddToCollabButton> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<SyncPlayProvider>(
-      builder: (context, provider, _) {
-        if (!provider.isInSession) {
+    return Selector<SyncPlayProvider, bool>(
+      selector: (_, provider) => provider.isInSession,
+      builder: (context, isInSession, _) {
+        if (!isInSession) {
           return const SizedBox.shrink();
         }
 
+        final provider = context.read<SyncPlayProvider>();
         if (widget.compact) {
           return _buildCompactButton(context, provider);
         }
@@ -155,12 +157,14 @@ class AddToCollabMenuItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Consumer<SyncPlayProvider>(
-      builder: (context, provider, _) {
-        if (!provider.isInSession) {
+    return Selector<SyncPlayProvider, bool>(
+      selector: (_, provider) => provider.isInSession,
+      builder: (context, isInSession, _) {
+        if (!isInSession) {
           return const SizedBox.shrink();
         }
 
+        final provider = context.read<SyncPlayProvider>();
         return ListTile(
           leading: Icon(
             Icons.playlist_add,
@@ -211,9 +215,10 @@ class CollabActiveIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Consumer<SyncPlayProvider>(
-      builder: (context, provider, _) {
-        if (!provider.isInSession) {
+    return Selector<SyncPlayProvider, bool>(
+      selector: (_, provider) => provider.isInSession,
+      builder: (context, isInSession, _) {
+        if (!isInSession) {
           return const SizedBox.shrink();
         }
 

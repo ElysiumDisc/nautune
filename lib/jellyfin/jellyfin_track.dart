@@ -31,6 +31,7 @@ class JellyfinTrack {
     this.genres,
     this.providerIds,
     this.tags,
+    this.productionYear,
   });
 
   final String id;
@@ -64,6 +65,7 @@ class JellyfinTrack {
   final List<String>? genres; // Track genres for stats
   final Map<String, String>? providerIds; // External IDs (MusicBrainzTrack, MusicBrainzArtist, etc.)
   final List<String>? tags; // User tags from Jellyfin for smart playlist filtering
+  final int? productionYear; // Album production year, persisted for offline display
 
   factory JellyfinTrack.fromJson(Map<String, dynamic> json, {String? serverUrl, String? token, String? userId}) {
     final rawArtists = json['Artists'];
@@ -173,6 +175,10 @@ class JellyfinTrack {
     final rawTags = json['Tags'];
     final tagsList = (rawTags is List) ? rawTags.whereType<String>().toList() : null;
 
+    // Production year (from album metadata included on track items)
+    final productionYearVal = json['ProductionYear'];
+    final productionYear = productionYearVal is int ? productionYearVal : (productionYearVal is num ? productionYearVal.toInt() : null);
+
     return JellyfinTrack(
       id: json['Id'] is String ? json['Id'] as String : '',
       name: json['Name'] is String ? json['Name'] as String : '',
@@ -203,6 +209,7 @@ class JellyfinTrack {
       genres: genresList,
       providerIds: providerIds,
       tags: tagsList,
+      productionYear: productionYear,
     );
   }
 
@@ -236,6 +243,7 @@ class JellyfinTrack {
     List<String>? genres,
     Map<String, String>? providerIds,
     List<String>? tags,
+    int? productionYear,
   }) {
     return JellyfinTrack(
       id: id ?? this.id,
@@ -267,6 +275,7 @@ class JellyfinTrack {
       genres: genres ?? this.genres,
       providerIds: providerIds ?? this.providerIds,
       tags: tags ?? this.tags,
+      productionYear: productionYear ?? this.productionYear,
     );
   }
 
@@ -575,6 +584,7 @@ class JellyfinTrack {
       'channels': channels,
       'genres': genres,
       'tags': tags,
+      'productionYear': productionYear,
     };
   }
 
@@ -596,6 +606,9 @@ class JellyfinTrack {
 
     final rawTags = json['tags'];
     final tagsList = (rawTags is List) ? rawTags.whereType<String>().toList() : null;
+
+    final productionYearVal = json['productionYear'];
+    final productionYear = productionYearVal is int ? productionYearVal : (productionYearVal is num ? productionYearVal.toInt() : null);
 
     return JellyfinTrack(
       id: json['id'] is String ? json['id'] as String : '',
@@ -626,6 +639,7 @@ class JellyfinTrack {
       channels: json['channels'] is int ? json['channels'] as int : (json['channels'] is num ? (json['channels'] as num).toInt() : null),
       genres: genresList,
       tags: tagsList,
+      productionYear: productionYear,
     );
   }
 

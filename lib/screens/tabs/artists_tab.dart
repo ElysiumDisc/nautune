@@ -93,7 +93,7 @@ class _ArtistsTab extends StatelessWidget {
           final uiState = context.watch<UIStateProvider>();
           final crossAxisCount = uiState.gridSize;
           final useListMode = uiState.useListMode;
-          final controller = scrollController ?? ScrollController();
+          final controller = scrollController!;
 
           // List mode rendering
           final effectiveSortBy = artists != null ? SortOption.name : appState.artistSortBy;

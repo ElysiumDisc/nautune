@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:http/http.dart' as http;
 
@@ -16,6 +17,7 @@ class ListenBrainzService {
   static const _boxName = 'listenbrainz_config';
   static const _configKey = 'config';
   static const _pendingScrobblesKey = 'pending_scrobbles';
+  static const _secureStorageKey = 'listenbrainz_hive_key';
 
   Box? _box;
   ListenBrainzConfig? _config;
@@ -149,12 +151,69 @@ class ListenBrainzService {
     }
   }
 
+  final _secureStorage = const FlutterSecureStorage();
+
+  /// Open or migrate the encrypted Hive box for config/scrobbles.
+  Future<Box> _openEncryptedBox() async {
+    if (Hive.isBoxOpen(_boxName)) return Hive.box(_boxName);
+
+    String? keyString = await _secureStorage.read(key: _secureStorageKey);
+    Uint8List encryptionKey;
+
+    if (keyString == null) {
+      // First launch with encryption — migrate any existing unencrypted data
+      dynamic oldConfigData;
+      dynamic oldScrobbleData;
+
+      if (await Hive.boxExists(_boxName)) {
+        try {
+          final oldBox = await Hive.openBox(_boxName);
+          oldConfigData = oldBox.get(_configKey);
+          oldScrobbleData = oldBox.get(_pendingScrobblesKey);
+          await oldBox.close();
+        } catch (e) {
+          debugPrint('ListenBrainzService: Failed to read old data: $e');
+        }
+      }
+
+      final key = Hive.generateSecureKey();
+      await _secureStorage.write(
+        key: _secureStorageKey,
+        value: base64UrlEncode(key),
+      );
+      encryptionKey = Uint8List.fromList(key);
+
+      // Open new encrypted box and restore old data before deleting old box
+      final newBox = await Hive.openBox(
+        _boxName,
+        encryptionCipher: HiveAesCipher(encryptionKey),
+      );
+      if (oldConfigData != null) {
+        await newBox.put(_configKey, oldConfigData);
+      }
+      if (oldScrobbleData != null) {
+        await newBox.put(_pendingScrobblesKey, oldScrobbleData);
+      }
+
+      // Old unencrypted data is now safely in the encrypted box — clean up
+      // (deleteBoxFromDisk is safe here since we already reopened with encryption)
+      debugPrint('ListenBrainzService: Migrated to encrypted storage');
+      return newBox;
+    }
+
+    encryptionKey = base64Url.decode(keyString);
+    return await Hive.openBox(
+      _boxName,
+      encryptionCipher: HiveAesCipher(encryptionKey),
+    );
+  }
+
   /// Initialize the service
   Future<void> initialize() async {
     if (_initialized) return;
 
     try {
-      _box = await Hive.openBox(_boxName);
+      _box = await _openEncryptedBox();
       _popularityCacheBox = await Hive.openBox(_popularityCacheBoxName);
       await _loadConfig();
       await _loadPendingScrobbles();

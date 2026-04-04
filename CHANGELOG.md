@@ -1,3 +1,47 @@
+### v8.0.4 - Deep Code Hardening: Security, Stability & Performance
+
+**Security**
+- ListenBrainz API token is now stored in an encrypted Hive box (matching Jellyfin session storage), with automatic migration from unencrypted data
+- Reduced verbose device ID logging — only logs on first generation, not every app launch
+
+**Data Safety**
+- Fixed session store migration that could lose session data if the app crashed mid-migration — encrypted box is now written before the old unencrypted box is deleted
+- Playlist cache no longer silently deletes all cached playlists on a single parse error — logs the error and returns gracefully instead
+
+**Bug Fixes**
+- Fixed `markFavorite()` not clearing caches on error paths — cache clearing now runs in a `finally` block so stale data is never served after a failed favorite toggle
+- Fixed race condition in Fleet Mode participant refresh — `_currentSession` could change during async API calls, causing stale participant data
+- Fixed `NowPlayingBar` potentially accessing navigator context after dispose
+- Fixed `JellyfinImage` not refreshing when `itemId` or `imageTag` changed (only artist/album/track IDs were compared in `didUpdateWidget`)
+- Fixed `RewindScreen` year selector `jumpToPage` failing when `PageController` wasn't yet attached — now deferred to post-frame callback
+- Fixed uncancellable `Future.delayed` timer in app startup that could fire after widget disposal — replaced with cancellable `Timer`
+- Made `RemoteControlService.dispose()` explicitly annotate fire-and-forget disconnect with `unawaited()`
+
+**Performance**
+- `DownloadService.downloads` getter no longer sorts the full list on every access — result is now cached and invalidated only on mutations
+- `fetchAllTracks` now paginates in 500-item batches instead of requesting up to 5000 items at once, preventing UI freezes and potential OOM on large libraries
+- Library selection screen uses `ListView.builder` instead of eagerly materializing all library tiles
+- `AddToCollabButton`, `AddToCollabMenuItem`, and `CollabActiveIndicator` switched from `Consumer` to `Selector` — only rebuilds when `isInSession` changes, not on every `SyncPlayProvider` update
+
+**JSON Error Handling**
+- All ~33 `jsonDecode(response.body)` calls in `JellyfinClient` are now wrapped in safe helpers that catch `FormatException` and throw descriptive errors — prevents app crashes when the server returns HTML error pages or malformed JSON
+
+---
+
+### v8.0.3 - Offline Album Deduplication & Search Polish
+
+**Bug Fix: Same-Name Albums Merged in Offline Mode**
+- Albums with the same name and artist but different years (e.g., "Greatest Hits" 2010 vs 2020) were incorrectly merged into a single entry in offline mode
+- Root cause: Offline library screen and search grouped downloaded tracks by album **name** instead of album **ID** — albums sharing a name collapsed into one entry
+- Fix: All offline grouping (album view, artist > album view, and offline search) now keys on `albumId`, keeping distinct albums separate
+- Added `productionYear` field to `JellyfinTrack` model — parsed from Jellyfin API, persisted through the download pipeline, and displayed in offline album subtitles (e.g., "Artist - 2020 - 12 tracks")
+- Existing downloads gracefully show no year; new downloads automatically persist it
+
+**Offline Search Performance**
+- Added result limits to offline search to keep the UI responsive with large libraries (50 albums, 50 artists, 100 tracks)
+
+---
+
 ### v8.0.2 - Offline Mode, WiFi-Only Downloads, Helm & Fleet Fixes
 
 **Helm Mode & Fleet/SyncPlay Improvements**

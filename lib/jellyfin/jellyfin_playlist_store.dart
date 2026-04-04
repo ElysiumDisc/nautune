@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import 'jellyfin_playlist.dart';
@@ -46,8 +47,8 @@ class JellyfinPlaylistStore {
           })
           .whereType<JellyfinPlaylist>()
           .toList();
-    } catch (_) {
-      await box.delete(_playlistsKey);
+    } catch (e) {
+      debugPrint('⚠️ JellyfinPlaylistStore: Failed to parse playlists: $e');
       return null;
     }
   }

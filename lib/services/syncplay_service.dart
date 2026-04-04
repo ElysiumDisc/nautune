@@ -337,21 +337,24 @@ class SyncPlayService extends ChangeNotifier {
   /// Refresh only the current group's participants (avoids fetching all groups).
   /// Used when a user joins to get their full profile data.
   Future<void> _refreshCurrentGroupParticipants() async {
-    final currentGroupId = _currentSession?.group.groupId;
-    if (currentGroupId == null) return;
+    final session = _currentSession;
+    final currentGroupId = session?.group.groupId;
+    if (currentGroupId == null || session == null) return;
 
     try {
       final groups = await _client.getGroups(credentials: _credentials);
       final currentGroup = groups.where((g) => g.groupId == currentGroupId).firstOrNull;
-      if (currentGroup == null || _currentSession == null) return;
+      // Abort if session changed during the async gap
+      if (currentGroup == null || _currentSession != session) return;
 
       final enrichedParticipants = await _enrichParticipants(currentGroup.participants);
-      if (_currentSession != null && enrichedParticipants.isNotEmpty) {
-        _currentSession = _currentSession!.copyWith(
-          group: _currentSession!.group.copyWith(participants: enrichedParticipants),
-        );
-        _notifySessionChanged();
-      }
+      // Re-check session identity after second async gap
+      if (_currentSession != session || enrichedParticipants.isEmpty) return;
+
+      _currentSession = _currentSession!.copyWith(
+        group: _currentSession!.group.copyWith(participants: enrichedParticipants),
+      );
+      _notifySessionChanged();
     } catch (e) {
       debugPrint('SyncPlay: Failed to refresh current group participants: $e');
     }

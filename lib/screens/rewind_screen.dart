@@ -95,10 +95,12 @@ class _RewindScreenState extends State<RewindScreen> with TickerProviderStateMix
       _selectedYear = year;
       _currentPage = 0;
     });
-    // Only jump if controller is attached to PageView
-    if (_pageController.hasClients) {
-      _pageController.jumpToPage(0);
-    }
+    // Defer jump until after the next frame when controller is attached
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_pageController.hasClients) {
+        _pageController.jumpToPage(0);
+      }
+    });
     _loadRewindData();
   }
 

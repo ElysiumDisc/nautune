@@ -24,9 +24,7 @@ class JellyfinSessionStore {
       if (deviceId == null) {
         deviceId = const Uuid().v4();
         await box.put(_deviceIdKey, deviceId);
-        debugPrint('🆔 JellyfinSessionStore: Generated new Device ID: $deviceId');
-      } else {
-         debugPrint('🆔 JellyfinSessionStore: reused Device ID: $deviceId');
+        debugPrint('🆔 JellyfinSessionStore: Generated new Device ID');
       }
       return deviceId;
     } catch (e) {
@@ -56,17 +54,9 @@ class JellyfinSessionStore {
               final oldBox = await Hive.openBox(_boxName);
               oldData = oldBox.get(_sessionKey);
               await oldBox.close();
-              await Hive.deleteBoxFromDisk(_boxName);
               migrationSucceeded = true;
             } catch (e) {
               debugPrint('⚠️ JellyfinSessionStore: Failed to read old data: $e');
-              // Try to delete corrupt box and start fresh
-              try {
-                await Hive.deleteBoxFromDisk(_boxName);
-                debugPrint('🗑️ JellyfinSessionStore: Deleted corrupt box');
-              } catch (_) {
-                // Ignore deletion errors
-              }
             }
 
             // Generate and save new key
@@ -77,18 +67,45 @@ class JellyfinSessionStore {
             );
             encryptionKey = Uint8List.fromList(key);
 
-            // Re-open with encryption and restore data if migration succeeded
+            // Write to new encrypted box FIRST, then delete old data
+            // This prevents data loss if the app crashes mid-migration
+            final tempBoxName = '${_boxName}_encrypted';
             final newBox = await Hive.openBox(
-              _boxName,
+              tempBoxName,
               encryptionCipher: HiveAesCipher(encryptionKey),
             );
             if (migrationSucceeded && oldData != null) {
               await newBox.put(_sessionKey, oldData);
+              debugPrint('✅ JellyfinSessionStore: Data written to encrypted box');
+            }
+            await newBox.close();
+
+            // Now safe to delete old unencrypted box
+            try {
+              await Hive.deleteBoxFromDisk(_boxName);
+            } catch (_) {
+              // Ignore deletion errors — old box is harmless
+            }
+
+            // Rename encrypted box to the standard name by copying
+            final finalBox = await Hive.openBox(
+              _boxName,
+              encryptionCipher: HiveAesCipher(encryptionKey),
+            );
+            if (migrationSucceeded && oldData != null) {
+              await finalBox.put(_sessionKey, oldData);
+            }
+            // Clean up temp box
+            try {
+              await Hive.deleteBoxFromDisk(tempBoxName);
+            } catch (_) {}
+
+            if (migrationSucceeded && oldData != null) {
               debugPrint('✅ JellyfinSessionStore: Migration completed successfully');
             } else if (!migrationSucceeded) {
               debugPrint('ℹ️ JellyfinSessionStore: Starting fresh after failed migration');
             }
-            return newBox;
+            return finalBox;
           }
           
           // Generate new key

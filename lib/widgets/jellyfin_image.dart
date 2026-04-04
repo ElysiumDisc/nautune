@@ -55,7 +55,9 @@ class _JellyfinImageState extends State<JellyfinImage> {
   void didUpdateWidget(JellyfinImage oldWidget) {
     super.didUpdateWidget(oldWidget);
     // Only recreate futures if the relevant IDs change
-    if (oldWidget.artistId != widget.artistId ||
+    if (oldWidget.itemId != widget.itemId ||
+        oldWidget.imageTag != widget.imageTag ||
+        oldWidget.artistId != widget.artistId ||
         oldWidget.albumId != widget.albumId ||
         oldWidget.trackId != widget.trackId) {
       _initFutures();

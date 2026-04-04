@@ -280,6 +280,7 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   StreamSubscription<String>? _traySubscription;
   StreamSubscription<String>? _deepLinkSubscription;
+  Timer? _coldStartJoinTimer;
   String? _deferredSyncPlayGroupId;
 
   @override
@@ -303,7 +304,7 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
       debugPrint('🔗 Post-frame callback: pendingGroupId=$pendingGroupId, session=${widget.sessionProvider.session != null}');
       if (pendingGroupId != null) {
         // Add delay to ensure navigator context is ready after cold start
-        Future.delayed(const Duration(milliseconds: 300), () {
+        _coldStartJoinTimer = Timer(const Duration(milliseconds: 300), () {
           if (mounted) {
             _handleSyncPlayJoin(pendingGroupId);
           }
@@ -416,6 +417,7 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
 
   @override
   void dispose() {
+    _coldStartJoinTimer?.cancel();
     _traySubscription?.cancel();
     _deepLinkSubscription?.cancel();
     widget.sessionProvider.removeListener(_onSessionChanged);

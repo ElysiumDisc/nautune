@@ -857,12 +857,12 @@ class JellyfinService {
     final activeClient = _client;
     if (activeClient == null) throw Exception('Client not initialized');
 
-    if (shouldBeFavorite) {
-      // Add to favorites - POST request (correct endpoint)
-      final addPath = '/Users/${session.credentials.userId}/FavoriteItems/$itemId';
-      debugPrint('🔵 Adding favorite - Sending POST to $addPath');
+    try {
+      if (shouldBeFavorite) {
+        // Add to favorites - POST request (correct endpoint)
+        final addPath = '/Users/${session.credentials.userId}/FavoriteItems/$itemId';
+        debugPrint('🔵 Adding favorite - Sending POST to $addPath');
 
-      try {
         final response = await activeClient.request(
           method: 'POST',
           path: addPath,
@@ -870,16 +870,11 @@ class JellyfinService {
         );
         debugPrint('✅ Add favorite response: $response');
         debugPrint('✅ Successfully added item $itemId to Jellyfin favorites');
-      } catch (e) {
-        debugPrint('❌ Failed to add favorite: $e');
-        rethrow;
-      }
-    } else {
-      // Remove from favorites - DELETE request (correct endpoint)
-      final deletePath = '/Users/${session.credentials.userId}/FavoriteItems/$itemId';
-      debugPrint('🔵 Removing favorite - Sending DELETE to $deletePath');
+      } else {
+        // Remove from favorites - DELETE request (correct endpoint)
+        final deletePath = '/Users/${session.credentials.userId}/FavoriteItems/$itemId';
+        debugPrint('🔵 Removing favorite - Sending DELETE to $deletePath');
 
-      try {
         final response = await activeClient.request(
           method: 'DELETE',
           path: deletePath,
@@ -903,15 +898,12 @@ class JellyfinService {
         }
 
         debugPrint('✅ Successfully removed item $itemId from Jellyfin favorites');
-      } catch (e) {
-        debugPrint('❌ Failed to remove favorite: $e');
-        rethrow;
       }
+    } finally {
+      // Clear caches so next fetch gets updated data, even on error
+      _clearCaches();
+      debugPrint('🧹 Cleared caches after favorite update');
     }
-    
-    // Clear caches so next fetch gets updated data
-    _clearCaches();
-    debugPrint('🧹 Cleared caches after favorite update');
   }
 
   Future<List<JellyfinAlbum>> getFavoriteAlbums() async {

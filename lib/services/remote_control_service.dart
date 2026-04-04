@@ -401,7 +401,7 @@ class RemoteControlService extends ChangeNotifier {
   @override
   void dispose() {
     _isDisposed = true;
-    disconnect();
+    unawaited(disconnect());
     super.dispose();
   }
 }

@@ -155,26 +155,31 @@ class _SearchTabState extends State<_SearchTab> {
       try {
         final downloads = widget.appState.downloadService.completedDownloads;
 
-        // Build album groups for album search
+        // Build album groups for album search - group by albumId, not name
         final Map<String, List<DownloadItem>> albumGroups = {};
         for (final download in downloads) {
-          final albumName = download.track.album ?? 'Unknown Album';
-          if (!albumGroups.containsKey(albumName)) {
-            albumGroups[albumName] = [];
+          final key = download.track.albumId ?? download.track.album ?? 'Unknown Album';
+          if (!albumGroups.containsKey(key)) {
+            albumGroups[key] = [];
           }
-          albumGroups[albumName]!.add(download);
+          albumGroups[key]!.add(download);
         }
 
-        // Filter albums by query
+        // Filter albums by query (check album name from first track, since key is now an ID)
         final matchingAlbums = albumGroups.entries
-            .where((entry) => entry.key.toLowerCase().contains(lowerQuery))
+            .where((entry) {
+              final albumName = entry.value.first.track.album?.toLowerCase() ?? 'unknown album';
+              return albumName.contains(lowerQuery);
+            })
+            .take(50)
             .map((entry) {
           final firstTrack = entry.value.first.track;
           return JellyfinAlbum(
             id: firstTrack.albumId ?? firstTrack.id,
-            name: entry.key,
+            name: firstTrack.album ?? 'Unknown Album',
             artists: [firstTrack.displayArtist],
             artistIds: const [],
+            productionYear: firstTrack.productionYear,
           );
         }).toList();
 
@@ -191,6 +196,7 @@ class _SearchTabState extends State<_SearchTab> {
         // Filter artists by query
         final matchingArtists = artistGroups.keys
             .where((name) => name.toLowerCase().contains(lowerQuery))
+            .take(50)
             .map((name) => JellyfinArtist(
               id: 'offline_$name',
               name: name,
@@ -206,6 +212,7 @@ class _SearchTabState extends State<_SearchTab> {
                   track.displayArtist.toLowerCase().contains(lowerQuery) ||
                   albumName.contains(lowerQuery);
             })
+            .take(100)
             .toList();
 
         if (!mounted || _lastQuery != trimmed) return;

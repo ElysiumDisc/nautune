@@ -59,6 +59,7 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
   }
 
   void _openFullPlayer(BuildContext context, {bool isSailorMode = false}) {
+    if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => FullPlayerScreen(

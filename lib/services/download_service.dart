@@ -179,8 +179,20 @@ class DownloadService extends ChangeNotifier {
   // Lock to prevent race conditions between download and delete operations
   final Set<String> _operationLocks = {};
 
-  List<DownloadItem> get downloads => _downloads.values.toList()
-    ..sort((a, b) => b.queuedAt.compareTo(a.queuedAt));
+  // Cached sorted downloads list — invalidated on any mutation
+  List<DownloadItem>? _sortedDownloadsCache;
+
+  List<DownloadItem> get downloads {
+    _sortedDownloadsCache ??= _downloads.values.toList()
+      ..sort((a, b) => b.queuedAt.compareTo(a.queuedAt));
+    return _sortedDownloadsCache!;
+  }
+
+  @override
+  void notifyListeners() {
+    _sortedDownloadsCache = null;
+    super.notifyListeners();
+  }
 
   List<DownloadItem> get completedDownloads =>
       downloads.where((d) => d.isCompleted).toList();
@@ -488,6 +500,7 @@ class DownloadService extends ChangeNotifier {
             sampleRate: (itemData['trackSampleRate'] as num?)?.toInt(),
             bitDepth: (itemData['trackBitDepth'] as num?)?.toInt(),
             channels: (itemData['trackChannels'] as num?)?.toInt(),
+            productionYear: (itemData['trackProductionYear'] as num?)?.toInt(),
           );
 
           final item = DownloadItem.fromJson(itemData, track);

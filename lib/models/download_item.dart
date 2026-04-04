@@ -84,6 +84,7 @@ class DownloadItem {
       'trackSampleRate': track.sampleRate,
       'trackBitDepth': track.bitDepth,
       'trackChannels': track.channels,
+      'trackProductionYear': track.productionYear,
       'localPath': localPath,
       'status': status.name,
       'progress': progress,

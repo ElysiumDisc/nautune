@@ -55,12 +55,13 @@ class OfflineRepository implements MusicRepository {
           name: albumName,
           artists: [track.displayArtist],
           primaryImageTag: track.albumPrimaryImageTag,
+          productionYear: track.productionYear,
         );
       }
     }
 
     final albumList = albums.values.toList();
-    
+
     // Sort based on options (offline only supports name sorting reliably)
     albumList.sort((a, b) {
       final comparison = a.name.compareTo(b.name);
@@ -163,6 +164,7 @@ class OfflineRepository implements MusicRepository {
             name: albumName,
             artists: [track.displayArtist],
             primaryImageTag: track.albumPrimaryImageTag,
+            productionYear: track.productionYear,
           );
         }
       }
@@ -219,6 +221,7 @@ class OfflineRepository implements MusicRepository {
             name: albumName,
             artists: [track.displayArtist],
             primaryImageTag: track.albumPrimaryImageTag,
+            productionYear: track.productionYear,
           ),
           date: download.completedAt ?? download.queuedAt,
         );

@@ -294,25 +294,31 @@ class _LibraryScreenState extends State<LibraryScreen>
           // Show library selection
           body = RefreshIndicator(
             onRefresh: () => appState.refreshLibraries(),
-            child: ListView(
+            child: ListView.builder(
               padding: const EdgeInsets.all(16),
-              children: [
-                Text(
-                  'Pick a library to explore',
-                  style: theme.textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                ...libraries.map((library) => Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: _LibraryTile(
-                        library: library,
-                        groupValue: selectedId,
-                        onSelect: () => appState.selectLibrary(library),
+              itemCount: libraries.length + 1, // +1 for the header
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      'Pick a library to explore',
+                      style: theme.textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
                       ),
-                    )),
-              ],
+                    ),
+                  );
+                }
+                final library = libraries[index - 1];
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _LibraryTile(
+                    library: library,
+                    groupValue: selectedId,
+                    onSelect: () => appState.selectLibrary(library),
+                  ),
+                );
+              },
             ),
           );
         } else {

@@ -187,32 +187,42 @@ class _OfflineLibraryScreenState extends State<OfflineLibraryScreen> {
   }
 
   Widget _buildByAlbum(ThemeData theme, List downloads, NautuneAppState appState) {
-    // Group by album
+    // Group by albumId (not name!) to keep same-name albums with different years separate
     final Map<String, List> albumGroups = {};
     for (final download in downloads) {
-      final albumName = download.track.album ?? 'Unknown Album';
-      if (!albumGroups.containsKey(albumName)) {
-        albumGroups[albumName] = [];
+      final key = download.track.albumId ?? download.track.album ?? 'Unknown Album';
+      if (!albumGroups.containsKey(key)) {
+        albumGroups[key] = [];
       }
-      albumGroups[albumName]!.add(download);
+      albumGroups[key]!.add(download);
     }
 
-    final sortedAlbums = albumGroups.keys.toList()..sort();
+    final sortedKeys = albumGroups.keys.toList()
+      ..sort((a, b) {
+        final aName = albumGroups[a]!.first.track.album ?? 'Unknown Album';
+        final bName = albumGroups[b]!.first.track.album ?? 'Unknown Album';
+        return aName.compareTo(bName);
+      });
 
     return ListView.builder(
       padding: const EdgeInsets.all(16),
-      itemCount: sortedAlbums.length,
+      itemCount: sortedKeys.length,
       itemBuilder: (context, index) {
-        final albumName = sortedAlbums[index];
-        final albumDownloads = albumGroups[albumName]!;
-        final artistName = albumDownloads.first.track.displayArtist;
+        final key = sortedKeys[index];
+        final albumDownloads = albumGroups[key]!;
+        final firstTrack = albumDownloads.first.track;
+        final albumName = firstTrack.album ?? 'Unknown Album';
+        final artistName = firstTrack.displayArtist;
+        final year = firstTrack.productionYear;
 
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
           child: ExpansionTile(
             leading: Icon(Icons.album, color: theme.colorScheme.primary),
             title: Text(albumName),
-            subtitle: Text('$artistName • ${albumDownloads.length} tracks'),
+            subtitle: Text(year != null
+                ? '$artistName • $year • ${albumDownloads.length} tracks'
+                : '$artistName • ${albumDownloads.length} tracks'),
             children: albumDownloads.map((download) {
               final track = download.track;
               return ListTile(
@@ -273,14 +283,14 @@ class _OfflineLibraryScreenState extends State<OfflineLibraryScreen> {
         final artistName = sortedArtists[index];
         final artistDownloads = artistGroups[artistName]!;
 
-        // Group artist's tracks by album
+        // Group artist's tracks by albumId (not name!) to keep same-name albums separate
         final Map<String, List> albumsForArtist = {};
         for (final download in artistDownloads) {
-          final albumName = download.track.album ?? 'Unknown Album';
-          if (!albumsForArtist.containsKey(albumName)) {
-            albumsForArtist[albumName] = [];
+          final key = download.track.albumId ?? download.track.album ?? 'Unknown Album';
+          if (!albumsForArtist.containsKey(key)) {
+            albumsForArtist[key] = [];
           }
-          albumsForArtist[albumName]!.add(download);
+          albumsForArtist[key]!.add(download);
         }
 
         return Card(
@@ -291,13 +301,16 @@ class _OfflineLibraryScreenState extends State<OfflineLibraryScreen> {
             subtitle: Text(
                 '${albumsForArtist.length} albums • ${artistDownloads.length} tracks'),
             children: albumsForArtist.entries.map((entry) {
-              final albumName = entry.key;
-              final tracks = entry.value;
+              final albumTracks = entry.value;
+              final albumName = albumTracks.first.track.album ?? 'Unknown Album';
+              final albumYear = albumTracks.first.track.productionYear;
               return ExpansionTile(
                 dense: true,
                 title: Text(albumName),
-                subtitle: Text('${tracks.length} tracks'),
-                children: tracks.map((download) {
+                subtitle: Text(albumYear != null
+                    ? '$albumYear • ${albumTracks.length} tracks'
+                    : '${albumTracks.length} tracks'),
+                children: albumTracks.map((download) {
                   final track = download.track;
                   return ListTile(
                     dense: true,
@@ -321,7 +334,7 @@ class _OfflineLibraryScreenState extends State<OfflineLibraryScreen> {
                           )
                         : null,
                     onTap: () {
-                      final allTracks = tracks
+                      final allTracks = albumTracks
                           .map((d) => d.track as JellyfinTrack)
                           .toList();
                       appState.audioPlayerService.playTrack(
