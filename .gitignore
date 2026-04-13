@@ -53,7 +53,5 @@ AppDir/
 appimage-builder
 appimagetool
 
-# Flatpak
-build-dir/
-.flatpak-builder/
+# Misc build artifacts
 *.tar.gz
