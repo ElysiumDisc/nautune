@@ -873,11 +873,11 @@ class SyncPlayService extends ChangeNotifier {
         final delay = Duration(seconds: 1 << _rejoinAttempts);
         debugPrint('Will retry rejoin in ${delay.inSeconds}s (attempt ${_rejoinAttempts + 1}/$_maxRejoinAttempts)');
         _isRejoining = false;
-        Future.delayed(delay, () {
+        unawaited(Future.delayed(delay, () {
           if (_lastGroupId != null && !_isRejoining) {
             _attemptAutoRejoin();
           }
-        });
+        }));
         return;
       } else {
         // Max attempts reached or group cleared - group likely no longer exists

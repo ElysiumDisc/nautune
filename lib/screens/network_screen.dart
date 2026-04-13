@@ -129,6 +129,25 @@ class _NetworkScreenState extends State<NetworkScreen>
     final clampedNumber = channelNumber.clamp(0, 333);
     final channel = findNearestChannel(clampedNumber);
 
+    // Offline guard: if we're offline and this channel isn't downloaded,
+    // surface a clear message instead of silently failing the stream attempt.
+    final connectivity = context.read<ConnectivityProvider>();
+    final isOffline = !connectivity.networkAvailable;
+    final isDownloaded = _downloadService.isChannelDownloaded(channel.number);
+    if (isOffline && !isDownloaded) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Offline — channel ${channel.number} not downloaded. Download it while online to play offline.',
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+
     setState(() {
       _isLoading = true;
       _errorMessage = null;

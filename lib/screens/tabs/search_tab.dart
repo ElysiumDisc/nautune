@@ -20,6 +20,7 @@ class _SearchTabState extends State<_SearchTab> {
   bool _showEssentialEasterEgg = false;
   bool _showFireEasterEgg = false;
   bool _showPianoEasterEgg = false;
+  bool _showHealingEasterEgg = false;
   List<JellyfinAlbum> _albumResults = const [];
   List<JellyfinArtist> _artistResults = const [];
   List<JellyfinTrack> _trackResults = const [];
@@ -109,6 +110,7 @@ class _SearchTabState extends State<_SearchTab> {
         _showEssentialEasterEgg = false;
         _showFireEasterEgg = false;
         _showPianoEasterEgg = false;
+        _showHealingEasterEgg = false;
       });
       return;
     }
@@ -121,6 +123,11 @@ class _SearchTabState extends State<_SearchTab> {
       _showEssentialEasterEgg = lowerQuery.contains('essential');
       _showFireEasterEgg = lowerQuery.contains('fire') || lowerQuery.contains('frets');
       _showPianoEasterEgg = lowerQuery.contains('piano');
+      _showHealingEasterEgg = lowerQuery.contains('solfeggio') ||
+          lowerQuery.contains('healing') ||
+          lowerQuery.contains('frequency') ||
+          lowerQuery.contains('frequencies') ||
+          lowerQuery.contains('hz');
     });
     unawaited(_rememberQuery(trimmed));
 
@@ -410,7 +417,8 @@ class _SearchTabState extends State<_SearchTab> {
                       _showNetworkEasterEgg ||
                       _showEssentialEasterEgg ||
                       _showFireEasterEgg ||
-                      _showPianoEasterEgg;
+                      _showPianoEasterEgg ||
+                      _showHealingEasterEgg;
 
     if (!hasResults) {
       return Center(
@@ -440,6 +448,9 @@ class _SearchTabState extends State<_SearchTab> {
         // Easter egg: Piano card
         if (_showPianoEasterEgg)
           _buildPianoCard(theme),
+        // Easter egg: Healing Frequencies card
+        if (_showHealingEasterEgg)
+          _buildHealingFrequenciesCard(theme),
         // Artists section
         if (_artistResults.isNotEmpty) ...[
           _buildSectionHeader(theme, 'Artists', Icons.person, _artistResults.length),
@@ -571,6 +582,28 @@ class _SearchTabState extends State<_SearchTab> {
         trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.white54),
         onTap: () => Navigator.of(context).push(
           MaterialPageRoute(builder: (context) => const PianoScreen()),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHealingFrequenciesCard(ThemeData theme) {
+    return Card(
+      color: const Color(0xFF142B2E),
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: const Icon(Icons.graphic_eq, color: Color(0xFF80DEEA)),
+        title: const Text(
+          'Healing Frequencies',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        subtitle: const Text(
+          'Solfeggio, Chakras, Schumann & more — offline-ready',
+          style: TextStyle(color: Colors.white70),
+        ),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.white54),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (context) => const HealingFrequenciesScreen()),
         ),
       ),
     );

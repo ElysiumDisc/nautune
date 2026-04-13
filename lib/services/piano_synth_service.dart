@@ -8,13 +8,14 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'wav_builder.dart';
+
 /// Programmatic piano synthesizer using additive synthesis + ADSR envelope.
 /// Generates WAV audio in-memory (no asset files needed).
 /// Uses a pool of AudioPlayer instances for polyphony (round-robin).
 class PianoSynthService {
   static const int _sampleRate = 44100;
   static const int _channels = 1;
-  static const int _bitsPerSample = 16;
   static const double _noteDuration = 0.8; // seconds
 
   // ADSR envelope parameters (in seconds)
@@ -133,7 +134,7 @@ class PianoSynthService {
       pcmData[i] = clamped;
     }
 
-    return _buildWav(pcmData);
+    return buildWavPcm16(pcmData, sampleRate: _sampleRate, channels: _channels);
   }
 
   /// ADSR envelope function.
@@ -151,71 +152,6 @@ class PianoSynthService {
     }
   }
 
-  /// Build a WAV file from PCM samples.
-  Uint8List _buildWav(Int16List samples) {
-    final dataSize = samples.length * 2; // 16-bit = 2 bytes per sample
-    final fileSize = 44 + dataSize; // 44-byte header + data
-
-    final buffer = ByteData(fileSize);
-    var offset = 0;
-
-    // RIFF header
-    buffer.setUint8(offset++, 0x52); // R
-    buffer.setUint8(offset++, 0x49); // I
-    buffer.setUint8(offset++, 0x46); // F
-    buffer.setUint8(offset++, 0x46); // F
-    buffer.setUint32(offset, fileSize - 8, Endian.little);
-    offset += 4;
-    buffer.setUint8(offset++, 0x57); // W
-    buffer.setUint8(offset++, 0x41); // A
-    buffer.setUint8(offset++, 0x56); // V
-    buffer.setUint8(offset++, 0x45); // E
-
-    // fmt sub-chunk
-    buffer.setUint8(offset++, 0x66); // f
-    buffer.setUint8(offset++, 0x6D); // m
-    buffer.setUint8(offset++, 0x74); // t
-    buffer.setUint8(offset++, 0x20); // ' '
-    buffer.setUint32(offset, 16, Endian.little); // sub-chunk size
-    offset += 4;
-    buffer.setUint16(offset, 1, Endian.little); // PCM format
-    offset += 2;
-    buffer.setUint16(offset, _channels, Endian.little);
-    offset += 2;
-    buffer.setUint32(offset, _sampleRate, Endian.little);
-    offset += 4;
-    buffer.setUint32(
-      offset,
-      _sampleRate * _channels * _bitsPerSample ~/ 8,
-      Endian.little,
-    ); // byte rate
-    offset += 4;
-    buffer.setUint16(
-      offset,
-      _channels * _bitsPerSample ~/ 8,
-      Endian.little,
-    ); // block align
-    offset += 2;
-    buffer.setUint16(offset, _bitsPerSample, Endian.little);
-    offset += 2;
-
-    // data sub-chunk
-    buffer.setUint8(offset++, 0x64); // d
-    buffer.setUint8(offset++, 0x61); // a
-    buffer.setUint8(offset++, 0x74); // t
-    buffer.setUint8(offset++, 0x61); // a
-    buffer.setUint32(offset, dataSize, Endian.little);
-    offset += 4;
-
-    // PCM data
-    for (final sample in samples) {
-      buffer.setInt16(offset, sample, Endian.little);
-      offset += 2;
-    }
-
-    return buffer.buffer.asUint8List();
-  }
-
   /// Release all resources.
   Future<void> dispose() async {
     _disposed = true;
@@ -230,7 +166,9 @@ class PianoSynthService {
       try {
         final dir = Directory(_tempDir!);
         if (await dir.exists()) await dir.delete(recursive: true);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('PianoSynthService: temp cleanup failed: $e');
+      }
     }
   }
 }

@@ -30,6 +30,7 @@ import '../widgets/jellyfin_waveform.dart';
 import '../theme/nautune_theme.dart';
 import '../widgets/equalizer_widget.dart';
 import '../widgets/visualizer_picker.dart';
+import 'easter_eggs_screen.dart';
 import 'listenbrainz_settings_screen.dart';
 import 'rewind_screen.dart';
 
@@ -310,6 +311,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     context,
                     MaterialPageRoute(
                       builder: (context) => const ListenBrainzSettingsScreen(),
+                    ),
+                  );
+                },
+              ),
+              const Divider(height: 1),
+              // Easter Eggs hub
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF8E2DE2), Color(0xFF4A00E0)],
+                    ),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.celebration,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                ),
+                title: const Text('Easter Eggs'),
+                subtitle: const Text(
+                  'Hidden features — ambient, radio, synth, frequencies',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const EasterEggsScreen(),
                     ),
                   );
                 },

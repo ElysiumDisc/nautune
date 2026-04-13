@@ -385,6 +385,48 @@ A playable synth keyboard inspired by [upiano](https://github.com/eliasdorneles/
 Piano generates audio programmatically and writes WAV files to a temporary directory for playback. Temp files are cleaned up when the piano screen is closed.
 
 
+## 🎶 Healing Frequencies (Easter Egg)
+
+A meditative tone generator inspired by [healing-frequencies](https://github.com/evoluteur/healing-frequencies) by Olivier Giulieri (MIT). All 11 reference categories are included plus a bonus **Schumann** category — so 12 in total.
+
+### How to Access
+
+1. Open the **Library** tab
+2. Search for **"solfeggio"**, **"healing"**, **"hz"**, **"frequency"**, or **"frequencies"**
+3. Tap the **"Healing Frequencies"** card
+
+Also reachable from Settings → Your Music → Easter Eggs.
+
+### Categories
+
+| # | Category | Count | Notes |
+|---|----------|-------|-------|
+| 1 | Solfeggio | 11 | UT · RE · MI · FA · SOL · LA · SI · 852 · 963 · 1152 · 2172 |
+| 2 | Healing | 4 | 128 · 256 · 512 · 1024 Hz tuning-fork tones |
+| 3 | Organs | 15 | Stomach, Pancreas, Gall Bladder, Liver, Kidneys, Adrenals… |
+| 4 | Mineral Nutrients | 17 | Sulphur, Selenium, Potassium, Calcium, Magnesium, Iron… |
+| 5 | Ohm | 4 | Low · Mid · High · Ultra High |
+| 6 | Chakras | 9 | Earth star → Soul star, with Sanskrit names |
+| 7 | DNA Nucleotides | 4 | Cytosine · Thymine · Adenine · Guanine |
+| 8 | Nikola Tesla 3·6·9 | 3 | 333 · 639 · 999 |
+| 9 | Cosmic Octave | 11 | Planetary harmonics (Cousto) |
+| 10 | Osteopathic (Otto) | 3 | 32 · 64 · 128 Hz |
+| 11 | Angels | 12 | 111…999 + 4096 · 4160 · 4225 |
+| 12 | Schumann (bonus) | 1 | 7.83 Hz — inaudible; plays 501 Hz audible octave |
+
+### Features
+
+- **Pure synthesis**: sine-wave oscillators built with integer-cycle WAV loops — head sample equals tail sample, so loops are click-free. No assets, no network, no cache.
+- **Works offline**: every frequency plays identically online and offline, including demo mode and airplane mode.
+- **Collapsible sections** with brief descriptions sourced directly from the reference project.
+- **Schumann (7.83 Hz)** is below the audible range; the app plays its 6-octave audible equivalent (~501 Hz) with a hint in the UI.
+- **Volume slider + master stop** in the app bar; tap a pill to play, tap again to stop.
+- **iOS/macOS mix-with-others** — tones layer over other playing audio.
+- **"Healing Frequencies Discovered"** tracked for the milestone system.
+
+Credit: Inspired by [healing-frequencies](https://github.com/evoluteur/healing-frequencies) by Olivier Giulieri — MIT licensed. All Hz values and labels mirror the reference directory.
+
+
 ### Keyboard Bindings
 
 **Navigation**

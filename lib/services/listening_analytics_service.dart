@@ -311,6 +311,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
   static const _fretsOnFireDiscoveredKey = 'frets_on_fire_discovered';
   static const _pianoDiscoveredKey = 'piano_discovered';
   static const _pianoStatsKey = 'piano_stats';
+  static const _healingFrequenciesDiscoveredKey = 'healing_frequencies_discovered';
 
   Box? _box;
   List<PlayEvent> _events = [];
@@ -321,6 +322,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
   bool _pianoDiscovered = false;
   int _pianoTotalNotes = 0;
   int _pianoTotalSessionMs = 0;
+  bool _healingFrequenciesDiscovered = false;
   bool _initialized = false;
 
   /// Singleton instance
@@ -349,6 +351,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
       await _loadEssentialMixDiscovered();
       await _loadFretsOnFireDiscovered();
       await _loadPianoStats();
+      await _loadHealingFrequenciesDiscovered();
       _initialized = true;
       debugPrint('ListeningAnalyticsService: Initialized with ${_events.length} events');
     } catch (e) {
@@ -547,6 +550,33 @@ class ListeningAnalyticsService extends ChangeNotifier {
     _pianoDiscovered = true;
     await _savePianoStats();
     debugPrint('ListeningAnalyticsService: Piano easter egg discovered!');
+  }
+
+  // Healing Frequencies Easter Egg discovery tracking
+  Future<void> _loadHealingFrequenciesDiscovered() async {
+    _healingFrequenciesDiscovered =
+        _box?.get(_healingFrequenciesDiscoveredKey) as bool? ?? false;
+  }
+
+  Future<void> _saveHealingFrequenciesDiscovered() async {
+    if (_box == null) return;
+    await _box!.put(
+      _healingFrequenciesDiscoveredKey,
+      _healingFrequenciesDiscovered,
+    );
+  }
+
+  /// Check if Healing Frequencies easter egg has been discovered
+  bool get healingFrequenciesDiscovered => _healingFrequenciesDiscovered;
+
+  /// Mark Healing Frequencies easter egg as discovered (for milestone)
+  Future<void> markHealingFrequenciesDiscovered() async {
+    if (_healingFrequenciesDiscovered) return;
+    _healingFrequenciesDiscovered = true;
+    await _saveHealingFrequenciesDiscovered();
+    debugPrint(
+      'ListeningAnalyticsService: Healing Frequencies easter egg discovered!',
+    );
   }
 
   /// Record a piano session

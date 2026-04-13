@@ -1,3 +1,44 @@
+### v8.1.0 - Healing Frequencies, Easter Eggs Hub & Service Hardening
+
+**New Feature: Healing Frequencies Easter Egg**
+- Meditative tone generator inspired by [evoluteur/healing-frequencies](https://github.com/evoluteur/healing-frequencies) (MIT © Olivier Giulieri)
+- 12 categories, ~90 preset frequencies — Solfeggio, Healing, Organs, Mineral Nutrients, Ohm, Chakras, DNA Nucleotides, Tesla 3·6·9, Cosmic Octave, Osteopathic (Otto), Angels, plus a bonus Schumann (7.83 Hz) category
+- Pure on-device synthesis: integer-cycle sine-wave WAV buffers generated in-memory → seamless looping with zero clicks at the loop boundary, zero network, zero asset footprint
+- Schumann's 7.83 Hz is below the audible range, so the screen transparently plays its 6-octave audible equivalent (~501 Hz) with a UI hint
+- iOS/macOS audio session uses `mixWithOthers` so tones layer over any other audio
+- Volume slider + master stop live in the app bar; tap a frequency pill to play, tap again to stop
+- "Healing Frequencies Discovered" tracked via `ListeningAnalyticsService` (milestone hook)
+- Access: Library → search `solfeggio`, `healing`, `hz`, `frequency`, or `frequencies`
+
+**Data Accuracy (Healing Frequencies)**
+- All Hz values and labels now match the evoluteur reference directory exactly — fixed mis-labeled Organs (Adrenals was called "Thyroid"; "Gall" → "Gall Bladder"), Mineral Nutrients (Calcium/Magnesium/Sodium/Iron/Copper etc. were scrambled across the wrong Hz values; Platinum/Gold/Silver/Silica were missing), DNA Nucleotides (all four labels were on the wrong Hz), Chakras (272.2 "Ohm" → "Soul star Vyapini", 68.05 Earth gained Vasundhara note), and Ohm (descriptive Low/Mid/High/Ultra High names)
+
+**New Feature: Easter Eggs Hub**
+- New `EasterEggsScreen` lists every hidden feature with descriptions, offline-capability chips, and search-keyword hints
+- Reachable from **Settings → Your Music → Easter Eggs** (gradient Celebration icon)
+- Offline-gated eggs (Network, Essential Mix) dim and surface a snack-bar explaining they need downloads when you're offline
+
+**Network Easter Egg**
+- Offline guard: tuning to a channel that isn't downloaded while offline now shows a clear SnackBar ("channel X not downloaded — download it while online to play offline") instead of silently failing the stream attempt
+
+**Service Hardening**
+- `EssentialMixService`: re-uses a single `http.Client` instance instead of constructing a new one per download (prevents connection-pool churn on retries)
+- `EssentialMixService`: fixed orphan-artwork cleanup — previously read `_state.artworkPath` **after** the state was overwritten with the reset value, so the old artwork file was never actually deleted. Now captures the path before resetting state
+- `NetworkDownloadService`: same `http.Client` re-use treatment
+- `DownloadService`: partial-download temp-file cleanup failures now log via `debugPrint` instead of silently swallowing
+- `EssentialMixService`: audio/artwork `.length()` failures in stats now log instead of swallowing
+- `PianoSynthService`: temp-dir cleanup failures now log instead of swallowing
+- `SyncPlayService` & `SyncPlayProvider`: fire-and-forget `Future.delayed(...)` calls are now wrapped in `unawaited()` and have proper try/catch around the rate-restore — prevents silent crashes in the drift-correction path and the auto-rejoin backoff
+
+**Code Reuse**
+- Extracted shared WAV PCM-16 builder into `lib/services/wav_builder.dart` — `PianoSynthService` and the new `HealingFrequencyService` both use it, removing ~70 lines of duplicated RIFF-header code
+- `PianoSynthService`: dropped now-unused `_bitsPerSample` constant and the private `_buildWav()` method
+
+**Performance**
+- `WaveformService` in-memory LRU cache bumped from 50 → 200 entries — long listening sessions stop thrashing disk I/O re-reading waveform files for recently-played tracks
+
+---
+
 ### v8.0.4 - Deep Code Hardening: Security, Stability & Performance
 
 **Security**

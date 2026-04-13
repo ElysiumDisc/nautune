@@ -20,8 +20,9 @@ class WaveformService {
   JustWaveformBackend? _justWaveformBackend;
   FFmpegWaveformBackend? _ffmpegBackend;
 
-  // In-memory LRU cache
-  final _cache = _LRUCache<String, WaveformData>(maxSize: 50);
+  // In-memory LRU cache. 200 entries ≈ enough for a long listening session
+  // without hammering disk I/O; bump higher for power users if needed.
+  final _cache = _LRUCache<String, WaveformData>(maxSize: 200);
 
   // Extraction in progress tracking
   final Map<String, Completer<WaveformData?>> _extractionCompleters = {};

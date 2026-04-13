@@ -277,10 +277,14 @@ class SyncPlayProvider extends ChangeNotifier {
           final behind = currentPos.inMilliseconds < command.position!.inMilliseconds;
           await _audioPlayerService.setPlaybackRate(behind ? 1.02 : 0.98);
           // Always restore rate to 1.0 after correction window
-          Future.delayed(const Duration(milliseconds: 500), () async {
+          unawaited(Future.delayed(const Duration(milliseconds: 500), () async {
             if (_syncPlayService == null) return; // Guard against disposed state
-            await _audioPlayerService.setPlaybackRate(1.0);
-          });
+            try {
+              await _audioPlayerService.setPlaybackRate(1.0);
+            } catch (e) {
+              debugPrint('SyncPlay: drift rate restore failed: $e');
+            }
+          }));
         }
       }
     }

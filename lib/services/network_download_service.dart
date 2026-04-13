@@ -186,6 +186,7 @@ class NetworkDownloadService extends ChangeNotifier {
   final Map<int, NetworkDownloadItem> _downloads = {};
   final Set<int> _downloadQueue = {};
   bool _isProcessingQueue = false;
+  final http.Client _httpClient = http.Client();
 
   // Auto-cache mode setting
   bool _autoCacheEnabled = false;
@@ -723,7 +724,7 @@ class NetworkDownloadService extends ChangeNotifier {
     void Function(double)? onProgress,
   }) async {
     final request = http.Request('GET', Uri.parse(url));
-    final response = await http.Client().send(request);
+    final response = await _httpClient.send(request);
 
     if (response.statusCode != 200) {
       throw Exception('HTTP ${response.statusCode}');

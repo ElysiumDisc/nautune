@@ -1115,7 +1115,9 @@ class DownloadService extends ChangeNotifier {
       try {
         final tmpFile = File('${item.localPath}.tmp');
         if (await tmpFile.exists()) await tmpFile.delete();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('DownloadService: partial temp cleanup failed: $e');
+      }
       _downloads[trackId] = item.copyWith(
         status: DownloadStatus.failed,
         errorMessage: e.toString(),

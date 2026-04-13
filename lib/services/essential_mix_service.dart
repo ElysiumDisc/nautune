@@ -117,6 +117,8 @@ class EssentialMixService extends ChangeNotifier {
     _initializeAndLoad();
   }
 
+  final http.Client _httpClient = http.Client();
+
   static const _boxName = 'nautune_essential_mix';
   static const _stateKey = 'download_state';
   static const _listenTimeKey = 'listen_time_seconds';
@@ -220,20 +222,24 @@ class EssentialMixService extends ChangeNotifier {
     }
 
     if (!audioExists) {
-      // Clean up orphaned state
+      // Capture old artwork path BEFORE overwriting state so we can clean up.
+      final oldArtworkPath = _state.artworkPath;
+
       _state = const EssentialMixDownloadState(
         status: EssentialMixDownloadStatus.notDownloaded,
       );
       await _saveState();
 
-      // Also clean up orphaned artwork
-      if (_state.artworkPath != null) {
+      // Clean up orphaned artwork from the previous state.
+      if (oldArtworkPath != null) {
         try {
-          final artworkFile = File(_state.artworkPath!);
+          final artworkFile = File(oldArtworkPath);
           if (await artworkFile.exists()) {
             await artworkFile.delete();
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('EssentialMixService: orphan artwork cleanup failed: $e');
+        }
       }
     }
   }
@@ -423,7 +429,9 @@ class EssentialMixService extends ChangeNotifier {
         if (await file.exists()) {
           audioBytes = await file.length();
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('EssentialMixService: audio stat failed: $e');
+      }
     }
 
     if (_state.artworkPath != null) {
@@ -432,7 +440,9 @@ class EssentialMixService extends ChangeNotifier {
         if (await file.exists()) {
           artworkBytes = await file.length();
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('EssentialMixService: artwork stat failed: $e');
+      }
     }
 
     _cachedStats = EssentialMixStorageStats(
@@ -452,7 +462,7 @@ class EssentialMixService extends ChangeNotifier {
     final request = http.Request('GET', Uri.parse(url));
     // Add User-Agent header to avoid 403 from archive.org
     request.headers['User-Agent'] = 'Nautune/5.7.0 (Music Player)';
-    final response = await http.Client().send(request);
+    final response = await _httpClient.send(request);
 
     if (response.statusCode != 200) {
       throw Exception('HTTP ${response.statusCode}');
