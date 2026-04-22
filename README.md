@@ -15,7 +15,7 @@
 - **Alternate App Icons**: Choose between Classic (purple), Sunset (orange), Crimson (red), and Emerald (green) icons across all platforms
 - **10-Band Equalizer** (Linux): Full graphic EQ with 12 presets (Rock, Pop, Jazz, Classical, and more)
 - **5 Audio Visualizers**: Ocean Waves, Spectrum Bars, Mirror Bars, Radial, and Psychedelic styles
-- **TUI Spectrum Visualizer**: ASCII spectrum analyzer in TUI mode — real-time `▁▂▃▅▇█` bars driven by PulseAudio FFT with peak tracking and gravity decay
+- **TUI Spectrum Visualizer**: ASCII spectrum analyzer in TUI mode — `v` toggles visibility, `V` cycles between `▁▂▃▅▇█` block bars and a Braille-dot spectroscope (inspired by `tunein-cli`), `F` opens a full-screen Braille spectroscope overlay. All modes driven by PulseAudio FFT with peak tracking and gravity decay
 - **Real-Time FFT**: True audio-reactive visualization using PulseAudio (Linux) and MTAudioProcessingTap (iOS)
 - **MPRIS Integration**: Linux desktop media key support, GNOME/KDE widgets, and KDE Connect — automatic via audio_service
 - **Smart Playlists**: Tag-aware mood playlists (Chill, Energetic, Melancholy, Upbeat) using actual file tags

@@ -54,6 +54,9 @@ class SyncPlayUserAvatar extends StatelessWidget {
 
   String? get _imageUrl {
     if (imageTag == null || serverUrl == null) return null;
+    // Jellyfin API note: /Users/{id}/Images/Primary is undocumented in
+    // 10.11.8 OpenAPI but remains backwards-compatible. Context:
+    // JellyfinClient.getUserImageUrl.
     return '$serverUrl/Users/$userId/Images/Primary?tag=$imageTag';
   }
 

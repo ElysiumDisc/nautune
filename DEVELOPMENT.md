@@ -10,10 +10,12 @@ Two files must be updated together when bumping the version:
 Both must match. `pubspec.yaml` is what Flutter/fastforge reads at build time. `app_version.dart` is the runtime fallback if `PackageInfo` fails.
 
 ```bash
-# Example: bump from 8.0.1 to 8.0.4
-sed -i 's/version: 8.0.1+1/version: 8.0.4+1/' pubspec.yaml
-sed -i "s/8.0.1+1/8.0.4+1/" lib/app_version.dart
+# Example: bump from 8.2.0 to 8.3.0
+sed -i 's/version: 8.2.0+1/version: 8.3.0+1/' pubspec.yaml
+sed -i "s/8.2.0+1/8.3.0+1/" lib/app_version.dart
 ```
+
+Don't forget to also bump `AppImageBuilder.yml` (`version:` under `app_info`) and the filename in the AppImage build command below.
 
 ### Run in Debug Mode
 ```bash
@@ -38,7 +40,7 @@ cp linux/nautune.desktop AppDir/ && \
 cp linux/nautune.png AppDir/ && \
 cd AppDir && ln -s usr/bin/nautune AppRun && cd .. && \
 mkdir -p dist && \
-ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.1.0.AppImage
+ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.3.0.AppImage
 ```
 
 ### Build Deb Package (Linux)
@@ -52,7 +54,19 @@ fastforge package --platform linux --targets deb
 flutter analyze
 ```
 
+### Troubleshooting
 
+**`Gdk-CRITICAL: gdk_device_get_source: assertion 'GDK_IS_DEVICE (device)' failed`**
+
+Occasionally emitted during playback on Linux. This is GTK/Flutter embedder
+log noise (fires when an input device hot-(un)plugs or a window-manager
+event races). It is **not** a Nautune bug, not a crash, and not actionable
+from Dart code. Safe to ignore.
+
+**`Lost connection to device.` at the end of `flutter run`**
+
+That's the expected output when you `Ctrl+C` or `q` out of a Flutter debug
+session. Not a crash.
 
 ### Desktop Shortcut with TUI Option (KDE/GNOME)
 

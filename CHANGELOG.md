@@ -1,3 +1,59 @@
+### v8.3.0 - Fullscreen TUI Visualizer, Jellyfin 10.11.8 Audit, Perf & Security Pass
+
+**New Feature: Fullscreen TUI Braille Spectroscope**
+- Press `F` (shift+f) in TUI mode to open a full-screen Braille-dot spectroscope overlay, inspired by `tsirysndr/tunein-cli`
+- Chart uses sub-character resolution (each Braille glyph holds a 2×4 dot matrix), so on a 120-col terminal you get a 240×dotH smooth curve — a big visual upgrade over the inline bars
+- Log-frequency axis with decade gridlines at 20/100/1k/10k Hz, per-track header line, and live FFT/bands indicator (matches what was available to `tunein-cli`)
+- Dismissed by Esc or `F` again
+- **Strictly scoped lifecycle**: the overlay's animation ticker + FFT subscription + keyboard focus node are only allocated while the overlay is visible. Closing it destroys the widget subtree and cancels every subscription — zero background cost when off. Uses the same conditional-render pattern that piano/help/command-palette overlays already rely on.
+- Help overlay (`?`) and status-bar hint row both updated with the new `F` binding
+
+**Reusable cell buffer**
+- Fullscreen overlay preallocates its `List<int>` Braille cell buffer once per terminal size; each frame just `fillRange`s it to zero and overwrites. No per-frame allocation at 30 Hz.
+
+**Jellyfin 10.11.8 API audit**
+- Diffed Nautune's Jellyfin callsites against `jellyfin-openapi-10.11.8.json`. **All documented endpoints unchanged.**
+- Three endpoints Nautune uses are not in the 10.11.8 OpenAPI (but remain backwards-compatible across all supported Jellyfin versions): `/Users/{id}/Images/Primary`, `/Users/{id}/Views`, `/Audio/{id}/Waveform`. Each callsite now carries a short "Jellyfin API note:" code comment documenting the status and fallback (no behavioural change)
+- Opportunities for v8.4: `/SyncPlay/{id}` single-group fetch, `/Audio/{id}/RemoteSearch/Lyrics` provider search
+
+**Docs**
+- DEVELOPMENT.md: troubleshooting section added for `Gdk-CRITICAL: gdk_device_get_source` log noise (GTK/Flutter embedder warning, not actionable) and "Lost connection to device" on `flutter run` exit
+- README.md: updated TUI Spectrum Visualizer bullet to mention `v` / `V` / `F` bindings
+
+---
+
+### v8.2.0 - Modern Settings & Profile, Bug Hunt Sweep, Performance Pass
+
+**New UI: Categorized Settings Landing**
+- Settings opens on a **tile grid of 8 categories** (Your Music · Server · Appearance · Audio · Performance · Downloads · Data & Backup · About) instead of a 3K-line vertical scroll
+- Gradient tiles styled in the app's accent colour; each tile pushes a dedicated detail page that renders only that section
+- **Full-text search** over every category title, subtitle, and keyword set — type "crossfade" and you land on Audio, type "rewind" and you land on Your Music
+- Legacy full-scroll view preserved behind a "Show all settings" button for power users and any code paths that already rely on it
+- Entry point (`SettingsScreen`) and route name unchanged so notification taps, CarPlay entries, and deep links keep working
+
+**New UI: Profile Bento Overview**
+- Profile now opens in a **compact bento dashboard** — hero ring sits next to a 3-tile stack of Plays / Artists / Albums, Rewind banner and Library Ocean card flow beneath, integration badges (ListenBrainz, Essential Mix, Frets on Fire) sit side-by-side
+- AppBar toggle (list/grid icon) swaps between bento and the legacy long-scroll so every existing detail section (Listening Patterns, Audiophile, Top Content tabs, Activity, Achievements, Deep Dive) remains one tap away
+- Signature visuals preserved: hero ring animation, Pacifico username, ListenBrainz orange (`0xFFEB743B`) badge, Essential Mix/Frets on Fire styling, nautical wave dividers
+
+**Bug Hunt**
+- **Fixed crash** in `AudioPlayerService._checkCrossfadeTrigger` when the queue was emptied mid-song — now guards against `_queue[0]` on an empty list
+- **Fixed crash** in `TrackContextMenu` "Go to Artist" when a track had empty `artistIds` — caches the id inside an `isEmpty` guard and reuses it across the cache-or-fetch path
+- **Hardened** audio player listener lifecycle — `_detachListeners()` now awaits cancellation and nulls out refs, so rapid audio-route changes (Bluetooth → speaker, iOS session re-activate) can no longer stack position/state/complete listeners and double-fire gapless transitions
+- **Hardened** waveform extraction — the in-flight `StreamSubscription` is now awaited-cancelled before reassignment; rapid track skips can't leak waveforms into the wrong track
+- **Tightened** SyncPlay group-id validation with a full UUID regex (32-char hex or dashed UUID); arbitrary 32-char strings no longer slip through as "valid" group ids
+- **Fixed** Frets on Fire crash when a MIDI track carried a non-numeric `duration` metadata field — now uses `int.tryParse` with a 180s default
+
+**Performance**
+- **Essential Mix download** — `notifyListeners()` is now coalesced via a 100 ms / ≥1% progress-delta gate, dropping ~150 rebuilds per MB to ≤10
+- **Visualizer fallback spectrum** — the 64-element `List<double>` allocated every FFT frame is now a reusable `Float64List`-style buffer, eliminating 30-60 Hz GC churn on iOS and the metadata-driven fallback
+- **App startup** — independent provider inits (`sessionProvider`, `connectivityProvider`, `uiStateProvider`, `themeProvider`, `ListeningAnalyticsService`) now run in parallel via `Future.wait`, shaving noticeable cold-start latency
+- **Image cache** — global `PaintingBinding` budget dropped from 100 MB to 50 MB; eliminates eviction thrashing on large library grids on mid-range devices
+- **Frets on Fire highway painter** — `shouldRepaint` now compares scroll time, combo, note identity and effect state instead of returning `true` unconditionally, so the highway skips work when the parent rebuilds during a pause
+- **Bioluminescent visualizer** — wave path sampling coarsened from 2 px to 3 px per step, cutting `lineTo` ops by ~33% per frame with no visible difference
+
+---
+
 ### v8.1.0 - Healing Frequencies, Easter Eggs Hub & Service Hardening
 
 **New Feature: Healing Frequencies Easter Egg**

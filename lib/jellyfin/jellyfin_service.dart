@@ -126,6 +126,10 @@ class JellyfinService {
   }
 
   /// Gets the URL for the current user's profile image.
+  ///
+  /// Jellyfin API note: `/Users/{id}/Images/Primary` is not in the 10.11.8
+  /// OpenAPI spec but remains backwards-compatible across all supported
+  /// Jellyfin versions. See `JellyfinClient.getUserImageUrl` for details.
   String? getUserProfileImageUrl() {
     final client = _client;
     final session = _session;

@@ -168,6 +168,8 @@ class TuiHelpOverlay extends StatelessWidget {
     _KeyBinding('/', 'Search'),
     _KeyBinding('f', 'Toggle favorite'),
     _KeyBinding('v', 'Toggle spectrum visualizer'),
+    _KeyBinding('V', 'Cycle visualizer style (blocks ↔ Braille)'),
+    _KeyBinding('F', 'Fullscreen Braille spectroscope (Esc to close)'),
     _KeyBinding('T', 'Cycle theme'),
     _KeyBinding('Ctrl+K', 'Command palette'),
     _KeyBinding('?', 'Show/hide help'),

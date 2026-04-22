@@ -34,14 +34,109 @@ import 'easter_eggs_screen.dart';
 import 'listenbrainz_settings_screen.dart';
 import 'rewind_screen.dart';
 
+/// Modern categorized Settings.
+///
+/// - `SettingsScreen()` (default) shows a grid of category tiles + search —
+///   the new landing UX that replaced a 3K-line vertical scroll.
+/// - `SettingsScreen(focusSection: 'audio')` shows only that one section;
+///   used as a detail page when a landing tile is tapped.
+/// - `SettingsScreen(focusSection: 'all')` shows every section in the old
+///   scroll layout. Kept as a power-user fallback and for search results
+///   that jump into the full list.
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({super.key, this.focusSection});
+
+  final String? focusSection;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
+/// Canonical list of categories shown on the Settings landing. Order here
+/// drives the tile order on the grid and the keyword search registry.
+class _SettingsCategory {
+  final String id;
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final List<String> keywords;
+  const _SettingsCategory({
+    required this.id,
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.keywords,
+  });
+}
+
+const List<_SettingsCategory> _settingsCategories = [
+  _SettingsCategory(
+    id: 'music',
+    title: 'Your Music',
+    subtitle: 'Rewind, ListenBrainz, easter eggs',
+    icon: Icons.auto_awesome,
+    keywords: ['rewind', 'listenbrainz', 'stats', 'easter', 'frets', 'piano', 'essential mix', 'healing'],
+  ),
+  _SettingsCategory(
+    id: 'server',
+    title: 'Server',
+    subtitle: 'Jellyfin connection & library',
+    icon: Icons.dns,
+    keywords: ['server', 'jellyfin', 'url', 'login', 'library', 'username'],
+  ),
+  _SettingsCategory(
+    id: 'appearance',
+    title: 'Appearance',
+    subtitle: 'Theme, icon, grid, layout',
+    icon: Icons.palette,
+    keywords: ['theme', 'color', 'icon', 'grid', 'font', 'visualizer', 'now playing layout', 'position'],
+  ),
+  _SettingsCategory(
+    id: 'audio',
+    title: 'Audio',
+    subtitle: 'Streaming, crossfade, EQ, gapless',
+    icon: Icons.audiotrack,
+    keywords: ['streaming', 'quality', 'crossfade', 'gapless', 'infinite radio', 'equalizer', 'eq'],
+  ),
+  _SettingsCategory(
+    id: 'performance',
+    title: 'Performance',
+    subtitle: 'Cache, smooth scroll, battery',
+    icon: Icons.speed,
+    keywords: ['cache', 'ttl', 'smooth', 'scroll', 'battery', 'submarine', 'auto-pause', 'prewarm'],
+  ),
+  _SettingsCategory(
+    id: 'downloads',
+    title: 'Downloads',
+    subtitle: 'Offline music, storage, loops',
+    icon: Icons.download,
+    keywords: ['download', 'offline', 'storage', 'wifi only', 'cleanup', 'loops', 'waveforms', 'charts'],
+  ),
+  _SettingsCategory(
+    id: 'data',
+    title: 'Data & Backup',
+    subtitle: 'Export / import listening data',
+    icon: Icons.backup,
+    keywords: ['export', 'import', 'backup', 'stats', 'restore'],
+  ),
+  _SettingsCategory(
+    id: 'about',
+    title: 'About',
+    subtitle: 'Version, licenses, credits',
+    icon: Icons.info_outline,
+    keywords: ['version', 'about', 'license', 'credits', 'nautune'],
+  ),
+];
+
 class _SettingsScreenState extends State<SettingsScreen> {
+  final TextEditingController _landingSearchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _landingSearchController.dispose();
+    super.dispose();
+  }
+
   String get _packageVersion => AppVersion.current;
   String _formatDuration(int minutes) {
     if (minutes < 60) return '$minutes minutes';
@@ -889,8 +984,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  /// Hide a section when a specific `focusSection` is active and this group
+  /// is not the one being focused. Returns `SizedBox.shrink()` to collapse
+  /// invisibly inside a ListView without affecting spacing.
+  Widget _group(String id, List<Widget> children) {
+    final focus = widget.focusSection;
+    if (focus != null && focus != 'all' && focus != id) {
+      return const SizedBox.shrink();
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
+    );
+  }
+
+  /// Title shown in the AppBar. Category screens get their category name;
+  /// the landing says "Settings"; the "all" fallback matches legacy behavior.
+  String _appBarTitleForFocus() {
+    final focus = widget.focusSection;
+    if (focus == null) return 'Settings';
+    if (focus == 'all') return 'All Settings';
+    final match = _settingsCategories.where((c) => c.id == focus).firstOrNull;
+    return match?.title ?? 'Settings';
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (widget.focusSection == null) {
+      return _buildLanding(context);
+    }
+    return _buildSectionList(context);
+  }
+
+  Widget _buildSectionList(BuildContext context) {
     final theme = Theme.of(context);
     final sessionProvider = Provider.of<SessionProvider>(context);
     final uiStateProvider = Provider.of<UIStateProvider>(context);
@@ -898,14 +1024,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Settings'),
+        title: Text(_appBarTitleForFocus()),
       ),
       body: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         children: [
           // Your Music section with Rewind and ListenBrainz
-          _buildYourMusicSection(context),
+          _group('music', [_buildYourMusicSection(context)]),
 
+          _group('server', [
           const _SectionHeader(icon: Icons.dns, title: 'Server'),
           Card(
             margin: const EdgeInsets.only(bottom: 16),
@@ -933,7 +1060,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
           ),
-          _buildAppearanceSection(context),
+          ]),
+          _group('appearance', [_buildAppearanceSection(context)]),
+          _group('audio', [
           const _SectionHeader(icon: Icons.audiotrack, title: 'Audio Options'),
           Card(
             margin: const EdgeInsets.only(bottom: 16),
@@ -1080,6 +1209,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
           ),
+          ]),
+          _group('performance', [
           const _SectionHeader(icon: Icons.speed, title: 'Performance'),
           Card(
             margin: const EdgeInsets.only(bottom: 16),
@@ -1182,6 +1313,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
           ),
+          ]),
+          _group('downloads', [
           const _SectionHeader(icon: Icons.download, title: 'Downloads'),
           ListenableBuilder(
             listenable: appState.downloadService,
@@ -1260,6 +1393,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               );
             },
           ),
+          ]),
+          _group('data', [
           const _SectionHeader(icon: Icons.backup, title: 'Data & Backup'),
           Card(
             margin: const EdgeInsets.only(bottom: 16),
@@ -1282,6 +1417,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
           ),
+          ]),
+          _group('about', [
           const _SectionHeader(icon: Icons.info_outline, title: 'About'),
           Card(
             margin: const EdgeInsets.only(bottom: 16),
@@ -1312,7 +1449,113 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ),
+          ]),
           const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+
+  /// Categorized landing: 8 tiles + a search field. Replaces the former
+  /// 3K-line vertical scroll as the default Settings entry point.
+  Widget _buildLanding(BuildContext context) {
+    final theme = Theme.of(context);
+    final query = _landingSearchController.text.trim().toLowerCase();
+
+    final matches = query.isEmpty
+        ? _settingsCategories
+        : _settingsCategories.where((c) {
+            if (c.title.toLowerCase().contains(query)) return true;
+            if (c.subtitle.toLowerCase().contains(query)) return true;
+            return c.keywords.any((k) => k.toLowerCase().contains(query));
+          }).toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Settings'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        children: [
+          TextField(
+            controller: _landingSearchController,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              hintText: 'Search settings',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _landingSearchController.text.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () {
+                        _landingSearchController.clear();
+                        setState(() {});
+                      },
+                    ),
+              filled: true,
+              fillColor: theme.colorScheme.surfaceContainerHighest,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide.none,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          if (matches.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 48),
+              child: Center(
+                child: Text(
+                  'No settings match "${_landingSearchController.text}"',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            )
+          else
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: 2,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 1.35,
+              children: [
+                for (final cat in matches)
+                  _SettingsCategoryTile(
+                    category: cat,
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => SettingsScreen(focusSection: cat.id),
+                        ),
+                      );
+                    },
+                  ),
+              ],
+            ),
+          const SizedBox(height: 20),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.list_alt),
+            label: const Text('Show all settings'),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const SettingsScreen(focusSection: 'all'),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          Center(
+            child: Text(
+              'Nautune $_packageVersion',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -2971,6 +3214,83 @@ class _ColorCircle extends StatelessWidget {
   }
 }
 
+
+/// Landing tile for a settings category. Uses a subtle tinted background
+/// keyed off the current theme so each tile feels like it belongs to the
+/// app's overall palette (vs. solid flat cards).
+class _SettingsCategoryTile extends StatelessWidget {
+  final _SettingsCategory category;
+  final VoidCallback onTap;
+
+  const _SettingsCategoryTile({
+    required this.category,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                primary.withValues(alpha: 0.18),
+                primary.withValues(alpha: 0.05),
+              ],
+            ),
+            border: Border.all(
+              color: primary.withValues(alpha: 0.25),
+              width: 1,
+            ),
+          ),
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: primary.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(category.icon, color: primary, size: 22),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                category.title,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                category.subtitle,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _SectionHeader extends StatelessWidget {
   final IconData icon;

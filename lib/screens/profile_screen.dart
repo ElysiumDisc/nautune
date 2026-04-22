@@ -312,6 +312,13 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   JellyfinUser? _user;
 
+  /// Dashboard layout mode. `true` = new bento overview grid (default);
+  /// `false` = legacy long-scroll layout with every section expanded.
+  /// Toggled by the AppBar action. Preserves the existing sections so any
+  /// deep-link/tap handler into the full view still works when detailed
+  /// drill-down is needed.
+  bool _bentoMode = true;
+
   // Stats
   List<JellyfinTrack>? _topTracks;
   List<_ComputedAlbumStats>? _topAlbums;
@@ -879,6 +886,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final sessionProvider = Provider.of<SessionProvider>(context, listen: false);
     final session = sessionProvider.session;
     if (session == null) return null;
+    // Jellyfin API note: /Users/{id}/Images/Primary is not in the 10.11.8
+    // OpenAPI but is backwards-compatible across every supported Jellyfin
+    // server. See JellyfinClient.getUserImageUrl for context.
     return '${session.serverUrl}/Users/${session.credentials.userId}/Images/Primary';
   }
 
@@ -914,6 +924,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               pinned: true,
               backgroundColor: Colors.transparent,
               elevation: 0,
+              actions: [
+                IconButton(
+                  tooltip: _bentoMode ? 'Show detailed stats' : 'Show bento overview',
+                  icon: Icon(_bentoMode ? Icons.view_list : Icons.dashboard_rounded),
+                  onPressed: () => setState(() => _bentoMode = !_bentoMode),
+                ),
+              ],
               flexibleSpace: FlexibleSpaceBar(
                 background: Container(
                   decoration: BoxDecoration(
@@ -1005,7 +1022,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-              child: Column(
+              child: _bentoMode
+                  ? _buildBentoOverview(theme)
+                  : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // 1. Hero Ring - Total hours with animated progress
@@ -1089,7 +1108,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
 
           // Listening Activity Section (lazy loaded)
-          if (_heatmap != null || _streak != null)
+          if (!_bentoMode && (_heatmap != null || _streak != null))
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -1106,7 +1125,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
 
           // Achievements Section (lazy loaded)
-          if (_milestones != null && _milestones!.all.isNotEmpty)
+          if (!_bentoMode && _milestones != null && _milestones!.all.isNotEmpty)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -1123,28 +1142,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
 
           // Deep Dive Section
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildWaveDivider(theme),
-                  _buildNauticalSectionHeader(theme, 'Deep Dive', Icons.explore),
-                  const SizedBox(height: 12),
-                  _buildListeningInsights(theme),
-                  const SizedBox(height: 16),
-                  _buildSoundDNA(theme),
-                  const SizedBox(height: 16),
-                  _buildGenreBreakdown(theme),
-                  const SizedBox(height: 16),
-                  _buildMonthlyComparison(theme),
-                  const SizedBox(height: 16),
-                  _buildYearlyComparison(theme),
-                ],
+          if (!_bentoMode)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildWaveDivider(theme),
+                    _buildNauticalSectionHeader(theme, 'Deep Dive', Icons.explore),
+                    const SizedBox(height: 12),
+                    _buildListeningInsights(theme),
+                    const SizedBox(height: 16),
+                    _buildSoundDNA(theme),
+                    const SizedBox(height: 16),
+                    _buildGenreBreakdown(theme),
+                    const SizedBox(height: 16),
+                    _buildMonthlyComparison(theme),
+                    const SizedBox(height: 16),
+                    _buildYearlyComparison(theme),
+                  ],
+                ),
               ),
             ),
-          ),
         ],
       ),
     ),
@@ -1191,6 +1211,144 @@ class _ProfileScreenState extends State<ProfileScreen> {
         Icons.person,
         size: 60,
         color: theme.colorScheme.primary,
+      ),
+    );
+  }
+
+  /// Bento-style overview. Compact, landing-style layout that replaces the
+  /// long-scroll stats when `_bentoMode` is true. Tap any card to expand
+  /// the full detail view via the AppBar toggle (switches to legacy mode
+  /// so every section is visible at once, no sheet required).
+  ///
+  /// Layout (portrait):
+  ///  ┌─────────────────────────────────────┐
+  ///  │   ◯ Hero ring  │  Plays            │
+  ///  │   (XL)         │  Artists          │
+  ///  │                │  Albums           │
+  ///  ├────────────────┴──────────────────-┤
+  ///  │  [ 🎁 Rewind 20xx  →  ]            │
+  ///  ├─────────────────────────────────────┤
+  ///  │  badges: streak, faves, discovery   │
+  ///  ├─────────────────────────────────────┤
+  ///  │  Library Ocean card (full width)    │
+  ///  ├────────────┬──────────┬────────────┤
+  ///  │  Essential │  Frets   │  LB badge  │
+  ///  │  Mix       │  on Fire │            │
+  ///  └────────────┴──────────┴────────────┘
+  Widget _buildBentoOverview(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Hero row: ring on the left, key metrics stacked on the right.
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(flex: 5, child: _buildHeroRing(theme)),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 4,
+                child: Column(
+                  children: [
+                    Expanded(child: _bentoMini(theme, Icons.play_arrow, '$_totalPlays', 'Plays')),
+                    const SizedBox(height: 8),
+                    Expanded(child: _bentoMini(theme, Icons.person, '$_uniqueArtistsPlayed', 'Artists')),
+                    const SizedBox(height: 8),
+                    Expanded(child: _bentoMini(theme, Icons.album, '$_uniqueAlbumsPlayed', 'Albums')),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _buildQuickStatsBadges(theme),
+        const SizedBox(height: 8),
+        _buildRewindBanner(theme),
+        _buildLibraryOverviewCard(theme),
+        const SizedBox(height: 12),
+        // Side-by-side compact integration badges.
+        if (ListenBrainzService().isConfigured ||
+            _essentialMixListenSeconds > 0 ||
+            (_fretsOnFireStats != null && _fretsOnFireStats!.totalPlayCount > 0))
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (_essentialMixListenSeconds > 0)
+                SizedBox(
+                  width: (MediaQuery.of(context).size.width - 40) / 2,
+                  child: _buildEssentialMixBadge(theme),
+                ),
+              if (_fretsOnFireStats != null && _fretsOnFireStats!.totalPlayCount > 0)
+                SizedBox(
+                  width: (MediaQuery.of(context).size.width - 40) / 2,
+                  child: _buildFretsOnFireStatsSection(theme),
+                ),
+            ],
+          ),
+        const SizedBox(height: 12),
+        // Footer hint — how to see everything.
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Text(
+              'Tap the list icon above to see every stat',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Compact stat tile used in the bento overview's top row.
+  Widget _bentoMini(ThemeData theme, IconData icon, String value, String label) {
+    final primary = theme.colorScheme.primary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            primary.withValues(alpha: 0.18),
+            primary.withValues(alpha: 0.05),
+          ],
+        ),
+        border: Border.all(color: primary.withValues(alpha: 0.22)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  value,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  label,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

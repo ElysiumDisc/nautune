@@ -185,13 +185,15 @@ void showTrackContextMenu({
                 title: const Text('Go to Artist'),
                 onTap: () async {
                   Navigator.pop(sheetContext);
+                  if (track.artistIds.isEmpty) return;
+                  final artistId = track.artistIds.first;
                   try {
                     // Try cache first for offline support
                     final cachedArtist = appState.artists
-                        ?.where((a) => a.id == track.artistIds.first)
+                        ?.where((a) => a.id == artistId)
                         .firstOrNull;
                     final artist = cachedArtist ??
-                        await appState.jellyfinService.getArtist(track.artistIds.first);
+                        await appState.jellyfinService.getArtist(artistId);
                     if (!parentContext.mounted) return;
                     Navigator.of(parentContext).push(
                       MaterialPageRoute(

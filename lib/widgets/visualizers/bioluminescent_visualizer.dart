@@ -133,7 +133,10 @@ class _BioluminescentWavePainter extends CustomPainter {
       final frequency = 2.5 + layer * 0.3 + bass * 0.5;
 
       path.moveTo(0, halfHeight);
-      for (double x = 0; x <= size.width; x += 2) {
+      // Step 3 px instead of 2 — on a 1080-wide canvas this drops lineTo
+      // calls from ~540 to ~360 per layer (~540 fewer per frame across
+      // 3 layers) with no visible difference thanks to path smoothing.
+      for (double x = 0; x <= size.width; x += 3) {
         final normalizedX = x / size.width;
 
         // Primary wave

@@ -165,11 +165,20 @@ class JellyfinClient {
   }
 
   /// Builds the URL for a user's profile image.
+  ///
+  /// Jellyfin API note: `/Users/{id}/Images/Primary` is not documented in
+  /// `jellyfin-openapi-10.11.8.json` but is served by every Jellyfin release
+  /// since 10.8 (and earlier). No documented alternative exists — verified
+  /// against the 10.11.8 spec on 2026-04-22. If this regresses, fall back to
+  /// `/Items/{userId}/Images/Primary`.
   String? getUserImageUrl(String userId, String? imageTag) {
     if (imageTag == null) return null;
     return '$serverUrl/Users/$userId/Images/Primary?tag=$imageTag';
   }
 
+  /// Jellyfin API note: `/Users/{id}/Views` is not in the 10.11.8 OpenAPI
+  /// spec but is the standard endpoint for fetching a user's library list.
+  /// Backwards-compatible across all supported Jellyfin versions.
   Future<List<JellyfinLibrary>> fetchLibraries(
     JellyfinCredentials credentials,
   ) async {

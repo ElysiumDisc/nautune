@@ -237,6 +237,40 @@ class TuiThemes {
   ];
 }
 
+/// TUI visualizer rendering styles. Persisted across launches so the user
+/// doesn't have to re-cycle through them every session. `blocks` is the
+/// original `▁▂▃▅▇█` bar visualizer; `brailleSpectro` is the Braille-dot
+/// spectroscope ported from `tunein-cli`.
+enum TuiVisualizerStyle {
+  blocks,
+  brailleSpectro,
+}
+
+extension TuiVisualizerStyleExt on TuiVisualizerStyle {
+  String get id => switch (this) {
+        TuiVisualizerStyle.blocks => 'blocks',
+        TuiVisualizerStyle.brailleSpectro => 'braille_spectro',
+      };
+
+  String get label => switch (this) {
+        TuiVisualizerStyle.blocks => 'Blocks',
+        TuiVisualizerStyle.brailleSpectro => 'Braille',
+      };
+
+  /// Next style in the cycle, wrapping back to the first.
+  TuiVisualizerStyle get next {
+    final values = TuiVisualizerStyle.values;
+    return values[(index + 1) % values.length];
+  }
+
+  static TuiVisualizerStyle fromId(String? id) {
+    for (final style in TuiVisualizerStyle.values) {
+      if (style.id == id) return style;
+    }
+    return TuiVisualizerStyle.blocks;
+  }
+}
+
 /// Theme manager singleton that handles theme switching and color extraction.
 class TuiThemeManager extends ChangeNotifier {
   TuiThemeManager._();
@@ -246,6 +280,7 @@ class TuiThemeManager extends ChangeNotifier {
 
   static const String _boxName = 'nautune_tui_settings';
   static const String _themeKey = 'theme_name';
+  static const String _visualizerStyleKey = 'visualizer_style';
 
   TuiTheme _currentTheme = TuiThemes.dark;
   Color? _extractedPrimary;
@@ -254,6 +289,7 @@ class TuiThemeManager extends ChangeNotifier {
   double _lerpProgress = 1.0;
   Box? _settingsBox;
   bool _initialized = false;
+  TuiVisualizerStyle _visualizerStyle = TuiVisualizerStyle.blocks;
 
   static const Duration _transitionDuration = Duration(milliseconds: 500);
 
@@ -273,6 +309,8 @@ class TuiThemeManager extends ChangeNotifier {
         _currentPrimary = savedTheme.primary ?? savedTheme.accent;
         debugPrint('TUI: Restored theme "$savedThemeName"');
       }
+      final savedStyle = _settingsBox?.get(_visualizerStyleKey) as String?;
+      _visualizerStyle = TuiVisualizerStyleExt.fromId(savedStyle);
       _initialized = true;
       notifyListeners();
     } catch (e) {
@@ -287,6 +325,33 @@ class TuiThemeManager extends ChangeNotifier {
       await _settingsBox?.put(_themeKey, _currentTheme.name);
     } catch (e) {
       debugPrint('TUI: Failed to save theme: $e');
+    }
+  }
+
+  /// Current visualizer style. Survives restarts via the same Hive box that
+  /// stores the theme choice.
+  TuiVisualizerStyle get visualizerStyle => _visualizerStyle;
+
+  /// Cycle to the next visualizer style and persist it.
+  void cycleVisualizerStyle() {
+    _visualizerStyle = _visualizerStyle.next;
+    _saveVisualizerStyle();
+    notifyListeners();
+  }
+
+  /// Directly set a style (used by the command palette, future settings UI).
+  void setVisualizerStyle(TuiVisualizerStyle style) {
+    if (style == _visualizerStyle) return;
+    _visualizerStyle = style;
+    _saveVisualizerStyle();
+    notifyListeners();
+  }
+
+  Future<void> _saveVisualizerStyle() async {
+    try {
+      await _settingsBox?.put(_visualizerStyleKey, _visualizerStyle.id);
+    } catch (e) {
+      debugPrint('TUI: Failed to save visualizer style: $e');
     }
   }
 

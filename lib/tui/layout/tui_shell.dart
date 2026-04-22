@@ -16,6 +16,7 @@ import '../tui_metrics.dart';
 import '../tui_theme.dart';
 import '../widgets/tui_box.dart';
 import '../widgets/tui_command_palette.dart';
+import '../widgets/tui_fullscreen_visualizer_overlay.dart';
 import '../widgets/tui_help_overlay.dart';
 import '../widgets/tui_piano_overlay.dart';
 import '../widgets/tui_list.dart';
@@ -71,6 +72,9 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
 
   // Visualizer state (persisted via Hive in status bar)
   bool _showVisualizer = true;
+  // Fullscreen Braille spectroscope. Ephemeral — intentionally not persisted
+  // so every session starts on the main shell.
+  bool _showFullscreenVisualizer = false;
 
   // Piano overlay state
   bool _showPiano = false;
@@ -255,6 +259,20 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
                       },
                     ),
                   ),
+                // Fullscreen Braille spectroscope. Only mounted while
+                // `_showFullscreenVisualizer` is true — Flutter destroys the
+                // subtree on toggle-off, which cancels the overlay's ticker
+                // and FFT subscription (see its dispose()). Zero background
+                // cost when closed.
+                if (_showFullscreenVisualizer)
+                  Positioned.fill(
+                    child: TuiFullscreenVisualizerOverlay(
+                      onDismiss: () {
+                        setState(() => _showFullscreenVisualizer = false);
+                        _focusNode.requestFocus();
+                      },
+                    ),
+                  ),
                 // Resize handle (bottom-right corner)
                 Positioned(
                   right: 0,
@@ -360,6 +378,11 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
 
     // Piano overlay handles its own keys
     if (_showPiano) {
+      return;
+    }
+
+    // Fullscreen visualizer overlay handles its own keys (Esc / F to close).
+    if (_showFullscreenVisualizer) {
       return;
     }
 
@@ -578,6 +601,18 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
       // Visualizer toggle
       case TuiAction.toggleVisualizer:
         _handleToggleVisualizer();
+        break;
+
+      // Cycle visualizer rendering style (persisted in TUI settings).
+      case TuiAction.cycleVisualizerStyle:
+        TuiThemeManager.instance.cycleVisualizerStyle();
+        break;
+
+      // Open/close the fullscreen Braille spectroscope overlay.
+      case TuiAction.toggleFullscreenVisualizer:
+        setState(() {
+          _showFullscreenVisualizer = !_showFullscreenVisualizer;
+        });
         break;
 
       // Command palette

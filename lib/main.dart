@@ -104,9 +104,12 @@ Future<void> _migrateHiveFiles() async {
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Set global image cache limits to prevent OOM on large libraries
+  // Set global image cache limits to prevent OOM on large libraries.
+  // 50 MB balances smooth scrolling in large grids against memory pressure
+  // on lower-end iOS/Android devices (was 100 MB; occasionally caused
+  // eviction thrashing when the cache filled on library screens).
   PaintingBinding.instance.imageCache.maximumSize = 200;
-  PaintingBinding.instance.imageCache.maximumSizeBytes = 100 * 1024 * 1024; // 100MB
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 50 * 1024 * 1024; // 50MB
 
   // Initialize app version from package info
   await AppVersion.init();
@@ -190,12 +193,17 @@ Future<void> main(List<String> args) async {
     audioPlayerService: appState.audioPlayerService,
   );
 
-  // Initialize providers and services in sequence
-  await sessionProvider.initialize();
-  await connectivityProvider.initialize();
-  await uiStateProvider.initialize();
-  await themeProvider.initialize();
-  await ListeningAnalyticsService().initialize();
+  // Initialize independent providers/services in parallel to shave cold-start
+  // time. These don't depend on each other — each opens its own Hive box or
+  // platform channel. Deep-link init stays sequential because it depends on
+  // session state being loaded first.
+  await Future.wait<void>([
+    sessionProvider.initialize(),
+    connectivityProvider.initialize(),
+    uiStateProvider.initialize(),
+    themeProvider.initialize(),
+    ListeningAnalyticsService().initialize(),
+  ]);
 
   // Initialize legacy app state
   unawaited(appState.initialize());

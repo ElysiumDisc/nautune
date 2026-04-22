@@ -401,6 +401,12 @@ class JellyfinTrack {
   }
 
   /// Builds a waveform preview URL provided by Jellyfin.
+  ///
+  /// Jellyfin API note: `/Audio/{id}/Waveform` is not in the 10.11.8 OpenAPI
+  /// spec but is served by Jellyfin 10.9+ (provider plugin or built-in,
+  /// depending on server config). Nautune falls back to its own extracted
+  /// waveforms via `WaveformService` when the server 404s, so this URL is
+  /// safe to call even if unavailable.
   String? waveformImageUrl({int width = 900, int height = 120}) {
     if (serverUrl == null || token == null) {
       return null;

@@ -49,6 +49,11 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
   StreamSubscription? _frequencySubscription;
   StreamSubscription? _fftSubscription;
 
+  // Reusable spectrum buffer. Filled in-place each frame to avoid allocating
+  // a new List<double> at 30-60 Hz (pre-iOS this was the hottest GC source
+  // in the visualizer pipeline).
+  List<double>? _fakeSpectrumBuffer;
+
   // Real FFT sources - check synchronously from singleton services
   bool get usePulseAudioFFT => Platform.isLinux && PulseAudioFFTService.instance.isAvailable;
   bool get useIOSFFT => Platform.isIOS && IOSFFTService.instance.isAvailable;
@@ -122,32 +127,34 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
     });
   }
 
-  /// Generate a fake spectrum from frequency bands for fallback mode
+  /// Generate a fake spectrum from frequency bands for fallback mode.
+  /// Writes into a reusable buffer sized to [spectrumBarCount] so repeated
+  /// 30-60 Hz calls don't churn the garbage collector.
   List<double> _generateFakeSpectrum(double bass, double mid, double treble) {
-    final spectrum = <double>[];
     final count = spectrumBarCount;
+    final buffer = (_fakeSpectrumBuffer == null ||
+            _fakeSpectrumBuffer!.length != count)
+        ? (_fakeSpectrumBuffer = List<double>.filled(count, 0.0))
+        : _fakeSpectrumBuffer!;
 
     for (int i = 0; i < count; i++) {
       final ratio = i / count;
       double value;
 
       if (ratio < 0.2) {
-        // Bass region
         value = bass * (1.0 - ratio * 2);
       } else if (ratio < 0.6) {
-        // Mid region
         final midRatio = (ratio - 0.2) / 0.4;
         value = mid * (0.7 + 0.3 * (1.0 - (midRatio - 0.5).abs() * 2));
       } else {
-        // Treble region
         final trebleRatio = (ratio - 0.6) / 0.4;
         value = treble * (1.0 - trebleRatio * 0.5);
       }
 
-      spectrum.add(value.clamp(0.0, 1.0));
+      buffer[i] = value.clamp(0.0, 1.0);
     }
 
-    return spectrum;
+    return buffer;
   }
 
   @override

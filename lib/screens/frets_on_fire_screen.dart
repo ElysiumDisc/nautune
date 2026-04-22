@@ -586,7 +586,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
         selected['id']!,
         selected['name']!,
         selected['artist']!,
-        int.parse(selected['duration']!),
+        int.tryParse(selected['duration'] ?? '') ?? 180000,
       );
     }
   }
@@ -2363,7 +2363,19 @@ class _NoteHighwayPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _NoteHighwayPainter old) => true;
+  bool shouldRepaint(covariant _NoteHighwayPainter old) {
+    // The highway scrolls with time, so in the common case we return true.
+    // Skipping repaint on identical frames saves work when the parent
+    // rebuilds for an unrelated reason (e.g. paused mid-game).
+    return old.currentTimeMs != currentTimeMs ||
+        old.combo != combo ||
+        old.lightningLane != lightningLane ||
+        old.hitFeedbackTime != hitFeedbackTime ||
+        !identical(old.notes, notes) ||
+        !identical(old.lanePressed, lanePressed) ||
+        !identical(old.hitParticles, hitParticles) ||
+        !identical(old.fireParticles, fireParticles);
+  }
 }
 
 /// Track selection dialog with album art

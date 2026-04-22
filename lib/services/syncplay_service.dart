@@ -70,6 +70,13 @@ enum SyncPlayCommandType {
 /// - Playback control (play, pause, seek, skip)
 /// - Real-time synchronization via WebSocket
 /// - State management for the current session
+/// Matches Jellyfin SyncPlay group IDs — either a 32-char hex GUID or a
+/// standard dashed UUID. Rejects arbitrary strings that merely happen to
+/// have 32+ characters.
+final _validGroupIdPattern = RegExp(
+  r'^([0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$',
+);
+
 class SyncPlayService extends ChangeNotifier {
   SyncPlayService({
     required String serverUrl,
@@ -1057,12 +1064,13 @@ class SyncPlayService extends ChangeNotifier {
     }
 
     // Preserve groupId and groupName if server sends empty/null ones
-    // (server often sends state updates without group identity info)
-    // Check for empty, all zeros (null GUID), or shorter than valid UUID
+    // (server often sends state updates without group identity info).
+    // A valid Jellyfin groupId is either a 32-char hex GUID or a dashed UUID;
+    // anything else (empty, zero-GUID, short string, random text) is rejected.
     final isInvalidGroupId = group.groupId.isEmpty ||
         group.groupId == '00000000000000000000000000000000' ||
         group.groupId == '00000000-0000-0000-0000-000000000000' ||
-        group.groupId.length < 32;
+        !_validGroupIdPattern.hasMatch(group.groupId);
     final preservedGroupId = isInvalidGroupId
         ? _currentSession!.group.groupId
         : group.groupId;

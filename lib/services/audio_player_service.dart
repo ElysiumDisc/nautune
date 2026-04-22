@@ -731,15 +731,31 @@ class AudioPlayerService {
     }
   }
 
-  void _detachListeners() {
-    _playerPosSub?.cancel();
-    _playerDurSub?.cancel();
-    _playerStateSub?.cancel();
-    _playerCompleteSub?.cancel();
+  Future<void> _detachListeners() async {
+    // Cancel and null-out so reattach can't stack subscriptions if
+    // _attachPlayerListeners throws midway or is called concurrently.
+    final futures = <Future<void>>[];
+    final pos = _playerPosSub;
+    final dur = _playerDurSub;
+    final state = _playerStateSub;
+    final done = _playerCompleteSub;
+    _playerPosSub = null;
+    _playerDurSub = null;
+    _playerStateSub = null;
+    _playerCompleteSub = null;
+    if (pos != null) futures.add(pos.cancel());
+    if (dur != null) futures.add(dur.cancel());
+    if (state != null) futures.add(state.cancel());
+    if (done != null) futures.add(done.cancel());
+    if (futures.isNotEmpty) {
+      await Future.wait(futures);
+    }
   }
 
   void _attachPlayerListeners(AudioPlayer player) {
-    _detachListeners();
+    // Fire-and-forget detach; null-out happens synchronously so we don't
+    // double-attach even while the old subs finish their cancel Future.
+    unawaited(_detachListeners());
     
     // Position updates
     _playerPosSub = player.onPositionChanged.listen((position) {
@@ -897,7 +913,7 @@ class AudioPlayerService {
 
           // SWAP PLAYERS for seamless transition
           // 1. Detach listeners from current player (which is ending)
-          _detachListeners();
+          await _detachListeners();
 
           // 2. Play the pre-loaded track (already loaded in _nextPlayer)
           await _nextPlayer.setVolume(_volume);
@@ -1839,14 +1855,16 @@ class AudioPlayerService {
   void _extractWaveformForLocalFile(JellyfinTrack track, String filePath) {
     final trackId = track.id;
 
-    WaveformService.instance.hasWaveform(trackId).then((hasWaveform) {
+    WaveformService.instance.hasWaveform(trackId).then((hasWaveform) async {
       if (hasWaveform) {
         debugPrint('🌊 Waveform: Already exists for ${track.name}');
         return;
       }
 
-      // Cancel any previous waveform extraction
-      _waveformExtractionSub?.cancel();
+      // Cancel any previous waveform extraction and await full teardown
+      // so the stream can never emit after reassignment.
+      await _waveformExtractionSub?.cancel();
+      _waveformExtractionSub = null;
 
       debugPrint('🌊 Waveform: Extracting for local file: ${track.name}');
       _waveformExtractionSub = WaveformService.instance.extractWaveform(trackId, filePath).listen(
@@ -2573,10 +2591,11 @@ class AudioPlayerService {
     if (position < triggerPoint) return;
 
     // Check if next track exists
+    if (_queue.isEmpty) return;
     final nextIndex = _currentIndex + 1;
     if (nextIndex >= _queue.length && _repeatMode != RepeatMode.all) return;
 
-    // Get next track
+    // Get next track (wrap to 0 if repeating; safe because _queue is non-empty)
     final nextTrack = nextIndex < _queue.length ? _queue[nextIndex] : _queue[0];
 
     // SMART: Don't crossfade within same album (respect artist intent)
@@ -2702,7 +2721,7 @@ class AudioPlayerService {
     await _player.stop();
 
     // SWAP: crossfade player becomes the new main player
-    _detachListeners();
+    await _detachListeners();
 
     // Update AudioHandler to listen to the crossfade player (now main)
     _audioHandler?.updatePlayer(_crossfadePlayer!);
@@ -3072,7 +3091,7 @@ class AudioPlayerService {
     _becomingNoisySubscription?.cancel();
     _waveformExtractionSub?.cancel();
     _connectivitySubscription?.cancel();
-    _detachListeners();
+    unawaited(_detachListeners());
     _audioHandler?.dispose();
     _player.dispose();
     _nextPlayer.dispose();

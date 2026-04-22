@@ -50,6 +50,10 @@ enum TuiAction {
   clearLoop,
   // Visualizer toggle
   toggleVisualizer,
+  // Cycle visualizer rendering style (e.g. block bars <-> Braille spectroscope)
+  cycleVisualizerStyle,
+  // Open / close the fullscreen Braille spectroscope overlay (bound to `F`).
+  toggleFullscreenVisualizer,
   // Command palette
   commandPalette,
   // Piano
@@ -288,6 +292,12 @@ class TuiKeyBindings extends ChangeNotifier {
       // Visualizer toggle
       case 'v':
         return TuiAction.toggleVisualizer;
+      // Shift-V cycles between rendering styles (blocks → Braille → …).
+      case 'V':
+        return TuiAction.cycleVisualizerStyle;
+      // Shift-F opens a fullscreen Braille spectroscope overlay.
+      case 'F':
+        return TuiAction.toggleFullscreenVisualizer;
 
       // Piano
       case 'P':

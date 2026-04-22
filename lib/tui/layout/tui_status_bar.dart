@@ -6,6 +6,7 @@ import '../../jellyfin/jellyfin_track.dart';
 import '../../models/loop_state.dart';
 import '../../services/audio_player_service.dart';
 import '../tui_theme.dart';
+import '../widgets/tui_braille_visualizer.dart';
 import '../widgets/tui_progress_bar.dart';
 import '../widgets/tui_spectrum_visualizer.dart';
 
@@ -37,14 +38,24 @@ class TuiStatusBar extends StatelessWidget {
                 overflow: TextOverflow.clip,
                 maxLines: 1,
               ),
-              // Spectrum visualizer (between divider and now playing)
+              // Spectrum visualizer (between divider and now playing). The
+              // active rendering style is picked from TuiThemeManager so
+              // cycling styles at runtime rebuilds the right widget without
+              // needing to touch shell state.
               if (showVisualizer) ...[
                 const SizedBox(height: 2),
-                TuiSpectrumVisualizer(
-                  audioService: audioService,
-                  barCount: 32,
-                  height: 2,
-                ),
+                switch (TuiThemeManager.instance.visualizerStyle) {
+                  TuiVisualizerStyle.brailleSpectro => TuiBrailleVisualizer(
+                      audioService: audioService,
+                      width: 80,
+                      height: 2,
+                    ),
+                  TuiVisualizerStyle.blocks => TuiSpectrumVisualizer(
+                      audioService: audioService,
+                      barCount: 32,
+                      height: 2,
+                    ),
+                },
                 const SizedBox(height: 2),
               ] else
                 const SizedBox(height: 4),
@@ -188,7 +199,11 @@ class _ControlsHint extends StatelessWidget {
           const SizedBox(width: 12),
           _hint('+/-', 'vol'),
           const SizedBox(width: 12),
-          _hint('v', 'visualizer'),
+          _hint('v', 'viz'),
+          const SizedBox(width: 12),
+          _hint('V', 'style'),
+          const SizedBox(width: 12),
+          _hint('F', 'fullscreen'),
           const SizedBox(width: 12),
           _hint('Ctrl+K', 'commands'),
           const SizedBox(width: 12),

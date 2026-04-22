@@ -135,6 +135,32 @@ class EssentialMixService extends ChangeNotifier {
   // Cached storage stats to avoid repeated file I/O
   EssentialMixStorageStats? _cachedStats;
 
+  // Throttle progress notifications so downstream consumers don't rebuild
+  // once per HTTP chunk (hundreds of times per MB). Fires at most every 100 ms
+  // and only when progress has moved by >=1% since the last notify.
+  Timer? _notifyTimer;
+  double _lastNotifiedProgress = -1.0;
+
+  void _scheduleNotify({bool force = false}) {
+    final progress = _state.progress;
+    if (!force &&
+        (progress - _lastNotifiedProgress).abs() < 0.01 &&
+        _notifyTimer != null) {
+      return;
+    }
+    _notifyTimer?.cancel();
+    _notifyTimer = Timer(const Duration(milliseconds: 100), () {
+      _lastNotifiedProgress = _state.progress;
+      notifyListeners();
+    });
+    if (force) {
+      _notifyTimer?.cancel();
+      _notifyTimer = null;
+      _lastNotifiedProgress = progress;
+      notifyListeners();
+    }
+  }
+
   final EssentialMixTrack track = const EssentialMixTrack();
 
   bool get isInitialized => _isInitialized;
@@ -318,7 +344,7 @@ class EssentialMixService extends ChangeNotifier {
           onProgress: (progress) {
             if (_isCancelled) throw Exception('Cancelled');
             _state = _state.copyWith(progress: progress * 0.02); // 2% for artwork
-            notifyListeners();
+            _scheduleNotify();
           },
         );
         savedArtworkPath = artworkPath;
@@ -339,7 +365,7 @@ class EssentialMixService extends ChangeNotifier {
           _state = _state.copyWith(
             progress: 0.02 + (progress * 0.98), // 98% for audio
           );
-          notifyListeners();
+          _scheduleNotify();
         },
       );
 
