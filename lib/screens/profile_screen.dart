@@ -1271,21 +1271,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
         if (ListenBrainzService().isConfigured ||
             _essentialMixListenSeconds > 0 ||
             (_fretsOnFireStats != null && _fretsOnFireStats!.totalPlayCount > 0))
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              if (_essentialMixListenSeconds > 0)
-                SizedBox(
-                  width: (MediaQuery.of(context).size.width - 40) / 2,
-                  child: _buildEssentialMixBadge(theme),
-                ),
-              if (_fretsOnFireStats != null && _fretsOnFireStats!.totalPlayCount > 0)
-                SizedBox(
-                  width: (MediaQuery.of(context).size.width - 40) / 2,
-                  child: _buildFretsOnFireStatsSection(theme),
-                ),
-            ],
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final hasBoth = _essentialMixListenSeconds > 0 &&
+                  (_fretsOnFireStats != null && _fretsOnFireStats!.totalPlayCount > 0);
+              final cardWidth = hasBoth
+                  ? (constraints.maxWidth - 8) / 2
+                  : constraints.maxWidth;
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  if (_essentialMixListenSeconds > 0)
+                    SizedBox(width: cardWidth, child: _buildEssentialMixBadge(theme)),
+                  if (_fretsOnFireStats != null && _fretsOnFireStats!.totalPlayCount > 0)
+                    SizedBox(width: cardWidth, child: _buildFretsOnFireStatsSection(theme)),
+                ],
+              );
+            },
           ),
         const SizedBox(height: 12),
         // Footer hint — how to see everything.
@@ -2016,30 +2019,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
               ),
               // Archive badge
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  border: Border.all(color: archiveGold.withValues(alpha: 0.5)),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.archive,
-                      color: archiveGold,
-                      size: 12,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      'archive.org',
-                      style: theme.textTheme.labelSmall?.copyWith(
+              Flexible(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: archiveGold.withValues(alpha: 0.5)),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.archive,
                         color: archiveGold,
-                        fontSize: 9,
-                        fontFamily: 'monospace',
+                        size: 12,
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          'archive.org',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: archiveGold,
+                            fontSize: 9,
+                            fontFamily: 'monospace',
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -2330,36 +2338,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
           // Stats grid
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildFireStatItem(
+              Expanded(child: _buildFireStatItem(
                 theme,
                 stats.totalSongsPlayed.toString(),
                 'songs',
                 Icons.music_note,
                 fireOrange,
-              ),
-              _buildFireStatItem(
+              )),
+              Expanded(child: _buildFireStatItem(
                 theme,
                 stats.totalPlayCount.toString(),
                 'plays',
                 Icons.play_arrow,
                 fireRed,
-              ),
-              _buildFireStatItem(
+              )),
+              Expanded(child: _buildFireStatItem(
                 theme,
                 stats.formattedNotesHit,
                 'notes',
                 Icons.touch_app,
                 fireGold,
-              ),
-              _buildFireStatItem(
+              )),
+              Expanded(child: _buildFireStatItem(
                 theme,
                 'x${stats.bestMaxMultiplier}',
                 'max',
                 Icons.local_fire_department,
                 fireOrange,
-              ),
+              )),
             ],
           ),
 
@@ -2413,26 +2420,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
     IconData icon,
     Color color,
   ) {
-    return Column(
-      children: [
-        Icon(icon, color: color, size: 16),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: GoogleFonts.raleway(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
+    return Center(
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 16),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: GoogleFonts.raleway(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+            textAlign: TextAlign.center,
           ),
-        ),
-        Text(
-          label,
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: Colors.white54,
-            fontSize: 10,
+          Text(
+            label,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: Colors.white54,
+              fontSize: 10,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 

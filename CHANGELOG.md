@@ -1,3 +1,12 @@
+### v8.3.1 - Portrait Bento Badge Layout Fix
+
+**Bug Fixes**
+- Fixed portrait-mode rendering glitch in profile bento view where the Essential Mix and Frets on Fire integration badges were forced to half screen width even when only one badge was present — they now expand to fill the full available width in the single-badge case
+- Fixed Essential Mix header row overflow on narrow iPhone screens (SE/14): the BBC badge + archive.org badge combined exceeded the ~135px content area; the archive badge is now `Flexible` and truncates gracefully
+- Fixed Frets on Fire stats row overflow on narrow screens: the four stat items (songs/plays/notes/max) are now `Expanded` so long note counts like "123,456" no longer push past the card boundary
+
+---
+
 ### v8.3.0 - Fullscreen TUI Visualizer, Jellyfin 10.11.8 Audit, Perf & Security Pass
 
 **New Feature: Fullscreen TUI Braille Spectroscope**

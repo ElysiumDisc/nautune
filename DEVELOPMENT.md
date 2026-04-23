@@ -10,9 +10,9 @@ Two files must be updated together when bumping the version:
 Both must match. `pubspec.yaml` is what Flutter/fastforge reads at build time. `app_version.dart` is the runtime fallback if `PackageInfo` fails.
 
 ```bash
-# Example: bump from 8.2.0 to 8.3.0
-sed -i 's/version: 8.2.0+1/version: 8.3.0+1/' pubspec.yaml
-sed -i "s/8.2.0+1/8.3.0+1/" lib/app_version.dart
+# Example: bump from 8.3.0 to 8.3.1
+sed -i 's/version: 8.3.0+1/version: 8.3.1+2/' pubspec.yaml
+sed -i "s/8.3.0+1/8.3.1+2/" lib/app_version.dart
 ```
 
 Don't forget to also bump `AppImageBuilder.yml` (`version:` under `app_info`) and the filename in the AppImage build command below.
@@ -40,7 +40,7 @@ cp linux/nautune.desktop AppDir/ && \
 cp linux/nautune.png AppDir/ && \
 cd AppDir && ln -s usr/bin/nautune AppRun && cd .. && \
 mkdir -p dist && \
-ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.3.0.AppImage
+ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.3.1.AppImage
 ```
 
 ### Build Deb Package (Linux)
