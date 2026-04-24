@@ -3,6 +3,7 @@ import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_genre.dart';
 import '../jellyfin/jellyfin_library.dart';
 import '../jellyfin/jellyfin_playlist.dart';
+import '../jellyfin/jellyfin_playlist_store.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../services/download_service.dart';
 import 'music_repository.dart';
@@ -15,10 +16,14 @@ import 'music_repository.dart';
 /// Returns only tracks/albums/artists that have been downloaded.
 /// Builds synthetic objects when necessary (e.g., albums from tracks).
 class OfflineRepository implements MusicRepository {
-  OfflineRepository({required DownloadService downloadService})
-      : _downloadService = downloadService;
+  OfflineRepository({
+    required DownloadService downloadService,
+    JellyfinPlaylistStore? playlistStore,
+  })  : _downloadService = downloadService,
+        _playlistStore = playlistStore;
 
   final DownloadService _downloadService;
+  final JellyfinPlaylistStore? _playlistStore;
 
   @override
   Future<List<JellyfinLibrary>> getLibraries() async {
@@ -117,15 +122,65 @@ class OfflineRepository implements MusicRepository {
 
   @override
   Future<List<JellyfinGenre>> getGenres({required String libraryId}) async {
-    // Genres not available in offline mode
-    return [];
+    final downloads = _downloadService.completedDownloads;
+    final genresMap = <String, JellyfinGenre>{};
+
+    for (final download in downloads) {
+      final track = download.track;
+      final genres = track.genres;
+      
+      if (genres != null && genres.isNotEmpty) {
+        for (final genreName in genres) {
+          // Jellyfin track genres are usually just strings, we use the name as ID
+          final genreId = genreName.toLowerCase().replaceAll(' ', '_');
+          
+          if (!genresMap.containsKey(genreId)) {
+            genresMap[genreId] = JellyfinGenre(
+              id: genreId,
+              name: genreName,
+              trackCount: 1,
+            );
+          } else {
+            // Increment track count
+            final existing = genresMap[genreId]!;
+            genresMap[genreId] = JellyfinGenre(
+              id: existing.id,
+              name: existing.name,
+              trackCount: (existing.trackCount ?? 0) + 1,
+              albumCount: existing.albumCount,
+            );
+          }
+        }
+      }
+    }
+
+    final genresList = genresMap.values.toList();
+    genresList.sort((a, b) => a.name.compareTo(b.name));
+    
+    return genresList;
   }
 
   @override
   Future<List<JellyfinPlaylist>> getPlaylists() async {
-    // Playlists not available in offline mode (for now)
-    // TODO: Could support offline playlists by caching playlist metadata
-    return [];
+    if (_playlistStore == null) return [];
+
+    final allPlaylists = await _playlistStore!.load();
+    if (allPlaylists == null || allPlaylists.isEmpty) return [];
+
+    final downloads = _downloadService.completedDownloads;
+    final downloadedTrackIds = downloads.map((d) => d.track.id).toSet();
+    
+    // Filter to playlists that have at least one downloaded track
+    final offlinePlaylists = <JellyfinPlaylist>[];
+    for (final playlist in allPlaylists) {
+      // Check if any downloaded track has this playlist as an owner
+      final hasDownloadedTracks = downloads.any((d) => d.owners.contains(playlist.id));
+      if (hasDownloadedTracks) {
+        offlinePlaylists.add(playlist);
+      }
+    }
+
+    return offlinePlaylists;
   }
 
   @override
@@ -176,8 +231,11 @@ class OfflineRepository implements MusicRepository {
 
   @override
   Future<List<JellyfinTrack>> getPlaylistTracks(String playlistId) async {
-    // Playlists not supported in offline mode yet
-    return [];
+    final downloads = _downloadService.completedDownloads;
+    return downloads
+        .where((d) => d.owners.contains(playlistId))
+        .map((d) => d.track)
+        .toList();
   }
 
   @override
@@ -195,9 +253,18 @@ class OfflineRepository implements MusicRepository {
     required String libraryId,
     int limit = 20,
   }) async {
-    // Recently played not available in offline mode
-    // Would need to track locally
-    return [];
+    final events = ListeningAnalyticsService().getRecentEvents(limit: limit * 2);
+    final tracks = <JellyfinTrack>[];
+    
+    for (final event in events) {
+      final track = _downloadService.trackFor(event.trackId);
+      if (track != null) {
+        tracks.add(track);
+      }
+      if (tracks.length >= limit) break;
+    }
+    
+    return tracks;
   }
 
   @override
@@ -316,8 +383,42 @@ class OfflineRepository implements MusicRepository {
 
   @override
   Future<List<JellyfinAlbum>> getGenreAlbums(String genreId) async {
-    // Genres not supported in offline mode
-    return [];
+    final downloads = _downloadService.completedDownloads;
+    final albums = <String, JellyfinAlbum>{};
+    
+    // genreId in our offline repo is name.toLowerCase().replaceAll(' ', '_')
+    // We need to match this back to the track's genres
+    for (final download in downloads) {
+      final track = download.track;
+      final genres = track.genres;
+      
+      if (genres != null) {
+        bool matches = false;
+        for (final g in genres) {
+          if (g.toLowerCase().replaceAll(' ', '_') == genreId) {
+            matches = true;
+            break;
+          }
+        }
+        
+        if (matches) {
+          final albumId = track.albumId ?? 'unknown';
+          if (!albums.containsKey(albumId)) {
+            albums[albumId] = JellyfinAlbum(
+              id: albumId,
+              name: track.album ?? 'Unknown Album',
+              artists: [track.displayArtist],
+              primaryImageTag: track.albumPrimaryImageTag,
+              productionYear: track.productionYear,
+            );
+          }
+        }
+      }
+    }
+    
+    final albumList = albums.values.toList();
+    albumList.sort((a, b) => a.name.compareTo(b.name));
+    return albumList;
   }
 
   @override

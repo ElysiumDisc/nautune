@@ -1613,6 +1613,8 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                 ? JellyfinImage(
                                     itemId: track.albumId ?? track.id,
                                     imageTag: track.albumPrimaryImageTag!,
+                                    trackId: track.id,
+                                    albumId: track.albumId,
                                     boxFit: BoxFit.cover,
                                   )
                                 : Container(

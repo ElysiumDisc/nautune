@@ -1,3 +1,4 @@
+import '../jellyfin/jellyfin_playlist_store.dart';
 import '../jellyfin/jellyfin_service.dart';
 import '../services/download_service.dart';
 import 'music_repository.dart';
@@ -13,9 +14,13 @@ class RepositoryFactory {
     required bool isOfflineMode,
     required JellyfinService jellyfinService,
     required DownloadService downloadService,
+    JellyfinPlaylistStore? playlistStore,
   }) {
     if (isOfflineMode) {
-      return OfflineRepository(downloadService: downloadService);
+      return OfflineRepository(
+        downloadService: downloadService,
+        playlistStore: playlistStore,
+      );
     } else {
       return OnlineRepository(jellyfinService: jellyfinService);
     }

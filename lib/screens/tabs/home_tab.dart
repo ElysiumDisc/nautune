@@ -144,6 +144,8 @@ class _TrackChip extends StatelessWidget {
                     ? JellyfinImage(
                         itemId: track.albumId!,
                         imageTag: track.albumPrimaryImageTag,
+                        trackId: track.id,
+                        albumId: track.albumId,
                         maxWidth: 300,
                         boxFit: BoxFit.cover,
                         errorBuilder: (context, url, error) => Image.asset(

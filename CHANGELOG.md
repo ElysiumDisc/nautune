@@ -1,3 +1,40 @@
+### v8.4.0 - Audio Engine & Battery Optimizations
+
+**Offline & Storage**
+- **Offline Library Expansion:** Added support for browsing by Genres, Playlists, and Recently Played history while offline. The app now dynamically builds a genre index and uses cached metadata to keep your library organized without a connection.
+- **Offline Artwork Fidelity:** Enhanced `JellyfinImage` with improved local lookup hints, ensuring album and artist art load instantly from local storage in all views (Home, History, Player) when offline.
+- **Genre Navigation Fix:** Refactored genre browsing to utilize the repository system, enabling full offline exploration of albums within a genre.
+
+**Audio Engine**
+- **Refactored Gapless Transitions:** Implemented instant player swapping by starting the next player immediately and detaching listeners asynchronously, eliminating micro-gaps between tracks.
+- **Concurrent Crossfade:** Redesigned crossfading to overlap tracks simultaneously using quadratic volume curves for a professional, seamless DJ-style transition.
+- **FFT Redundancy Fix:** Optimized iOS FFT shadow player to reuse local cache and downloaded files, halving network usage for visualization during streaming.
+
+**Battery & Performance**
+- **Low Power Mode Integration:** Connected iOS Low Power Mode detection to throttle background scrobble retries and disable power-intensive visualizers.
+- **Visualizer Optimization:** Added logic to halt visualizer frame emissions when Battery Saver Mode is active, reducing CPU/GPU overhead.
+
+**Security & Hardening**
+- **Log Sanitization:** Stripped raw HTTP response bodies from ListenBrainz logs to prevent PII and session token leaks in debug outputs.
+- **Data Protection:** Hardened `PlaylistSyncQueue` and `JellyfinSessionStore` with explicit error logging, preventing silent data loss during transient storage failures.
+
+---
+
+### v8.3.2 - Stats & Rewind Accuracy Fixes
+
+**Bug Fixes**
+- Fixed all-time Rewind always showing 0 for Longest Streak — `longestStreak` was hardcoded to `0` when `year == null` in both `computeRewind()` and `computeRewindFromServer()`; now correctly reads from `getStreakInfo().longestStreak`
+- Fixed Marathoner personality being permanently unreachable — `ListeningPersonality.marathoner` was a defined enum value with no code path that could return it; `_computePersonality()` now accepts a `marathonSessionCount` parameter and classifies users with 5+ marathon sessions accordingly
+- Fixed Healing Frequencies discovery not registering any achievement — `_healingFrequenciesDiscovered` was tracked and saved but had no corresponding milestone; added "Healing Harmony" milestone to the achievements list
+- Fixed `saveAnalytics()` not saving all state on app lifecycle pause — `_fretsOnFireDiscovered` and `_healingFrequenciesDiscovered` were missing from the `Future.wait` batch; both flags are now included
+- Fixed server-path Top Artists undercounting multi-artist tracks — `_TrackData` only stored the first artist string, so featured/collab tracks only credited one artist; changed to `artists: List<String>` and updated aggregation to match the local analytics path which already counted all artists
+
+**Performance**
+- Artist image lookups in all-time Rewind now run in parallel (`Future.wait`) instead of sequentially — reduces load time by up to 10× for the artist image fetch step (was 10 serial network calls)
+- Removed duplicate marathon session computation in `getMilestones()` — the method contained a hand-written copy of the same session-grouping loop that `getMarathonSessionCount()` already implements; replaced with a single reuse call
+
+---
+
 ### v8.3.1 - Portrait Bento Badge Layout Fix
 
 **Bug Fixes**

@@ -79,17 +79,8 @@ class _GenreDetailScreenState extends State<GenreDetailScreen> {
         throw Exception('No session');
       }
 
-      final client = _appState!.jellyfinService.jellyfinClient;
-      if (client == null) {
-        throw Exception('No client available');
-      }
-
-      // Fetch albums directly from Jellyfin API filtered by this genre
-      _albums = await client.fetchAlbums(
-        credentials: session.credentials,
-        libraryId: libraryId,
-        genreIds: widget.genre.id,
-      );
+      // Use repository instead of direct client call to support offline mode
+      _albums = await _appState!.repository.getGenreAlbums(widget.genre.id);
     } catch (e) {
       _error = e;
     } finally {

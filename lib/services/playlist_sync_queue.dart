@@ -67,8 +67,8 @@ class PlaylistSyncQueue {
           })
           .whereType<PendingPlaylistAction>()
           .toList();
-    } catch (_) {
-      await box.delete(_queueKey);
+    } catch (e) {
+      debugPrint('❌ PlaylistSyncQueue: Failed to load queue: $e');
       return [];
     }
   }

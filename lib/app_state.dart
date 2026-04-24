@@ -422,6 +422,7 @@ class NautuneAppState extends ChangeNotifier {
         isOfflineMode: isOfflineMode,
         jellyfinService: _jellyfinService,
         downloadService: _downloadService,
+        playlistStore: _playlistStore,
       );
 
   bool get showVolumeBar => _showVolumeBar;
@@ -2171,15 +2172,15 @@ class NautuneAppState extends ChangeNotifier {
     }
 
     try {
-      // Load ALL playlists (playlists are global, not library-specific)
-      _playlists = await _jellyfinService.loadPlaylists(
-        libraryId: null,
-        forceRefresh: forceRefresh,
-      );
-      await _playlistStore.save(_playlists!);
-      final cacheKey = _sessionCacheKey;
-      if (cacheKey != null) {
-        await _cacheService.savePlaylists(cacheKey, _playlists!);
+      // Load ALL playlists via repository
+      _playlists = await repository.getPlaylists();
+      
+      if (_playlists != null) {
+        await _playlistStore.save(_playlists!);
+        final cacheKey = _sessionCacheKey;
+        if (cacheKey != null) {
+          await _cacheService.savePlaylists(cacheKey, _playlists!);
+        }
       }
     } catch (error) {
       _playlistsError = error;
@@ -2385,10 +2386,7 @@ class NautuneAppState extends ChangeNotifier {
     }
 
     try {
-      _genres = await _jellyfinService.loadGenres(
-        libraryId: libraryId,
-        forceRefresh: forceRefresh,
-      );
+      _genres = await repository.getGenres(libraryId: libraryId);
     } catch (error) {
       _genresError = error;
       _genres = null;
@@ -2410,7 +2408,7 @@ class NautuneAppState extends ChangeNotifier {
     }
 
     try {
-      _recentlyPlayedTracks = await _jellyfinService.getRecentlyPlayedTracks(
+      _recentlyPlayedTracks = await repository.getRecentlyPlayedTracks(
         libraryId: libraryId,
         limit: 20,
       );

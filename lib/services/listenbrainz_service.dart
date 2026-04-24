@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import '../jellyfin/jellyfin_service.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../models/listenbrainz_config.dart';
+import 'power_mode_service.dart';
 
 /// Service for ListenBrainz integration (scrobbling + recommendations)
 class ListenBrainzService {
@@ -360,7 +361,7 @@ class ListenBrainzService {
         body: requestBody,
       ).timeout(const Duration(seconds: 30));
 
-      debugPrint('ListenBrainzService: Response ${response.statusCode}: ${response.body}');
+      debugPrint('ListenBrainzService: Response ${response.statusCode}');
 
       if (response.statusCode == 200) {
         // Verify response body indicates success
@@ -389,7 +390,7 @@ class ListenBrainzService {
         debugPrint('ListenBrainzService: Scrobbled "${track.name}" successfully');
         return true;
       } else {
-        debugPrint('ListenBrainzService: Scrobble failed: ${response.statusCode} - ${response.body}');
+        debugPrint('ListenBrainzService: Scrobble failed: ${response.statusCode}');
 
         // Queue for retry on server errors or rate limiting
         if (response.statusCode >= 500 || response.statusCode == 429) {
@@ -437,7 +438,7 @@ class ListenBrainzService {
         debugPrint('ListenBrainzService: Now playing "${track.name}"');
         return true;
       }
-      debugPrint('ListenBrainzService: Now playing failed: ${response.statusCode} - ${response.body}');
+      debugPrint('ListenBrainzService: Now playing failed: ${response.statusCode}');
       return false;
     } catch (e) {
       debugPrint('ListenBrainzService: Now playing error: $e');
@@ -502,6 +503,12 @@ class ListenBrainzService {
   /// Retry pending scrobbles (call when network is available)
   Future<int> retryPendingScrobbles() async {
     if (!_initialized || _config == null || _pendingScrobbles.isEmpty) {
+      return 0;
+    }
+
+    // Throttle during Low Power Mode to save battery
+    if (PowerModeService.instance.isLowPowerMode) {
+      debugPrint('ListenBrainzService: Throttling scrobble retry due to Low Power Mode');
       return 0;
     }
 
@@ -1037,7 +1044,7 @@ class ListenBrainzService {
         debugPrint('ListenBrainzService: Got ${recs.length} LB Radio recommendations');
         return recs;
       } else {
-        debugPrint('ListenBrainzService: LB Radio failed: ${response.statusCode} - ${response.body}');
+        debugPrint('ListenBrainzService: Request failed: ${response.statusCode}');
         return [];
       }
     } on TimeoutException {
@@ -1159,7 +1166,7 @@ class ListenBrainzService {
         debugPrint('ListenBrainzService: Got ${freshReleases.length} fresh releases');
         return freshReleases;
       } else {
-        debugPrint('ListenBrainzService: Fresh releases failed: ${response.statusCode} - ${response.body}');
+        debugPrint('ListenBrainzService: Request failed: ${response.statusCode}');
         return [];
       }
     } on TimeoutException {

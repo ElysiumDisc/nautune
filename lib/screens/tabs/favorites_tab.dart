@@ -369,6 +369,7 @@ class _FavoritesTab extends StatelessWidget {
                           itemId: track.albumId!,
                           imageTag: track.albumPrimaryImageTag,
                           trackId: track.id, // Enable offline artwork support
+                          albumId: track.albumId,
                           maxWidth: 200,
                           boxFit: BoxFit.cover,
                           placeholderBuilder: (context, url) => Container(

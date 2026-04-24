@@ -761,7 +761,7 @@ class AudioPlayerService {
     _playerPosSub = player.onPositionChanged.listen((position) {
       _positionController.add(position);
       _lastPosition = position;
-      if (player.state == PlayerState.playing) {
+      if (player.state == PlayerState.playing && !_batterySaverMode) {
         _emitVisualizerFrame(position);
       }
       // Check A-B loop boundary (needs every tick for tight enforcement)
@@ -912,12 +912,13 @@ class AudioPlayerService {
           }
 
           // SWAP PLAYERS for seamless transition
-          // 1. Detach listeners from current player (which is ending)
-          await _detachListeners();
-
-          // 2. Play the pre-loaded track (already loaded in _nextPlayer)
+          // 1. Start playback on the pre-loaded player as early as possible
           await _nextPlayer.setVolume(_volume);
           await _nextPlayer.resume();
+
+          // 2. Detach listeners from the old main player (which is ending)
+          // We don't await this to keep the transition instant.
+          unawaited(_detachListeners());
 
           // 3. IMPORTANT: Update AudioHandler to listen to the NEW player (which is playing)
           // BEFORE stopping the old one. This prevents the OS from seeing a "Stop" state.
@@ -1767,10 +1768,37 @@ class AudioPlayerService {
   /// Cache streaming track for iOS FFT visualization.
   /// Once cached, starts FFT from local file and syncs to current position.
   /// Uses the same [streamUrl] as playback to match transcoding quality.
-  void _cacheTrackForIOSFFT(JellyfinTrack track, String streamUrl) {
+  void _cacheTrackForIOSFFT(JellyfinTrack track, String streamUrl) async {
     if (!Platform.isIOS) return;
 
     final trackId = track.id;
+
+    // Check for downloaded file first
+    final localPath = await _downloadService?.getLocalPath(trackId);
+    if (localPath != null) {
+      debugPrint('🎵 iOS FFT: Using downloaded file for ${track.name}');
+      await IOSFFTService.instance.setAudioUrl('file://$localPath');
+      
+      // Still start capture if track hasn't changed
+      if (_currentTrack?.id == trackId) {
+        await IOSFFTService.instance.startCapture();
+      }
+      return;
+    }
+
+    // Check for cached file
+    final cachedFile = await _audioCacheService.getCachedFile(trackId);
+    if (cachedFile != null && await cachedFile.exists()) {
+      debugPrint('🎵 iOS FFT: Using cached file for ${track.name}');
+      await IOSFFTService.instance.setAudioUrl('file://${cachedFile.path}');
+      
+      // Still start capture if track hasn't changed
+      if (_currentTrack?.id == trackId) {
+        await IOSFFTService.instance.startCapture();
+      }
+      return;
+    }
+
     debugPrint('🎵 iOS FFT: Caching track for visualization: ${track.name}');
 
     // Cache in background using same stream URL as playback
@@ -2662,52 +2690,38 @@ class AudioPlayerService {
     }
   }
 
-  /// Execute the crossfade (sequential fade out/in - not overlay)
-  /// User expectation: current track fades OUT completely, then next track fades IN
+  /// Execute the crossfade (Concurrent overlap)
   Future<void> _executeCrossfade(JellyfinTrack nextTrack, int nextIndex) async {
     if (_crossfadePlayer == null) return;
 
-    final steps = 20; // Steps per fade phase (smooth enough, fast enough)
-    // Split crossfade duration: 60% fade out, 40% fade in
-    final fadeOutDuration = Duration(milliseconds: (_crossfadeDurationSeconds * 600) ~/ steps);
-    final fadeInDuration = Duration(milliseconds: (_crossfadeDurationSeconds * 400) ~/ steps);
+    final steps = 25; // More steps for smoother concurrent transition
+    final stepDuration = Duration(milliseconds: (_crossfadeDurationSeconds * 1000) ~/ steps);
 
-    // PHASE 1: Fade out current track
-    for (int i = 0; i <= steps; i++) {
-      if (!_isCrossfading || _crossfadePlayer == null) break;
-
-      final progress = i / steps;
-      // Quadratic fade out for natural decay
-      final fadeOut = 1.0 - (progress * progress);
-
-      await _player.setVolume(_volume * fadeOut);
-
-      if (i < steps) {
-        await Future.delayed(fadeOutDuration);
-      }
-    }
-
-    // Stop current track after fade out
-    await _player.stop();
-    await _player.setVolume(_volume); // Reset volume for next use
-
-    // PHASE 2: Start next track and fade in
+    // Start the next track at volume 0.0 immediately
     await _crossfadePlayer!.setVolume(0.0);
     await _crossfadePlayer!.resume();
 
+    // Concurrent Fade loop
     for (int i = 0; i <= steps; i++) {
       if (!_isCrossfading || _crossfadePlayer == null) break;
 
       final progress = i / steps;
-      // Quadratic fade in for natural attack
+      // Quadratic curves for natural logarithmic volume perception
+      final fadeOut = 1.0 - (progress * progress);
       final fadeIn = progress * progress;
 
-      await _crossfadePlayer!.setVolume(_volume * fadeIn);
+      // Update both volumes simultaneously
+      unawaited(_player.setVolume(_volume * fadeOut));
+      unawaited(_crossfadePlayer!.setVolume(_volume * fadeIn));
 
       if (i < steps) {
-        await Future.delayed(fadeInDuration);
+        await Future.delayed(stepDuration);
       }
     }
+
+    // Stop the old track AFTER the concurrent fade is complete
+    await _player.stop();
+    await _player.setVolume(_volume); // Reset volume for next use
 
     // Complete the transition
     await _completeCrossfadeTransition(nextTrack, nextIndex);

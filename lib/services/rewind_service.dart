@@ -58,11 +58,16 @@ class RewindService {
         final userData = t['UserData'] as Map<String, dynamic>?;
         final rawGenres = t['Genres'] as List<dynamic>?;
         final genres = rawGenres?.whereType<String>().toList() ?? <String>[];
+        final rawArtists = t['Artists'] as List<dynamic>?;
+        final artists = rawArtists?.whereType<String>().toList() ?? <String>[];
+        final fallbackArtist = t['AlbumArtist'] as String?;
+        final resolvedArtists = artists.isNotEmpty
+            ? artists
+            : (fallbackArtist != null ? [fallbackArtist] : ['Unknown']);
         return _TrackData(
           trackId: t['Id'] as String,
           name: t['Name'] as String? ?? 'Unknown',
-          artistName: (t['Artists'] as List?)?.firstOrNull?.toString() ??
-                      t['AlbumArtist'] as String? ?? 'Unknown',
+          artists: resolvedArtists,
           albumName: t['Album'] as String?,
           albumId: t['AlbumId'] as String?,
           albumImageTag: t['AlbumPrimaryImageTag'] as String?,
@@ -76,7 +81,7 @@ class RewindService {
       final allTracks = trackDataList.map((t) => RewindTrack(
         trackId: t.trackId,
         name: t.name,
-        artistName: t.artistName,
+        artistName: t.artists.isNotEmpty ? t.artists.first : 'Unknown',
         albumName: t.albumName,
         albumId: t.albumId,
         playCount: t.playCount,
@@ -87,11 +92,12 @@ class RewindService {
         ..sort((a, b) => b.playCount.compareTo(a.playCount)))
         .take(10).toList();
 
-      // Aggregate play counts by artist from track data
+      // Aggregate play counts by artist from track data (all artists per track)
       final artistPlayCounts = <String, int>{};
       for (final track in trackDataList) {
-        final artist = track.artistName;
-        artistPlayCounts[artist] = (artistPlayCounts[artist] ?? 0) + track.playCount;
+        for (final artist in track.artists) {
+          artistPlayCounts[artist] = (artistPlayCounts[artist] ?? 0) + track.playCount;
+        }
       }
 
       // Sort by play count and take top 10 artist names
@@ -99,31 +105,32 @@ class RewindService {
         ..sort((a, b) => b.value.compareTo(a.value));
       final topArtistNames = sortedArtists.take(10).toList();
 
-      // Look up artist IDs and images from Jellyfin
-      final topArtists = <RewindArtist>[];
-      for (final entry in topArtistNames) {
-        String? artistId;
-        String? imageTag;
-        try {
-          final results = await jellyfinService.searchArtists(
-            libraryId: libraryId,
-            query: entry.key,
+      // Look up artist IDs and images from Jellyfin (all requests in parallel)
+      final topArtists = await Future.wait(
+        topArtistNames.map((entry) async {
+          String? artistId;
+          String? imageTag;
+          try {
+            final results = await jellyfinService.searchArtists(
+              libraryId: libraryId,
+              query: entry.key,
+            );
+            final match = results.where((a) =>
+              a.name.toLowerCase() == entry.key.toLowerCase()
+            ).firstOrNull;
+            if (match != null) {
+              artistId = match.id;
+              imageTag = match.primaryImageTag;
+            }
+          } catch (_) {}
+          return RewindArtist(
+            name: entry.key,
+            playCount: entry.value,
+            id: artistId,
+            imageTag: imageTag,
           );
-          final match = results.where((a) =>
-            a.name.toLowerCase() == entry.key.toLowerCase()
-          ).firstOrNull;
-          if (match != null) {
-            artistId = match.id;
-            imageTag = match.primaryImageTag;
-          }
-        } catch (_) {}
-        topArtists.add(RewindArtist(
-          name: entry.key,
-          playCount: entry.value,
-          id: artistId,
-          imageTag: imageTag,
-        ));
-      }
+        }),
+      );
 
       // Aggregate play counts by album from track data (with image tags)
       final albumPlayCounts = <String, _AlbumData>{};
@@ -136,7 +143,7 @@ class RewindService {
             albumPlayCounts[key] = _AlbumData(
               albumId: track.albumId,
               name: track.albumName ?? 'Unknown Album',
-              artistName: track.artistName,
+              artistName: track.artists.isNotEmpty ? track.artists.first : 'Unknown',
               playCount: track.playCount,
               imageTag: track.albumImageTag,
             );
@@ -192,8 +199,11 @@ class RewindService {
       final playsByHour = _analytics.getPlaysByHourForYear(year);
       final playsByDayOfWeek = _analytics.getPlaysByDayOfWeekForYear(year);
       final peakMonth = year != null ? _analytics.getPeakMonthForYear(year) : null;
-      final longestStreak = year != null ? _analytics.getLongestStreakForYear(year) : 0;
+      final longestStreak = year != null
+          ? _analytics.getLongestStreakForYear(year)
+          : _analytics.getStreakInfo().longestStreak;
       final discoveryRate = _analytics.getDiscoveryRateForYear(year);
+      final marathonSessionCount = _analytics.getMarathonSessionCount();
 
       final personality = _computePersonality(
         discoveryRate: discoveryRate,
@@ -201,6 +211,7 @@ class RewindService {
         playsByDayOfWeek: playsByDayOfWeek,
         genres: genres,
         totalPlays: totalPlays,
+        marathonSessionCount: marathonSessionCount,
       );
 
       // Calculate unique counts from server data (more accurate for all-time)
@@ -298,11 +309,14 @@ class RewindService {
 
     // Stats
     final peakMonth = year != null ? _analytics.getPeakMonthForYear(year) : null;
-    final longestStreak = year != null ? _analytics.getLongestStreakForYear(year) : 0;
+    final longestStreak = year != null
+        ? _analytics.getLongestStreakForYear(year)
+        : _analytics.getStreakInfo().longestStreak;
     final uniqueArtists = _analytics.getUniqueArtistsForYear(year);
     final uniqueTracks = _analytics.getUniqueTracksForYear(year);
     final uniqueAlbums = _analytics.getUniqueAlbumsForYear(year);
     final discoveryRate = _analytics.getDiscoveryRateForYear(year);
+    final marathonSessionCount = _analytics.getMarathonSessionCount();
 
     // Time patterns
     final playsByHour = _analytics.getPlaysByHourForYear(year);
@@ -315,6 +329,7 @@ class RewindService {
       playsByDayOfWeek: playsByDayOfWeek,
       genres: genres,
       totalPlays: totalPlays,
+      marathonSessionCount: marathonSessionCount,
     );
 
     return RewindData(
@@ -345,6 +360,7 @@ class RewindService {
     required Map<int, int> playsByDayOfWeek,
     required Map<String, int> genres,
     required int totalPlays,
+    required int marathonSessionCount,
   }) {
     if (totalPlays < 10) {
       return ListeningPersonality.balanced;
@@ -397,6 +413,11 @@ class RewindService {
       }
     }
 
+    // Marathoner: 5+ listening sessions over 2 hours
+    if (marathonSessionCount >= 5) {
+      return ListeningPersonality.marathoner;
+    }
+
     return ListeningPersonality.balanced;
   }
 
@@ -431,7 +452,7 @@ class RewindService {
 class _TrackData {
   final String trackId;
   final String name;
-  final String artistName;
+  final List<String> artists;
   final String? albumName;
   final String? albumId;
   final String? albumImageTag;
@@ -442,7 +463,7 @@ class _TrackData {
   _TrackData({
     required this.trackId,
     required this.name,
-    required this.artistName,
+    required this.artists,
     this.albumName,
     this.albumId,
     this.albumImageTag,

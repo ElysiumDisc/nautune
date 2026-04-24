@@ -28,7 +28,7 @@
 - **Your Sound DNA**: Concentric arc visualization of your top genres with animated rendering
 - **Live Search**: Results appear as you type with 300ms debounce — no Enter key required
 - **Track Info Sheet**: Long-press any track to view detailed audio metadata (codec, bitrate, sample rate, bit depth, MusicBrainz IDs)
-- **Smart Offline Mode**: Persistent offline preference, auto-detects airplane mode, seamless downloaded content playback, complete network silence (zero background requests)
+- **Smart Offline Mode**: Persistent offline preference, auto-detects airplane mode, and provides a full-featured library experience even without network. Supports offline browsing by **Genres**, **Playlists**, and **Recently Played** history using local metadata indexing and high-fidelity artwork fallbacks. Zero background requests ensure complete network silence.
 - **A-B Repeat Loop**: Set loop markers on downloaded/cached tracks to repeat a section (long-press with haptic feedback on iOS, or use the A-B Loop button on desktop). Save loops for later recall.
 - **Artist Radio**: Start radio from any artist page — seeds 50 similar tracks with continuous Infinite Radio
 - **Recently Played**: Full listening history screen with day-grouped events, tap to play, long-press for context menu

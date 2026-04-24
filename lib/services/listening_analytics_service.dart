@@ -370,6 +370,8 @@ class ListeningAnalyticsService extends ChangeNotifier {
         _saveNetworkDiscovered(),
         _saveEssentialMixDiscovered(),
         _savePianoStats(),
+        _saveFretsOnFireDiscovered(),
+        _saveHealingFrequenciesDiscovered(),
       ]);
       debugPrint('ListeningAnalyticsService: Analytics saved');
     } catch (e) {
@@ -1101,36 +1103,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
     }
 
     // Calculate marathon sessions (sessions over 2 hours)
-    int marathonSessions = 0;
-    if (_events.isNotEmpty) {
-      final sortedEvents = List<PlayEvent>.from(_events)
-        ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-
-      DateTime? lastEventTime;
-      int sessionDurationMs = 0;
-
-      for (final event in sortedEvents) {
-        if (lastEventTime == null) {
-          sessionDurationMs = event.durationMs;
-        } else {
-          final gap = event.timestamp.difference(lastEventTime);
-          if (gap.inMinutes > 30) {
-            // Session ended, check if it was a marathon (> 2 hours)
-            if (sessionDurationMs >= 2 * 60 * 60 * 1000) {
-              marathonSessions++;
-            }
-            sessionDurationMs = event.durationMs;
-          } else {
-            sessionDurationMs += event.durationMs;
-          }
-        }
-        lastEventTime = event.timestamp;
-      }
-      // Check the last session
-      if (sessionDurationMs >= 2 * 60 * 60 * 1000) {
-        marathonSessions++;
-      }
-    }
+    final marathonSessions = getMarathonSessionCount();
 
     final milestones = <ListeningMilestone>[
       // Play count milestones - Voyage themed
@@ -1521,6 +1494,16 @@ class ListeningAnalyticsService extends ChangeNotifier {
         iconType: IconType.special,
         targetValue: 1,
         currentValue: _pianoDiscovered ? 1 : 0,
+      ),
+
+      // Healing Frequencies milestone - Hidden feature discovery
+      ListeningMilestone(
+        id: 'healing_frequencies',
+        name: 'Healing Harmony',
+        description: 'Discover the Healing Frequencies',
+        iconType: IconType.special,
+        targetValue: 1,
+        currentValue: _healingFrequenciesDiscovered ? 1 : 0,
       ),
     ];
 

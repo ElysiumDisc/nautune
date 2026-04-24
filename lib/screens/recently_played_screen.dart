@@ -250,6 +250,8 @@ class _EventTile extends StatelessWidget {
                     ? JellyfinImage(
                         itemId: event.albumId!,
                         imageTag: 'Primary',
+                        trackId: event.trackId,
+                        albumId: event.albumId,
                         maxWidth: 96,
                         boxFit: BoxFit.cover,
                         errorBuilder: (context, url, error) => Container(

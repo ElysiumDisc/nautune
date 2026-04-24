@@ -304,6 +304,7 @@ class _MiniPlayerScreenState extends State<MiniPlayerScreen> with WindowListener
       itemId: itemId,
       imageTag: imageTag,
       trackId: track.id,
+      albumId: track.albumId,
       boxFit: BoxFit.cover,
     );
   }
