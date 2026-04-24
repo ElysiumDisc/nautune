@@ -6,6 +6,7 @@ import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_playlist_store.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../services/download_service.dart';
+import '../services/listening_analytics_service.dart';
 import 'music_repository.dart';
 
 /// Offline implementation of MusicRepository.
@@ -164,11 +165,10 @@ class OfflineRepository implements MusicRepository {
   Future<List<JellyfinPlaylist>> getPlaylists() async {
     if (_playlistStore == null) return [];
 
-    final allPlaylists = await _playlistStore!.load();
+    final allPlaylists = await _playlistStore.load();
     if (allPlaylists == null || allPlaylists.isEmpty) return [];
 
     final downloads = _downloadService.completedDownloads;
-    final downloadedTrackIds = downloads.map((d) => d.track.id).toSet();
     
     // Filter to playlists that have at least one downloaded track
     final offlinePlaylists = <JellyfinPlaylist>[];
