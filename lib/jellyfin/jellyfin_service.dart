@@ -41,6 +41,8 @@ class JellyfinService {
   final Map<String, Future<List<JellyfinAlbum>>> _albumRequests = {};
   final Map<String, Future<List<JellyfinArtist>>> _artistRequests = {};
   final Map<String, Future<List<JellyfinPlaylist>>> _playlistRequests = {};
+  final Map<String, Future<List<JellyfinLibrary>>> _libraryRequests = {};
+  final Map<String, Future<List<JellyfinGenre>>> _genreRequests = {};
 
   JellyfinSession? get session => _session;
   JellyfinClient? get jellyfinClient => _client;
@@ -217,7 +219,22 @@ class JellyfinService {
     if (client == null || session == null) {
       throw StateError('Authenticate before requesting libraries.');
     }
-    return client.fetchLibraries(session.credentials);
+
+    const cacheKey = 'libraries';
+    final inFlight = _libraryRequests[cacheKey];
+    if (inFlight != null) {
+      debugPrint('📦 Reusing in-flight libraries request');
+      return inFlight;
+    }
+
+    final request = client.fetchLibraries(session.credentials);
+    _libraryRequests[cacheKey] = request;
+
+    try {
+      return await request;
+    } finally {
+      _libraryRequests.remove(cacheKey);
+    }
   }
 
   Future<List<JellyfinAlbum>> loadAlbums({
@@ -985,17 +1002,31 @@ class JellyfinService {
       if (cached != null && !cached.isExpired(_cacheTtl)) {
         return cached.value;
       }
+
+      final inFlight = _genreRequests[cacheKey];
+      if (inFlight != null) {
+        debugPrint('📦 Reusing in-flight genres request for $cacheKey');
+        return inFlight;
+      }
     }
 
-    final genresJson = await client.fetchGenres(
-      session.credentials,
-      parentId: libraryId,
-    );
+    final request = (() async {
+      final genresJson = await client.fetchGenres(
+        session.credentials,
+        parentId: libraryId,
+      );
+      return genresJson.map((json) => JellyfinGenre.fromJson(json)).toList();
+    })();
+    
+    _genreRequests[cacheKey] = request;
 
-    final genres = genresJson.map((json) => JellyfinGenre.fromJson(json)).toList();
-    _addToCacheWithEviction(_genreCache, _genreCacheOrder, cacheKey, genres);
-
-    return genres;
+    try {
+      final genres = await request;
+      _addToCacheWithEviction(_genreCache, _genreCacheOrder, cacheKey, genres);
+      return genres;
+    } finally {
+      _genreRequests.remove(cacheKey);
+    }
   }
 
   /// Get instant mix based on a track, album, or artist

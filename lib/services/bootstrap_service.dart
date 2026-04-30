@@ -72,28 +72,30 @@ class BootstrapService {
     final sessionKey = _cacheService.cacheKeyForSession(session);
     final selectedLibraryId = libraryIdOverride ?? session.selectedLibraryId;
 
-    final libraries = await _cacheService.readLibraries(sessionKey);
-    final playlists = await _cacheService.readPlaylists(sessionKey);
-    final albums = selectedLibraryId != null
-        ? await _cacheService.readAlbums(sessionKey, libraryId: selectedLibraryId)
-        : null;
-    final artists = selectedLibraryId != null
-        ? await _cacheService.readArtists(sessionKey, libraryId: selectedLibraryId)
-        : null;
-    final recentTracks = selectedLibraryId != null
-        ? await _cacheService.readRecentTracks(sessionKey, libraryId: selectedLibraryId)
-        : null;
-    final recentlyAdded = selectedLibraryId != null
-        ? await _cacheService.readRecentlyAddedAlbums(sessionKey, libraryId: selectedLibraryId)
-        : null;
+    // Parallelize all cache reads
+    final results = await Future.wait([
+      _cacheService.readLibraries(sessionKey),
+      _cacheService.readPlaylists(sessionKey),
+      if (selectedLibraryId != null) ...[
+        _cacheService.readAlbums(sessionKey, libraryId: selectedLibraryId),
+        _cacheService.readArtists(sessionKey, libraryId: selectedLibraryId),
+        _cacheService.readRecentTracks(sessionKey, libraryId: selectedLibraryId),
+        _cacheService.readRecentlyAddedAlbums(sessionKey, libraryId: selectedLibraryId),
+      ] else ...[
+        Future.value(null),
+        Future.value(null),
+        Future.value(null),
+        Future.value(null),
+      ],
+    ]);
 
     return BootstrapSnapshot(
-      libraries: libraries,
-      playlists: playlists,
-      albums: albums,
-      artists: artists,
-      recentTracks: recentTracks,
-      recentlyAddedAlbums: recentlyAdded,
+      libraries: results[0] as List<JellyfinLibrary>?,
+      playlists: results[1] as List<JellyfinPlaylist>?,
+      albums: results[2] as List<JellyfinAlbum>?,
+      artists: results[3] as List<JellyfinArtist>?,
+      recentTracks: results[4] as List<JellyfinTrack>?,
+      recentlyAddedAlbums: results[5] as List<JellyfinAlbum>?,
     );
   }
 

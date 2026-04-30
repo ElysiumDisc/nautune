@@ -39,10 +39,15 @@ import 'app_version.dart';
 /// Only runs if files exist in old location and NOT in new location.
 Future<void> _migrateHiveFiles() async {
   final docsDir = await getApplicationDocumentsDirectory();
-  final oldPath = docsDir.path;
   final newPath = '${docsDir.path}${Platform.pathSeparator}nautune';
-  final newDir = Directory(newPath);
+  final markerFile = File('$newPath${Platform.pathSeparator}.migration_done');
 
+  // Skip migration if marker file exists
+  if (await markerFile.exists()) {
+    return;
+  }
+
+  final oldPath = docsDir.path;
   const hiveBoxNames = [
     'nautune_session',
     'nautune_playback',
@@ -54,32 +59,42 @@ Future<void> _migrateHiveFiles() async {
     'nautune_analytics',
   ];
 
-  // Check if any files already exist in the new location
+  // Check if any files already exist in the new location to avoid re-migration
+  final newDir = Directory(newPath);
   if (await newDir.exists()) {
-    for (final boxName in hiveBoxNames) {
-      final newHiveFile = File('$newPath${Platform.pathSeparator}$boxName.hive');
-      if (await newHiveFile.exists()) {
-        // Files already in new location, no migration needed
-        return;
-      }
+    final newFilesCheck = await Future.wait(hiveBoxNames.map((boxName) {
+      return File('$newPath${Platform.pathSeparator}$boxName.hive').exists();
+    }));
+    if (newFilesCheck.any((exists) => exists)) {
+      // Create marker file and skip
+      await markerFile.create(recursive: true);
+      return;
     }
   }
 
   // Check if old files exist and need migration
+  final oldFilesExist = await Future.wait(hiveBoxNames.expand((boxName) => [
+        File('$oldPath${Platform.pathSeparator}$boxName.hive').exists(),
+        File('$oldPath${Platform.pathSeparator}$boxName.lock').exists(),
+      ]));
+
   final filesToMove = <File>[];
+  var index = 0;
   for (final boxName in hiveBoxNames) {
-    final oldHiveFile = File('$oldPath${Platform.pathSeparator}$boxName.hive');
-    final oldLockFile = File('$oldPath${Platform.pathSeparator}$boxName.lock');
-    if (await oldHiveFile.exists()) {
-      filesToMove.add(oldHiveFile);
+    if (oldFilesExist[index++]) {
+      filesToMove.add(File('$oldPath${Platform.pathSeparator}$boxName.hive'));
     }
-    if (await oldLockFile.exists()) {
-      filesToMove.add(oldLockFile);
+    if (oldFilesExist[index++]) {
+      filesToMove.add(File('$oldPath${Platform.pathSeparator}$boxName.lock'));
     }
   }
 
   // No old files to migrate
   if (filesToMove.isEmpty) {
+    // Still create marker file if new directory exists (fresh install)
+    if (await newDir.exists()) {
+      await markerFile.create(recursive: true);
+    }
     return;
   }
 
@@ -88,7 +103,7 @@ Future<void> _migrateHiveFiles() async {
     await newDir.create(recursive: true);
   }
 
-  for (final file in filesToMove) {
+  await Future.wait(filesToMove.map((file) async {
     final fileName = file.path.split(Platform.pathSeparator).last;
     final newFile = File('$newPath${Platform.pathSeparator}$fileName');
     try {
@@ -98,34 +113,39 @@ Future<void> _migrateHiveFiles() async {
       await file.copy(newFile.path);
       await file.delete();
     }
-  }
+  }));
+
+  // Mark migration as complete
+  await markerFile.create();
 }
 
 Future<void> main(List<String> args) async {
+  final stopwatch = Stopwatch()..start();
   WidgetsFlutterBinding.ensureInitialized();
 
   // Set global image cache limits to prevent OOM on large libraries.
-  // 50 MB balances smooth scrolling in large grids against memory pressure
-  // on lower-end iOS/Android devices (was 100 MB; occasionally caused
-  // eviction thrashing when the cache filled on library screens).
-  PaintingBinding.instance.imageCache.maximumSize = 200;
+  // 50 MB balances smooth scrolling in large grids against memory pressure.
+  // Increased maximumSize to 500 to reduce eviction thrashing.
+  PaintingBinding.instance.imageCache.maximumSize = 500;
   PaintingBinding.instance.imageCache.maximumSizeBytes = 50 * 1024 * 1024; // 50MB
 
-  // Initialize app version from package info
-  await AppVersion.init();
+  // Parallelize non-dependent initializations
+  final results = await Future.wait([
+    AppVersion.init(),
+    LocalCacheService.create(),
+    _migrateHiveFiles(),
+  ]);
 
-  // Detect TUI mode from command line, environment, or dart-define
+  final cacheService = results[1] as LocalCacheService;
+
+  // Detect TUI mode
   const tuiModeDefine = bool.fromEnvironment('TUI_MODE', defaultValue: false);
   final isTuiMode = tuiModeDefine ||
       Platform.environment['NAUTUNE_TUI_MODE'] == '1' ||
       args.contains('--tui');
 
-  // Migrate old Hive files to nautune subfolder (one-time migration)
-  await _migrateHiveFiles();
-
   // Initialize core services
   final jellyfinService = JellyfinService();
-  final cacheService = await LocalCacheService.create();
   final connectivityService = ConnectivityService();
   final bootstrapService = BootstrapService(
     cacheService: cacheService,
@@ -136,7 +156,7 @@ Future<void> main(List<String> args) async {
   final notificationService = NotificationService();
   await notificationService.initialize();
 
-  // Initialize providers first
+  // Initialize providers
   final sessionProvider = SessionProvider(
     jellyfinService: jellyfinService,
     sessionStore: sessionStore,
@@ -156,7 +176,6 @@ Future<void> main(List<String> args) async {
     cacheService: cacheService,
   );
 
-  // Create download service standalone (needed by both appState and demoModeProvider)
   final downloadService = DownloadService(
     jellyfinService: jellyfinService,
     notificationService: notificationService,
@@ -173,7 +192,6 @@ Future<void> main(List<String> args) async {
     playbackStateStore: playbackStateStore,
   );
 
-  // Initialize legacy app state with demo mode provider
   final appState = NautuneAppState(
     jellyfinService: jellyfinService,
     sessionStore: sessionStore,
@@ -183,38 +201,32 @@ Future<void> main(List<String> args) async {
     connectivityService: connectivityService,
     downloadService: downloadService,
     demoModeProvider: demoModeProvider,
-    sessionProvider: sessionProvider,);
+    sessionProvider: sessionProvider,
+    libraryDataProvider: libraryDataProvider,
+    );
 
-  // Initialize SyncPlay provider for collaborative playlists
-  // Created after appState so we can access audioPlayerService
   final syncPlayProvider = SyncPlayProvider(
     sessionProvider: sessionProvider,
     jellyfinService: jellyfinService,
     audioPlayerService: appState.audioPlayerService,
   );
 
-  // Initialize independent providers/services in parallel to shave cold-start
-  // time. These don't depend on each other — each opens its own Hive box or
-  // platform channel. Deep-link init stays sequential because it depends on
-  // session state being loaded first.
+  // Initialize providers/services in parallel
   await Future.wait<void>([
     sessionProvider.initialize(),
     connectivityProvider.initialize(),
     uiStateProvider.initialize(),
     themeProvider.initialize(),
     ListeningAnalyticsService().initialize(),
+    DeepLinkService.instance.initialize(),
   ]);
 
   // Initialize legacy app state
   unawaited(appState.initialize());
 
-  // Initialize deep link service for SyncPlay join links
-  await DeepLinkService.instance.initialize();
-
   if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
     await windowManager.ensureInitialized();
 
-    // Configure window for TUI mode (Linux only)
     if (isTuiMode && Platform.isLinux) {
       await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
       await windowManager.setBackgroundColor(Colors.black);
@@ -224,7 +236,8 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  // Launch TUI or GUI mode
+  debugPrint('🚀 App initialization took: ${stopwatch.elapsedMilliseconds}ms');
+
   if (isTuiMode && Platform.isLinux) {
     runApp(
       TuiNautuneApp(

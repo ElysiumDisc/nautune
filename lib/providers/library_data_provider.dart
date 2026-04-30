@@ -11,6 +11,7 @@ import '../jellyfin/jellyfin_playlist_store.dart';
 import '../jellyfin/jellyfin_service.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../services/local_cache_service.dart';
+import '../services/bootstrap_service.dart';
 import 'session_provider.dart';
 
 /// Manages all library data (albums, artists, playlists, tracks, genres).
@@ -36,12 +37,50 @@ class LibraryDataProvider extends ChangeNotifier {
   })  : _sessionProvider = sessionProvider,
         _jellyfinService = jellyfinService,
         _cacheService = cacheService,
-        _playlistStore = playlistStore ?? JellyfinPlaylistStore();
+        _playlistStore = playlistStore ?? JellyfinPlaylistStore() {
+    _sessionProvider.addListener(_onSessionChanged);
+  }
 
   final SessionProvider _sessionProvider;
   final JellyfinService _jellyfinService;
   final LocalCacheService _cacheService;
   final JellyfinPlaylistStore _playlistStore;
+  String? _lastSessionId;
+  String? _lastLibraryId;
+
+  void _onSessionChanged() {
+    final session = _sessionProvider.session;
+    final sessionId = session?.credentials.accessToken; // Using token as session ID
+    final libraryId = session?.selectedLibraryId;
+
+    if (sessionId != _lastSessionId) {
+      _lastSessionId = sessionId;
+      _lastLibraryId = libraryId;
+      if (sessionId == null) {
+        clearAllData();
+      } else {
+        loadLibraries();
+        if (libraryId != null) {
+          loadAllLibraryData(forceRefresh: true);
+        }
+      }
+    } else if (libraryId != _lastLibraryId) {
+      _lastLibraryId = libraryId;
+      if (libraryId != null) {
+        loadAllLibraryData(forceRefresh: true);
+      } else {
+        // Clear library-dependent data but keep libraries list
+        _albums = null;
+        _artists = null;
+        _playlists = null;
+        _recentTracks = null;
+        _recentlyAddedAlbums = null;
+        _favoriteTracks = null;
+        _genres = null;
+        notifyListeners();
+      }
+    }
+  }
 
   // Libraries
   bool _isLoadingLibraries = false;
@@ -150,6 +189,47 @@ class LibraryDataProvider extends ChangeNotifier {
     final session = _sessionProvider.session;
     if (session == null) return null;
     return _cacheService.cacheKeyForSession(session);
+  }
+
+  /// Apply a bootstrap snapshot for fast startup.
+  void applySnapshot(BootstrapSnapshot snapshot) {
+    if (snapshot.libraries != null) {
+      _libraries = snapshot.libraries;
+      _librariesError = null;
+      _isLoadingLibraries = false;
+    }
+
+    if (snapshot.playlists != null) {
+      _playlists = snapshot.playlists;
+      _playlistsError = null;
+      _isLoadingPlaylists = false;
+    }
+
+    if (snapshot.albums != null) {
+      _albums = snapshot.albums;
+      _albumsError = null;
+      _isLoadingAlbums = false;
+    }
+
+    if (snapshot.artists != null) {
+      _artists = snapshot.artists;
+      _artistsError = null;
+      _isLoadingArtists = false;
+    }
+
+    if (snapshot.recentTracks != null) {
+      _recentTracks = snapshot.recentTracks;
+      _recentError = null;
+      _isLoadingRecent = false;
+    }
+
+    if (snapshot.recentlyAddedAlbums != null) {
+      _recentlyAddedAlbums = snapshot.recentlyAddedAlbums;
+      _recentlyAddedError = null;
+      _isLoadingRecentlyAdded = false;
+    }
+
+    notifyListeners();
   }
 
   /// Clear all library data (called on logout or library change).
@@ -618,7 +698,7 @@ class LibraryDataProvider extends ChangeNotifier {
   }
 
   /// Load all library-dependent content at once.
-  Future<void> loadAllLibraryContent({bool forceRefresh = false}) async {
+  Future<void> loadAllLibraryData({bool forceRefresh = false}) async {
     final libraryId = _sessionProvider.session?.selectedLibraryId;
     if (libraryId == null) {
       clearAllData();

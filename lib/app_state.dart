@@ -36,8 +36,11 @@ import 'services/tray_service.dart';
 import 'providers/session_provider.dart';
 
 // Import repository layer for offline UI parity
+import 'models/playback_state.dart';
 import 'repositories/music_repository.dart';
 import 'repositories/repository_factory.dart';
+
+import 'providers/library_data_provider.dart';
 
 class NautuneAppState extends ChangeNotifier {
   NautuneAppState({
@@ -51,7 +54,8 @@ class NautuneAppState extends ChangeNotifier {
     JellyfinPlaylistStore? playlistStore,
     PlaylistSyncQueue? syncQueue,
     DemoModeProvider? demoModeProvider,
-    SessionProvider? sessionProvider, // New parameter for SessionProvider
+    SessionProvider? sessionProvider,
+    LibraryDataProvider? libraryDataProvider, // New parameter
   })  : _jellyfinService = jellyfinService,
         _sessionStore = sessionStore,
         _playbackStateStore = playbackStateStore,
@@ -61,9 +65,16 @@ class NautuneAppState extends ChangeNotifier {
         _playlistStore = playlistStore ?? JellyfinPlaylistStore(),
         _syncQueue = syncQueue ?? PlaylistSyncQueue(),
         _demoModeProvider = demoModeProvider,
-        _sessionProvider = sessionProvider, // Initialize the new field
+        _sessionProvider = sessionProvider,
+        _libraryDataProvider = libraryDataProvider, // Initialize
         _downloadService = downloadService {
     _audioPlayerService = AudioPlayerService();
+
+    // Listen to LibraryDataProvider changes if available
+    if (_libraryDataProvider != null) {
+      _libraryDataProvider.addListener(notifyListeners);
+    }
+    
     // Link download service to audio player for offline playback
     _audioPlayerService.setDownloadService(_downloadService);
     _audioPlayerService.setJellyfinService(_jellyfinService);
@@ -124,7 +135,8 @@ class NautuneAppState extends ChangeNotifier {
   final JellyfinPlaylistStore _playlistStore;
   final PlaylistSyncQueue _syncQueue;
   final DemoModeProvider? _demoModeProvider;
-  final SessionProvider? _sessionProvider; // New field for SessionProvider
+  final SessionProvider? _sessionProvider;
+  final LibraryDataProvider? _libraryDataProvider; // New field
   late final AudioPlayerService _audioPlayerService;
   late final DownloadService _downloadService;
   CarPlayService? _carPlayService;
@@ -367,34 +379,34 @@ class NautuneAppState extends ChangeNotifier {
 
   JellyfinSession? get session => _session;
   Object? get lastError => _lastError;
-  bool get isLoadingLibraries => _isLoadingLibraries;
-  Object? get librariesError => _librariesError;
-  List<JellyfinLibrary>? get libraries => _libraries;
-  bool get isLoadingAlbums => _isLoadingAlbums;
-  Object? get albumsError => _albumsError;
-  List<JellyfinAlbum>? get albums => _albums;
-  bool get isLoadingMoreAlbums => _isLoadingMoreAlbums;
-  bool get hasMoreAlbums => _hasMoreAlbums;
-  bool get isLoadingArtists => _isLoadingArtists;
-  Object? get artistsError => _artistsError;
-  List<JellyfinArtist>? get artists => _artists;
-  bool get isLoadingMoreArtists => _isLoadingMoreArtists;
-  bool get hasMoreArtists => _hasMoreArtists;
-  bool get isLoadingPlaylists => _isLoadingPlaylists;
-  Object? get playlistsError => _playlistsError;
-  List<JellyfinPlaylist>? get playlists => _playlists;
-  bool get isLoadingRecent => _isLoadingRecent;
-  Object? get recentError => _recentError;
-  List<JellyfinTrack>? get recentTracks => _recentTracks;
-  bool get isLoadingRecentlyAdded => _isLoadingRecentlyAdded;
-  Object? get recentlyAddedError => _recentlyAddedError;
-  List<JellyfinAlbum>? get recentlyAddedAlbums => _recentlyAddedAlbums;
-  bool get isLoadingFavorites => _isLoadingFavorites;
-  Object? get favoritesError => _favoritesError;
-  List<JellyfinTrack>? get favoriteTracks => _favoriteTracks;
-  bool get isLoadingGenres => _isLoadingGenres;
-  Object? get genresError => _genresError;
-  List<JellyfinGenre>? get genres => _genres;
+  bool get isLoadingLibraries => _libraryDataProvider?.isLoadingLibraries ?? _isLoadingLibraries;
+  Object? get librariesError => _libraryDataProvider?.librariesError ?? _librariesError;
+  List<JellyfinLibrary>? get libraries => _libraryDataProvider?.libraries ?? _libraries;
+  bool get isLoadingAlbums => _libraryDataProvider?.isLoadingAlbums ?? _isLoadingAlbums;
+  Object? get albumsError => _libraryDataProvider?.albumsError ?? _albumsError;
+  List<JellyfinAlbum>? get albums => _libraryDataProvider?.albums ?? _albums;
+  bool get isLoadingMoreAlbums => _libraryDataProvider?.isLoadingMoreAlbums ?? _isLoadingMoreAlbums;
+  bool get hasMoreAlbums => _libraryDataProvider?.hasMoreAlbums ?? _hasMoreAlbums;
+  bool get isLoadingArtists => _libraryDataProvider?.isLoadingArtists ?? _isLoadingArtists;
+  Object? get artistsError => _libraryDataProvider?.artistsError ?? _artistsError;
+  List<JellyfinArtist>? get artists => _libraryDataProvider?.artists ?? _artists;
+  bool get isLoadingMoreArtists => _libraryDataProvider?.isLoadingMoreArtists ?? _isLoadingMoreArtists;
+  bool get hasMoreArtists => _libraryDataProvider?.hasMoreArtists ?? _hasMoreArtists;
+  bool get isLoadingPlaylists => _libraryDataProvider?.isLoadingPlaylists ?? _isLoadingPlaylists;
+  Object? get playlistsError => _libraryDataProvider?.playlistsError ?? _playlistsError;
+  List<JellyfinPlaylist>? get playlists => _libraryDataProvider?.playlists ?? _playlists;
+  bool get isLoadingRecent => _libraryDataProvider?.isLoadingRecent ?? _isLoadingRecent;
+  Object? get recentError => _libraryDataProvider?.recentError ?? _recentError;
+  List<JellyfinTrack>? get recentTracks => _libraryDataProvider?.recentTracks ?? _recentTracks;
+  bool get isLoadingRecentlyAdded => _libraryDataProvider?.isLoadingRecentlyAdded ?? _isLoadingRecentlyAdded;
+  Object? get recentlyAddedError => _libraryDataProvider?.recentlyAddedError ?? _recentlyAddedError;
+  List<JellyfinAlbum>? get recentlyAddedAlbums => _libraryDataProvider?.recentlyAddedAlbums ?? _recentlyAddedAlbums;
+  bool get isLoadingFavorites => _libraryDataProvider?.isLoadingFavorites ?? _isLoadingFavorites;
+  Object? get favoritesError => _libraryDataProvider?.favoritesError ?? _favoritesError;
+  List<JellyfinTrack>? get favoriteTracks => _libraryDataProvider?.favoriteTracks ?? _favoriteTracks;
+  bool get isLoadingGenres => _libraryDataProvider?.isLoadingGenres ?? _isLoadingGenres;
+  Object? get genresError => _libraryDataProvider?.genresError ?? _genresError;
+  List<JellyfinGenre>? get genres => _libraryDataProvider?.genres ?? _genres;
   bool get isLoadingRecentlyPlayed => _isLoadingRecentlyPlayed;
   List<JellyfinTrack>? get recentlyPlayedTracks => _recentlyPlayedTracks;
   bool get isLoadingMostPlayedTracks => _isLoadingMostPlayedTracks;
@@ -1086,20 +1098,28 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> initialize() async {
-    debugPrint('Nautune initialization started');
-    await _ensureConnectivityMonitoring();
+    final initStopwatch = Stopwatch()..start();
+    debugPrint('NautuneAppState initialization started');
 
-    // Initialize iOS Low Power Mode detection (listener attached after state restoration below)
-    await PowerModeService.instance.initialize();
+    // Parallelize core connectivity and power monitoring
+    await Future.wait([
+      _ensureConnectivityMonitoring(),
+      PowerModeService.instance.initialize(),
+      AppIconService().initialize().then((_) => AppIconService().syncIOSIcon()),
+    ]);
 
-    // Initialize app icon service (for alternate icon support)
-    await AppIconService().initialize();
-    // Sync iOS icon to match stored preference
-    await AppIconService().syncIOSIcon();
-    // Update tray icon to match saved preference (tray may have initialized with default)
+    // Update tray icon if available
     _trayService?.updateTrayIcon();
 
-    final storedPlaybackState = await _playbackStateStore.load();
+    // Parallelize playback state restoration and session loading
+    final initResults = await Future.wait([
+      _playbackStateStore.load(),
+      _sessionStore.load(),
+    ]);
+
+    final storedPlaybackState = initResults[0] as PlaybackState?;
+    final storedSession = initResults[1] as JellyfinSession?;
+
     if (storedPlaybackState != null) {
       _showVolumeBar = storedPlaybackState.showVolumeBar;
       _crossfadeEnabled = storedPlaybackState.crossfadeEnabled;
@@ -1115,12 +1135,12 @@ class NautuneAppState extends ChangeNotifier {
       _visualizerType = storedPlaybackState.visualizerType;
       _visualizerPosition = storedPlaybackState.visualizerPosition;
       _nowPlayingLayout = storedPlaybackState.nowPlayingLayout;
-      // Submarine mode is now derived from offline state — don't restore the old toggle.
-      // Only restore the snapshot so we can deactivate cleanly if user was offline.
       _submarineModeEnabled = storedPlaybackState.isOfflineMode;
       _batterySaverSnapshot = storedPlaybackState.batterySaverSnapshot;
       _libraryScrollOffsets =
           Map<String, double>.from(storedPlaybackState.scrollOffsets);
+
+      // Hydrate audio service and set preferences
       await _audioPlayerService.hydrateFromPersistence(storedPlaybackState);
       _audioPlayerService.setCrossfadeEnabled(_crossfadeEnabled);
       _audioPlayerService.setCrossfadeDuration(_crossfadeDurationSeconds);
@@ -1133,20 +1153,15 @@ class NautuneAppState extends ChangeNotifier {
       _downloadService.setConnectivityService(_connectivityService);
       _jellyfinService.setCacheTtl(Duration(minutes: _cacheTtlMinutes));
 
-      // Restore Submarine Mode battery saver if it was active
       if (_submarineModeEnabled) {
         _audioPlayerService.setBatterySaverMode(true);
         _audioPlayerService.reportingService?.setProgressInterval(
           const Duration(seconds: 60),
         );
-        debugPrint('🚢 Submarine Mode restored from persistence');
       }
 
-      // Initialize Low Power Mode listener AFTER visualizer state is restored
-      // (so the initial check has the correct _visualizerEnabled value)
       _initPowerModeListener();
 
-      // Restore download settings
       _downloadService.loadSettings(
         maxConcurrentDownloads: storedPlaybackState.maxConcurrentDownloads,
         wifiOnlyDownloads: storedPlaybackState.wifiOnlyDownloads,
@@ -1155,27 +1170,22 @@ class NautuneAppState extends ChangeNotifier {
         autoCleanupDays: storedPlaybackState.autoCleanupDays,
       );
 
-      // Restore offline mode preference
       _userWantsOffline = storedPlaybackState.isOfflineMode;
 
-      // If user wants offline, disable reporting and prewarming at startup
       if (_userWantsOffline) {
         _audioPlayerService.reportingService?.setEnabled(false);
         _audioPlayerService.setImagePrewarmEnabled(false);
       }
     } else {
-      // No stored state - still need power mode listener for new installs
       _initPowerModeListener();
     }
 
-    try {
-      final storedSession = await _sessionStore.load();
-      if (storedSession != null) {
+    if (storedSession != null) {
+      try {
         if (storedSession.isDemo) {
           if (_demoModeProvider != null) {
             await _demoModeProvider.startDemoMode();
           } else {
-            // Fallback for legacy demo
             final data = await rootBundle.load('assets/demo/demo_offline_track.mp3');
             await _setupDemoMode(DemoContent(), data.buffer.asUint8List());
           }
@@ -1194,55 +1204,43 @@ class NautuneAppState extends ChangeNotifier {
         );
         _audioPlayerService.setReportingService(reportingService);
 
+        // Load cached snapshot and start sync in parallel
         final snapshot = await _bootstrapService.loadCachedSnapshot(
           session: storedSession,
         );
         await _applyBootstrapSnapshot(snapshot);
-        // Start periodic analytics sync timer (runs every 10 min) — only when online
+
         if (!_userWantsOffline) {
           _startPeriodicSyncTimer();
         }
 
         if (_networkAvailable && !_userWantsOffline) {
           _startBootstrapSync(storedSession);
-          // Sync analytics in background on startup
           unawaited(_syncAnalyticsToServer());
-          // Start remote control WebSocket for Helm Mode
           _startRemoteControl(storedSession);
-        } else {
-          debugPrint('Skipping bootstrap sync: ${_userWantsOffline ? "user wants offline" : "no network"} at startup');
-          // When starting offline, load content from offline repository
-          // instead of showing stale cached online data
-          if (isOfflineMode) {
-            _applyOfflineNetworkPolicy();
-            _activateSubmarineFeatures();
-            audioPlayerService.setOfflineMode(true);
-            unawaited(_loadLibraryDependentContent(forceRefresh: true));
-          }
+        } else if (isOfflineMode) {
+          _applyOfflineNetworkPolicy();
+          _activateSubmarineFeatures();
+          audioPlayerService.setOfflineMode(true);
+          unawaited(_loadLibraryDependentContent(forceRefresh: true));
         }
-      }
-    } catch (error, stackTrace) {
-      _lastError = error;
-      debugPrint('Nautune initialization failed: $error');
-      FlutterError.reportError(
-        FlutterErrorDetails(
-          exception: error,
-          stack: stackTrace,
-          library: 'app_state',
-          context: ErrorDescription('restoring Nautune session'),
-        ),
-      );
-    } finally {
-      _initialized = true;
-      notifyListeners();
-      debugPrint('Nautune initialization finished (session restored: ${_session != null}, offline: $_userWantsOffline)');
-      
-      // CarPlay is now initialized early in constructor, no need to init here
-      // Just refresh content if connected
-      if (Platform.isIOS && _carPlayService != null) {
-        debugPrint('🚗 CarPlay: Refreshing content after app init');
+      } catch (error, stackTrace) {
+        _lastError = error;
+        debugPrint('Session restoration failed: $error');
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'app_state',
+            context: ErrorDescription('restoring Nautune session'),
+          ),
+        );
       }
     }
+
+    _initialized = true;
+    notifyListeners();
+    debugPrint('NautuneAppState init took: ${initStopwatch.elapsedMilliseconds}ms');
   }
 
   void _startBootstrapSync(
@@ -1266,6 +1264,16 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> _applyBootstrapSnapshot(BootstrapSnapshot snapshot) async {
+    if (_libraryDataProvider != null) {
+      _libraryDataProvider.applySnapshot(snapshot);
+      // We still need to check if selected library is valid in legacy state
+      if (snapshot.libraries != null) {
+        _libraries = snapshot.libraries;
+        await _ensureSelectedLibraryStillValid();
+      }
+      return;
+    }
+    
     final hasSession = _session != null;
     final selectedLibraryId = _session?.selectedLibraryId;
 
@@ -1484,6 +1492,10 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> refreshLibraries() async {
+    if (_libraryDataProvider != null) {
+      await _libraryDataProvider.loadLibraries();
+      return;
+    }
     await _loadLibraries();
     await _loadLibraryDependentContent(forceRefresh: true);
   }
@@ -1825,10 +1837,18 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> refreshAlbums() async {
+    if (_libraryDataProvider != null) {
+      await _libraryDataProvider.loadAlbums(forceRefresh: true);
+      return;
+    }
     await _loadAlbumsForSelectedLibrary(forceRefresh: true);
   }
 
   Future<void> refreshArtists() async {
+    if (_libraryDataProvider != null) {
+      await _libraryDataProvider.loadArtists(forceRefresh: true);
+      return;
+    }
     final libraryId = _session?.selectedLibraryId;
     if (libraryId != null) {
       await _loadArtistsForLibrary(libraryId, forceRefresh: true);
@@ -1836,6 +1856,10 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> refreshLibraryData() async {
+    if (_libraryDataProvider != null) {
+      await _libraryDataProvider.loadAllLibraryData(forceRefresh: true);
+      return;
+    }
     final libraryId = _session?.selectedLibraryId;
     if (libraryId != null) {
       await _loadLibraryDependentContent(forceRefresh: true);
@@ -1843,6 +1867,10 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> refreshPlaylists() async {
+    if (_libraryDataProvider != null) {
+      await _libraryDataProvider.loadPlaylists(forceRefresh: true);
+      return;
+    }
     await _loadPlaylistsForSelectedLibrary(forceRefresh: true);
   }
 
@@ -2019,6 +2047,10 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> loadMoreAlbums() async {
+    if (_libraryDataProvider != null) {
+      await _libraryDataProvider.loadMoreAlbums();
+      return;
+    }
     if (_isDemoMode) {
       return;
     }
@@ -2118,6 +2150,10 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> loadMoreArtists() async {
+    if (_libraryDataProvider != null) {
+      await _libraryDataProvider.loadMoreArtists();
+      return;
+    }
     if (_isDemoMode) {
       return;
     }
