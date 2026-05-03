@@ -85,6 +85,9 @@ class SavedLoopsService extends ChangeNotifier {
   // In-memory cache: trackId -> list of saved loops
   final Map<String, List<SavedLoop>> _loopsCache = {};
 
+  // Cached sorted result for getAllLoops(); invalidated on any mutation.
+  List<SavedLoop>? _allLoopsSortedCache;
+
   Future<void> initialize() async {
     if (_box != null) return;
     _box = await Hive.openBox<dynamic>(_boxName);
@@ -112,6 +115,7 @@ class SavedLoopsService extends ChangeNotifier {
   Future<void> _loadAllLoops() async {
     if (_box == null) return;
     _loopsCache.clear();
+    _allLoopsSortedCache = null;
 
     for (final key in _box!.keys) {
       if (key is String) {
@@ -142,11 +146,14 @@ class SavedLoopsService extends ChangeNotifier {
 
   /// Get all saved loops across all tracks
   List<SavedLoop> getAllLoops() {
+    final cached = _allLoopsSortedCache;
+    if (cached != null) return cached;
     final allLoops = <SavedLoop>[];
     for (final loops in _loopsCache.values) {
       allLoops.addAll(loops);
     }
     allLoops.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    _allLoopsSortedCache = allLoops;
     return allLoops;
   }
 
@@ -209,6 +216,7 @@ class SavedLoopsService extends ChangeNotifier {
     final loops = _loopsCache[trackId] ?? [];
     loops.add(loop);
     _loopsCache[trackId] = loops;
+    _allLoopsSortedCache = null;
 
     await _persistTrackLoops(trackId);
     notifyListeners();
@@ -244,6 +252,7 @@ class SavedLoopsService extends ChangeNotifier {
     } else {
       await _persistTrackLoops(trackId);
     }
+    _allLoopsSortedCache = null;
 
     notifyListeners();
     debugPrint('🔁 SavedLoopsService: Deleted loop $loopId');
@@ -271,6 +280,7 @@ class SavedLoopsService extends ChangeNotifier {
 
     _loopsCache.remove(trackId);
     await _box?.delete(trackId);
+    _allLoopsSortedCache = null;
     notifyListeners();
 
     debugPrint('🔁 SavedLoopsService: Deleted all loops for track $trackId');

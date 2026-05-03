@@ -1926,8 +1926,12 @@ class NautuneAppState extends ChangeNotifier {
           .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Recent load timed out')),
       _loadRecentlyAddedForLibrary(libraryId, forceRefresh: forceRefresh)
           .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ RecentlyAdded load timed out')),
-      _loadFavorites(forceRefresh: forceRefresh)
-          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Favorites load timed out')),
+      // Skip the legacy favorites load when LibraryDataProvider is wired —
+      // it loads favorites itself via loadAllLibraryData on session change,
+      // and the favoriteTracks getter prefers the provider's list.
+      if (_libraryDataProvider == null)
+        _loadFavorites(forceRefresh: forceRefresh)
+            .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Favorites load timed out')),
       _loadGenres(libraryId, forceRefresh: forceRefresh)
           .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Genres load timed out')),
       _loadRecentlyPlayed(libraryId, forceRefresh: forceRefresh)
@@ -2399,6 +2403,10 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> refreshFavorites() async {
+    if (_libraryDataProvider != null) {
+      await _libraryDataProvider.loadFavorites(forceRefresh: true);
+      return;
+    }
     await _loadFavorites(forceRefresh: true);
   }
 

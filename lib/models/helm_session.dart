@@ -75,6 +75,8 @@ class HelmSession {
       other is HelmSession &&
           sessionId == other.sessionId &&
           deviceName == other.deviceName &&
+          clientName == other.clientName &&
+          userName == other.userName &&
           nowPlayingItemName == other.nowPlayingItemName &&
           nowPlayingArtist == other.nowPlayingArtist &&
           isPaused == other.isPaused &&
@@ -82,8 +84,8 @@ class HelmSession {
           runtimeTicks == other.runtimeTicks;
 
   @override
-  int get hashCode => Object.hash(sessionId, deviceName, nowPlayingItemName,
-      nowPlayingArtist, isPaused, positionTicks, runtimeTicks);
+  int get hashCode => Object.hash(sessionId, deviceName, clientName, userName,
+      nowPlayingItemName, nowPlayingArtist, isPaused, positionTicks, runtimeTicks);
 
   @override
   String toString() => 'HelmSession($deviceName, $clientName, $userName)';

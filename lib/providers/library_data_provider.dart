@@ -780,6 +780,7 @@ class LibraryDataProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _sessionProvider.removeListener(_onSessionChanged);
     // Clear all library data on dispose
     clearAllData();
     super.dispose();

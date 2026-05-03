@@ -1,3 +1,30 @@
+### v8.5.2 - Library Listener Regression Sweep
+
+**Regression Fixes (LibraryScreen `listen: false` refactor coverage)**
+
+The v8.5.1 perf change registered `_LibraryScreenState` with `listen: false` and added a manual diff-based listener. The initial diff only covered connectivity, sort fields, list identities, and per-section loading flags, leaving several `appState` getters that the build method reads off the listener's radar — when those changed, the UI never rebuilt. This release expands the diff to cover every field the build path actually consumes:
+
+- Fixed Library sort by Name / Date Added / Year / Play Count not updating the visible list until the user switched tabs — sort fields and list identities now drive the listener
+- Fixed library picker not rendering on first load and not reacting to library switches — `selectedLibraryId`, the `libraries` list identity, and `isLoadingLibraries` are now tracked
+- Fixed error states (libraries, albums, artists, playlists, favorites) not surfacing in the UI when a fetch failed — all five `*Error` getters are now diffed
+- Fixed Helm Mode button not appearing/disappearing when demo mode toggled — `isDemoMode` is now tracked
+- Fixed the "loading more" pagination spinner not appearing during infinite scroll — `isLoadingMoreAlbums` and `isLoadingMoreArtists` are now tracked
+- Fixed Favorites tab not showing tracks marked as favourite on the Jellyfin server — `NautuneAppState.refreshFavorites()` was the only `refresh*` method that did not delegate to `LibraryDataProvider`, so the refresh updated the legacy `_favoriteTracks` field while the getter returned the provider's stale list; the method now matches its sibling `refresh*` pattern
+
+**Performance**
+- Cached `_LibraryTab._buildOfflineContent` results keyed on the `completedDownloads` list identity — previously the offline album/artist maps were rebuilt and re-sorted on every parent rebuild while offline; now they recompute only when downloads change, mirroring the `_getFilteredFavorites` caching pattern in the same file
+- Cached `SavedLoopsService.getAllLoops()` sorted result with invalidation on save / delete / load — avoids re-sorting the full loop set on every UI rebuild
+
+**Hardening**
+- `LibraryDataProvider.dispose()` now removes its `SessionProvider` listener — previously the listener was added in the constructor but never removed, leaking the callback if the provider is ever recreated
+- `network_screen` Scaffolds wrapped in `TickerMode(enabled: ModalRoute.isCurrent)` so the radio ticker animation mutes when another screen covers the route, instead of spending frames invisibly
+- `HelmSession.==` and `hashCode` now include `clientName` and `userName`, restoring the equality contract for `Set` / `Map` keying
+
+**Cleanup**
+- `_loadLibraryDependentContent` no longer triggers a duplicate legacy favorites fetch when `LibraryDataProvider` is wired (the provider's `loadAllLibraryData` already covers favourites, and the legacy result was being silently discarded by the favourite-tracks getter)
+
+---
+
 ### v8.5.1 - Bug Hunt & Performance Audit
 
 **Bug Fixes**

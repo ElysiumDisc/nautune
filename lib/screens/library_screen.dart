@@ -96,6 +96,38 @@ class _LibraryScreenState extends State<LibraryScreen>
   bool? _previousNetworkAvailable;
   bool _hasInitialized = false;
 
+  // Tracked snapshots used by _onAppStateChanged to detect when a rebuild is
+  // needed. listen:false on Provider.of (above) means the framework no longer
+  // auto-rebuilds on every notifyListeners(); we manually rebuild only when one
+  // of these UI-relevant fields actually changes.
+  SortOption? _previousAlbumSortBy;
+  SortOrder? _previousAlbumSortOrder;
+  SortOption? _previousArtistSortBy;
+  SortOrder? _previousArtistSortOrder;
+  int? _previousAlbumsIdentity;
+  int? _previousArtistsIdentity;
+  int? _previousPlaylistsIdentity;
+  int? _previousGenresIdentity;
+  int? _previousFavoritesIdentity;
+  int? _previousRecentTracksIdentity;
+  int? _previousLibrariesIdentity;
+  bool? _previousIsLoadingAlbums;
+  bool? _previousIsLoadingArtists;
+  bool? _previousIsLoadingPlaylists;
+  bool? _previousIsLoadingFavorites;
+  bool? _previousIsLoadingGenres;
+  bool? _previousIsLoadingRecent;
+  bool? _previousIsLoadingLibraries;
+  bool? _previousIsLoadingMoreAlbums;
+  bool? _previousIsLoadingMoreArtists;
+  bool? _previousIsDemoMode;
+  String? _previousSelectedLibraryId;
+  Object? _previousLibrariesError;
+  Object? _previousAlbumsError;
+  Object? _previousArtistsError;
+  Object? _previousPlaylistsError;
+  Object? _previousFavoritesError;
+
   // Cached filtered favorites to avoid recomputing on every build
   List<JellyfinTrack>? _cachedFilteredFavorites;
   List<JellyfinTrack>? _lastFavoriteTracks;
@@ -120,9 +152,36 @@ class _LibraryScreenState extends State<LibraryScreen>
       _appState = Provider.of<NautuneAppState>(context, listen: false);
       _previousOfflineMode = _appState!.isOfflineMode;
       _previousNetworkAvailable = _appState!.networkAvailable;
+      _previousAlbumSortBy = _appState!.albumSortBy;
+      _previousAlbumSortOrder = _appState!.albumSortOrder;
+      _previousArtistSortBy = _appState!.artistSortBy;
+      _previousArtistSortOrder = _appState!.artistSortOrder;
+      _previousAlbumsIdentity = identityHashCode(_appState!.albums);
+      _previousArtistsIdentity = identityHashCode(_appState!.artists);
+      _previousPlaylistsIdentity = identityHashCode(_appState!.playlists);
+      _previousGenresIdentity = identityHashCode(_appState!.genres);
+      _previousFavoritesIdentity = identityHashCode(_appState!.favoriteTracks);
+      _previousRecentTracksIdentity = identityHashCode(_appState!.recentTracks);
+      _previousLibrariesIdentity = identityHashCode(_appState!.libraries);
+      _previousIsLoadingAlbums = _appState!.isLoadingAlbums;
+      _previousIsLoadingArtists = _appState!.isLoadingArtists;
+      _previousIsLoadingPlaylists = _appState!.isLoadingPlaylists;
+      _previousIsLoadingFavorites = _appState!.isLoadingFavorites;
+      _previousIsLoadingGenres = _appState!.isLoadingGenres;
+      _previousIsLoadingRecent = _appState!.isLoadingRecent;
+      _previousIsLoadingLibraries = _appState!.isLoadingLibraries;
+      _previousIsLoadingMoreAlbums = _appState!.isLoadingMoreAlbums;
+      _previousIsLoadingMoreArtists = _appState!.isLoadingMoreArtists;
+      _previousIsDemoMode = _appState!.isDemoMode;
+      _previousSelectedLibraryId = _appState!.selectedLibraryId;
+      _previousLibrariesError = _appState!.librariesError;
+      _previousAlbumsError = _appState!.albumsError;
+      _previousArtistsError = _appState!.artistsError;
+      _previousPlaylistsError = _appState!.playlistsError;
+      _previousFavoritesError = _appState!.favoritesError;
       _hasInitialized = true;
       _tabOrder = List<int>.from(_appState!.navTabOrder);
-      _appState!.addListener(_onConnectivityChanged);
+      _appState!.addListener(_onAppStateChanged);
 
       // Restore saved tab index after build completes
       final savedTabIndex = _appState!.initialLibraryTabIndex;
@@ -137,11 +196,72 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
   }
 
-  void _onConnectivityChanged() {
+  void _onAppStateChanged() {
     if (!mounted || _appState == null) return;
-    final offline = _appState!.isOfflineMode;
-    final network = _appState!.networkAvailable;
-    if (_previousOfflineMode != offline || _previousNetworkAvailable != network) {
+    final appState = _appState!;
+
+    final offline = appState.isOfflineMode;
+    final network = appState.networkAvailable;
+    final connectivityChanged = _previousOfflineMode != offline ||
+        _previousNetworkAvailable != network;
+
+    final albumSortBy = appState.albumSortBy;
+    final albumSortOrder = appState.albumSortOrder;
+    final artistSortBy = appState.artistSortBy;
+    final artistSortOrder = appState.artistSortOrder;
+    final albumsId = identityHashCode(appState.albums);
+    final artistsId = identityHashCode(appState.artists);
+    final playlistsId = identityHashCode(appState.playlists);
+    final genresId = identityHashCode(appState.genres);
+    final favoritesId = identityHashCode(appState.favoriteTracks);
+    final recentId = identityHashCode(appState.recentTracks);
+    final librariesId = identityHashCode(appState.libraries);
+    final isLoadingAlbums = appState.isLoadingAlbums;
+    final isLoadingArtists = appState.isLoadingArtists;
+    final isLoadingPlaylists = appState.isLoadingPlaylists;
+    final isLoadingFavorites = appState.isLoadingFavorites;
+    final isLoadingGenres = appState.isLoadingGenres;
+    final isLoadingRecent = appState.isLoadingRecent;
+    final isLoadingLibraries = appState.isLoadingLibraries;
+    final isLoadingMoreAlbums = appState.isLoadingMoreAlbums;
+    final isLoadingMoreArtists = appState.isLoadingMoreArtists;
+    final isDemoMode = appState.isDemoMode;
+    final selectedLibraryId = appState.selectedLibraryId;
+    final librariesError = appState.librariesError;
+    final albumsError = appState.albumsError;
+    final artistsError = appState.artistsError;
+    final playlistsError = appState.playlistsError;
+    final favoritesError = appState.favoritesError;
+
+    final dataChanged = _previousAlbumSortBy != albumSortBy ||
+        _previousAlbumSortOrder != albumSortOrder ||
+        _previousArtistSortBy != artistSortBy ||
+        _previousArtistSortOrder != artistSortOrder ||
+        _previousAlbumsIdentity != albumsId ||
+        _previousArtistsIdentity != artistsId ||
+        _previousPlaylistsIdentity != playlistsId ||
+        _previousGenresIdentity != genresId ||
+        _previousFavoritesIdentity != favoritesId ||
+        _previousRecentTracksIdentity != recentId ||
+        _previousLibrariesIdentity != librariesId ||
+        _previousIsLoadingAlbums != isLoadingAlbums ||
+        _previousIsLoadingArtists != isLoadingArtists ||
+        _previousIsLoadingPlaylists != isLoadingPlaylists ||
+        _previousIsLoadingFavorites != isLoadingFavorites ||
+        _previousIsLoadingGenres != isLoadingGenres ||
+        _previousIsLoadingRecent != isLoadingRecent ||
+        _previousIsLoadingLibraries != isLoadingLibraries ||
+        _previousIsLoadingMoreAlbums != isLoadingMoreAlbums ||
+        _previousIsLoadingMoreArtists != isLoadingMoreArtists ||
+        _previousIsDemoMode != isDemoMode ||
+        _previousSelectedLibraryId != selectedLibraryId ||
+        _previousLibrariesError != librariesError ||
+        _previousAlbumsError != albumsError ||
+        _previousArtistsError != artistsError ||
+        _previousPlaylistsError != playlistsError ||
+        _previousFavoritesError != favoritesError;
+
+    if (connectivityChanged) {
       debugPrint('🔄 LibraryScreen: Connectivity changed (offline: $_previousOfflineMode -> $offline, network: $_previousNetworkAvailable -> $network)');
       _previousOfflineMode = offline;
       _previousNetworkAvailable = network;
@@ -151,11 +271,45 @@ class _LibraryScreenState extends State<LibraryScreen>
         _helmService?.resumePolling();
       }
     }
+
+    if (dataChanged) {
+      _previousAlbumSortBy = albumSortBy;
+      _previousAlbumSortOrder = albumSortOrder;
+      _previousArtistSortBy = artistSortBy;
+      _previousArtistSortOrder = artistSortOrder;
+      _previousAlbumsIdentity = albumsId;
+      _previousArtistsIdentity = artistsId;
+      _previousPlaylistsIdentity = playlistsId;
+      _previousGenresIdentity = genresId;
+      _previousFavoritesIdentity = favoritesId;
+      _previousRecentTracksIdentity = recentId;
+      _previousLibrariesIdentity = librariesId;
+      _previousIsLoadingAlbums = isLoadingAlbums;
+      _previousIsLoadingArtists = isLoadingArtists;
+      _previousIsLoadingPlaylists = isLoadingPlaylists;
+      _previousIsLoadingFavorites = isLoadingFavorites;
+      _previousIsLoadingGenres = isLoadingGenres;
+      _previousIsLoadingRecent = isLoadingRecent;
+      _previousIsLoadingLibraries = isLoadingLibraries;
+      _previousIsLoadingMoreAlbums = isLoadingMoreAlbums;
+      _previousIsLoadingMoreArtists = isLoadingMoreArtists;
+      _previousIsDemoMode = isDemoMode;
+      _previousSelectedLibraryId = selectedLibraryId;
+      _previousLibrariesError = librariesError;
+      _previousAlbumsError = albumsError;
+      _previousArtistsError = artistsError;
+      _previousPlaylistsError = playlistsError;
+      _previousFavoritesError = favoritesError;
+    }
+
+    if (connectivityChanged || dataChanged) {
+      setState(() {});
+    }
   }
 
   @override
   void dispose() {
-    _appState?.removeListener(_onConnectivityChanged);
+    _appState?.removeListener(_onAppStateChanged);
     _helmService?.dispose();
     _helmService = null;
     _tabController.removeListener(_handleTabChange);
@@ -840,6 +994,12 @@ class _LibraryTabState extends State<_LibraryTab> {
   late ScrollController _albumsScrollController;
   late ScrollController _artistsScrollController;
 
+  // Offline content cache — recompute only when the completedDownloads list
+  // identity changes, not on every parent rebuild.
+  int? _lastOfflineDownloadsIdentity;
+  List<JellyfinAlbum>? _cachedOfflineAlbums;
+  List<JellyfinArtist>? _cachedOfflineArtists;
+
   @override
   void initState() {
     super.initState();
@@ -929,25 +1089,35 @@ class _LibraryTabState extends State<_LibraryTab> {
 
   Widget _buildOfflineContent() {
     final downloads = widget.appState.downloadService.completedDownloads;
+    final downloadsId = identityHashCode(downloads);
+    if (downloadsId != _lastOfflineDownloadsIdentity) {
+      _lastOfflineDownloadsIdentity = downloadsId;
+      _cachedOfflineAlbums = null;
+      _cachedOfflineArtists = null;
+    }
 
     if (_selectedView == 'albums') {
-      final Map<String, List<dynamic>> albumsMap = {};
-      for (final download in downloads) {
-        final albumName = download.track.album ?? 'Unknown Album';
-        albumsMap.putIfAbsent(albumName, () => []).add(download);
-      }
+      var offlineAlbums = _cachedOfflineAlbums;
+      if (offlineAlbums == null) {
+        final Map<String, List<dynamic>> albumsMap = {};
+        for (final download in downloads) {
+          final albumName = download.track.album ?? 'Unknown Album';
+          albumsMap.putIfAbsent(albumName, () => []).add(download);
+        }
 
-      final offlineAlbums = albumsMap.entries.map((entry) {
-        final firstTrack = entry.value.first.track;
-        return JellyfinAlbum(
-          id: firstTrack.albumId ?? firstTrack.id, // Fallback to track ID if album ID missing
-          name: entry.key,
-          artists: [firstTrack.displayArtist],
-          artistIds: const [], // IDs might not be available offline
-          primaryImageTag: firstTrack.albumPrimaryImageTag,
-        );
-      }).toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
+        offlineAlbums = albumsMap.entries.map((entry) {
+          final firstTrack = entry.value.first.track;
+          return JellyfinAlbum(
+            id: firstTrack.albumId ?? firstTrack.id, // Fallback to track ID if album ID missing
+            name: entry.key,
+            artists: [firstTrack.displayArtist],
+            artistIds: const [], // IDs might not be available offline
+            primaryImageTag: firstTrack.albumPrimaryImageTag,
+          );
+        }).toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+        _cachedOfflineAlbums = offlineAlbums;
+      }
 
       return _AlbumsTab(
         albums: offlineAlbums,
@@ -960,26 +1130,30 @@ class _LibraryTabState extends State<_LibraryTab> {
         appState: widget.appState,
       );
     } else {
-      final Map<String, JellyfinArtist> artistsMap = {};
-      for (final download in downloads) {
-        final track = download.track;
-        final artistName = track.displayArtist;
-        // Use actual artist ID if available, otherwise fall back to artist name
-        final artistId = track.artistIds.isNotEmpty
-            ? track.artistIds.first
-            : artistName;
+      var offlineArtists = _cachedOfflineArtists;
+      if (offlineArtists == null) {
+        final Map<String, JellyfinArtist> artistsMap = {};
+        for (final download in downloads) {
+          final track = download.track;
+          final artistName = track.displayArtist;
+          // Use actual artist ID if available, otherwise fall back to artist name
+          final artistId = track.artistIds.isNotEmpty
+              ? track.artistIds.first
+              : artistName;
 
-        if (!artistsMap.containsKey(artistId)) {
-          artistsMap[artistId] = JellyfinArtist(
-            id: artistId,
-            name: artistName,
-            primaryImageTag: 'offline', // Marker for offline image availability
-          );
+          if (!artistsMap.containsKey(artistId)) {
+            artistsMap[artistId] = JellyfinArtist(
+              id: artistId,
+              name: artistName,
+              primaryImageTag: 'offline', // Marker for offline image availability
+            );
+          }
         }
-      }
 
-      final offlineArtists = artistsMap.values.toList()
-        ..sort((a, b) => a.name.compareTo(b.name));
+        offlineArtists = artistsMap.values.toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+        _cachedOfflineArtists = offlineArtists;
+      }
 
       return _ArtistsTab(
         appState: widget.appState,

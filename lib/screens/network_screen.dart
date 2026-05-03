@@ -224,26 +224,32 @@ class _NetworkScreenState extends State<NetworkScreen>
     final demoMode = context.watch<DemoModeProvider>();
     final isOffline = !connectivity.networkAvailable || demoMode.isDemoMode;
     final hasDownloads = _downloadService.downloadedCount > 0;
+    // Mute the ticker animation when this screen isn't the topmost route, so
+    // the controller doesn't keep spending frames while another screen covers it.
+    final routeIsCurrent = ModalRoute.of(context)?.isCurrent ?? true;
 
     // Show offline/demo message only if no downloads available
     if (isOffline && !hasDownloads) {
       final message = demoMode.isDemoMode
           ? 'DEMO MODE\n\nDownload channels while online\nto access them in demo mode'
           : 'THE NETWORK REQUIRES\nAN INTERNET CONNECTION\n\nDownload channels from Settings\nto access them offline';
-      return Scaffold(
-        backgroundColor: Colors.black,
-        appBar: _buildAppBar(),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
-            child: Text(
-              message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontFamily: 'monospace',
-                fontSize: 14,
-                letterSpacing: 2,
+      return TickerMode(
+        enabled: routeIsCurrent,
+        child: Scaffold(
+          backgroundColor: Colors.black,
+          appBar: _buildAppBar(),
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontFamily: 'monospace',
+                  fontSize: 14,
+                  letterSpacing: 2,
+                ),
               ),
             ),
           ),
@@ -251,23 +257,26 @@ class _NetworkScreenState extends State<NetworkScreen>
       );
     }
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: _buildAppBar(),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Header section with current channel info
-            _buildHeader(),
+    return TickerMode(
+      enabled: routeIsCurrent,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        appBar: _buildAppBar(),
+        body: SafeArea(
+          child: Column(
+            children: [
+              // Header section with current channel info
+              _buildHeader(),
 
-            // Main content
-            Expanded(
-              child: _buildMainContent(isOffline),
-            ),
+              // Main content
+              Expanded(
+                child: _buildMainContent(isOffline),
+              ),
 
-            // Footer
-            _buildFooter(),
-          ],
+              // Footer
+              _buildFooter(),
+            ],
+          ),
         ),
       ),
     );
