@@ -116,18 +116,16 @@ class _LibraryScreenState extends State<LibraryScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-
-    final currentAppState = Provider.of<NautuneAppState>(context, listen: true);
-
     if (!_hasInitialized) {
-      _appState = currentAppState;
-      _previousOfflineMode = currentAppState.isOfflineMode;
-      _previousNetworkAvailable = currentAppState.networkAvailable;
+      _appState = Provider.of<NautuneAppState>(context, listen: false);
+      _previousOfflineMode = _appState!.isOfflineMode;
+      _previousNetworkAvailable = _appState!.networkAvailable;
       _hasInitialized = true;
-      _tabOrder = List<int>.from(currentAppState.navTabOrder);
+      _tabOrder = List<int>.from(_appState!.navTabOrder);
+      _appState!.addListener(_onConnectivityChanged);
 
       // Restore saved tab index after build completes
-      final savedTabIndex = currentAppState.initialLibraryTabIndex;
+      final savedTabIndex = _appState!.initialLibraryTabIndex;
       if (savedTabIndex != _homeTabIndex && savedTabIndex < 5) {
         _currentTabIndex = savedTabIndex;
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -136,28 +134,28 @@ class _LibraryScreenState extends State<LibraryScreen>
           }
         });
       }
-    } else {
-      _appState = currentAppState;
-      final currentOfflineMode = currentAppState.isOfflineMode;
-      final currentNetworkAvailable = currentAppState.networkAvailable;
+    }
+  }
 
-      if (_previousOfflineMode != currentOfflineMode ||
-          _previousNetworkAvailable != currentNetworkAvailable) {
-        debugPrint('🔄 LibraryScreen: Connectivity changed (offline: $_previousOfflineMode -> $currentOfflineMode, network: $_previousNetworkAvailable -> $currentNetworkAvailable)');
-        _previousOfflineMode = currentOfflineMode;
-        _previousNetworkAvailable = currentNetworkAvailable;
-        // Suspend/resume helm polling based on connectivity
-        if (!currentNetworkAvailable || currentOfflineMode) {
-          _helmService?.suspendPolling();
-        } else {
-          _helmService?.resumePolling();
-        }
+  void _onConnectivityChanged() {
+    if (!mounted || _appState == null) return;
+    final offline = _appState!.isOfflineMode;
+    final network = _appState!.networkAvailable;
+    if (_previousOfflineMode != offline || _previousNetworkAvailable != network) {
+      debugPrint('🔄 LibraryScreen: Connectivity changed (offline: $_previousOfflineMode -> $offline, network: $_previousNetworkAvailable -> $network)');
+      _previousOfflineMode = offline;
+      _previousNetworkAvailable = network;
+      if (!network || offline) {
+        _helmService?.suspendPolling();
+      } else {
+        _helmService?.resumePolling();
       }
     }
   }
 
   @override
   void dispose() {
+    _appState?.removeListener(_onConnectivityChanged);
     _helmService?.dispose();
     _helmService = null;
     _tabController.removeListener(_handleTabChange);

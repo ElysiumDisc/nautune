@@ -36,29 +36,32 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-
-    // Get appState with listening enabled
-    final currentAppState = Provider.of<NautuneAppState>(context, listen: true);
-
     if (!_hasInitialized) {
-      _appState = currentAppState;
-      _previousOfflineMode = currentAppState.isOfflineMode;
-      _previousNetworkAvailable = currentAppState.networkAvailable;
+      _appState = Provider.of<NautuneAppState>(context, listen: false);
+      _previousOfflineMode = _appState!.isOfflineMode;
+      _previousNetworkAvailable = _appState!.networkAvailable;
       _hasInitialized = true;
+      _appState!.addListener(_onConnectivityChanged);
       _loadTracks();
-    } else {
-      _appState = currentAppState;
-      final currentOfflineMode = currentAppState.isOfflineMode;
-      final currentNetworkAvailable = currentAppState.networkAvailable;
-
-      if (_previousOfflineMode != currentOfflineMode ||
-          _previousNetworkAvailable != currentNetworkAvailable) {
-        debugPrint('🔄 PlaylistDetail: Connectivity changed');
-        _previousOfflineMode = currentOfflineMode;
-        _previousNetworkAvailable = currentNetworkAvailable;
-        _loadTracks();
-      }
     }
+  }
+
+  void _onConnectivityChanged() {
+    if (!mounted || _appState == null) return;
+    final offline = _appState!.isOfflineMode;
+    final network = _appState!.networkAvailable;
+    if (_previousOfflineMode != offline || _previousNetworkAvailable != network) {
+      debugPrint('🔄 PlaylistDetail: Connectivity changed');
+      _previousOfflineMode = offline;
+      _previousNetworkAvailable = network;
+      _loadTracks();
+    }
+  }
+
+  @override
+  void dispose() {
+    _appState?.removeListener(_onConnectivityChanged);
+    super.dispose();
   }
 
   Future<void> _loadTracks() async {

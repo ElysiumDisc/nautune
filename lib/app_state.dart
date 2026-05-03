@@ -2749,7 +2749,9 @@ class NautuneAppState extends ChangeNotifier {
     // If switching to online mode and we have a session and network, try to refresh data
     if (!_userWantsOffline && _session != null && _networkAvailable) {
       debugPrint('📶 Switching to online mode - refreshing libraries');
-      refreshLibraries().catchError((error) {
+      refreshLibraries().then((_) {
+        _syncPendingPlaylistActions();
+      }).catchError((error) {
         debugPrint('Failed to refresh libraries when going online: $error');
         // Revert to offline if refresh fails
         _userWantsOffline = true;
@@ -2758,9 +2760,6 @@ class NautuneAppState extends ChangeNotifier {
         _activateSubmarineFeatures();
         notifyListeners();
       });
-
-      // Sync pending playlist actions
-      _syncPendingPlaylistActions();
     }
   }
 
@@ -2877,6 +2876,7 @@ class NautuneAppState extends ChangeNotifier {
     _periodicSyncTimer?.cancel();
     _demoModeProvider?.removeListener(_onDemoModeChanged);
     _sessionProvider?.removeListener(_onSessionChanged);
+    _libraryDataProvider?.removeListener(notifyListeners);
     _carPlayService?.dispose();
     _remoteControlService?.dispose();
     _audioPlayerService.dispose();

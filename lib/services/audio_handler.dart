@@ -170,14 +170,17 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
   }
 
   void updateNautuneQueue(List<JellyfinTrack> tracks) {
-    queue.add(tracks.map((track) => audio_service.MediaItem(
-      id: track.id,
-      album: track.album,
-      title: track.name,
-      artist: track.displayArtist,
-      duration: track.duration,
-      artUri: track.artworkUrl() != null ? Uri.parse(track.artworkUrl()!) : null,
-    )).toList());
+    queue.add(tracks.map((track) {
+      final artUrl = track.artworkUrl();
+      return audio_service.MediaItem(
+        id: track.id,
+        album: track.album,
+        title: track.name,
+        artist: track.displayArtist,
+        duration: track.duration,
+        artUri: artUrl != null ? Uri.parse(artUrl) : null,
+      );
+    }).toList());
   }
 
   @override

@@ -671,28 +671,32 @@ class AudioPlayerService {
       
       // Handle audio interruptions (phone calls, other media apps)
       await _interruptionSubscription?.cancel();
-      _interruptionSubscription = session.interruptionEventStream.listen((event) {
-        if (event.begin) {
-          debugPrint('🔊 Audio interruption began: ${event.type}');
-          if (event.type == AudioInterruptionType.pause ||
-              event.type == AudioInterruptionType.duck ||
-              event.type == AudioInterruptionType.unknown) {
-            unawaited(pause());
+      _interruptionSubscription = session.interruptionEventStream.listen(
+        (event) {
+          if (event.begin) {
+            debugPrint('🔊 Audio interruption began: ${event.type}');
+            if (event.type == AudioInterruptionType.pause ||
+                event.type == AudioInterruptionType.duck ||
+                event.type == AudioInterruptionType.unknown) {
+              unawaited(pause());
+            }
+          } else {
+            debugPrint('🔊 Audio interruption ended: ${event.type}');
+            // After interruption ends, reactivate session then resume
+            if (event.type == AudioInterruptionType.pause && !isPlaying) {
+              unawaited(_reactivateAndResume());
+            }
           }
-        } else {
-          debugPrint('🔊 Audio interruption ended: ${event.type}');
-          // After interruption ends, reactivate session then resume
-          if (event.type == AudioInterruptionType.pause && !isPlaying) {
-            unawaited(_reactivateAndResume());
-          }
-        }
-      });
+        },
+        onError: (e) => debugPrint('⚠️ Audio interruption stream error: $e'),
+      );
 
       // Pause when headphones are unplugged / audio becomes noisy
       await _becomingNoisySubscription?.cancel();
-      _becomingNoisySubscription = session.becomingNoisyEventStream.listen((_) {
-        unawaited(pause());
-      });
+      _becomingNoisySubscription = session.becomingNoisyEventStream.listen(
+        (_) => unawaited(pause()),
+        onError: (e) => debugPrint('⚠️ Becoming noisy stream error: $e'),
+      );
     } catch (e) {
       debugPrint('Audio session setup failed: $e');
     }
@@ -807,40 +811,46 @@ class AudioPlayerService {
     });
     
     // State changes
-    _playerStateSub = player.onPlayerStateChanged.listen((state) {
-      final isPlaying = state == PlayerState.playing;
-      _playingController.add(isPlaying);
-      
-      // Report state change to Jellyfin (only for real Jellyfin tracks)
-      if (_lastPlayingState != isPlaying && _currentTrack != null) {
-        _lastPlayingState = isPlaying;
-        if (_reportingService != null && _currentTrack!.serverUrl != null) {
-          _reportingService?.reportPlaybackProgress(
-            _currentTrack!,
-            _lastPosition,
-            !isPlaying, // isPaused
-          );
+    _playerStateSub = player.onPlayerStateChanged.listen(
+      (state) {
+        final isPlaying = state == PlayerState.playing;
+        _playingController.add(isPlaying);
+
+        // Report state change to Jellyfin (only for real Jellyfin tracks)
+        if (_lastPlayingState != isPlaying && _currentTrack != null) {
+          _lastPlayingState = isPlaying;
+          if (_reportingService != null && _currentTrack!.serverUrl != null) {
+            _reportingService?.reportPlaybackProgress(
+              _currentTrack!,
+              _lastPosition,
+              !isPlaying, // isPaused
+            );
+          }
         }
-      }
-      
-      if (isPlaying) {
-        _lastListenTimeRecord = DateTime.now();
-        _startPositionSaving();
-        unawaited(_stateStore.savePlaybackSnapshot(isPlaying: true));
-      } else {
-        _stopPositionSaving();
-        _saveCurrentPosition();
-        _emitIdleVisualizer();
-        unawaited(_stateStore.savePlaybackSnapshot(isPlaying: false));
-      }
-    });
-    
+
+        if (isPlaying) {
+          _lastListenTimeRecord = DateTime.now();
+          _startPositionSaving();
+          unawaited(_stateStore.savePlaybackSnapshot(isPlaying: true));
+        } else {
+          _stopPositionSaving();
+          _saveCurrentPosition();
+          _emitIdleVisualizer();
+          unawaited(_stateStore.savePlaybackSnapshot(isPlaying: false));
+        }
+      },
+      onError: (e) => debugPrint('⚠️ Player state stream error: $e'),
+    );
+
     // Track completion - gapless transition
-    _playerCompleteSub = player.onPlayerComplete.listen((_) async {
-      if (!_isTransitioning) {
-        await _gaplessTransition();
-      }
-    });
+    _playerCompleteSub = player.onPlayerComplete.listen(
+      (_) async {
+        if (!_isTransitioning) {
+          await _gaplessTransition();
+        }
+      },
+      onError: (e) => debugPrint('⚠️ Player complete stream error: $e'),
+    );
   }
   
   Future<void> _gaplessTransition() async {
@@ -2975,7 +2985,7 @@ class AudioPlayerService {
 
     // Handle end of queue
     if (nextIndex >= _queue.length) {
-      if (_repeatMode == RepeatMode.all) {
+      if (_repeatMode == RepeatMode.all && _queue.isNotEmpty) {
         nextIndex = 0; // Loop back to start
       } else {
         return null; // Queue ended

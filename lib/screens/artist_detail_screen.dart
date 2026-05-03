@@ -249,13 +249,22 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
       final completer = Completer<ui.Image>();
 
       late ImageStreamListener listener;
-      listener = ImageStreamListener((info, _) {
-        completer.complete(info.image);
-        imageStream.removeListener(listener);
-      });
+      listener = ImageStreamListener(
+        (info, _) {
+          if (!completer.isCompleted) completer.complete(info.image);
+        },
+        onError: (e, st) {
+          if (!completer.isCompleted) completer.completeError(e, st);
+        },
+      );
 
       imageStream.addListener(listener);
-      final image = await completer.future;
+      final ui.Image image;
+      try {
+        image = await completer.future.timeout(const Duration(seconds: 10));
+      } finally {
+        imageStream.removeListener(listener);
+      }
 
       final ByteData? byteData = await image.toByteData();
       if (byteData == null) return;

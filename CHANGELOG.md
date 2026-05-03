@@ -1,3 +1,31 @@
+### v8.5.1 - Bug Hunt & Performance Audit
+
+**Bug Fixes**
+- Fixed `findNearestChannel` crashing with a `RangeError` on an empty channel list — the empty-guard was calling `.first` on the empty list it was meant to protect against; now throws a proper `StateError`
+- Fixed `AudioHandler` calling `track.artworkUrl()` twice — a null-check on the first call followed by a force-unwrap of a second call; now stores the result in a variable, eliminating the theoretical TOCTOU risk
+- Fixed race condition when switching from offline to online mode — `_syncPendingPlaylistActions()` was firing immediately alongside `refreshLibraries()` instead of waiting for the refresh to complete; pending sync actions now run only after the library refresh succeeds
+- Fixed potential crash in repeat-all mode with an empty queue — `_getPreloadTrack` computed `nextIndex = 0` but then accessed `_queue[0]` without guarding against an empty queue; added `_queue.isNotEmpty` check
+- Fixed memory leak in `artist_detail_screen` palette extraction — `ImageStreamListener` lacked an `onError` handler and `try/finally` cleanup, meaning a failed image stream would leave the listener attached and hang the `Completer`; now mirrors the correct pattern from `full_player_screen`
+
+**Performance**
+- Eliminated excessive widget rebuilds in `GenreDetailScreen`, `AlbumDetailScreen`, `LibraryScreen`, and `PlaylistDetailScreen` — all four screens were registered as full dependents of `NautuneAppState` via `Provider.of(listen: true)`, causing a full rebuild on every playback tick, track change, and library update; each screen now uses `listen: false` and registers a targeted `addListener` callback that only reacts to `isOfflineMode` and `networkAvailable` changes
+- Replaced eager `Column` + `SingleChildScrollView` in the lyrics tab with a lazy `ListView.builder` — on tracks with 100+ lyric lines, the old approach forced Flutter to lay out every line on initial render; the new approach only builds visible items, with a hybrid scroll strategy (`Scrollable.ensureVisible` when the item is in the viewport, estimated offset fallback when it isn't)
+
+**Hardening**
+- Added `onError` handlers to four unguarded audio stream subscriptions (`onPlayerStateChanged`, `onPlayerComplete`, `interruptionEventStream`, `becomingNoisyEventStream`) — previously a platform-level stream error would surface as an unhandled exception and silently kill playback
+
+**Additional Bug Fixes**
+- Fixed memory leak in `NautuneAppState.dispose()` — `_libraryDataProvider.addListener(notifyListeners)` was registered in the constructor but never removed in `dispose()`, keeping the `NautuneAppState` alive and allowing stale callbacks to fire after disposal
+
+**Additional Performance**
+- Hoisted three `RegExp` patterns in `AlbumDetailScreen._normalizeTrackName` to `static final` fields — previously the patterns were compiled on every call inside the track-popularity matching loop (once per track per album open)
+- Cached `hasMultipleDiscs` as a state field computed once in `_loadTracks()` — previously recalculated via a full `map → toSet` pass on every `build()` call
+- Eliminated O(n²) disc track-number lookup in `AlbumDetailScreen` track list — replaced per-item `take(index).where(...)` scan with a pre-computed `Map<int, int>` start-index lookup, reducing 5 000+ iterations for a 100-track album to a single O(1) map access per tile
+- Lifted `StreamBuilder<JellyfinTrack?>` above the album track list — previously each tile created its own stream subscription (50+ for a typical album), causing all tiles to rebuild on every track change; now a single `StreamBuilder` computes `currentlyPlayingId` and passes `isPlaying: bool` to each stateless tile
+- Replaced `NetworkImage` with `CachedNetworkImageProvider` in `MiniPlayerScreen` color extraction — the fallback network path now benefits from Flutter's image cache, avoiding redundant fetches when the same album art is needed again
+
+---
+
 ### v8.5.0 - Deep Audit: Startup Performance & Code Architecture
 
 **Performance (Cold Start & UI)**

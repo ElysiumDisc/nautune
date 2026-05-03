@@ -879,7 +879,7 @@ const List<NetworkChannel> networkChannels = [
 /// Finds the nearest channel to the given number.
 /// Returns the channel with the smallest absolute difference.
 NetworkChannel findNearestChannel(int number) {
-  if (networkChannels.isEmpty) return networkChannels.first;
+  if (networkChannels.isEmpty) throw StateError('networkChannels is empty');
 
   return networkChannels.reduce((a, b) =>
       (a.number - number).abs() <= (b.number - number).abs() ? a : b);

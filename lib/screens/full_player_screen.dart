@@ -2961,19 +2961,29 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     }
 
     // Trigger auto-scroll if index changed and user is not scrolling
-    // We check if the index actually advanced or changed to avoid redundant scrolling calls
     if (activeIndex != _currentLyricIndex) {
       _currentLyricIndex = activeIndex;
       if (!_userIsScrolling) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
-          // Ensure the key exists and context is available before scrolling
           if (activeIndex >= 0 && activeIndex < _lyrics!.length) {
             final key = _lyrics![activeIndex].key;
             if (key.currentContext != null) {
+              // Item is in viewport — use precise scroll
               Scrollable.ensureVisible(
                 key.currentContext!,
-                alignment: 0.5, // Center the item
+                alignment: 0.5,
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeInOut,
+              );
+            } else if (_lyricsScrollController.hasClients) {
+              // Item is outside viewport (not yet built) — estimate position
+              const estimatedItemHeight = 52.0; // ~20px font * 1.4 lineHeight + 24px padding
+              const topPadding = 200.0;
+              final viewportCenter = _lyricsScrollController.position.viewportDimension * 0.5;
+              final offset = topPadding + (activeIndex * estimatedItemHeight) - viewportCenter;
+              _lyricsScrollController.animateTo(
+                offset.clamp(0.0, _lyricsScrollController.position.maxScrollExtent),
                 duration: const Duration(milliseconds: 300),
                 curve: Curves.easeInOut,
               );
@@ -2991,68 +3001,57 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
               _userIsScrolling = true;
               _userScrollTimer?.cancel();
               _userScrollTimer = Timer(const Duration(seconds: 2), () {
-                if (mounted) {
-                  // Reset scrolling state after timeout
-                  setState(() {
-                    _userIsScrolling = false;
-                  });
-                }
+                if (mounted) setState(() { _userIsScrolling = false; });
               });
             }
             return false;
           },
-          child: SingleChildScrollView(
+          child: ListView.builder(
             controller: _lyricsScrollController,
-            // Add large padding to allow scrolling top/bottom items to center
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 200),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: List.generate(_lyrics!.length, (index) {
-                final line = _lyrics![index];
-                final isCurrent = index == activeIndex;
-                final isPast = index < activeIndex;
+            itemCount: _lyrics!.length,
+            itemBuilder: (context, index) {
+              final line = _lyrics![index];
+              final isCurrent = index == activeIndex;
+              final isPast = index < activeIndex;
 
-                return GestureDetector(
-                  key: line.key, // Assign the GlobalKey here
-                  onTap: () {
-                    if (line.startTicks != null) {
-                      // Jellyfin ticks are 100ns units
-                      final microseconds = line.startTicks! ~/ 10;
-                      _audioService.seek(Duration(microseconds: microseconds));
-                    }
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: AnimatedDefaultTextStyle(
-                      duration: const Duration(milliseconds: 200),
-                      style: theme.textTheme.titleLarge!.copyWith(
-                        color: isCurrent
-                            ? theme.colorScheme.primary
-                            : theme.colorScheme.onSurfaceVariant.withValues(
-                                alpha: isPast ? 0.3 : 0.6,
+              return GestureDetector(
+                key: line.key,
+                onTap: () {
+                  if (line.startTicks != null) {
+                    final microseconds = line.startTicks! ~/ 10;
+                    _audioService.seek(Duration(microseconds: microseconds));
+                  }
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: AnimatedDefaultTextStyle(
+                    duration: const Duration(milliseconds: 200),
+                    style: theme.textTheme.titleLarge!.copyWith(
+                      color: isCurrent
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.onSurfaceVariant.withValues(
+                              alpha: isPast ? 0.3 : 0.6,
+                            ),
+                      fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                      fontSize: isCurrent ? 28 : 20,
+                      height: 1.4,
+                      shadows: isCurrent
+                          ? [
+                              Shadow(
+                                color: theme.colorScheme.primary.withValues(alpha: 0.4),
+                                blurRadius: 12,
+                                offset: const Offset(0, 2),
                               ),
-                        fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                        fontSize: isCurrent ? 28 : 20,
-                        height: 1.4,
-                        shadows: isCurrent
-                            ? [
-                                Shadow(
-                                  color: theme.colorScheme.primary.withValues(
-                                    alpha: 0.4,
-                                  ),
-                                  blurRadius: 12,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ]
-                            : [],
-                      ),
-                      textAlign: TextAlign.center,
-                      child: Text(line.text.isEmpty ? '♫' : line.text),
+                            ]
+                          : [],
                     ),
+                    textAlign: TextAlign.center,
+                    child: Text(line.text.isEmpty ? '♫' : line.text),
                   ),
-                );
-              }),
-            ),
+                ),
+              );
+            },
           ),
         ),
         // Source indicator removed - now in three-dot menu

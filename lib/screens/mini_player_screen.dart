@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui show Image, ImageFilter;
 
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:material_color_utilities/material_color_utilities.dart';
@@ -215,7 +216,7 @@ class _MiniPlayerScreenState extends State<MiniPlayerScreen> with WindowListener
           tag: imageTag,
           maxWidth: 100,
         );
-        imageProvider = NetworkImage(
+        imageProvider = CachedNetworkImageProvider(
           imageUrl,
           headers: appState.jellyfinService.imageHeaders(),
         );

@@ -37,6 +37,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   // Shared palette cache - shared with FullPlayerScreen
   static final _paletteCache = PaletteCacheService.instance;
 
+  static final _reParenthetical = RegExp(r'\s*[\(\[].*?[\)\]]');
+  static final _rePunctuation   = RegExp(r'[^\w\s]');
+  static final _reWhitespace    = RegExp(r'\s+');
+
   bool _isLoading = false;
   Object? _error;
   List<JellyfinTrack>? _tracks;
@@ -49,6 +53,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   // Hot track IDs (tracks that appear in artist's top tracks on ListenBrainz)
   Set<String>? _hotTrackIds;
 
+  bool _hasMultipleDiscs = false;
+  Map<int, int> _discTrackStartIndex = {};
+
   @override
   void initState() {
     super.initState();
@@ -57,34 +64,33 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-
-    // Get appState with listening enabled
-    final currentAppState = Provider.of<NautuneAppState>(context, listen: true);
-
     if (!_hasInitialized) {
-      // First time initialization
-      _appState = currentAppState;
-      _previousOfflineMode = currentAppState.isOfflineMode;
-      _previousNetworkAvailable = currentAppState.networkAvailable;
+      _appState = Provider.of<NautuneAppState>(context, listen: false);
+      _previousOfflineMode = _appState!.isOfflineMode;
+      _previousNetworkAvailable = _appState!.networkAvailable;
       _hasInitialized = true;
+      _appState!.addListener(_onConnectivityChanged);
       _loadTracks();
       _extractColors();
-    } else {
-      // Check if connectivity state changed
-      _appState = currentAppState;
-      final currentOfflineMode = currentAppState.isOfflineMode;
-      final currentNetworkAvailable = currentAppState.networkAvailable;
-
-      if (_previousOfflineMode != currentOfflineMode ||
-          _previousNetworkAvailable != currentNetworkAvailable) {
-        debugPrint('🔄 AlbumDetail: Connectivity changed (offline: $_previousOfflineMode -> $currentOfflineMode, network: $_previousNetworkAvailable -> $currentNetworkAvailable)');
-        _previousOfflineMode = currentOfflineMode;
-        _previousNetworkAvailable = currentNetworkAvailable;
-
-        // Reload tracks when connectivity changes
-        _loadTracks();
-      }
     }
+  }
+
+  void _onConnectivityChanged() {
+    if (!mounted || _appState == null) return;
+    final offline = _appState!.isOfflineMode;
+    final network = _appState!.networkAvailable;
+    if (_previousOfflineMode != offline || _previousNetworkAvailable != network) {
+      debugPrint('🔄 AlbumDetail: Connectivity changed (offline: $_previousOfflineMode -> $offline, network: $_previousNetworkAvailable -> $network)');
+      _previousOfflineMode = offline;
+      _previousNetworkAvailable = network;
+      _loadTracks();
+    }
+  }
+
+  @override
+  void dispose() {
+    _appState?.removeListener(_onConnectivityChanged);
+    super.dispose();
   }
 
   Future<void> _extractColors() async {
@@ -204,9 +210,19 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           return a.name.compareTo(b.name);
         });
       if (mounted) {
+        final startMap = <int, int>{};
+        for (var i = 0; i < sorted.length; i++) {
+          startMap.putIfAbsent(sorted[i].discNumber ?? 1, () => i);
+        }
         setState(() {
           _tracks = sorted;
           _isLoading = false;
+          _hasMultipleDiscs = sorted
+              .map((t) => t.discNumber)
+              .whereType<int>()
+              .toSet()
+              .length > 1;
+          _discTrackStartIndex = startMap;
         });
         // Load track popularities in background (non-blocking)
         _loadTrackPopularities(sorted);
@@ -311,9 +327,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   String _normalizeTrackName(String name) {
     return name
         .toLowerCase()
-        .replaceAll(RegExp(r'\s*[\(\[].*?[\)\]]'), '') // Remove parenthetical content
-        .replaceAll(RegExp(r'[^\w\s]'), '') // Remove punctuation
-        .replaceAll(RegExp(r'\s+'), ' ') // Collapse whitespace
+        .replaceAll(_reParenthetical, '')
+        .replaceAll(_rePunctuation, '')
+        .replaceAll(_reWhitespace, ' ')
         .trim();
   }
 
@@ -323,12 +339,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     final album = widget.album;
     final isDesktop = MediaQuery.of(context).size.width > 600;
     final List<JellyfinTrack> tracks = _tracks ?? const <JellyfinTrack>[];
-    final hasMultipleDiscs = tracks
-        .map((t) => t.discNumber)
-        .whereType<int>()
-        .toSet()
-        .length >
-        1;
 
     Widget artwork;
     final tag = album.primaryImageTag;
@@ -644,91 +654,94 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               ),
             )
           else
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-              sliver: SliverList(
-                delegate: SliverChildBuilderDelegate(
-                  (context, index) {
-                    final currentTracks = tracks;
-                    if (index >= currentTracks.length) {
-                      return const SizedBox.shrink();
-                    }
-                    final track = currentTracks[index];
-                    final discKey = track.discNumber ?? 1;
-                    final tracksBeforeDisc = currentTracks
-                        .take(index)
-                        .where((t) => (t.discNumber ?? 1) == discKey)
-                        .length;
-                    final fallbackNumber = tracksBeforeDisc + 1;
-                    final trackNumber =
-                        track.effectiveTrackNumber(fallbackNumber);
-                    final displayNumber =
-                        trackNumber.toString().padLeft(2, '0');
-                    final previousDisc = index == 0
-                        ? null
-                        : (currentTracks[index - 1].discNumber ?? 1);
-                    final showDiscHeader = hasMultipleDiscs &&
-                        (index == 0 || discKey != previousDisc);
+            StreamBuilder<JellyfinTrack?>(
+              stream: _appState!.audioPlayerService.currentTrackStream,
+              builder: (context, snapshot) {
+                final currentlyPlayingId = snapshot.data?.id;
+                return SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final currentTracks = tracks;
+                        if (index >= currentTracks.length) {
+                          return const SizedBox.shrink();
+                        }
+                        final track = currentTracks[index];
+                        final discKey = track.discNumber ?? 1;
+                        final fallbackNumber = index - (_discTrackStartIndex[discKey] ?? index) + 1;
+                        final trackNumber =
+                            track.effectiveTrackNumber(fallbackNumber);
+                        final displayNumber =
+                            trackNumber.toString().padLeft(2, '0');
+                        final previousDisc = index == 0
+                            ? null
+                            : (currentTracks[index - 1].discNumber ?? 1);
+                        final showDiscHeader = _hasMultipleDiscs &&
+                            (index == 0 || discKey != previousDisc);
 
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (showDiscHeader) ...[
-                          Padding(
-                            padding: const EdgeInsets.only(
-                              top: 16,
-                              bottom: 8,
-                              left: 8,
-                            ),
-                            child: Text(
-                              'Disc $discKey',
-                              style: theme.textTheme.titleSmall?.copyWith(
-                                color:
-                                    theme.colorScheme.onSurfaceVariant,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                        _TrackTile(
-                          track: track,
-                          displayTrackNumber: displayNumber,
-                          appState: _appState!,
-                          isHotTrack: _hotTrackIds?.contains(track.id) ?? false,
-                          onTap: () async {
-                            try {
-                              await _appState!.audioPlayerService
-                                  .playTrack(
-                                track,
-                                queueContext: currentTracks,
-                                albumId: widget.album.id,
-                                albumName: widget.album.name,
-                              );
-                            } catch (error) {
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Could not start playback: $error'),
-                                  duration: const Duration(seconds: 3),
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (showDiscHeader) ...[
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                  top: 16,
+                                  bottom: 8,
+                                  left: 8,
                                 ),
-                              );
-                            }
-                          },
-                        ),
-                        if (index < currentTracks.length - 1)
-                          Divider(
-                            height: 1,
-                            thickness: 0.5,
-                            indent: 72,
-                            endIndent: 16,
-                            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.2),
-                          ),
-                      ],
-                    );
-                  },
-                  childCount: tracks.length,
-                ),
-              ),
+                                child: Text(
+                                  'Disc $discKey',
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    color:
+                                        theme.colorScheme.onSurfaceVariant,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                            _TrackTile(
+                              track: track,
+                              displayTrackNumber: displayNumber,
+                              appState: _appState!,
+                              isHotTrack: _hotTrackIds?.contains(track.id) ?? false,
+                              isPlaying: currentlyPlayingId == track.id,
+                              onTap: () async {
+                                try {
+                                  await _appState!.audioPlayerService
+                                      .playTrack(
+                                    track,
+                                    queueContext: currentTracks,
+                                    albumId: widget.album.id,
+                                    albumName: widget.album.name,
+                                  );
+                                } catch (error) {
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Could not start playback: $error'),
+                                      duration: const Duration(seconds: 3),
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                            if (index < currentTracks.length - 1)
+                              Divider(
+                                height: 1,
+                                thickness: 0.5,
+                                indent: 72,
+                                endIndent: 16,
+                                color: theme.colorScheme.outlineVariant.withValues(alpha: 0.2),
+                              ),
+                          ],
+                        );
+                      },
+                      childCount: tracks.length,
+                    ),
+                  ),
+                );
+              },
             ),
         ],
         ),
@@ -749,6 +762,7 @@ class _TrackTile extends StatelessWidget {
     required this.displayTrackNumber,
     required this.onTap,
     required this.appState,
+    required this.isPlaying,
     this.isHotTrack = false,
   });
 
@@ -756,6 +770,7 @@ class _TrackTile extends StatelessWidget {
   final String displayTrackNumber;
   final VoidCallback onTap;
   final NautuneAppState appState;
+  final bool isPlaying;
   final bool isHotTrack;
 
   @override
@@ -767,111 +782,104 @@ class _TrackTile extends StatelessWidget {
     final showArtist = track.artists.isNotEmpty;
 
     return RepaintBoundary(
-      child: StreamBuilder<JellyfinTrack?>(
-        stream: appState.audioPlayerService.currentTrackStream,
-        builder: (context, snapshot) {
-          final isPlayingTrack = snapshot.data?.id == track.id;
-
-          return Material(
-          color: isPlayingTrack 
-              ? theme.colorScheme.primaryContainer.withValues(alpha: 0.2) 
-              : Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
-            onLongPress: () => _showTrackMenu(context),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 48,
-                    child: isPlayingTrack
-                        ? Icon(
-                            Icons.equalizer,
-                            color: theme.colorScheme.primary,
-                            size: 20,
-                          )
-                        : Text(
-                            displayTrackNumber,
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: theme.colorScheme.tertiary.withValues(alpha: 0.7),
-                              fontFeatures: const [ui.FontFeature.tabularFigures()],
-                            ),
-                            textAlign: TextAlign.center,
+      child: Material(
+        color: isPlaying
+            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.2)
+            : Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: () => _showTrackMenu(context),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 48,
+                  child: isPlaying
+                      ? Icon(
+                          Icons.equalizer,
+                          color: theme.colorScheme.primary,
+                          size: 20,
+                        )
+                      : Text(
+                          displayTrackNumber,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.tertiary.withValues(alpha: 0.7),
+                            fontFeatures: const [ui.FontFeature.tabularFigures()],
                           ),
-                  ),
-                  // Flame icon for hot tracks (artist's popular songs)
-                  if (isHotTrack)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: Tooltip(
-                        message: 'Popular track by this artist',
-                        child: Icon(
-                          Icons.local_fire_department,
-                          size: 16,
-                          color: Colors.orange,
+                          textAlign: TextAlign.center,
                         ),
+                ),
+                // Flame icon for hot tracks (artist's popular songs)
+                if (isHotTrack)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Tooltip(
+                      message: 'Popular track by this artist',
+                      child: Icon(
+                        Icons.local_fire_department,
+                        size: 16,
+                        color: Colors.orange,
                       ),
-                    )
-                  else
-                    const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
+                    ),
+                  )
+                else
+                  const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        track.name,
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          color: isPlaying
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.tertiary,
+                          fontWeight: isPlaying ? FontWeight.bold : null,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (showArtist) ...[
+                        const SizedBox(height: 2),
                         Text(
-                          track.name,
-                          style: theme.textTheme.bodyLarge?.copyWith(
-                            color: isPlayingTrack 
-                                ? theme.colorScheme.primary 
-                                : theme.colorScheme.tertiary,
-                            fontWeight: isPlayingTrack ? FontWeight.bold : null,
+                          track.displayArtist,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: isPlaying
+                                ? theme.colorScheme.primary.withValues(alpha: 0.8)
+                                : theme.colorScheme.tertiary.withValues(alpha: 0.6),
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        if (showArtist) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            track.displayArtist,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: isPlayingTrack
-                                  ? theme.colorScheme.primary.withValues(alpha: 0.8)
-                                  : theme.colorScheme.tertiary.withValues(alpha: 0.6),
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
                       ],
-                    ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  Text(
-                    durationText,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: isPlayingTrack
-                          ? theme.colorScheme.primary.withValues(alpha: 0.8)
-                          : theme.colorScheme.tertiary.withValues(alpha: 0.7),
-                    ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  durationText,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: isPlaying
+                        ? theme.colorScheme.primary.withValues(alpha: 0.8)
+                        : theme.colorScheme.tertiary.withValues(alpha: 0.7),
                   ),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    icon: Icon(
-                      Icons.more_vert,
-                      size: 20,
-                      color: isPlayingTrack ? theme.colorScheme.primary : null,
-                    ),
-                    onPressed: () => _showTrackMenu(context),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  icon: Icon(
+                    Icons.more_vert,
+                    size: 20,
+                    color: isPlaying ? theme.colorScheme.primary : null,
                   ),
-                ],
-              ),
+                  onPressed: () => _showTrackMenu(context),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+              ],
             ),
           ),
-          );
-        },
+        ),
       ),
     );
   }
