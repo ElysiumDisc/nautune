@@ -10,6 +10,7 @@ import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_playlist_store.dart';
 import '../jellyfin/jellyfin_service.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../repositories/music_repository.dart';
 import '../services/local_cache_service.dart';
 import '../services/bootstrap_service.dart';
 import 'session_provider.dart';
@@ -95,6 +96,8 @@ class LibraryDataProvider extends ChangeNotifier {
   bool _hasMoreAlbums = true;
   int _albumsPage = 0;
   static const int _albumsPageSize = 50;
+  SortOption _albumSortBy = SortOption.name;
+  SortOrder _albumSortOrder = SortOrder.ascending;
 
   // Artists (with pagination)
   bool _isLoadingArtists = false;
@@ -104,6 +107,11 @@ class LibraryDataProvider extends ChangeNotifier {
   bool _hasMoreArtists = true;
   int _artistsPage = 0;
   static const int _artistsPageSize = 50;
+  SortOption _artistSortBy = SortOption.name;
+  SortOrder _artistSortOrder = SortOrder.ascending;
+  // Monotonic IDs to discard stale results when sort changes mid-fetch.
+  int _albumsLoadId = 0;
+  int _artistsLoadId = 0;
 
   // Playlists
   bool _isLoadingPlaylists = false;
@@ -159,6 +167,41 @@ class LibraryDataProvider extends ChangeNotifier {
   List<JellyfinArtist>? get artists => _artists;
   bool get isLoadingMoreArtists => _isLoadingMoreArtists;
   bool get hasMoreArtists => _hasMoreArtists;
+
+  // Getters - Sort
+  SortOption get albumSortBy => _albumSortBy;
+  SortOrder get albumSortOrder => _albumSortOrder;
+  SortOption get artistSortBy => _artistSortBy;
+  SortOrder get artistSortOrder => _artistSortOrder;
+
+  /// Update album sort and reload from server.
+  Future<void> setAlbumSort(SortOption sortBy, SortOrder sortOrder) async {
+    if (_albumSortBy == sortBy && _albumSortOrder == sortOrder) return;
+    _albumSortBy = sortBy;
+    _albumSortOrder = sortOrder;
+    await loadAlbums(forceRefresh: true);
+  }
+
+  /// Update artist sort and reload from server.
+  Future<void> setArtistSort(SortOption sortBy, SortOrder sortOrder) async {
+    if (_artistSortBy == sortBy && _artistSortOrder == sortOrder) return;
+    _artistSortBy = sortBy;
+    _artistSortOrder = sortOrder;
+    await loadArtists(forceRefresh: true);
+  }
+
+  /// Seed sort state at startup without triggering a reload.
+  void seedSortState({
+    SortOption? albumSortBy,
+    SortOrder? albumSortOrder,
+    SortOption? artistSortBy,
+    SortOrder? artistSortOrder,
+  }) {
+    if (albumSortBy != null) _albumSortBy = albumSortBy;
+    if (albumSortOrder != null) _albumSortOrder = albumSortOrder;
+    if (artistSortBy != null) _artistSortBy = artistSortBy;
+    if (artistSortOrder != null) _artistSortOrder = artistSortOrder;
+  }
 
   // Getters - Playlists
   bool get isLoadingPlaylists => _isLoadingPlaylists;
@@ -341,6 +384,7 @@ class LibraryDataProvider extends ChangeNotifier {
     _isLoadingAlbums = true;
     _albumsPage = 0;
     _hasMoreAlbums = true;
+    final loadId = ++_albumsLoadId;
     notifyListeners();
 
     try {
@@ -349,7 +393,11 @@ class LibraryDataProvider extends ChangeNotifier {
         forceRefresh: forceRefresh,
         startIndex: 0,
         limit: _albumsPageSize,
+        sortBy: sortOptionToJellyfin(_albumSortBy),
+        sortOrder: sortOrderToJellyfin(_albumSortOrder),
       );
+      // Discard if a newer load started while awaiting.
+      if (loadId != _albumsLoadId) return;
       _albums = albums;
       _hasMoreAlbums = albums.length == _albumsPageSize;
 
@@ -362,6 +410,7 @@ class LibraryDataProvider extends ChangeNotifier {
         );
       }
     } catch (error) {
+      if (loadId != _albumsLoadId) return;
       debugPrint('LibraryDataProvider: Failed to load albums: $error');
       _albumsError = error;
 
@@ -374,8 +423,10 @@ class LibraryDataProvider extends ChangeNotifier {
         }
       }
     } finally {
-      _isLoadingAlbums = false;
-      notifyListeners();
+      if (loadId == _albumsLoadId) {
+        _isLoadingAlbums = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -391,6 +442,7 @@ class LibraryDataProvider extends ChangeNotifier {
     }
 
     _isLoadingMoreAlbums = true;
+    final loadId = _albumsLoadId;
     notifyListeners();
 
     try {
@@ -399,7 +451,12 @@ class LibraryDataProvider extends ChangeNotifier {
         libraryId: libraryId,
         startIndex: _albumsPage * _albumsPageSize,
         limit: _albumsPageSize,
+        sortBy: sortOptionToJellyfin(_albumSortBy),
+        sortOrder: sortOrderToJellyfin(_albumSortOrder),
       );
+
+      // Discard if sort/load changed while awaiting.
+      if (loadId != _albumsLoadId) return;
 
       if (newAlbums.isEmpty || newAlbums.length < _albumsPageSize) {
         _hasMoreAlbums = false;
@@ -430,6 +487,7 @@ class LibraryDataProvider extends ChangeNotifier {
     _isLoadingArtists = true;
     _artistsPage = 0;
     _hasMoreArtists = true;
+    final loadId = ++_artistsLoadId;
     notifyListeners();
 
     try {
@@ -438,7 +496,10 @@ class LibraryDataProvider extends ChangeNotifier {
         forceRefresh: forceRefresh,
         startIndex: 0,
         limit: _artistsPageSize,
+        sortBy: sortOptionToJellyfin(_artistSortBy),
+        sortOrder: sortOrderToJellyfin(_artistSortOrder),
       );
+      if (loadId != _artistsLoadId) return;
       _artists = artists;
       _hasMoreArtists = artists.length == _artistsPageSize;
 
@@ -451,6 +512,7 @@ class LibraryDataProvider extends ChangeNotifier {
         );
       }
     } catch (error) {
+      if (loadId != _artistsLoadId) return;
       debugPrint('LibraryDataProvider: Failed to load artists: $error');
       _artistsError = error;
 
@@ -463,8 +525,10 @@ class LibraryDataProvider extends ChangeNotifier {
         }
       }
     } finally {
-      _isLoadingArtists = false;
-      notifyListeners();
+      if (loadId == _artistsLoadId) {
+        _isLoadingArtists = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -480,6 +544,7 @@ class LibraryDataProvider extends ChangeNotifier {
     }
 
     _isLoadingMoreArtists = true;
+    final loadId = _artistsLoadId;
     notifyListeners();
 
     try {
@@ -488,7 +553,11 @@ class LibraryDataProvider extends ChangeNotifier {
         libraryId: libraryId,
         startIndex: _artistsPage * _artistsPageSize,
         limit: _artistsPageSize,
+        sortBy: sortOptionToJellyfin(_artistSortBy),
+        sortOrder: sortOrderToJellyfin(_artistSortOrder),
       );
+
+      if (loadId != _artistsLoadId) return;
 
       if (newArtists.isEmpty || newArtists.length < _artistsPageSize) {
         _hasMoreArtists = false;

@@ -9,6 +9,7 @@ class JellyfinAlbum {
     this.isFavorite = false,
     this.genres,
     this.playCount,
+    this.sortName,
   });
 
   final String id;
@@ -20,6 +21,10 @@ class JellyfinAlbum {
   final bool isFavorite;
   final List<String>? genres;
   final int? playCount;
+  final String? sortName;
+
+  /// Name used for alphabetical grouping. Falls back to display name.
+  String get groupingName => sortName ?? name;
 
   factory JellyfinAlbum.fromJson(Map<String, dynamic> json) {
     List<Map<String, dynamic>> extractArtistMaps(String key) {
@@ -88,6 +93,7 @@ class JellyfinAlbum {
       isFavorite: userData is Map ? (userData['IsFavorite'] as bool? ?? false) : false,
       genres: genresList,
       playCount: playCount,
+      sortName: json['SortName'] as String?,
     );
   }
 
@@ -115,6 +121,7 @@ class JellyfinAlbum {
       if (primaryImageTag != null) 'ImageTags': {'Primary': primaryImageTag},
       'UserData': {'IsFavorite': isFavorite},
       if (genres != null) 'Genres': genres,
+      if (sortName != null) 'SortName': sortName,
     };
   }
 }

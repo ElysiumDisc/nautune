@@ -1721,6 +1721,9 @@ class ListeningAnalyticsService extends ChangeNotifier {
           _savePianoStats(),
         ]);
         debugPrint('ListeningAnalyticsService: Imported $importedCount events');
+        // Several `_save*` helpers don't notify (events / discovery flags);
+        // emit a single aggregate notification so listeners refresh after import.
+        notifyListeners();
       }
 
       return importedCount;

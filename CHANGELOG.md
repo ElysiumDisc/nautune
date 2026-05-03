@@ -1,3 +1,42 @@
+### v8.6.0 - Sort Overhaul, CarPlay Polish, Subsystem Hardening
+
+**Critical Bug Fixes**
+
+The library sort UI has been broken since `LibraryDataProvider` was introduced — `appState.albums` / `artists` getters delegate to the provider, but `setAlbumSort` / `setArtistSort` were writing to the legacy `_albums` field on `NautuneAppState`, and the provider's load methods never passed the user's sort to the Jellyfin API. The screen never updated on sort change. Additionally, headers grouped items by display `Name` while the server sorted by `SortName` (articles stripped), producing the "B before A" symptom when every "A"-sortname album was a "The …" title.
+
+- Fixed library sort by Name / Date Added / Year / Play Count not reordering the visible list — `LibraryDataProvider` now owns sort state, exposes `setAlbumSort` / `setArtistSort`, and passes the user's sort through to all four load paths (`loadAlbums`, `loadMoreAlbums`, `loadArtists`, `loadMoreArtists`); `NautuneAppState.setAlbumSort` / `setArtistSort` route through the provider when present
+- Fixed sort-direction (asc/desc) toggle not reordering the list — same root cause; same fix
+- Fixed alphabetical headers showing "B" first when "The Avengers"-style titles existed — `JellyfinAlbum` and `JellyfinArtist` gained a `sortName` field (parsed from the server's `SortName`) and a `groupingName` getter; the alphabet builder and scrollbar now group by `groupingName` so headers match the server's sort key
+- Fixed offline mode silently ignoring the sort-by dropdown — `OfflineRepository.getAlbums` now honors `SortOption.year` (via `productionYear`) and falls back to name for unsupported keys; the sort menu hides Date Added / Play Count when offline so the UI is honest about what's available
+- Fixed `ListeningAnalyticsService.importAllStatsFromJson` not refreshing the UI after import — only 2 of 6 internal `_save*` helpers called `notifyListeners`; an aggregate notify now fires after the import save block
+
+**Performance**
+
+- Cached `DownloadService.completedDownloads` and `activeDownloads` (invalidated on `notifyListeners`) — the offline repository was hitting `completedDownloads` ~9× per library refresh, allocating a fresh filtered `List` each time; with 10k downloads that was ~90k allocations per refresh
+- Added monotonic `_albumsLoadId` / `_artistsLoadId` to `LibraryDataProvider` so a stale fetch can't overwrite the result of a newer one when the user toggles sort rapidly
+
+**Hardening**
+
+- `PlaylistSyncQueue` actions now carry a stable UUID; `remove` matches by id instead of `(type, timestamp)` so two adds enqueued in the same millisecond can no longer collapse into one removal. `add`, `remove`, and `clear` are serialized behind a `Future`-chain mutex so a UI-driven enqueue can't lose its entry to a concurrent dequeue running in the sync drain loop
+- `HelmService` gained a `_disposed` flag with short-circuits in `_refreshTargetState`, `discoverTargets`, `helmPlay`, and `helmPause` — eliminates the "setState/notifyListeners called after dispose" debug assertion that fired when the user navigated away from the Network screen mid-poll
+
+**CarPlay**
+
+- Removed the orphaned `plugins/nautune_carplay/` plugin (never wired into `pubspec.yaml`, scene delegate is owned by `flutter_carplay`, so its `CPApplicationDelegate` callbacks never fired anyway)
+- Album, artist, and playlist rows now show artwork — added `JellyfinService.buildSelfContainedImageUrl` so the URL embeds the access token and the OS image loader can fetch without our auth headers
+- After tapping a track, CarPlay now navigates to the shared `CPNowPlayingTemplate` (via `FlutterCarplay.showSharedNowPlaying`) so the user can see what's playing and operate transport — previously the UI stayed on the track list
+- The currently-playing track's row shows a `playbackProgress: 1.0` indicator, driven by an `AudioPlayerService.currentTrackStream` subscription
+- Downloads tab uses `file://` artwork from `DownloadService.getArtworkPathForTrack` when present, so artwork renders fully offline
+- Added "Browse A–Z" entry on the Library tab — drills into letter buckets for Albums and Artists (search alternative; `flutter_carplay 1.3.1` does not expose `CPSearchTemplate`)
+- Reset `_userHasNavigated` once the stack returns to root and the 5-second post-nav window has elapsed (was sticky after navigation)
+- Dropped the redundant third `refresh*()` retry in `_showAlbums` / `_showArtists` / `_showPlaylists` — first-empty + wait-for-loading already covers the cases the third call was meant to catch, and on flaky networks it tripled API load
+
+**Cleanup**
+
+- `sortOptionToJellyfin` adds `SortName` as secondary tiebreaker for `dateAdded` and `playCount` so equal primary keys sort stably by name
+
+---
+
 ### v8.5.2 - Library Listener Regression Sweep
 
 **Regression Fixes (LibraryScreen `listen: false` refactor coverage)**

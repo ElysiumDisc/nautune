@@ -9,6 +9,7 @@ class JellyfinArtist {
     this.songCount,
     this.playCount,
     this.providerIds,
+    this.sortName,
   });
 
   final String id;
@@ -20,6 +21,10 @@ class JellyfinArtist {
   final int? songCount;
   final int? playCount;
   final Map<String, String>? providerIds;
+  final String? sortName;
+
+  /// Name used for alphabetical grouping. Falls back to display name.
+  String get groupingName => sortName ?? name;
 
   factory JellyfinArtist.fromJson(Map<String, dynamic> json) {
     final imageTags = json['ImageTags'];
@@ -69,6 +74,7 @@ class JellyfinArtist {
       songCount: songCount,
       playCount: playCount,
       providerIds: providerIds,
+      sortName: json['SortName'] is String ? json['SortName'] as String : null,
     );
   }
 
@@ -82,6 +88,7 @@ class JellyfinArtist {
       'ChildCount': albumCount,
       'SongCount': songCount,
       if (providerIds != null) 'ProviderIds': providerIds,
+      if (sortName != null) 'SortName': sortName,
     };
   }
 }

@@ -28,6 +28,7 @@ class HelmService extends ChangeNotifier {
   List<HelmSession> _discoveredTargets = [];
   Timer? _pollingTimer;
   bool _isDiscovering = false;
+  bool _disposed = false;
 
   /// The currently controlled remote session, or null if helm is inactive.
   HelmSession? get activeTarget => _activeTarget;
@@ -43,11 +44,13 @@ class HelmService extends ChangeNotifier {
 
   /// Discover other Nautune instances on the server.
   Future<void> discoverTargets() async {
+    if (_disposed) return;
     _isDiscovering = true;
     notifyListeners();
 
     try {
       final sessions = await _client.fetchSessions(_credentials);
+      if (_disposed) return;
       _discoveredTargets = sessions
           .where((s) {
             final client = s['Client'] as String? ?? '';
@@ -60,8 +63,10 @@ class HelmService extends ChangeNotifier {
     } catch (e) {
       debugPrint('Helm: Failed to discover targets: $e');
     } finally {
-      _isDiscovering = false;
-      notifyListeners();
+      if (!_disposed) {
+        _isDiscovering = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -119,12 +124,14 @@ class HelmService extends ChangeNotifier {
   Future<void> _refreshTargetState() async {
     // Capture to local to avoid null-after-await race condition
     final target = _activeTarget;
-    if (target == null) return;
+    if (target == null || _disposed) return;
 
     try {
       final sessions = await _client.fetchSessions(_credentials);
-      // Re-check after await in case deactivateHelm() was called
-      if (_activeTarget == null) return;
+      // Re-check after await in case deactivateHelm() or dispose() ran while
+      // the network call was in flight. Without the dispose guard we'd hit
+      // notifyListeners() on a disposed ChangeNotifier (debug assert).
+      if (_activeTarget == null || _disposed) return;
 
       final match = sessions.firstWhere(
         (s) => s['Id'] == target.sessionId,
@@ -135,19 +142,21 @@ class HelmService extends ChangeNotifier {
         final oldPaused = _activeTarget!.isPaused;
         final updated = HelmSession.fromSessionJson(match);
         // Only notify if state actually changed (equality check)
-        if (_activeTarget != updated) {
+        if (_activeTarget != updated && !_disposed) {
           _activeTarget = updated;
           notifyListeners();
         }
 
         // Adjust polling rate when play/pause state changes
-        if (updated.isPaused != oldPaused) {
+        if (updated.isPaused != oldPaused && !_disposed) {
           _startAdaptivePolling();
         }
       } else {
         // Target session disappeared from server - deactivate
-        debugPrint('Helm: Target session disappeared, deactivating');
-        deactivateHelm();
+        if (!_disposed) {
+          debugPrint('Helm: Target session disappeared, deactivating');
+          deactivateHelm();
+        }
       }
     } catch (e) {
       debugPrint('Helm: Failed to refresh target state: $e');
@@ -158,14 +167,16 @@ class HelmService extends ChangeNotifier {
 
   Future<void> helmPlay() async {
     final target = _activeTarget;
-    if (target == null) return;
+    if (target == null || _disposed) return;
     try {
       await _client.sendPlaystateCommand(
         _credentials,
         sessionId: target.sessionId,
         command: 'Unpause',
       );
-      // Optimistic update
+      if (_disposed) return;
+      // Post-success update (true optimistic UX would update before await
+      // and revert on error; we accept the slight latency for correctness).
       _activeTarget = target.copyWith(isPaused: false);
       notifyListeners();
       debugPrint('Helm: Sent Unpause to ${target.deviceName}');
@@ -176,14 +187,14 @@ class HelmService extends ChangeNotifier {
 
   Future<void> helmPause() async {
     final target = _activeTarget;
-    if (target == null) return;
+    if (target == null || _disposed) return;
     try {
       await _client.sendPlaystateCommand(
         _credentials,
         sessionId: target.sessionId,
         command: 'Pause',
       );
-      // Optimistic update
+      if (_disposed) return;
       _activeTarget = target.copyWith(isPaused: true);
       notifyListeners();
       debugPrint('Helm: Sent Pause to ${target.deviceName}');
@@ -267,7 +278,9 @@ class HelmService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _pollingTimer?.cancel();
+    _pollingTimer = null;
     super.dispose();
   }
 }

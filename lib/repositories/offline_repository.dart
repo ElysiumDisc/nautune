@@ -68,10 +68,27 @@ class OfflineRepository implements MusicRepository {
 
     final albumList = albums.values.toList();
 
-    // Sort based on options (offline only supports name sorting reliably)
+    // Sort based on options. Offline data has no DateCreated/PlayCount; fall
+    // back to name for those. Year is supported via productionYear.
+    int Function(JellyfinAlbum, JellyfinAlbum) cmp;
+    switch (sortBy) {
+      case SortOption.year:
+        cmp = (a, b) {
+          final c = (a.productionYear ?? 0).compareTo(b.productionYear ?? 0);
+          if (c != 0) return c;
+          return a.groupingName.toLowerCase().compareTo(b.groupingName.toLowerCase());
+        };
+        break;
+      case SortOption.dateAdded:
+      case SortOption.playCount:
+      case SortOption.name:
+        cmp = (a, b) =>
+            a.groupingName.toLowerCase().compareTo(b.groupingName.toLowerCase());
+        break;
+    }
     albumList.sort((a, b) {
-      final comparison = a.name.compareTo(b.name);
-      return sortOrder == SortOrder.ascending ? comparison : -comparison;
+      final c = cmp(a, b);
+      return sortOrder == SortOrder.ascending ? c : -c;
     });
 
     // Apply pagination
@@ -109,11 +126,13 @@ class OfflineRepository implements MusicRepository {
     }
 
     final artistList = artists.values.toList();
-    
-    // Sort based on options (offline only supports name sorting reliably)
+
+    // Artists offline only support name sort meaningfully; other options
+    // fall back to name so the UI doesn't appear frozen.
     artistList.sort((a, b) {
-      final comparison = a.name.compareTo(b.name);
-      return sortOrder == SortOrder.ascending ? comparison : -comparison;
+      final c =
+          a.groupingName.toLowerCase().compareTo(b.groupingName.toLowerCase());
+      return sortOrder == SortOrder.ascending ? c : -c;
     });
 
     // Apply pagination

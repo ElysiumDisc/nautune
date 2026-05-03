@@ -10,9 +10,9 @@ Two files must be updated together when bumping the version:
 Both must match. `pubspec.yaml` is what Flutter/fastforge reads at build time. `app_version.dart` is the runtime fallback if `PackageInfo` fails.
 
 ```bash
-# Example: bump from 8.5.2 to 8.5.3
-sed -i 's/version: 8.5.2+1/version: 8.5.3+1/' pubspec.yaml
-sed -i "s/8.5.2+1/8.5.3+1/" lib/app_version.dart
+# Example: bump from 8.6.0 to 8.6.1
+sed -i 's/version: 8.6.0+1/version: 8.6.1+1/' pubspec.yaml
+sed -i "s/8.6.0+1/8.6.1+1/" lib/app_version.dart
 ```
 
 Don't forget to also bump `AppImageBuilder.yml` (`version:` under `app_info`) and the filename in the AppImage build command below.
@@ -40,7 +40,7 @@ cp linux/nautune.desktop AppDir/ && \
 cp linux/nautune.png AppDir/ && \
 cd AppDir && ln -s usr/bin/nautune AppRun && cd .. && \
 mkdir -p dist && \
-ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.5.2.AppImage
+ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.6.0.AppImage
 ```
 
 ### Build Deb Package (Linux)
@@ -174,6 +174,26 @@ flutter run -d linux --dart-define=TUI_MODE=true
 - **Equalizer**: PulseAudio LADSPA (Linux only)
 - **FFT Processing**: Custom Cooley-Tukey (Linux), Apple Accelerate vDSP (iOS)
 - **Image Processing**: Material Color Utilities for vibrant palette generation, shared PaletteCacheService singleton across all screens
+
+## 🧭 Library Data Flow
+
+`LibraryDataProvider` is the source of truth for albums, artists, playlists, and friends. `NautuneAppState` exposes the same getters for screen code, but they delegate to the provider when present (`appState.albums => _libraryDataProvider?.albums ?? _albums`). All sort mutations flow through `LibraryDataProvider.setAlbumSort` / `setArtistSort`, which update the provider's sort state and re-fetch via `JellyfinService.loadAlbums` / `loadArtists` with the user's sort. Stale fetches are discarded via monotonic `_albumsLoadId` / `_artistsLoadId` so a slow request can't overwrite a newer one. Alphabetical headers and the alphabet scrollbar group items by `JellyfinAlbum.groupingName` / `JellyfinArtist.groupingName` (which prefer the server's `SortName`) so the visible sections match the server's sort key — articles ("The …") fall under their first letter, not the article's letter.
+
+`OfflineRepository` honors `SortOption.year` for albums (via `productionYear`) and falls back to `groupingName` for keys that have no offline equivalent (DateAdded, PlayCount). The album/artist sort menu hides those two options when `appState.isOfflineMode` so the UI can't promise a sort it won't deliver.
+
+## 🔁 Playlist Sync Queue
+
+`PlaylistSyncQueue` wraps a Hive box of `PendingPlaylistAction` records. Each action carries a stable UUID (`id` field), so removal matches by `id` rather than `(type, timestamp)` — two adds enqueued in the same millisecond can no longer collapse into one removal. `add` / `remove` / `clear` are serialized behind a `Future`-chain mutex so a UI-driven enqueue can't lose its entry to a concurrent dequeue running in `_syncPendingPlaylistActions`.
+
+## 📥 DownloadService Caching
+
+`DownloadService.downloads`, `completedDownloads`, and `activeDownloads` are cached and invalidated on every `notifyListeners()` call. The offline repository previously hit `completedDownloads` ~9× per library refresh, allocating a fresh filtered list each time; the cache makes these getters O(1) after the first call within a notify cycle.
+
+## 🚗 CarPlay (iOS)
+
+CarPlay is owned end-to-end by the `flutter_carplay` package — `Info.plist` declares `flutter_carplay.FlutterCarPlaySceneDelegate` as the scene delegate, and `lib/services/carplay_service.dart` builds the templates. `CPListItem` artwork uses `JellyfinService.buildSelfContainedImageUrl` (token embedded as `api_key` query param) so the system image loader can fetch without our auth headers. Tapping a track plays it via `AudioPlayerService` and then navigates to the shared `CPNowPlayingTemplate` via `FlutterCarplay.showSharedNowPlaying`. Lock-screen and now-playing artwork is plumbed through `audio_service` via `MediaItem.artUri` set in `AudioHandler.updateNautuneMediaItem`, not through CarPlay-specific code.
+
+`CPSearchTemplate` is not exposed by `flutter_carplay 1.3.1`, so search is replaced by a "Browse A–Z" entry on the Library tab that drills into letter-bucket lists.
 
 ## 📂 File Structure (Linux)
 Nautune follows a clean data structure on Linux for easy backups and management:

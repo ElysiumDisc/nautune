@@ -25,11 +25,11 @@ String sortOptionToJellyfin(SortOption option) {
     case SortOption.name:
       return 'SortName';
     case SortOption.dateAdded:
-      return 'DateCreated';
+      return 'DateCreated,SortName';
     case SortOption.year:
       return 'ProductionYear,SortName';
     case SortOption.playCount:
-      return 'PlayCount';
+      return 'PlayCount,SortName';
   }
 }
 

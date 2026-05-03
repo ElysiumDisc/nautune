@@ -36,7 +36,7 @@
 - **Smart Battery Saver**: Automatically disables power-hungry features (visualizers, crossfade, gapless, pre-caching) when offline — snapshot/restore preserves your settings, streaming quality stays untouched
 - **Infinite Radio**: Auto-generates similar tracks when your queue runs low — toggle from the full player's more options menu
 - **High-Fidelity Playback**: Native backends for Linux and iOS ensuring bit-perfect audio with optimized position tracking, double-buffered visualizer rendering, reactive network quality adaptation, gapless crossfade via player swapping, and shared palette color cache
-- **CarPlay Support**: Take your Jellyfin library on the road with CarPlay interface
+- **CarPlay Support**: Take your Jellyfin library on the road with album/artist/playlist artwork, automatic transition to the now-playing screen on track tap, currently-playing row indicator, "Browse A–Z" letter-bucket navigation as a no-keyboard search alternative, and offline-aware artwork that loads from local files when downloaded
 - **Personalized Home**: Discover, On This Day, and For You recommendation shelves
 
 
@@ -662,7 +662,7 @@ Apple's Guideline 2.1 requires working reviewer access. Nautune includes an on-d
 | Android Build | Android | 🔜 Planned |
 | Helm Mode (Remote Control) | All | ✅ Complete (v6.7, fixed v6.8, hardened v7.6-7.7) |
 | Fleet Mode (SyncPlay) | All | ✅ Complete (v6.7, hardened v7.6-7.7) |
-| CarPlay Overhaul | iOS | ✅ Complete (v7.3, hardened v8.0) |
+| CarPlay Overhaul | iOS | ✅ Complete (v7.3, hardened v8.0, artwork + now-playing transition + Browse A–Z added v8.6) |
 | Linux Distribution (AppImage + Deb) | Linux | ✅ Complete |
 | Additional Visualizers | All | ✅ Complete |
 

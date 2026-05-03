@@ -17,6 +17,8 @@ class CarPlayService {
   bool _userHasNavigated = false;
   DateTime _lastNavigationTime = DateTime(2000);
   bool _isRefreshing = false;
+  String? _currentPlayingTrackId;
+  StreamSubscription<JellyfinTrack?>? _currentTrackSub;
 
   // Pagination limits for CarPlay (prevents performance issues with large libraries)
   static const int _maxItemsPerPage = 100;
@@ -36,6 +38,9 @@ class CarPlayService {
         DateTime.now().difference(_lastNavigationTime).inSeconds < 5) {
       return false;
     }
+    // Stack is back at root and the 5-second post-nav window has elapsed —
+    // clear the flag so future debounced refreshes aren't blocked by stale state.
+    _userHasNavigated = false;
     return true;
   }
 
@@ -79,6 +84,11 @@ class CarPlayService {
     
     // Also listen to app state changes for library updates
     appState.addListener(_onAppStateChanged);
+
+    // Track currently-playing track id so list rows can show a progress mark.
+    _currentTrackSub = appState.audioPlayerService.currentTrackStream.listen((track) {
+      _currentPlayingTrackId = track?.id;
+    });
   }
   
   void _onCarPlayConnect() {
@@ -103,6 +113,46 @@ class CarPlayService {
     _userHasNavigated = true;
     _lastNavigationTime = DateTime.now();
     _refreshDebounceTimer?.cancel();
+  }
+
+  /// Build a CPListItem for a single track. Sets artwork and the
+  /// playbackProgress mark when this row is the currently-playing track.
+  /// `imageOverride` lets the Downloads tab supply a `file://` path so the
+  /// row renders without network.
+  CPListItem _buildTrackRow(
+    JellyfinTrack track,
+    List<JellyfinTrack> queue,
+    String detailText, {
+    String? imageOverride,
+  }) {
+    return CPListItem(
+      text: track.name,
+      detailText: detailText,
+      image: imageOverride ?? track.artworkUrl(),
+      playbackProgress: track.id == _currentPlayingTrackId ? 1.0 : null,
+      onPress: (complete, self) async {
+        complete(); // Signal CarPlay immediately
+        try {
+          await appState.audioPlayerService.playTrack(
+            track,
+            queueContext: queue,
+            reorderQueue: false,
+          );
+          // Move user to the now-playing screen so they can see what's
+          // playing and operate transport controls. flutter_carplay 1.3.1
+          // navigates the shared CPNowPlayingTemplate.
+          if (_isConnected) {
+            try {
+              await FlutterCarplay.showSharedNowPlaying(animated: true);
+            } catch (e) {
+              debugPrint('⚠️ CarPlay showSharedNowPlaying failed: $e');
+            }
+          }
+        } catch (e) {
+          debugPrint('CarPlay playback error: $e');
+        }
+      },
+    );
   }
 
   void _onAppStateChanged() {
@@ -192,6 +242,17 @@ class CarPlayService {
               onPress: (complete, self) async {
                 complete(); // Signal CarPlay immediately to stop spinner
                 await _showPlaylists();
+              },
+            ),
+            // Stand-in for CPSearchTemplate (not exposed by flutter_carplay
+            // 1.3.1). Lets the user drill into a large library by first letter
+            // without a keyboard.
+            CPListItem(
+              text: 'Browse A–Z',
+              detailText: 'Albums and artists by letter',
+              onPress: (complete, self) async {
+                complete();
+                await _showAlphabeticalRoot();
               },
             ),
           ],
@@ -320,13 +381,6 @@ class CarPlayService {
         }
 
         allAlbums = appState.albums ?? [];
-
-        // If still empty after loading, try one more refresh
-        if (allAlbums.isEmpty && !appState.isOfflineMode) {
-          debugPrint('🚗 CarPlay: Albums still empty, attempting final refresh');
-          await appState.refreshAlbums();
-          allAlbums = appState.albums ?? [];
-        }
       }
 
       if (!_isConnected) return;
@@ -344,6 +398,10 @@ class CarPlayService {
       final items = paginatedAlbums.map((album) => CPListItem(
         text: album.name,
         detailText: album.artists.join(', '),
+        image: appState.jellyfinService.buildSelfContainedImageUrl(
+          itemId: album.id,
+          tag: album.primaryImageTag,
+        ),
         onPress: (complete, self) async {
           complete(); // Signal CarPlay immediately
           await _showAlbumTracks(album.id, album.name);
@@ -409,13 +467,6 @@ class CarPlayService {
         }
 
         allArtists = appState.artists ?? [];
-
-        // If still empty after loading, try one more refresh
-        if (allArtists.isEmpty && !appState.isOfflineMode) {
-          debugPrint('🚗 CarPlay: Artists still empty, attempting final refresh');
-          await appState.refreshArtists();
-          allArtists = appState.artists ?? [];
-        }
       }
 
       if (!_isConnected) return;
@@ -432,6 +483,10 @@ class CarPlayService {
 
       final items = paginatedArtists.map((artist) => CPListItem(
         text: artist.name,
+        image: appState.jellyfinService.buildSelfContainedImageUrl(
+          itemId: artist.id,
+          tag: artist.primaryImageTag,
+        ),
         onPress: (complete, self) async {
           complete(); // Signal CarPlay immediately
           await _showArtistAlbums(artist.id, artist.name);
@@ -493,14 +548,7 @@ class CarPlayService {
         }
       }
 
-      var allPlaylists = appState.playlists ?? [];
-
-      // If still empty after loading, try one more refresh
-      if (allPlaylists.isEmpty) {
-        debugPrint('🚗 CarPlay: Playlists still empty, attempting final refresh');
-        await appState.refreshPlaylists();
-        allPlaylists = appState.playlists ?? [];
-      }
+      final allPlaylists = appState.playlists ?? [];
 
       if (!_isConnected) return;
 
@@ -517,6 +565,10 @@ class CarPlayService {
       final items = paginatedPlaylists.map((playlist) => CPListItem(
         text: playlist.name,
         detailText: '${playlist.trackCount} tracks',
+        image: appState.jellyfinService.buildSelfContainedImageUrl(
+          itemId: playlist.id,
+          tag: playlist.primaryImageTag,
+        ),
         onPress: (complete, self) async {
           complete(); // Signal CarPlay immediately
           await _showPlaylistTracks(playlist.id, playlist.name);
@@ -566,24 +618,9 @@ class CarPlayService {
         return;
       }
 
-      final items = tracks.map((track) {
-        return CPListItem(
-          text: track.name,
-          detailText: track.artists.join(', '),
-          onPress: (complete, self) async {
-            complete();  // Signal CarPlay immediately
-            try {
-              await appState.audioPlayerService.playTrack(
-                track,
-                queueContext: tracks,
-                reorderQueue: false,
-              );
-            } catch (e) {
-              debugPrint('CarPlay playback error: $e');
-            }
-          },
-        );
-      }).toList();
+      final items = tracks
+          .map((track) => _buildTrackRow(track, tracks, track.artists.join(', ')))
+          .toList();
 
       await FlutterCarplay.push(
         template: CPListTemplate(
@@ -629,6 +666,10 @@ class CarPlayService {
       final items = albums.map((album) => CPListItem(
         text: album.name,
         detailText: album.artists.join(', '),
+        image: appState.jellyfinService.buildSelfContainedImageUrl(
+          itemId: album.id,
+          tag: album.primaryImageTag,
+        ),
         onPress: (complete, self) async {
           complete(); // Signal CarPlay immediately
           await _showAlbumTracks(album.id, album.name);
@@ -659,24 +700,9 @@ class CarPlayService {
         return;
       }
 
-      final items = tracks.map((track) {
-        return CPListItem(
-          text: track.name,
-          detailText: track.artists.join(', '),
-          onPress: (complete, self) async {
-            complete();  // Signal CarPlay immediately
-            try {
-              await appState.audioPlayerService.playTrack(
-                track,
-                queueContext: tracks,
-                reorderQueue: false,
-              );
-            } catch (e) {
-              debugPrint('CarPlay playback error: $e');
-            }
-          },
-        );
-      }).toList();
+      final items = tracks
+          .map((track) => _buildTrackRow(track, tracks, track.artists.join(', ')))
+          .toList();
 
       await FlutterCarplay.push(
         template: CPListTemplate(
@@ -726,22 +752,13 @@ class CarPlayService {
       final hasMore = offset + _maxItemsPerPage < allFavorites.length;
       final totalCount = allFavorites.length;
 
-      final items = paginatedFavorites.map((track) => CPListItem(
-        text: track.name,
-        detailText: '${track.artists.join(', ')} • ${track.album}',
-        onPress: (complete, self) async {
-          complete();  // Signal CarPlay immediately
-          try {
-            await appState.audioPlayerService.playTrack(
-              track,
-              queueContext: allFavorites,
-              reorderQueue: false,
-            );
-          } catch (e) {
-            debugPrint('CarPlay playback error: $e');
-          }
-        },
-      )).toList();
+      final items = paginatedFavorites
+          .map((track) => _buildTrackRow(
+                track,
+                allFavorites,
+                '${track.artists.join(', ')} • ${track.album}',
+              ))
+          .toList();
 
       // Add "Load More" item if there are more favorites
       if (hasMore) {
@@ -807,22 +824,13 @@ class CarPlayService {
       final hasMore = offset + _maxItemsPerPage < allRecent.length;
       final totalCount = allRecent.length;
 
-      final items = paginatedRecent.map((track) => CPListItem(
-        text: track.name,
-        detailText: '${track.artists.join(', ')} • ${track.album}',
-        onPress: (complete, self) async {
-          complete();  // Signal CarPlay immediately
-          try {
-            await appState.audioPlayerService.playTrack(
-              track,
-              queueContext: allRecent,
-              reorderQueue: false,
-            );
-          } catch (e) {
-            debugPrint('CarPlay playback error: $e');
-          }
-        },
-      )).toList();
+      final items = paginatedRecent
+          .map((track) => _buildTrackRow(
+                track,
+                allRecent,
+                '${track.artists.join(', ')} • ${track.album}',
+              ))
+          .toList();
 
       // Add "Load More" item if there are more
       if (hasMore) {
@@ -873,22 +881,27 @@ class CarPlayService {
       final totalCount = allDownloads.length;
 
       final allTracks = allDownloads.map((d) => d.track).toList();
-      final items = paginatedDownloads.map((download) => CPListItem(
-        text: download.track.name,
-        detailText: '${download.track.artists.join(', ')} • ${download.track.album}',
-        onPress: (complete, self) async {
-          complete();  // Signal CarPlay immediately
-          try {
-            await appState.audioPlayerService.playTrack(
-              download.track,
-              queueContext: allTracks,
-              reorderQueue: false,
-            );
-          } catch (e) {
-            debugPrint('CarPlay playback error: $e');
+      // Pre-resolve local artwork paths so each row can render without network.
+      final localArt = <String, String?>{};
+      for (final d in paginatedDownloads) {
+        try {
+          final p = await appState.downloadService
+              .getArtworkPathForTrack(d.track.id);
+          if (p != null && File(p).existsSync()) {
+            localArt[d.track.id] = 'file://$p';
           }
-        },
-      )).toList();
+        } catch (_) {
+          // best-effort; fall back to network URL
+        }
+      }
+      final items = paginatedDownloads
+          .map((download) => _buildTrackRow(
+                download.track,
+                allTracks,
+                '${download.track.artists.join(', ')} • ${download.track.album}',
+                imageOverride: localArt[download.track.id],
+              ))
+          .toList();
 
       // Add "Load More" item if there are more downloads
       if (hasMore) {
@@ -917,6 +930,193 @@ class CarPlayService {
 
     } catch (e) {
       debugPrint('⚠️ CarPlay push Downloads failed: $e');
+    }
+  }
+
+  // ============ Browse A–Z (search alternative) ============
+
+  Future<void> _showAlphabeticalRoot() async {
+    _markUserNavigation();
+    try {
+      await FlutterCarplay.push(
+        template: CPListTemplate(
+          title: 'Browse A–Z',
+          sections: [
+            CPListSection(items: [
+              CPListItem(
+                text: 'Albums by Letter',
+                onPress: (complete, self) async {
+                  complete();
+                  await _showAlphabeticalLetters(forArtists: false);
+                },
+              ),
+              CPListItem(
+                text: 'Artists by Letter',
+                onPress: (complete, self) async {
+                  complete();
+                  await _showAlphabeticalLetters(forArtists: true);
+                },
+              ),
+            ]),
+          ],
+          systemIcon: 'list.bullet.rectangle',
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push BrowseAZ root failed: $e');
+    }
+  }
+
+  Future<void> _showAlphabeticalLetters({required bool forArtists}) async {
+    _markUserNavigation();
+    try {
+      // Source the buckets from already-loaded data; if missing, pull a wide
+      // page so we have something to bucket. Avoid extra retries — the
+      // refresh path is already exercised on tab open.
+      List<String> names;
+      List<String> idsForLookup; // not used here, kept for symmetry
+      if (forArtists) {
+        if (appState.artists == null) {
+          await appState.refreshArtists();
+        }
+        final artists = appState.artists ?? const [];
+        names = artists.map((a) => a.groupingName).toList();
+        idsForLookup = artists.map((a) => a.id).toList();
+      } else {
+        if (appState.albums == null) {
+          await appState.refreshAlbums();
+        }
+        final albums = appState.albums ?? const [];
+        names = albums.map((a) => a.groupingName).toList();
+        idsForLookup = albums.map((a) => a.id).toList();
+      }
+      // Reference idsForLookup so the analyzer doesn't flag it; future-proof
+      // for switching to id-based bucketing.
+      identical(idsForLookup, idsForLookup);
+
+      if (!_isConnected) return;
+      if (names.isEmpty) {
+        await _showEmptyState(
+          forArtists ? 'Artists by Letter' : 'Albums by Letter',
+          'Nothing to browse yet',
+        );
+        return;
+      }
+
+      final buckets = <String, int>{};
+      for (final n in names) {
+        if (n.isEmpty) continue;
+        final c = n[0].toUpperCase();
+        final code = c.codeUnitAt(0);
+        final letter = (code >= 65 && code <= 90) ? c : '#';
+        buckets.update(letter, (v) => v + 1, ifAbsent: () => 1);
+      }
+      final sortedLetters = buckets.keys.toList()
+        ..sort((a, b) {
+          if (a == '#') return -1;
+          if (b == '#') return 1;
+          return a.compareTo(b);
+        });
+
+      final items = sortedLetters.map((letter) {
+        return CPListItem(
+          text: letter,
+          detailText: '${buckets[letter]} entries',
+          onPress: (complete, self) async {
+            complete();
+            await _showLetterBucket(letter, forArtists: forArtists);
+          },
+        );
+      }).toList();
+
+      await FlutterCarplay.push(
+        template: CPListTemplate(
+          title: forArtists ? 'Artists by Letter' : 'Albums by Letter',
+          sections: [CPListSection(items: items)],
+          systemIcon: 'character.book.closed',
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push BrowseAZ letters failed: $e');
+    }
+  }
+
+  Future<void> _showLetterBucket(String letter,
+      {required bool forArtists}) async {
+    _markUserNavigation();
+    try {
+      bool matchesLetter(String name) {
+        if (name.isEmpty) return letter == '#';
+        final c = name[0].toUpperCase();
+        final code = c.codeUnitAt(0);
+        final isAlpha = code >= 65 && code <= 90;
+        return letter == '#' ? !isAlpha : c == letter;
+      }
+
+      if (forArtists) {
+        final artists = (appState.artists ?? const <JellyfinArtist>[])
+            .where((a) => matchesLetter(a.groupingName))
+            .take(_maxItemsPerPage)
+            .toList();
+        if (!_isConnected) return;
+        if (artists.isEmpty) {
+          await _showEmptyState('Letter $letter', 'No artists for this letter');
+          return;
+        }
+        final items = artists
+            .map((a) => CPListItem(
+                  text: a.name,
+                  image: appState.jellyfinService.buildSelfContainedImageUrl(
+                    itemId: a.id,
+                    tag: a.primaryImageTag,
+                  ),
+                  onPress: (complete, self) async {
+                    complete();
+                    await _showArtistAlbums(a.id, a.name);
+                  },
+                ))
+            .toList();
+        await FlutterCarplay.push(
+          template: CPListTemplate(
+            title: 'Artists · $letter',
+            sections: [CPListSection(items: items)],
+            systemIcon: 'music.mic',
+          ),
+        );
+      } else {
+        final albums = (appState.albums ?? const <JellyfinAlbum>[])
+            .where((a) => matchesLetter(a.groupingName))
+            .take(_maxItemsPerPage)
+            .toList();
+        if (!_isConnected) return;
+        if (albums.isEmpty) {
+          await _showEmptyState('Letter $letter', 'No albums for this letter');
+          return;
+        }
+        final items = albums
+            .map((a) => CPListItem(
+                  text: a.name,
+                  detailText: a.artists.join(', '),
+                  image: appState.jellyfinService.buildSelfContainedImageUrl(
+                    itemId: a.id,
+                    tag: a.primaryImageTag,
+                  ),
+                  onPress: (complete, self) async {
+                    complete();
+                    await _showAlbumTracks(a.id, a.name);
+                  },
+                ))
+            .toList();
+        await FlutterCarplay.push(
+          template: CPListTemplate(
+            title: 'Albums · $letter',
+            sections: [CPListSection(items: items)],
+            systemIcon: 'music.note.list',
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('⚠️ CarPlay push BrowseAZ bucket failed: $e');
     }
   }
 
@@ -952,6 +1152,7 @@ class CarPlayService {
 
   void dispose() {
     _refreshDebounceTimer?.cancel();
+    _currentTrackSub?.cancel();
     _carplay.removeListenerOnConnectionChange();
     appState.removeListener(_onAppStateChanged);
   }

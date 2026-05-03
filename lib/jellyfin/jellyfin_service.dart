@@ -635,6 +635,29 @@ class JellyfinService {
     return buffer.toString();
   }
 
+  /// Image URL with the access token embedded as a query parameter, so
+  /// system image loaders that can't supply our auth headers (CarPlay's
+  /// `CPListItem.image`, lock-screen artwork, OS share sheets) can fetch it.
+  /// Returns null if no session.
+  String? buildSelfContainedImageUrl({
+    required String itemId,
+    String? tag,
+    String imageType = 'Primary',
+    int maxWidth = 400,
+  }) {
+    final session = _session;
+    if (session == null) return null;
+    final params = <String, String>{
+      'quality': '90',
+      'maxWidth': '$maxWidth',
+      'api_key': session.credentials.accessToken,
+    };
+    if (tag != null) params['tag'] = tag;
+    final uri = Uri.parse('${session.serverUrl}/Items/$itemId/Images/$imageType')
+        .replace(queryParameters: params);
+    return uri.toString();
+  }
+
   Map<String, String> imageHeaders() {
     final session = _session;
     if (session == null) {

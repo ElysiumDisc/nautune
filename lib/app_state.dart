@@ -929,7 +929,15 @@ class NautuneAppState extends ChangeNotifier {
     if (_albumSortBy == sortBy && _albumSortOrder == sortOrder) return;
     _albumSortBy = sortBy;
     _albumSortOrder = sortOrder;
-    await _loadAlbumsForSelectedLibrary(forceRefresh: true);
+    notifyListeners();
+    if (_libraryDataProvider != null) {
+      // Provider owns the displayed `albums` list (see getter at `albums`).
+      // Route through it so the user-visible list actually re-fetches with
+      // the new sort instead of writing to a shadow `_albums` field.
+      await _libraryDataProvider.setAlbumSort(sortBy, sortOrder);
+    } else {
+      await _loadAlbumsForSelectedLibrary(forceRefresh: true);
+    }
   }
 
   /// Set artist sort options and reload
@@ -937,7 +945,12 @@ class NautuneAppState extends ChangeNotifier {
     if (_artistSortBy == sortBy && _artistSortOrder == sortOrder) return;
     _artistSortBy = sortBy;
     _artistSortOrder = sortOrder;
-    await _loadArtistsForSelectedLibrary(forceRefresh: true);
+    notifyListeners();
+    if (_libraryDataProvider != null) {
+      await _libraryDataProvider.setArtistSort(sortBy, sortOrder);
+    } else {
+      await _loadArtistsForSelectedLibrary(forceRefresh: true);
+    }
   }
 
   void updateLibraryTabIndex(int index) {

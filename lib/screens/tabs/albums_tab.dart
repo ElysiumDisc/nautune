@@ -57,9 +57,13 @@ class _SortControls extends StatelessWidget {
           },
           itemBuilder: (context) => [
             _buildMenuItem(SortOption.name, currentSort),
-            _buildMenuItem(SortOption.dateAdded, currentSort),
+            // Offline data has no DateCreated / PlayCount; year only meaningful
+            // for albums, and even then only when productionYear is populated.
+            if (!appState.isOfflineMode)
+              _buildMenuItem(SortOption.dateAdded, currentSort),
             if (isAlbums) _buildMenuItem(SortOption.year, currentSort),
-            _buildMenuItem(SortOption.playCount, currentSort),
+            if (!appState.isOfflineMode)
+              _buildMenuItem(SortOption.playCount, currentSort),
           ],
           child: Container(
             padding: const EdgeInsets.all(8),
@@ -185,7 +189,7 @@ class _AlbumsTab extends StatelessWidget {
             final letterGroups = showHeaders
                 ? AlphabetSectionBuilder.groupByLetter<JellyfinAlbum>(
                     albums!,
-                    (album) => album.name,
+                    (album) => album.groupingName,
                     appState.albumSortOrder,
                   )
                 : <(String, List<JellyfinAlbum>)>[];
@@ -247,7 +251,7 @@ class _AlbumsTab extends StatelessWidget {
                 ),
                 AlphabetScrollbar(
                   items: albums!,
-                  getItemName: (album) => (album as JellyfinAlbum).name,
+                  getItemName: (album) => (album as JellyfinAlbum).groupingName,
                   scrollController: scrollController,
                   itemHeight: 72, // List tile height
                   crossAxisCount: 1,
@@ -263,7 +267,7 @@ class _AlbumsTab extends StatelessWidget {
           final gridLetterGroups = showGridHeaders
               ? AlphabetSectionBuilder.groupByLetter<JellyfinAlbum>(
                   albums!,
-                  (album) => album.name,
+                  (album) => album.groupingName,
                   appState.albumSortOrder,
                 )
               : <(String, List<JellyfinAlbum>)>[];
@@ -340,7 +344,7 @@ class _AlbumsTab extends StatelessWidget {
               ),
               AlphabetScrollbar(
                 items: albums!,
-                getItemName: (album) => (album as JellyfinAlbum).name,
+                getItemName: (album) => (album as JellyfinAlbum).groupingName,
                 scrollController: scrollController,
                 itemHeight: itemHeight,
                 crossAxisCount: crossAxisCount,

@@ -181,6 +181,8 @@ class DownloadService extends ChangeNotifier {
 
   // Cached sorted downloads list — invalidated on any mutation
   List<DownloadItem>? _sortedDownloadsCache;
+  List<DownloadItem>? _completedDownloadsCache;
+  List<DownloadItem>? _activeDownloadsCache;
 
   List<DownloadItem> get downloads {
     _sortedDownloadsCache ??= _downloads.values.toList()
@@ -191,14 +193,20 @@ class DownloadService extends ChangeNotifier {
   @override
   void notifyListeners() {
     _sortedDownloadsCache = null;
+    _completedDownloadsCache = null;
+    _activeDownloadsCache = null;
     super.notifyListeners();
   }
 
+  // The offline repository touches this getter many times per library refresh
+  // (~9 sites × N methods). Cache the filtered list and invalidate on notify.
   List<DownloadItem> get completedDownloads =>
-      downloads.where((d) => d.isCompleted).toList();
+      _completedDownloadsCache ??=
+          downloads.where((d) => d.isCompleted).toList(growable: false);
 
   List<DownloadItem> get activeDownloads =>
-      downloads.where((d) => d.isDownloading || d.isQueued).toList();
+      _activeDownloadsCache ??=
+          downloads.where((d) => d.isDownloading || d.isQueued).toList(growable: false);
 
   bool isDownloaded(String trackId) =>
       _downloads[trackId]?.isCompleted ?? false;

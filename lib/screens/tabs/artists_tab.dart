@@ -102,7 +102,7 @@ class _ArtistsTab extends StatelessWidget {
           final artistLetterGroups = showArtistHeaders
               ? AlphabetSectionBuilder.groupByLetter<JellyfinArtist>(
                   effectiveArtists,
-                  (artist) => artist.name,
+                  (artist) => artist.groupingName,
                   effectiveSortOrder,
                 )
               : <(String, List<JellyfinArtist>)>[];
@@ -153,7 +153,7 @@ class _ArtistsTab extends StatelessWidget {
                 ),
                 AlphabetScrollbar(
                   items: effectiveArtists,
-                  getItemName: (artist) => (artist as JellyfinArtist).name,
+                  getItemName: (artist) => (artist as JellyfinArtist).groupingName,
                   scrollController: controller,
                   itemHeight: 72,
                   crossAxisCount: 1,
@@ -228,7 +228,7 @@ class _ArtistsTab extends StatelessWidget {
               ),
               AlphabetScrollbar(
                 items: effectiveArtists,
-                getItemName: (artist) => (artist as JellyfinArtist).name,
+                getItemName: (artist) => (artist as JellyfinArtist).groupingName,
                 scrollController: controller,
                 itemHeight: artistItemHeight,
                 crossAxisCount: crossAxisCount,
