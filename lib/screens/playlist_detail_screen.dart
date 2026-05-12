@@ -117,36 +117,24 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
 
   Future<void> _downloadPlaylist() async {
     if (_tracks == null || _tracks!.isEmpty) return;
-    
+
     final count = _tracks!.length;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Checking $count tracks for download...')),
     );
 
-    int started = 0;
-    // Copy list to avoid concurrent modification issues
-    final tracksToDownload = List<JellyfinTrack>.from(_tracks!);
-    
-    for (final track in tracksToDownload) {
-      if (!mounted) break;
-      try {
-        final downloadService = _appState!.downloadService;
-        final existing = downloadService.getDownload(track.id);
-        
-        if (existing == null || existing.isFailed) {
-           await downloadService.downloadTrack(track);
-           started++;
-        }
-      } catch (_) {
-        // Ignore individual failures
-      }
-    }
-    
+    // Centralized in DownloadService so a rapid double-tap can't kick off two
+    // concurrent passes — _playlistBatchInFlight guards the batch.
+    final started = await _appState!.downloadService.downloadPlaylist(
+      playlistId: widget.playlist.id,
+      tracks: List<JellyfinTrack>.from(_tracks!),
+    );
+
     if (mounted) {
-       ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(started > 0 
-            ? 'Queued $started new downloads' 
+          content: Text(started > 0
+            ? 'Queued $started new downloads'
             : 'All tracks already downloaded or queued'),
           backgroundColor: Colors.green,
         ),

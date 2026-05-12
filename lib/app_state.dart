@@ -422,7 +422,18 @@ class NautuneAppState extends ChangeNotifier {
   bool get isLoadingRecommendations => _isLoadingRecommendations;
   List<JellyfinTrack>? get recommendationTracks => _recommendationTracks;
   String? get recommendationSeedTrackName => _recommendationSeedTrackName;
-  /// Offline mode is active if user explicitly chose it OR network is unavailable
+  /// Offline mode is active if user explicitly chose it OR network is unavailable.
+  ///
+  /// Auto-recovery semantics: when connectivity is restored, isOfflineMode flips
+  /// back to false automatically (because `_networkAvailable` flips true) **unless**
+  /// the user explicitly opted into offline mode via the settings toggle — in
+  /// that case `_userWantsOffline` keeps it true until they toggle it off.
+  ///
+  /// The `repository` getter below is re-evaluated on every call, so consumers
+  /// that fetch `appState.repository.<method>()` fresh (the pattern used by
+  /// every screen and service today) automatically switch between online and
+  /// offline implementations on the next Provider rebuild after
+  /// notifyListeners() fires from _handleConnectivityStatusChange.
   bool get isOfflineMode => _userWantsOffline || !_networkAvailable;
 
   /// Whether user explicitly wants offline mode (persisted setting)

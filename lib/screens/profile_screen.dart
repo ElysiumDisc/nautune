@@ -1196,6 +1196,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ? CachedNetworkImage(
                 imageUrl: imageUrl,
                 fit: BoxFit.cover,
+                memCacheWidth: 240,
+                memCacheHeight: 240,
                 placeholder: (context, url) => _buildDefaultAvatar(theme),
                 errorWidget: (context, url, error) => _buildDefaultAvatar(theme),
               )
@@ -2891,6 +2893,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ? CachedNetworkImage(
                             imageUrl: imageUrl,
                             fit: BoxFit.cover,
+                            memCacheWidth: 160,
+                            memCacheHeight: 160,
                             placeholder: (context, url) => _buildArtistPlaceholder(theme, artist.name),
                             errorWidget: (context, url, error) => _buildArtistPlaceholder(theme, artist.name),
                           )
@@ -2980,6 +2984,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ? CachedNetworkImage(
                             imageUrl: imageUrl,
                             fit: BoxFit.cover,
+                            memCacheWidth: 200,
+                            memCacheHeight: 200,
                             placeholder: (context, url) => Container(
                               color: theme.colorScheme.surfaceContainerHighest,
                               child: Icon(
@@ -3338,6 +3344,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ? CachedNetworkImage(
                         imageUrl: imageUrl,
                         fit: BoxFit.cover,
+                        memCacheWidth: 96,
+                        memCacheHeight: 96,
                         placeholder: (context, url) => Container(
                           color: theme.colorScheme.surfaceContainerHighest,
                           child: Icon(
@@ -5505,7 +5513,7 @@ class _SparklinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _SparklinePainter old) =>
-      old.data != data || old.lineColor != lineColor;
+      !listEquals(old.data, data) || old.lineColor != lineColor;
 }
 
 class _SoundDNAPainter extends CustomPainter {
@@ -5549,7 +5557,9 @@ class _SoundDNAPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _SoundDNAPainter old) =>
-      old.animationProgress != animationProgress;
+      old.animationProgress != animationProgress ||
+      !listEquals(old.entries, entries) ||
+      !listEquals(old.colors, colors);
 }
 
 class _WavePainter extends CustomPainter {

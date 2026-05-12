@@ -28,6 +28,7 @@ import '../services/saved_loops_service.dart';
 import '../services/chart_cache_service.dart';
 import '../services/waveform_service.dart';
 import '../widgets/jellyfin_waveform.dart';
+import '../theme/nautune_spacing.dart';
 import '../theme/nautune_theme.dart';
 import '../widgets/equalizer_widget.dart';
 import '../widgets/visualizer_picker.dart';
@@ -259,20 +260,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ],
-              ListTile(
-                leading: Icon(Icons.waves, color: theme.colorScheme.primary),
-                title: const Text('Audio Visualizer'),
-                subtitle: Text(
-                  appState.visualizerEnabled
-                      ? appState.visualizerType.label
-                      : 'Disabled for battery savings'
-                ),
-                trailing: Switch(
-                  value: appState.visualizerEnabled,
-                  onChanged: (value) {
-                    appState.setVisualizerEnabled(value);
-                  },
-                ),
+              _NautuneToggleTile(
+                icon: Icons.waves,
+                title: 'Audio Visualizer',
+                subtitle: appState.visualizerEnabled
+                    ? appState.visualizerType.label
+                    : 'Disabled for battery savings',
+                value: appState.visualizerEnabled,
+                onChanged: appState.setVisualizerEnabled,
               ),
               if (appState.visualizerEnabled)
                 ListTile(
@@ -297,20 +292,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _showNowPlayingLayoutPicker(context),
               ),
-              ListTile(
-                leading: Icon(Icons.volume_up, color: theme.colorScheme.primary),
-                title: const Text('Volume Bar'),
-                subtitle: Text(
-                  appState.showVolumeBar
-                      ? 'Shown in Now Playing'
-                      : 'Hidden (use device volume)'
-                ),
-                trailing: Switch(
-                  value: appState.showVolumeBar,
-                  onChanged: (value) {
-                    appState.setVolumeBarVisibility(value);
-                  },
-                ),
+              _NautuneToggleTile(
+                icon: Icons.volume_up,
+                title: 'Volume Bar',
+                subtitle: appState.showVolumeBar
+                    ? 'Shown in Now Playing'
+                    : 'Hidden (use device volume)',
+                value: appState.showVolumeBar,
+                onChanged: appState.setVolumeBarVisibility,
               ),
             ],
           ),
@@ -992,14 +981,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// Hide a section when a specific `focusSection` is active and this group
   /// is not the one being focused. Returns `SizedBox.shrink()` to collapse
   /// invisibly inside a ListView without affecting spacing.
-  Widget _group(String id, List<Widget> children) {
+  ///
+  /// The children list is taken as a builder so hidden sections don't pay the
+  /// cost of constructing their widget tree — previously a detail page (e.g.
+  /// focusSection == 'audio') still eagerly built the other seven sections'
+  /// widgets, only to throw them away here.
+  Widget _group(String id, List<Widget> Function() builder) {
     final focus = widget.focusSection;
     if (focus != null && focus != 'all' && focus != id) {
       return const SizedBox.shrink();
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: children,
+      children: builder(),
     );
   }
 
@@ -1035,39 +1029,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         children: [
           // Your Music section with Rewind and ListenBrainz
-          _group('music', [_buildYourMusicSection(context)]),
+          _group('music', () => [_buildYourMusicSection(context)]),
 
-          _group('server', [
-          const _SectionHeader(icon: Icons.dns, title: 'Server'),
-          Card(
-            margin: const EdgeInsets.only(bottom: 16),
-            child: Column(
-              children: [
-                ListTile(
-                  leading: Icon(Icons.cloud, color: theme.colorScheme.primary),
-                  title: const Text('Server URL'),
-                  subtitle: Text(sessionProvider.session?.serverUrl ?? 'Not connected'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () {
-                    // TODO: Allow changing server
-                  },
-                ),
-                ListTile(
-                  leading: Icon(Icons.person, color: theme.colorScheme.primary),
-                  title: const Text('Username'),
-                  subtitle: Text(sessionProvider.session?.username ?? 'Not logged in'),
-                ),
-                ListTile(
-                  leading: Icon(Icons.library_music, color: theme.colorScheme.primary),
-                  title: const Text('Library'),
-                  subtitle: Text(sessionProvider.session?.selectedLibraryName ?? 'None selected'),
-                ),
-              ],
+          _group('server', () => [
+            const _SectionHeader(icon: Icons.dns, title: 'Server'),
+            Card(
+              margin: const EdgeInsets.only(bottom: NautuneSpacing.lg),
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: Icon(Icons.cloud, color: theme.colorScheme.primary),
+                    title: const Text('Server URL'),
+                    subtitle: Text(sessionProvider.session?.serverUrl ?? 'Not connected'),
+                  ),
+                  ListTile(
+                    leading: Icon(Icons.person, color: theme.colorScheme.primary),
+                    title: const Text('Username'),
+                    subtitle: Text(sessionProvider.session?.username ?? 'Not logged in'),
+                  ),
+                  ListTile(
+                    leading: Icon(Icons.library_music, color: theme.colorScheme.primary),
+                    title: const Text('Library'),
+                    subtitle: Text(sessionProvider.session?.selectedLibraryName ?? 'None selected'),
+                  ),
+                ],
+              ),
             ),
-          ),
           ]),
-          _group('appearance', [_buildAppearanceSection(context)]),
-          _group('audio', [
+          _group('appearance', () => [_buildAppearanceSection(context)]),
+          _group('audio', () => [
           const _SectionHeader(icon: Icons.audiotrack, title: 'Audio Options'),
           Card(
             margin: const EdgeInsets.only(bottom: 16),
@@ -1120,20 +1110,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
-                ListTile(
-                  leading: Icon(Icons.tune, color: theme.colorScheme.primary),
-                  title: const Text('Crossfade'),
-                  subtitle: Text(
-                    appState.crossfadeEnabled
-                      ? 'Enabled (${appState.crossfadeDurationSeconds}s)'
-                      : 'Smooth transitions between tracks'
-                  ),
-                  trailing: Switch(
-                    value: appState.crossfadeEnabled,
-                    onChanged: (value) {
-                      appState.toggleCrossfade(value);
-                    },
-                  ),
+                _NautuneToggleTile(
+                  icon: Icons.tune,
+                  title: 'Crossfade',
+                  subtitle: appState.crossfadeEnabled
+                    ? 'Enabled (${appState.crossfadeDurationSeconds}s)'
+                    : 'Smooth transitions between tracks',
+                  value: appState.crossfadeEnabled,
+                  onChanged: appState.toggleCrossfade,
                 ),
                 if (appState.crossfadeEnabled)
                   Padding(
@@ -1166,35 +1150,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                   ),
-                ListTile(
-                  leading: Icon(Icons.music_note, color: theme.colorScheme.primary),
-                  title: const Text('Gapless Playback'),
-                  subtitle: Text(
-                    appState.gaplessPlaybackEnabled
-                      ? 'Seamless transitions enabled'
-                      : 'Standard playback'
-                  ),
-                  trailing: Switch(
-                    value: appState.gaplessPlaybackEnabled,
-                    onChanged: (value) {
-                      appState.toggleGaplessPlayback(value);
-                    },
-                  ),
+                _NautuneToggleTile(
+                  icon: Icons.music_note,
+                  title: 'Gapless Playback',
+                  subtitle: appState.gaplessPlaybackEnabled
+                    ? 'Seamless transitions enabled'
+                    : 'Standard playback',
+                  value: appState.gaplessPlaybackEnabled,
+                  onChanged: appState.toggleGaplessPlayback,
                 ),
-                ListTile(
-                  leading: Icon(Icons.all_inclusive, color: theme.colorScheme.primary),
-                  title: const Text('Infinite Radio'),
-                  subtitle: Text(
-                    uiStateProvider.infiniteRadioEnabled
-                      ? 'Auto-generates similar tracks when queue is low'
-                      : 'Endless playback based on current track'
-                  ),
-                  trailing: Switch(
-                    value: uiStateProvider.infiniteRadioEnabled,
-                    onChanged: (value) {
-                      uiStateProvider.toggleInfiniteRadio(value);
-                    },
-                  ),
+                _NautuneToggleTile(
+                  icon: Icons.all_inclusive,
+                  title: 'Infinite Radio',
+                  subtitle: uiStateProvider.infiniteRadioEnabled
+                    ? 'Auto-generates similar tracks when queue is low'
+                    : 'Endless playback based on current track',
+                  value: uiStateProvider.infiniteRadioEnabled,
+                  onChanged: uiStateProvider.toggleInfiniteRadio,
                 ),
                 if (uiStateProvider.infiniteRadioEnabled)
                   Padding(
@@ -1215,7 +1187,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           ]),
-          _group('performance', [
+          _group('performance', () => [
           const _SectionHeader(icon: Icons.speed, title: 'Performance'),
           Card(
             margin: const EdgeInsets.only(bottom: 16),
@@ -1303,23 +1275,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
-                ListTile(
-                  leading: Icon(Icons.wifi, color: theme.colorScheme.primary),
-                  title: const Text('WiFi-Only Pre-Cache'),
-                  subtitle: const Text('Only pre-cache when connected to WiFi'),
-                  trailing: Switch(
-                    value: uiStateProvider.wifiOnlyCaching,
-                    onChanged: (value) {
-                      uiStateProvider.setWifiOnlyCaching(value);
-                      appState.setWifiOnlyCaching(value);
-                    },
-                  ),
+                _NautuneToggleTile(
+                  icon: Icons.wifi,
+                  title: 'WiFi-Only Pre-Cache',
+                  subtitle: 'Only pre-cache when connected to WiFi',
+                  value: uiStateProvider.wifiOnlyCaching,
+                  onChanged: (value) {
+                    uiStateProvider.setWifiOnlyCaching(value);
+                    appState.setWifiOnlyCaching(value);
+                  },
                 ),
               ],
             ),
           ),
           ]),
-          _group('downloads', [
+          _group('downloads', () => [
           const _SectionHeader(icon: Icons.download, title: 'Downloads'),
           ListenableBuilder(
             listenable: appState.downloadService,
@@ -1357,17 +1327,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ],
                       ),
                     ),
-                    ListTile(
-                      leading: Icon(Icons.wifi, color: theme.colorScheme.primary),
-                      title: const Text('WiFi-Only Downloads'),
-                      subtitle: const Text('Only download when connected to WiFi'),
-                      trailing: Switch(
-                        value: downloadService.wifiOnlyDownloads,
-                        onChanged: (value) {
-                          downloadService.setWifiOnlyDownloads(value);
-                          uiStateProvider.setWifiOnlyDownloads(value);
-                        },
-                      ),
+                    _NautuneToggleTile(
+                      icon: Icons.wifi,
+                      title: 'WiFi-Only Downloads',
+                      subtitle: 'Only download when connected to WiFi',
+                      value: downloadService.wifiOnlyDownloads,
+                      onChanged: (value) {
+                        downloadService.setWifiOnlyDownloads(value);
+                        uiStateProvider.setWifiOnlyDownloads(value);
+                      },
                     ),
                     ListTile(
                       leading: Icon(Icons.folder_open, color: theme.colorScheme.primary),
@@ -1399,7 +1367,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
           ]),
-          _group('data', [
+          _group('data', () => [
           const _SectionHeader(icon: Icons.backup, title: 'Data & Backup'),
           Card(
             margin: const EdgeInsets.only(bottom: 16),
@@ -1423,7 +1391,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           ]),
-          _group('about', [
+          _group('about', () => [
           const _SectionHeader(icon: Icons.info_outline, title: 'About'),
           Card(
             margin: const EdgeInsets.only(bottom: 16),
@@ -1831,22 +1799,18 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                             ),
                           ),
                         ),
-                        ListTile(
-                          leading: const Icon(Icons.auto_delete),
-                          title: const Text('Auto-Cleanup'),
-                          subtitle: Text(
-                            downloadService.autoCleanupEnabled
-                                ? 'Remove downloads older than ${downloadService.autoCleanupDays} days'
-                                : 'Keep all downloads'
-                          ),
-                          trailing: Switch(
-                            value: downloadService.autoCleanupEnabled,
-                            onChanged: (value) {
-                              downloadService.setAutoCleanup(enabled: value);
-                              uiStateProvider.setAutoCleanup(enabled: value);
-                              setState(() {});
-                            },
-                          ),
+                        _NautuneToggleTile(
+                          icon: Icons.auto_delete,
+                          title: 'Auto-Cleanup',
+                          subtitle: downloadService.autoCleanupEnabled
+                              ? 'Remove downloads older than ${downloadService.autoCleanupDays} days'
+                              : 'Keep all downloads',
+                          value: downloadService.autoCleanupEnabled,
+                          onChanged: (value) {
+                            downloadService.setAutoCleanup(enabled: value);
+                            uiStateProvider.setAutoCleanup(enabled: value);
+                            setState(() {});
+                          },
                         ),
                         if (downloadService.autoCleanupEnabled)
                           Padding(
@@ -3331,6 +3295,124 @@ class _SectionHeader extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Shared base tile used across settings sections. Provides a consistent
+/// gradient leading-icon container, title/subtitle, and optional trailing
+/// widget so individual rows stop drifting on padding and icon styling.
+class _NautuneSettingsTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+
+  const _NautuneSettingsTile({
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    this.trailing,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = theme.colorScheme.primary;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: NautuneRadius.allMd,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: NautuneSpacing.lg,
+            vertical: NautuneSpacing.md,
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      color.withValues(alpha: 0.22),
+                      color.withValues(alpha: 0.10),
+                    ],
+                  ),
+                  borderRadius: NautuneRadius.allSm,
+                ),
+                child: Icon(icon, color: color, size: 20),
+              ),
+              const SizedBox(width: NautuneSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle!,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (trailing != null) ...[
+                const SizedBox(width: NautuneSpacing.sm),
+                trailing!,
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Toggle row built on top of `_NautuneSettingsTile`. Replaces bare `Switch`
+/// widgets that previously sat in flat `ListTile`s without visual containment.
+class _NautuneToggleTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+
+  const _NautuneToggleTile({
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _NautuneSettingsTile(
+      icon: icon,
+      title: title,
+      subtitle: subtitle,
+      onTap: onChanged == null ? null : () => onChanged!(!value),
+      trailing: Switch.adaptive(
+        value: value,
+        onChanged: onChanged,
       ),
     );
   }

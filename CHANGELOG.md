@@ -1,3 +1,37 @@
+### v8.8.0 - Download Hardening, Settings/Profile Polish
+
+**Downloads & Offline**
+
+- Fixed duplicate-download bug: two rapid taps on "Download album" / "Download playlist" used to slip past the per-track `containsKey` guard in `DownloadService.downloadTrack` (the check at the top of the method and the queue insert below it were not atomic across concurrent calls), producing duplicate `_downloadQueue` entries that `_processQueue` then ran twice. The track entry is now synchronously reserved before any `await`, so a concurrent caller hits the existing `isQueued` merge branch instead of creating a second entry.
+- Added album/playlist batch-level guards (`_albumBatchInFlight`, `_playlistBatchInFlight`) so a single rapid double-tap can't kick off two parallel batch passes. New `DownloadService.downloadPlaylist(playlistId:, tracks:)` centralizes the playlist path; `playlist_detail_screen.dart` was updated to call it.
+- Exponential backoff retry with jitter (`500ms * 2^attempt + 0–400ms`, capped at 30s, max 5 attempts). `retryDownload` no longer instantly re-enqueues a failed task; attempt counters reset on successful completion.
+- Connectivity auto-resume: `setConnectivityService` now subscribes to `ConnectivityService.onStatusChange`, so a paused-for-mobile-data download resumes automatically when WiFi returns — no manual `resumeIfOnWifi()` call from UI required. The subscription is cancelled in `dispose`.
+- Error categorization: new `DownloadErrorKind` enum (`network`, `server`, `storageFull`, `permission`, `fileSystem`, `canceled`, `unknown`) on `DownloadItem`. Hive-safe (stored as `int?` index; older records load with `errorKind: null`). The `_startDownload` catch block now classifies via `_classifyDownloadError` (e.g. `SocketException`/`TimeoutException` → network, `ENOSPC` → storageFull).
+- Single-flight Hive writes: `_saveDownloads` is wrapped in a coalescer (`_savePending` / `_saveDirty`). If a save is already running when another call arrives, the new call attaches to the in-flight future and one follow-up save captures the final state — eliminates write storms when download progress, retries, and owner merges all fire at once.
+- Extracted the previously hard-coded 60 s stall timeout in `_startDownload` to `static const _stallTimeout`.
+- Documented `isOfflineMode` auto-recovery semantics in `app_state.dart` (the union of `_userWantsOffline` and `!_networkAvailable`; `repository` getter is re-evaluated on every access so the existing `notifyListeners()` flow naturally switches between online and offline implementations on connectivity changes).
+
+**Settings UI tidy-in-place**
+
+- New design tokens in `lib/theme/nautune_spacing.dart`: `NautuneSpacing` (xs/sm/md/lg/xl/xxl) and `NautuneRadius` (xs/sm/md/lg/xl plus `allMd`/`allLg`/etc. const `BorderRadius` constants).
+- New private primitives in `settings_screen.dart`: `_NautuneSettingsTile` and `_NautuneToggleTile` — uniform gradient leading-icon container, consistent paddings, contained adaptive switches. Replaces 8 bare `Switch` widgets that previously sat in flat `ListTile` rows (Audio Visualizer, Volume Bar, Crossfade, Gapless Playback, Infinite Radio, WiFi-Only Pre-Cache, WiFi-Only Downloads, Auto-Cleanup).
+- Server section no longer fakes interactivity — the `Server URL` row dropped its `chevron_right` and stub `onTap: () { // TODO }`; the row now reads as the info row it actually is.
+- Lazy section building: `_group(id, children)` was changed from `List<Widget>` to `List<Widget> Function()`. On a single-section detail page (e.g. `focusSection: 'audio'`) the other seven sections' widget trees are no longer eagerly constructed only to be thrown away by the `SizedBox.shrink()` early-return.
+- Section spacing migrated to `NautuneSpacing.lg` where applicable.
+
+**Profile perf wins (no visual change)**
+
+- `_SparklinePainter.shouldRepaint` was over-aggressive (`old.data != data` is reference equality on a `List<double>`, repaints on every new same-content list); now uses `listEquals`.
+- `_SoundDNAPainter.shouldRepaint` only compared `animationProgress`, missing `entries` and `colors` changes — could go stale; now compares all three.
+- Added `memCacheWidth`/`memCacheHeight` to the four `CachedNetworkImage` sites (profile avatar 240, recent-artists 160, recent-albums 200, recent-tracks 96), eliminating full-resolution decode of small thumbnails.
+
+**Documentation**
+
+- README: "42 Nautical Milestones" → 47 (actual count); the inline 110-row Network channel list is replaced with a count (120) and a pointer to `lib/data/network_channels.dart` — the in-app screen is the source of truth.
+- DEVELOPMENT.md: the version-bump section listed two files; the procedure actually needs four (`pubspec.yaml`, `lib/app_version.dart`, `AppImageBuilder.yml`, this doc's embedded examples). Bumped the example commands to current. "54 actions" in the TUI keybindings comment → 46 (actual `TuiAction` enum count).
+
+---
+
 ### v8.7.0 - Audit Pass: Connectivity, Downloads, Cache, Player
 
 A wide-surface bug/perf audit (six Explore agents, ~55 raw candidates, ~10 verified-real after manual review) produced a small, targeted set of fixes. Most agent findings were false positives — including phantom "syntax errors" against valid Dart 3.3+ null-aware collection elements, an `inMicroseconds * 10` "overflow" claim that has 27000 years of headroom, and a claim that Dart's default `Set` doesn't preserve insertion order (it does — it's a `LinkedHashSet`). Those are documented in the audit plan but explicitly *not* changed.

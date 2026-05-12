@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
@@ -76,6 +77,18 @@ class DownloadService extends ChangeNotifier {
   LyricsService? _lyricsService;
   final Map<String, DownloadItem> _downloads = {};
   final List<String> _downloadQueue = [];
+  // Album/playlist batches in flight, keyed by album/playlist id. Used to
+  // guard against duplicate batch downloads from rapid double-taps.
+  final Set<String> _albumBatchInFlight = <String>{};
+  final Set<String> _playlistBatchInFlight = <String>{};
+  // Retry attempt count keyed by trackId, used to compute exponential backoff.
+  // Cleared on successful completion.
+  final Map<String, int> _retryAttempts = <String, int>{};
+  static const int _maxRetryAttempts = 5;
+  final Random _retryJitter = Random();
+  // Connectivity stream subscription so WiFi reconnects can auto-resume paused
+  // downloads without a manual resumeIfOnWifi() call from UI.
+  StreamSubscription<bool>? _connectivitySub;
   bool _isDownloading = false;
   int _maxConcurrentDownloads = 3; // Now configurable
   int _activeDownloads = 0;
@@ -102,6 +115,7 @@ class DownloadService extends ChangeNotifier {
 
   static const _boxName = 'nautune_downloads';
   static const _downloadsKey = 'downloads';
+  static const _stallTimeout = Duration(seconds: 60);
   static bool _hiveInitialized = false;
   Box<dynamic>? _box;
 
@@ -296,9 +310,17 @@ class DownloadService extends ChangeNotifier {
     if (autoCleanupDays != null) _autoCleanupDays = autoCleanupDays;
   }
 
-  /// Set the connectivity service for WiFi-only checks
+  /// Set the connectivity service for WiFi-only checks. Also subscribes to
+  /// status changes so a WiFi reconnect auto-resumes downloads that were
+  /// paused for mobile data.
   void setConnectivityService(ConnectivityService service) {
     _connectivityService = service;
+    _connectivitySub?.cancel();
+    _connectivitySub = service.onStatusChange.listen((online) {
+      if (online && _wifiOnlyDownloads && _pausedForMobileData) {
+        unawaited(resumeIfOnWifi());
+      }
+    });
   }
 
   /// Set the lyrics service for pre-caching lyrics on download
@@ -370,6 +392,36 @@ class DownloadService extends ChangeNotifier {
           progress: null,
        );
     }
+  }
+
+  /// Exponential backoff with jitter for retry attempts. Capped at 30s.
+  /// Formula: 500ms * 2^attempt + 0-400ms jitter.
+  Duration _backoffFor(int attempt) {
+    final base = 500 * (1 << attempt.clamp(0, 6));
+    final jitter = _retryJitter.nextInt(400);
+    final ms = (base + jitter).clamp(0, 30000);
+    return Duration(milliseconds: ms);
+  }
+
+  /// Map an exception thrown during download to a DownloadErrorKind for UI
+  /// surfaces and retry-policy decisions. Order matters: more specific types
+  /// must come before less specific ones.
+  DownloadErrorKind _classifyDownloadError(Object e) {
+    if (e is TimeoutException) return DownloadErrorKind.network;
+    if (e is SocketException) return DownloadErrorKind.network;
+    if (e is HttpException) return DownloadErrorKind.network;
+    if (e is FileSystemException) {
+      final code = e.osError?.errorCode;
+      if (code == 28) return DownloadErrorKind.storageFull; // ENOSPC
+      if (code == 13) return DownloadErrorKind.permission;  // EACCES
+      return DownloadErrorKind.fileSystem;
+    }
+    // HTTP-level failures we throw ourselves use the 'HTTP <code>' string.
+    final msg = e.toString();
+    if (msg.contains('HTTP 4') || msg.contains('HTTP 5')) {
+      return DownloadErrorKind.server;
+    }
+    return DownloadErrorKind.unknown;
   }
 
   /// Resume downloads when WiFi becomes available
@@ -533,7 +585,32 @@ class DownloadService extends ChangeNotifier {
 
 
 
+  // Single-flight coalescer for Hive writes. Many async paths can call
+  // _saveDownloads concurrently (download progress, retries, owner merges).
+  // Coalesce them so only one save runs at a time; if work arrives while a
+  // save is in flight, a single follow-up save captures the final state.
+  Future<void>? _savePending;
+  bool _saveDirty = false;
+
   Future<void> _saveDownloads() async {
+    if (_savePending != null) {
+      _saveDirty = true;
+      return _savePending;
+    }
+    final fut = _runSave();
+    _savePending = fut;
+    try {
+      await fut;
+    } finally {
+      _savePending = null;
+    }
+    if (_saveDirty) {
+      _saveDirty = false;
+      return _saveDownloads();
+    }
+  }
+
+  Future<void> _runSave() async {
     try {
       final box = _box;
       if (box == null) {
@@ -541,6 +618,8 @@ class DownloadService extends ChangeNotifier {
         return;
       }
 
+      // Snapshot the map so a concurrent mutation during box.put doesn't
+      // corrupt the data we serialize.
       final data = <String, dynamic>{};
       for (final entry in _downloads.entries) {
         data[entry.key] = entry.value.toJson();
@@ -931,16 +1010,22 @@ class DownloadService extends ChangeNotifier {
       return;
     }
 
-    final localPath = await _getDownloadPath(track);
-    final downloadItem = DownloadItem(
+    // Synchronous reservation closes the check-then-act race between the
+    // containsKey check above and the queue insert below: a concurrent
+    // downloadTrack call now sees the queued placeholder and takes the
+    // merge-owners branch instead of double-queueing.
+    _downloads[track.id] = DownloadItem(
       track: track,
-      localPath: localPath,
+      localPath: '',
       status: DownloadStatus.queued,
       queuedAt: DateTime.now(),
-      owners: ownerId != null ? {ownerId} : {}, // Initialize with ownerId if provided
+      owners: ownerId != null ? {ownerId} : {},
     );
 
-    _downloads[track.id] = downloadItem;
+    final localPath = await _getDownloadPath(track);
+    final reserved = _downloads[track.id];
+    if (reserved == null) return; // deleted concurrently while resolving path
+    _downloads[track.id] = reserved.copyWith(localPath: localPath);
     _downloadQueue.add(track.id);
     notifyListeners();
     await _saveDownloads();
@@ -949,6 +1034,10 @@ class DownloadService extends ChangeNotifier {
   }
 
   Future<void> downloadAlbum(JellyfinAlbum album) async {
+    if (!_albumBatchInFlight.add(album.id)) {
+      debugPrint('downloadAlbum: batch already in flight for ${album.id}');
+      return;
+    }
     try {
       final tracks = await jellyfinService.loadAlbumTracks(albumId: album.id);
       for (final track in tracks) {
@@ -956,7 +1045,35 @@ class DownloadService extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('Error downloading album: $e');
+    } finally {
+      _albumBatchInFlight.remove(album.id);
     }
+  }
+
+  /// Queue every track in a playlist for download, guarded against duplicate
+  /// concurrent calls (rapid double-tap on the playlist download button).
+  /// Returns the number of tracks newly queued.
+  Future<int> downloadPlaylist({
+    required String playlistId,
+    required List<JellyfinTrack> tracks,
+  }) async {
+    if (!_playlistBatchInFlight.add(playlistId)) {
+      debugPrint('downloadPlaylist: batch already in flight for $playlistId');
+      return 0;
+    }
+    int started = 0;
+    try {
+      for (final track in tracks) {
+        final existing = _downloads[track.id];
+        if (existing == null || existing.isFailed) {
+          await downloadTrack(track, ownerId: playlistId);
+          started++;
+        }
+      }
+    } finally {
+      _playlistBatchInFlight.remove(playlistId);
+    }
+    return started;
   }
 
   Future<void> _processQueue() async {
@@ -1051,13 +1168,13 @@ class DownloadService extends ChangeNotifier {
       final totalBytes = response.contentLength ?? 0;
       int downloadedBytes = 0;
 
-      // 60s no-progress timeout: Stream.timeout fires when no event arrives
-      // within the duration, so a server that sends headers but stalls the body
-      // won't freeze the download queue indefinitely.
+      // No-progress timeout: Stream.timeout fires when no event arrives within
+      // the duration, so a server that sends headers but stalls the body won't
+      // freeze the download queue indefinitely.
       final stalledStream = response.stream.timeout(
-        const Duration(seconds: 60),
+        _stallTimeout,
         onTimeout: (_) => throw TimeoutException(
-          'Download stalled (no data for 60s)',
+          'Download stalled (no data for ${_stallTimeout.inSeconds}s)',
         ),
       );
 
@@ -1105,7 +1222,9 @@ class DownloadService extends ChangeNotifier {
         progress: 1.0,
         completedAt: DateTime.now(),
         fileSizeBytes: fileSize,
+        clearErrorKind: true,
       );
+      _retryAttempts.remove(trackId);
 
       // Download artwork after track completes
       await _downloadArtwork(updatedTrack);
@@ -1147,6 +1266,7 @@ class DownloadService extends ChangeNotifier {
       _downloads[trackId] = item.copyWith(
         status: DownloadStatus.failed,
         errorMessage: e.toString(),
+        errorKind: _classifyDownloadError(e),
       );
       notifyListeners();
       await _saveDownloads();
@@ -1404,17 +1524,31 @@ class DownloadService extends ChangeNotifier {
     final item = _downloads[trackId];
     if (item == null || !item.isFailed) return;
 
+    final attempt = _retryAttempts[trackId] ?? 0;
+    if (attempt >= _maxRetryAttempts) {
+      debugPrint('retryDownload: max attempts ($_maxRetryAttempts) reached for $trackId');
+      return;
+    }
+    _retryAttempts[trackId] = attempt + 1;
+
     _downloads[trackId] = item.copyWith(
       status: DownloadStatus.queued,
       progress: 0.0,
       errorMessage: null,
+      clearErrorKind: true,
     );
-    
-    _downloadQueue.add(trackId);
     notifyListeners();
-    await _saveDownloads();
 
-    unawaited(_processQueue());
+    final delay = _backoffFor(attempt);
+    debugPrint('retryDownload: scheduling retry ${attempt + 1}/$_maxRetryAttempts for $trackId in ${delay.inMilliseconds}ms');
+    unawaited(Future.delayed(delay, () async {
+      // Re-check: user may have deleted the item or completed it via another path.
+      final current = _downloads[trackId];
+      if (current == null || !current.isQueued) return;
+      _downloadQueue.add(trackId);
+      await _saveDownloads();
+      unawaited(_processQueue());
+    }));
   }
 
   Future<String?> getLocalPath(String trackId) async {
@@ -1668,6 +1802,7 @@ class DownloadService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _connectivitySub?.cancel();
     _httpClient.close();
     super.dispose();
   }

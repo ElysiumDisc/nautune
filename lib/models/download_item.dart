@@ -9,6 +9,18 @@ enum DownloadStatus {
   paused,
 }
 
+/// Categorizes a failed download by its root cause. Persisted as the enum
+/// index in Hive; do not reorder existing entries — append new kinds.
+enum DownloadErrorKind {
+  network,      // SocketException, HttpException, TLS, DNS, timeout
+  server,       // HTTP 4xx/5xx
+  storageFull,  // ENOSPC
+  permission,   // Filesystem permission denied
+  fileSystem,   // Other FileSystemException
+  canceled,     // User canceled or pause/dispose interrupted
+  unknown,
+}
+
 class DownloadItem {
   final JellyfinTrack track;
   final String localPath;
@@ -19,6 +31,7 @@ class DownloadItem {
   final DateTime queuedAt;
   final DateTime? completedAt;
   final String? errorMessage;
+  final DownloadErrorKind? errorKind;
   final bool isDemoAsset;
   final Set<String> owners;
   final int? fileSizeBytes; // Cached file size to avoid repeated file I/O
@@ -33,6 +46,7 @@ class DownloadItem {
     required this.queuedAt,
     this.completedAt,
     this.errorMessage,
+    this.errorKind,
     this.isDemoAsset = false,
     required this.owners,
     this.fileSizeBytes,
@@ -48,6 +62,8 @@ class DownloadItem {
     DateTime? queuedAt,
     DateTime? completedAt,
     String? errorMessage,
+    DownloadErrorKind? errorKind,
+    bool clearErrorKind = false,
     bool? isDemoAsset,
     Set<String>? owners,
     int? fileSizeBytes,
@@ -62,6 +78,7 @@ class DownloadItem {
       queuedAt: queuedAt ?? this.queuedAt,
       completedAt: completedAt ?? this.completedAt,
       errorMessage: errorMessage ?? this.errorMessage,
+      errorKind: clearErrorKind ? null : (errorKind ?? this.errorKind),
       isDemoAsset: isDemoAsset ?? this.isDemoAsset,
       owners: owners ?? this.owners,
       fileSizeBytes: fileSizeBytes ?? this.fileSizeBytes,
@@ -93,6 +110,7 @@ class DownloadItem {
       'queuedAt': queuedAt.toIso8601String(),
       'completedAt': completedAt?.toIso8601String(),
       'errorMessage': errorMessage,
+      'errorKind': errorKind?.index,
       'isDemoAsset': isDemoAsset,
       'owners': owners.toList(),
       'fileSizeBytes': fileSizeBytes,
@@ -116,6 +134,13 @@ class DownloadItem {
             ? DateTime.parse(json['completedAt'] as String)
             : null,
         errorMessage: json['errorMessage'] as String?,
+        errorKind: () {
+          final idx = json['errorKind'] as int?;
+          if (idx == null || idx < 0 || idx >= DownloadErrorKind.values.length) {
+            return null;
+          }
+          return DownloadErrorKind.values[idx];
+        }(),
         isDemoAsset: json['isDemoAsset'] as bool? ?? false,
         owners: HashSet<String>.from(json['owners'] as List? ?? []),
         fileSizeBytes: json['fileSizeBytes'] as int?,
