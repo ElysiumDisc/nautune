@@ -2994,15 +2994,17 @@ class _CustomThemeCard extends StatelessWidget {
               end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isSelected ? primaryColor : primaryColor.withValues(alpha: 0.5),
-              width: isSelected ? 3 : 1,
-            ),
+            border: isSelected
+                ? null
+                : Border.all(
+                    color: primaryColor.withValues(alpha: 0.5),
+                    width: 1,
+                  ),
             boxShadow: isSelected
                 ? [
                     BoxShadow(
-                      color: primaryColor.withValues(alpha: 0.3),
-                      blurRadius: 8,
+                      color: primaryColor.withValues(alpha: 0.35),
+                      blurRadius: 14,
                       spreadRadius: 1,
                     ),
                   ]

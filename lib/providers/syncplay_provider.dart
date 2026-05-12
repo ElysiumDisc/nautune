@@ -109,6 +109,11 @@ class SyncPlayProvider extends ChangeNotifier {
   String? get shareLink => _syncPlayService?.getShareLink();
   String? get shareUrl => _syncPlayService?.getShareUrl();
 
+  /// Pass-through for the app-lifecycle hub: stop ping/drift timers when
+  /// backgrounded so the radio isn't woken every 5–15 s.
+  void pauseBackgroundPolling() => _syncPlayService?.pauseBackgroundPolling();
+  void resumeBackgroundPolling() => _syncPlayService?.resumeBackgroundPolling();
+
   void _onSessionChanged() {
     final session = _sessionProvider.session;
     if (session == null) {

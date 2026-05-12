@@ -17,6 +17,7 @@ import '../services/chart_generator_service.dart';
 import '../services/ios_fft_service.dart';
 import '../services/listening_analytics_service.dart';
 import '../services/pulseaudio_fft_service.dart';
+import '../theme/nautune_theme.dart';
 import '../widgets/jellyfin_image.dart';
 
 /// Frets on Fire - Guitar Hero style rhythm game easter egg.
@@ -249,7 +250,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
           dy: -2.0 - _random.nextDouble() * 2,
           color: Color.lerp(
             const Color(0xFFFF6B35),
-            const Color(0xFFFFD700),
+            NautuneFeatureColors.treasureGold,
             _random.nextDouble(),
           )!,
           life: 1.0,
@@ -359,7 +360,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     if (isPerfect) {
       _perfectHits++;
       _score += 50 * effectiveMultiplier;
-      _showHitFeedback(lane, 'PERFECT', const Color(0xFFFFD700));
+      _showHitFeedback(lane, 'PERFECT', NautuneFeatureColors.treasureGold);
     } else {
       _goodHits++;
       _score += 50 * effectiveMultiplier;
@@ -396,7 +397,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     _laneHitTime[lane] = DateTime.now();
 
     // Spawn hit burst particles
-    final particleColor = isPerfect ? const Color(0xFFFFD700) : Colors.white;
+    final particleColor = isPerfect ? NautuneFeatureColors.treasureGold : Colors.white;
     final count = isPerfect ? 10 : 7;
     for (int i = 0; i < count; i++) {
       final angle = _random.nextDouble() * 3.14159 * 2;
@@ -407,7 +408,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
         dx: speed * (angle < 3.14159 ? 1 : -1) * (_random.nextDouble() - 0.3),
         dy: -speed * 0.5 - _random.nextDouble() * 2,
         color: isPerfect
-            ? Color.lerp(const Color(0xFFFFD700), Colors.white, _random.nextDouble() * 0.4)!
+            ? Color.lerp(NautuneFeatureColors.treasureGold, Colors.white, _random.nextDouble() * 0.4)!
             : particleColor,
         life: 1.0,
         size: 3.0 + _random.nextDouble() * 2,
@@ -845,7 +846,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   Widget _buildLegendaryDownloadPrompt(ThemeData theme) {
     const fireOrange = Color(0xFFFF6B35);
     const fireRed = Color(0xFFFF4D6D);
-    const fireYellow = Color(0xFFFFD700);
+    const fireYellow = NautuneFeatureColors.treasureGold;
 
     return Container(
       color: Colors.black87,
@@ -1184,8 +1185,8 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     // Fire colors for streak effects
     const fireOrange = Color(0xFFFF6B35);
     const fireRed = Color(0xFFFF4D6D);
-    const fireYellow = Color(0xFFFFD700);
-    const lightningBlue = Color(0xFF00BFFF);
+    const fireYellow = NautuneFeatureColors.treasureGold;
+    const lightningBlue = NautuneFeatureColors.cyanVisualizer;
 
     return Stack(
       children: [
@@ -1335,12 +1336,12 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
                 color: _lightningLane != null
-                    ? const Color(0xFF00BFFF).withValues(alpha: 0.3)
+                    ? NautuneFeatureColors.cyanVisualizer.withValues(alpha: 0.3)
                     : Colors.white.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: _lightningLane != null
-                      ? const Color(0xFF00BFFF)
+                      ? NautuneFeatureColors.cyanVisualizer
                       : Colors.white24,
                   width: 1,
                 ),
@@ -1348,7 +1349,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
               child: Icon(
                 Icons.bolt,
                 color: _lightningLane != null
-                    ? const Color(0xFF00BFFF)
+                    ? NautuneFeatureColors.cyanVisualizer
                     : Colors.white54,
                 size: 24,
               ),
@@ -1526,7 +1527,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     // Fire colors
     const fireOrange = Color(0xFFFF6B35);
     const fireRed = Color(0xFFFF4D6D);
-    const fireYellow = Color(0xFFFFD700);
+    const fireYellow = NautuneFeatureColors.treasureGold;
 
     return Container(
       decoration: BoxDecoration(
@@ -2063,7 +2064,7 @@ class _NoteHighwayPainter extends CustomPainter {
       // Secondary yellow glow for higher combos
       if (combo >= 20) {
         final yellowGlowPaint = Paint()
-          ..color = const Color(0xFFFFD700).withValues(alpha: 0.2 * fireIntensity)
+          ..color = NautuneFeatureColors.treasureGold.withValues(alpha: 0.2 * fireIntensity)
           ..maskFilter = MaskFilter.blur(BlurStyle.normal, 25 * scaleFactor);
         canvas.drawLine(
           Offset(0, hitLineY),
@@ -2146,7 +2147,7 @@ class _NoteHighwayPainter extends CustomPainter {
 
       // Outer glow - pulsing edge effect
       final edgeGlowPaint = Paint()
-        ..color = const Color(0xFF00BFFF).withValues(alpha: 0.2 + 0.15 * pulseIntensity)
+        ..color = NautuneFeatureColors.cyanVisualizer.withValues(alpha: 0.2 + 0.15 * pulseIntensity)
         ..strokeWidth = (3 + pulseIntensity) * scaleFactor
         ..style = PaintingStyle.stroke
         ..maskFilter = MaskFilter.blur(BlurStyle.normal, (10 + 4 * pulseIntensity) * scaleFactor);
@@ -2161,9 +2162,9 @@ class _NoteHighwayPainter extends CustomPainter {
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
-            const Color(0xFF00BFFF).withValues(alpha: 0.05),
-            const Color(0xFF00BFFF).withValues(alpha: 0.15 + 0.1 * pulseIntensity),
-            const Color(0xFF00BFFF).withValues(alpha: 0.25 + 0.1 * pulseIntensity),
+            NautuneFeatureColors.cyanVisualizer.withValues(alpha: 0.05),
+            NautuneFeatureColors.cyanVisualizer.withValues(alpha: 0.15 + 0.1 * pulseIntensity),
+            NautuneFeatureColors.cyanVisualizer.withValues(alpha: 0.25 + 0.1 * pulseIntensity),
           ],
         ).createShader(Rect.fromLTWH(laneLeft, 0, laneWidth, hitLineY));
       canvas.drawRect(
@@ -2173,14 +2174,14 @@ class _NoteHighwayPainter extends CustomPainter {
 
       // Draw zigzag lightning bolt down the center
       final boltPaint = Paint()
-        ..color = const Color(0xFF00BFFF)
+        ..color = NautuneFeatureColors.cyanVisualizer
         ..strokeWidth = 3 * scaleFactor
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round;
 
       final boltGlowPaint = Paint()
-        ..color = const Color(0xFF00BFFF).withValues(alpha: 0.5 + 0.2 * pulseIntensity)
+        ..color = NautuneFeatureColors.cyanVisualizer.withValues(alpha: 0.5 + 0.2 * pulseIntensity)
         ..strokeWidth = 8 * scaleFactor
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
@@ -2274,7 +2275,7 @@ class _NoteHighwayPainter extends CustomPainter {
 
       if (note.isBonus) {
         // Golden bonus note
-        const bonusGold = Color(0xFFFFD700);
+        const bonusGold = NautuneFeatureColors.treasureGold;
         const bonusOrange = Color(0xFFFF8C00);
 
         // Larger glow for bonus
@@ -2550,7 +2551,7 @@ class _TrackSelectionDialog extends StatelessWidget {
 
   Widget _buildLegendaryTrackItem(BuildContext context, ThemeData theme) {
     const fireOrange = Color(0xFFFF6B35);
-    const fireYellow = Color(0xFFFFD700);
+    const fireYellow = NautuneFeatureColors.treasureGold;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),

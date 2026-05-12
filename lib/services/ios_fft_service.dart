@@ -20,6 +20,7 @@ class IOSFFTService {
   bool _isCapturing = false;
   bool _initialized = false;
   String? _currentUrl;
+  bool _wasCapturingBeforeBackground = false;
 
   // FFT output stream
   final _fftController = BehaviorSubject<IOSFFTData>.seeded(IOSFFTData.zero);
@@ -103,6 +104,27 @@ class IOSFFTService {
   /// This ensures setAudioUrl will actually update even if same track is replayed
   void resetUrl() {
     _currentUrl = null;
+  }
+
+  /// Stop the MTAudioProcessingTap + shadow AVPlayer when the app goes to
+  /// background. The native syncTimer is cancelled by stopCapture() already.
+  /// EventChannel subscription stays alive (cheap) so resume is fast.
+  Future<void> suspendForBackground() async {
+    if (!Platform.isIOS) return;
+    _wasCapturingBeforeBackground = _isCapturing;
+    if (_isCapturing) {
+      await stopCapture();
+    }
+  }
+
+  /// Re-engage capture if a track URL is still set and capture was active
+  /// before background. Safe to call when nothing was capturing.
+  Future<void> resumeFromBackground() async {
+    if (!Platform.isIOS) return;
+    if (_wasCapturingBeforeBackground && _currentUrl != null) {
+      await startCapture();
+    }
+    _wasCapturingBeforeBackground = false;
   }
 
   /// Sync shadow player position with main player

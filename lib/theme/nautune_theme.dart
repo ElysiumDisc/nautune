@@ -391,3 +391,29 @@ class NautuneTheme {
     return NautunePalettes.purpleOcean.buildTheme();
   }
 }
+
+/// Cross-screen accent colours that recur in feature/easter-egg screens
+/// (Profile shelves, Frets on Fire, ListenBrainz badges). Centralised so the
+/// values stop drifting and so a future palette tweak only edits one place.
+///
+/// Signature colours that are intentionally local to one site (e.g. the
+/// Pacifico username `0xFFB39DDB`, the hero ring's bespoke gradient palette)
+/// are NOT mirrored here — they are part of a single visual landmark.
+class NautuneFeatureColors {
+  const NautuneFeatureColors._();
+
+  /// Hero/profile ocean blue accent (also surfaces in Frets on Fire highlights).
+  static const Color oceanBlueAccent = Color(0xFF409CFF);
+
+  /// "Emerald sea" — used for treasure/achievement chips on Profile.
+  static const Color verdantGreen = Color(0xFF10B981);
+
+  /// "Gold treasure" — Frets on Fire fire colour, achievement medals.
+  static const Color treasureGold = Color(0xFFFFD700);
+
+  /// Lightning-blue cyan — visualizers, Frets on Fire arcs.
+  static const Color cyanVisualizer = Color(0xFF00BFFF);
+
+  /// ListenBrainz brand orange — Profile integration badge.
+  static const Color listenBrainzOrange = Color(0xFFEB743B);
+}

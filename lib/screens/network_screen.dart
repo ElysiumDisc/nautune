@@ -24,7 +24,7 @@ class NetworkScreen extends StatefulWidget {
 }
 
 class _NetworkScreenState extends State<NetworkScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final AudioPlayer _audioPlayer = AudioPlayer();
   final TextEditingController _channelController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -53,6 +53,7 @@ class _NetworkScreenState extends State<NetworkScreen>
       vsync: this,
       duration: const Duration(seconds: 10),
     )..repeat();
+    WidgetsBinding.instance.addObserver(this);
 
     // Listen to player state changes
     _audioPlayer.onPlayerStateChanged.listen((state) {
@@ -100,6 +101,7 @@ class _NetworkScreenState extends State<NetworkScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     // Record any remaining listen time before disposing
     _recordListenTime();
     _tickerController.dispose();
@@ -108,6 +110,24 @@ class _NetworkScreenState extends State<NetworkScreen>
     _scrollController.dispose();
     _downloadService.removeListener(_onDownloadServiceChanged);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+        if (_tickerController.isAnimating) _tickerController.stop();
+        break;
+      case AppLifecycleState.resumed:
+        if (mounted && !_tickerController.isAnimating) {
+          _tickerController.repeat();
+        }
+        break;
+      case AppLifecycleState.detached:
+        break;
+    }
   }
 
   /// Record listening time for the current channel.

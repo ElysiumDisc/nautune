@@ -239,7 +239,37 @@ class _FreqPillState extends State<_FreqPill>
   late final AnimationController _pulse = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1100),
-  )..repeat(reverse: true);
+  );
+  late String _label;
+
+  @override
+  void initState() {
+    super.initState();
+    _label = _composeLabel(widget.freq);
+    if (widget.isPlaying) {
+      _pulse.repeat(reverse: true);
+    }
+  }
+
+  @override
+  void didUpdateWidget(_FreqPill oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.freq != oldWidget.freq) {
+      _label = _composeLabel(widget.freq);
+    }
+    if (widget.isPlaying != oldWidget.isPlaying) {
+      if (widget.isPlaying) {
+        _pulse.repeat(reverse: true);
+      } else {
+        _pulse.stop();
+        _pulse.value = 0;
+      }
+    }
+  }
+
+  String _composeLabel(HealingFrequency freq) => freq.name.isEmpty
+      ? '${_formatHz(freq.hz)} Hz'
+      : '${freq.name} · ${_formatHz(freq.hz)} Hz';
 
   @override
   void dispose() {
@@ -258,9 +288,7 @@ class _FreqPillState extends State<_FreqPill>
         ? theme.colorScheme.onPrimary
         : theme.colorScheme.onPrimaryContainer;
 
-    final label = widget.freq.name.isEmpty
-        ? '${_formatHz(widget.freq.hz)} Hz'
-        : '${widget.freq.name} · ${_formatHz(widget.freq.hz)} Hz';
+    final label = _label;
 
     final tooltipMsg = widget.freq.description ??
         (widget.freq.isInaudible ? 'Playing audible octave' : '');

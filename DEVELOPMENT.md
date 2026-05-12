@@ -12,10 +12,10 @@ Four files must be updated together when bumping the version (they each carry an
 iOS/macOS/Linux generated config files regenerate on build; don't edit them by hand.
 
 ```bash
-# Example: bump from 8.8.0 to 8.8.1
-sed -i 's/version: 8.8.0+1/version: 8.8.1+1/' pubspec.yaml
-sed -i "s/8.8.0+1/8.8.1+1/" lib/app_version.dart
-sed -i 's/    version: 8.8.0/    version: 8.8.1/' AppImageBuilder.yml
+# Example: bump from 8.8.1 to 8.8.2
+sed -i 's/version: 8.8.1+1/version: 8.8.2+1/' pubspec.yaml
+sed -i "s/8.8.1+1/8.8.2+1/" lib/app_version.dart
+sed -i 's/    version: 8.8.1/    version: 8.8.2/' AppImageBuilder.yml
 ```
 
 After editing, run `flutter analyze` and add a new `### vX.Y.Z` block to `CHANGELOG.md`.
@@ -43,7 +43,7 @@ cp linux/nautune.desktop AppDir/ && \
 cp linux/nautune.png AppDir/ && \
 cd AppDir && ln -s usr/bin/nautune AppRun && cd .. && \
 mkdir -p dist && \
-ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.8.0.AppImage
+ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.8.1.AppImage
 ```
 
 ### Build Deb Package (Linux)

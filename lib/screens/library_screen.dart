@@ -46,6 +46,7 @@ import 'playlist_detail_screen.dart';
 import 'profile_screen.dart';
 import 'recently_played_screen.dart';
 import 'settings_screen.dart';
+import '../theme/nautune_spacing.dart';
 
 part 'tabs/albums_tab.dart';
 part 'tabs/artists_tab.dart';
@@ -701,7 +702,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                         size: 20,
                         color: theme.colorScheme.onTertiaryContainer,
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: NautuneSpacing.md),
                       Expanded(
                         child: Text(
                           'No internet connection. Showing downloaded content only.',
@@ -885,7 +886,7 @@ class _EmptyState extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           const Icon(Icons.library_music, size: 64),
-          const SizedBox(height: 16),
+          const SizedBox(height: NautuneSpacing.lg),
           const Text('No libraries found'),
           const SizedBox(height: 8),
           ElevatedButton.icon(
@@ -913,9 +914,9 @@ class _ErrorState extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(Icons.error, size: 64, color: Theme.of(context).colorScheme.error),
-            const SizedBox(height: 16),
+            const SizedBox(height: NautuneSpacing.lg),
             Text(message, textAlign: TextAlign.center, maxLines: 3, overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 16),
+            const SizedBox(height: NautuneSpacing.lg),
             ElevatedButton.icon(
               onPressed: onRetry,
               icon: const Icon(Icons.refresh),
@@ -957,7 +958,7 @@ class _LibraryTile extends StatelessWidget {
                 Icons.library_music,
                 color: isSelected ? theme.colorScheme.onSecondaryContainer : theme.colorScheme.onSurfaceVariant,
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: NautuneSpacing.lg),
               Expanded(
                 child: Text(
                   library.name,
@@ -1243,7 +1244,7 @@ class _DownloadsTab extends StatelessWidget {
                       children: [
                         Icon(Icons.download_outlined,
                             size: 64, color: theme.colorScheme.secondary),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: NautuneSpacing.lg),
                         Text(
                           'No Downloads',
                           style: theme.textTheme.titleLarge?.copyWith(
@@ -1294,7 +1295,7 @@ class _DownloadsTab extends StatelessWidget {
                     children: [
                       Icon(Icons.info_outline,
                           size: 20, color: theme.colorScheme.primary),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: NautuneSpacing.md),
                       Expanded(
                         child: Text(
                           '$completedCount completed • $activeCount active',
@@ -1493,7 +1494,7 @@ class _PlaceholderTab extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(icon, size: 64, color: Theme.of(context).colorScheme.onSurfaceVariant),
-          const SizedBox(height: 16),
+          const SizedBox(height: NautuneSpacing.lg),
           Text(message, textAlign: TextAlign.center, style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
         ],
       ),

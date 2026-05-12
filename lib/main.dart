@@ -32,6 +32,7 @@ import 'services/listening_analytics_service.dart';
 import 'services/local_cache_service.dart';
 import 'services/deep_link_service.dart';
 import 'services/notification_service.dart';
+import 'services/ios_fft_service.dart';
 import 'services/playback_state_store.dart';
 import 'app_version.dart';
 
@@ -473,20 +474,41 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver, Wi
         unawaited(ListeningAnalyticsService().saveAnalytics());
         // Broadcast media session state so lock screen controls stay active
         unawaited(_broadcastMediaSessionState());
+        _suspendBackgroundWork();
         break;
-        
+
       case AppLifecycleState.resumed:
         // App returning to foreground - check connectivity and refresh if needed
         debugPrint('📱 App lifecycle: resumed - checking connectivity');
+        _resumeBackgroundWork();
         unawaited(_onAppResumed());
         break;
-        
+
       case AppLifecycleState.detached:
       case AppLifecycleState.hidden:
         // App being detached - final save
         debugPrint('📱 App lifecycle: $state');
         unawaited(_savePlaybackState());
+        _suspendBackgroundWork();
         break;
+    }
+  }
+
+  /// Stop polling/timers/native taps that don't need to run while backgrounded.
+  /// Cheap and idempotent — safe to call from any lifecycle transition.
+  void _suspendBackgroundWork() {
+    widget.syncPlayProvider.pauseBackgroundPolling();
+    widget.appState.audioPlayerService.reportingService?.suspendForBackground();
+    if (Platform.isIOS) {
+      unawaited(IOSFFTService.instance.suspendForBackground());
+    }
+  }
+
+  void _resumeBackgroundWork() {
+    widget.syncPlayProvider.resumeBackgroundPolling();
+    widget.appState.audioPlayerService.reportingService?.resumeFromBackground();
+    if (Platform.isIOS) {
+      unawaited(IOSFFTService.instance.resumeFromBackground());
     }
   }
 

@@ -96,9 +96,9 @@ class _ContinueListeningShelf extends StatelessWidget {
               : hasData
                   ? ListView.separated(
                       scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                       itemCount: tracks!.length,
-                      separatorBuilder: (context, _) => const SizedBox(width: 12),
+                      separatorBuilder: (context, _) => const SizedBox(width: NautuneSpacing.md),
                       itemBuilder: (context, index) {
                         final track = tracks![index];
                         return _TrackChip(
@@ -108,7 +108,7 @@ class _ContinueListeningShelf extends StatelessWidget {
                       },
                     )
                   : Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                       child: Text(
                         'Nothing waiting for you yet.',
                         style: theme.textTheme.bodySmall,
@@ -226,9 +226,9 @@ class _RecentlyAddedShelf extends StatelessWidget {
               : hasData
                   ? ListView.separated(
                       scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                       itemCount: albums!.length,
-                      separatorBuilder: (context, _) => const SizedBox(width: 12),
+                      separatorBuilder: (context, _) => const SizedBox(width: NautuneSpacing.md),
                       itemBuilder: (context, index) {
                         final album = albums![index];
                         return _MiniAlbumCard(
@@ -239,7 +239,7 @@ class _RecentlyAddedShelf extends StatelessWidget {
                       },
                     )
                   : Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                       child: Text(
                         'No new albums yet.',
                         style: theme.textTheme.bodySmall,
@@ -310,9 +310,9 @@ class _RecentlyPlayedShelf extends StatelessWidget {
               : hasData
                   ? ListView.separated(
                       scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                       itemCount: tracks!.length,
-                      separatorBuilder: (context, _) => const SizedBox(width: 12),
+                      separatorBuilder: (context, _) => const SizedBox(width: NautuneSpacing.md),
                       itemBuilder: (context, index) {
                         final track = tracks![index];
                         return _TrackChip(
@@ -322,7 +322,7 @@ class _RecentlyPlayedShelf extends StatelessWidget {
                       },
                     )
                   : Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                       child: Text(
                         'No recently played tracks.',
                         style: theme.textTheme.bodySmall,
@@ -368,9 +368,9 @@ class _DiscoverShelf extends StatelessWidget {
               : hasData
                   ? ListView.separated(
                       scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                       itemCount: tracks!.length,
-                      separatorBuilder: (context, _) => const SizedBox(width: 12),
+                      separatorBuilder: (context, _) => const SizedBox(width: NautuneSpacing.md),
                       itemBuilder: (context, index) {
                         final track = tracks![index];
                         return _TrackChip(
@@ -380,7 +380,7 @@ class _DiscoverShelf extends StatelessWidget {
                       },
                     )
                   : Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                       child: Text(
                         'No tracks to discover yet.',
                         style: theme.textTheme.bodySmall,
@@ -431,9 +431,9 @@ class _RecommendationsShelf extends StatelessWidget {
               : hasData
                   ? ListView.separated(
                       scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                       itemCount: tracks!.length,
-                      separatorBuilder: (context, _) => const SizedBox(width: 12),
+                      separatorBuilder: (context, _) => const SizedBox(width: NautuneSpacing.md),
                       itemBuilder: (context, index) {
                         final track = tracks![index];
                         return _TrackChip(
@@ -443,7 +443,7 @@ class _RecommendationsShelf extends StatelessWidget {
                       },
                     )
                   : Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                       child: Text(
                         'Play some music to get recommendations.',
                         style: theme.textTheme.bodySmall,
@@ -628,9 +628,9 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
                 : hasMatchedData
                     ? ListView.separated(
                         scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                         itemCount: _matchedTracks!.length,
-                        separatorBuilder: (context, _) => const SizedBox(width: 12),
+                        separatorBuilder: (context, _) => const SizedBox(width: NautuneSpacing.md),
                         itemBuilder: (context, index) {
                           final track = _matchedTracks![index];
                           return _TrackChip(
@@ -645,7 +645,7 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
                         },
                       )
                     : Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                         child: Text(
                           'Getting recommendations from ListenBrainz...',
                           style: theme.textTheme.bodySmall,
@@ -667,9 +667,9 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
             height: 100,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
               itemCount: notInLibraryRecs.length,
-              separatorBuilder: (context, _) => const SizedBox(width: 12),
+              separatorBuilder: (context, _) => const SizedBox(width: NautuneSpacing.md),
               itemBuilder: (context, index) {
                 final rec = notInLibraryRecs[index];
                 return _DiscoveryChip(
@@ -840,9 +840,9 @@ class _OnThisDayShelf extends StatelessWidget {
               : hasData
                   ? ListView.separated(
                       scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                       itemCount: tracks!.length,
-                      separatorBuilder: (context, _) => const SizedBox(width: 12),
+                      separatorBuilder: (context, _) => const SizedBox(width: NautuneSpacing.md),
                       itemBuilder: (context, index) {
                         final track = tracks![index];
                         return _TrackChip(
@@ -852,7 +852,7 @@ class _OnThisDayShelf extends StatelessWidget {
                       },
                     )
                   : Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
                       child: Text(
                         'No listening history for this date.',
                         style: theme.textTheme.bodySmall,
@@ -910,7 +910,7 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
                 size: 64,
                 color: theme.colorScheme.secondary.withValues(alpha: 0.5),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: NautuneSpacing.lg),
               Text(
                 'No content available',
                 style: theme.textTheme.titleLarge,
@@ -954,7 +954,7 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
             )
           else
             body,
-        const SizedBox(height: 16),
+        const SizedBox(height: NautuneSpacing.lg),
       ],
     );
   }
@@ -992,7 +992,7 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 16),
+        const SizedBox(height: NautuneSpacing.lg),
         if (showContinue) ...[
           _ContinueListeningShelf(
             tracks: continueTracks,

@@ -22,6 +22,7 @@ import '../services/essential_mix_service.dart';
 import '../services/network_download_service.dart';
 import '../services/chart_cache_service.dart';
 import '../services/rewind_service.dart';
+import '../theme/nautune_theme.dart';
 import 'rewind_screen.dart';
 
 /// Cache for profile stats to avoid recomputing on every visit
@@ -980,7 +981,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                                   child: Container(
                                                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                                     decoration: BoxDecoration(
-                                                      color: const Color(0xFFEB743B).withValues(alpha: 0.9),
+                                                      color: NautuneFeatureColors.listenBrainzOrange.withValues(alpha: 0.9),
                                                       borderRadius: BorderRadius.circular(12),
                                                     ),
                                                     child: Row(
@@ -1359,7 +1360,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildHeroRing(ThemeData theme) {
-    const oceanBlue = Color(0xFF409CFF);
+    const oceanBlue = NautuneFeatureColors.oceanBlueAccent;
     const deepPurple = Color(0xFF7A3DF1);
 
     // Progress toward goal (e.g., 100 hours)
@@ -1588,9 +1589,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildKeyMetricsRow(ThemeData theme) {
-    const oceanBlue = Color(0xFF409CFF);
-    const emeraldSea = Color(0xFF10B981);
-    const goldTreasure = Color(0xFFFFD700);
+    const oceanBlue = NautuneFeatureColors.oceanBlueAccent;
+    const emeraldSea = NautuneFeatureColors.verdantGreen;
+    const goldTreasure = NautuneFeatureColors.treasureGold;
 
     final weekChange = _weekComparison;
 
@@ -1636,7 +1637,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildListenBrainzStatsRow(ThemeData theme) {
     final listenBrainz = ListenBrainzService();
     final config = listenBrainz.config;
-    const listenBrainzOrange = Color(0xFFEB743B);
+    const listenBrainzOrange = NautuneFeatureColors.listenBrainzOrange;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2232,7 +2233,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     const fireOrange = Color(0xFFFF6B35);
     const fireRed = Color(0xFFFF4D6D);
     const fireDark = Color(0xFF1A0A0A);
-    const fireGold = Color(0xFFFFD700);
+    const fireGold = NautuneFeatureColors.treasureGold;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2294,10 +2295,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   children: [
                     Text(
                       'Frets on Fire',
-                      style: GoogleFonts.pacifico(
-                        fontSize: 18,
-                        color: fireOrange,
-                      ),
+                      style: _pacificoStyle(fontSize: 18, color: fireOrange),
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -2501,10 +2499,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   children: [
                     Text(
                       'Piano',
-                      style: GoogleFonts.pacifico(
-                        fontSize: 18,
-                        color: pianoBlue,
-                      ),
+                      style: _pacificoStyle(fontSize: 18, color: pianoBlue),
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -2553,12 +2548,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: isOnline
-            ? const Color(0xFF10B981).withValues(alpha: 0.1)
+            ? NautuneFeatureColors.verdantGreen.withValues(alpha: 0.1)
             : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: isOnline
-              ? const Color(0xFF10B981).withValues(alpha: 0.3)
+              ? NautuneFeatureColors.verdantGreen.withValues(alpha: 0.3)
               : theme.colorScheme.outline.withValues(alpha: 0.2),
         ),
       ),
@@ -2568,7 +2563,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             isOnline ? Icons.cloud_upload : Icons.cloud_off,
             size: 18,
             color: isOnline
-                ? const Color(0xFF10B981)
+                ? NautuneFeatureColors.verdantGreen
                 : theme.colorScheme.onSurfaceVariant,
           ),
           const SizedBox(width: 10),
@@ -2579,7 +2574,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   : '$_unsyncedPlays ${_unsyncedPlays == 1 ? 'play' : 'plays'} pending sync',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: isOnline
-                    ? const Color(0xFF10B981)
+                    ? NautuneFeatureColors.verdantGreen
                     : theme.colorScheme.onSurfaceVariant,
               ),
             ),
@@ -3633,7 +3628,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         children: [
           Text(
             'Your Sound DNA',
-            style: GoogleFonts.pacifico(
+            style: _pacificoStyle(
               fontSize: 16,
               color: theme.colorScheme.primary,
             ),
@@ -4707,7 +4702,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Color _getTierBorderColor(String tier) {
     switch (tier) {
       case 'gold':
-        return const Color(0xFFFFD700); // Gold
+        return NautuneFeatureColors.treasureGold; // Gold
       case 'silver':
         return const Color(0xFFC0C0C0); // Silver
       default:
@@ -4741,15 +4736,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Color _getMilestoneColor(IconType type) {
     switch (type) {
       case IconType.plays:
-        return const Color(0xFF409CFF); // Ocean blue (Nautune theme)
+        return NautuneFeatureColors.oceanBlueAccent; // Ocean blue (Nautune theme)
       case IconType.hours:
         return const Color(0xFF7A3DF1); // Deep purple (Nautune theme)
       case IconType.streak:
         return Colors.orange; // Warm sunset
       case IconType.artists:
-        return const Color(0xFF10B981); // Emerald sea
+        return NautuneFeatureColors.verdantGreen; // Emerald sea
       case IconType.albums:
-        return const Color(0xFFFFD700); // Gold treasure
+        return NautuneFeatureColors.treasureGold; // Gold treasure
       case IconType.tracks:
         return const Color(0xFFEC4899); // Pearl pink
       case IconType.genres:
@@ -4818,7 +4813,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             theme,
             icon: Icons.explore,
             text: discoveryLabel,
-            color: const Color(0xFF10B981),
+            color: NautuneFeatureColors.verdantGreen,
           ),
         ],
       ),
@@ -4857,9 +4852,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   /// Build Library Overview Card
   Widget _buildLibraryOverviewCard(ThemeData theme) {
-    const oceanBlue = Color(0xFF409CFF);
-    const emeraldSea = Color(0xFF10B981);
-    const goldTreasure = Color(0xFFFFD700);
+    const oceanBlue = NautuneFeatureColors.oceanBlueAccent;
+    const emeraldSea = NautuneFeatureColors.verdantGreen;
+    const goldTreasure = NautuneFeatureColors.treasureGold;
     const pinkCoral = Color(0xFFEC4899);
 
     return Container(
@@ -4885,10 +4880,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(width: 8),
               Text(
                 'Your Musical Ocean',
-                style: GoogleFonts.pacifico(
-                  fontSize: 16,
-                  color: oceanBlue,
-                ),
+                style: _pacificoStyle(fontSize: 16, color: oceanBlue),
               ),
             ],
           ),
@@ -5012,10 +5004,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(width: 8),
               Text(
                 'Audiophile Stats',
-                style: GoogleFonts.pacifico(
-                  fontSize: 16,
-                  color: deepPurple,
-                ),
+                style: _pacificoStyle(fontSize: 16, color: deepPurple),
               ),
             ],
           ),
@@ -5183,7 +5172,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             icon: Icons.schedule,
             label: 'Peak Hour',
             value: _peakHour != null ? _formatHour(_peakHour!) : '-',
-            color: const Color(0xFF409CFF),
+            color: NautuneFeatureColors.oceanBlueAccent,
           ),
           _buildCompactPatternTile(theme,
             icon: Icons.today,
@@ -5191,7 +5180,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             value: _peakDay != null
                 ? ListeningAnalyticsService.getShortDayName(_peakDay!)
                 : '-',
-            color: const Color(0xFFFFD700),
+            color: NautuneFeatureColors.treasureGold,
           ),
           _buildCompactPatternTile(theme,
             icon: Icons.timelapse,
@@ -5203,7 +5192,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             icon: Icons.explore,
             label: 'Discovery',
             value: '${_discoveryRate.toStringAsFixed(0)}%',
-            color: const Color(0xFF10B981),
+            color: NautuneFeatureColors.verdantGreen,
             progress: _discoveryRate / 100,
           ),
           _buildCompactPatternTile(theme,
@@ -5317,7 +5306,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   Expanded(
                     child: Text(
                       'On This Day ($monthDay)',
-                      style: GoogleFonts.pacifico(
+                      style: _pacificoStyle(
                         fontSize: 16,
                         color: theme.colorScheme.tertiary,
                       ),
@@ -5436,13 +5425,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
         const SizedBox(width: 10),
         Text(
           title,
-          style: GoogleFonts.pacifico(
-            fontSize: 18,
-            color: theme.colorScheme.primary,
-          ),
+          style: _pacificoStyle(fontSize: 18, color: theme.colorScheme.primary),
         ),
       ],
     );
+  }
+
+  /// Shared Pacifico section-header text style. The 28-px hero username on
+  /// the avatar uses its own inline GoogleFonts call (drop shadow + bespoke
+  /// colour); everything else should come through here.
+  TextStyle _pacificoStyle({required double fontSize, required Color color}) {
+    return GoogleFonts.pacifico(fontSize: fontSize, color: color);
   }
 
   /// Build wave divider between sections

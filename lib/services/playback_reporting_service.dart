@@ -23,6 +23,12 @@ class PlaybackReportingService {
   Duration Function()? _positionProvider;
   Duration _progressInterval = const Duration(seconds: 10);
   bool _enabled = true;
+  JellyfinTrack? _activeTrack;
+  bool _isPaused = false;
+  bool _backgroundSuspended = false;
+
+  static const Duration _activeInterval = Duration(seconds: 10);
+  static const Duration _pausedInterval = Duration(seconds: 60);
 
   /// Queued start/stop events recorded while disabled (offline).
   /// Progress events are skipped (redundant — start/stop capture endpoints).
@@ -108,12 +114,48 @@ class PlaybackReportingService {
   }
 
   void _startProgressReporting(JellyfinTrack track) {
+    _activeTrack = track;
+    _isPaused = false;
+    _restartProgressTimer();
+  }
+
+  void _restartProgressTimer() {
     _progressTimer?.cancel();
+    final track = _activeTrack;
+    if (track == null || _backgroundSuspended) return;
     _progressTimer = Timer.periodic(_progressInterval, (_) {
       final provider = _positionProvider;
       final position = provider != null ? provider() : Duration.zero;
-      unawaited(reportPlaybackProgress(track, position, false));
+      unawaited(reportPlaybackProgress(track, position, _isPaused));
     });
+  }
+
+  /// Notify the reporter that playback paused/resumed. Downshifts the
+  /// progress cadence to 60 s while paused, restores 10 s on resume.
+  void notifyPaused(bool isPaused) {
+    if (_isPaused == isPaused) return;
+    _isPaused = isPaused;
+    _progressInterval = isPaused ? _pausedInterval : _activeInterval;
+    if (_activeTrack != null) {
+      _restartProgressTimer();
+    }
+  }
+
+  /// Cancel the progress timer while the app is backgrounded. Server already
+  /// has the most recent progress; resume rearms when the app returns.
+  void suspendForBackground() {
+    if (_backgroundSuspended) return;
+    _backgroundSuspended = true;
+    _progressTimer?.cancel();
+  }
+
+  /// Re-arm the progress timer if a track is still active.
+  void resumeFromBackground() {
+    if (!_backgroundSuspended) return;
+    _backgroundSuspended = false;
+    if (_activeTrack != null) {
+      _restartProgressTimer();
+    }
   }
 
   Future<void> reportPlaybackProgress(
@@ -162,6 +204,9 @@ class PlaybackReportingService {
     Duration position,
   ) async {
     _progressTimer?.cancel();
+    _activeTrack = null;
+    _isPaused = false;
+    _progressInterval = _activeInterval;
 
     if (_currentSessionId == null || serverUrl.startsWith('demo://')) return;
 

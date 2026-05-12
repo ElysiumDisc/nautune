@@ -820,6 +820,7 @@ class AudioPlayerService {
         if (_lastPlayingState != isPlaying && _currentTrack != null) {
           _lastPlayingState = isPlaying;
           if (_reportingService != null && _currentTrack!.serverUrl != null) {
+            _reportingService?.notifyPaused(!isPlaying);
             _reportingService?.reportPlaybackProgress(
               _currentTrack!,
               _lastPosition,

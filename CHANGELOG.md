@@ -1,3 +1,49 @@
+### v8.8.1 - Battery, Background-Work Hygiene & Minimalist Polish
+
+**Battery / lifecycle hub** (`lib/main.dart`)
+
+- `_NautuneAppState.didChangeAppLifecycleState` now suspends three pieces of work when the app is backgrounded (`paused` / `inactive` / `hidden`) and re-arms them on `resumed`: SyncPlay ping + drift timers, the iOS MTAudioProcessingTap / shadow-AVPlayer FFT capture, and the Jellyfin playback-progress timer. Previously each kept firing while the phone was locked.
+- New `_suspendBackgroundWork()` / `_resumeBackgroundWork()` private helpers — single call site on each lifecycle transition.
+
+**SyncPlay suspend/resume** (`lib/services/syncplay_service.dart`)
+
+- New `pauseBackgroundPolling()` / `resumeBackgroundPolling()` methods (idempotent, guarded by `_backgroundSuspended`). They wrap the existing `_stopPingTimer()` / `_startPingTimer()` helpers, so the protocol surface is unchanged — the server tolerates ping gaps. Exposed on `SyncPlayProvider` for the lifecycle hub.
+
+**iOS FFT suspend/resume** (`lib/services/ios_fft_service.dart`)
+
+- New `suspendForBackground()` / `resumeFromBackground()` methods. `suspendForBackground` remembers whether `_isCapturing` was active and calls the existing `stopCapture()` (which also cancels the native `syncTimer` in `AudioFFTPlugin.swift`). `resumeFromBackground` re-engages only if a URL is still set. EventChannel subscription stays alive between transitions — no init/teardown churn.
+
+**Playback-reporting cadence** (`lib/services/playback_reporting_service.dart`)
+
+- The Jellyfin `/Sessions/Playing/Progress` timer now varies its interval: 10 s while playing, 60 s while paused (`notifyPaused(bool)`). Wired from the existing `onPlayerStateChanged` listener in `audio_player_service.dart` — one line added, no new subscription.
+- Added `suspendForBackground()` / `resumeFromBackground()` so the timer cancels entirely when the app is backgrounded and re-arms on resume if a track is still loaded.
+- Internal: track-in-progress is now captured in `_activeTrack` so timer restarts don't need the caller to re-supply the track.
+
+**Network screen ticker** (`lib/screens/network_screen.dart`)
+
+- `_NetworkScreenState` now mixes in `WidgetsBindingObserver`. The scrolling-text `AnimationController.repeat()` is stopped on `paused`/`inactive`/`hidden` and rearmed on `resumed`. Previously the 10 s loop spun forever once the screen was opened.
+
+**Healing Frequencies pill** (`lib/screens/healing_frequencies_screen.dart`)
+
+- `_FreqPill._pulse` no longer `..repeat(reverse: true)` unconditionally in init. The pulse is now started in `initState` only if `widget.isPlaying`, and toggled in `didUpdateWidget`. With ~12 pills visible, this removes the per-frame `AnimatedBuilder` rebuild for pills that aren't playing.
+- Pill label string (`'name · Hz'`) is now memoised in `_label` so the `AnimatedBuilder.builder` doesn't re-concatenate on every frame while the pulse is running.
+
+**Feature-colour palette** (`lib/theme/nautune_theme.dart`)
+
+- New `NautuneFeatureColors` class centralising the ad-hoc colours that recur across feature/easter-egg screens: `oceanBlueAccent`, `verdantGreen`, `treasureGold`, `cyanVisualizer`, `listenBrainzOrange`. Replaces ~25 `const Color(0xFF…)` literals in `profile_screen.dart` and `frets_on_fire_screen.dart`. Signature colours that are part of a single visual landmark (the Pacifico 28-px username `0xFFB39DDB`, the hero ring's bespoke gradient) are intentionally NOT mirrored — they belong inline.
+
+**Pacifico section-header consolidation** (`lib/screens/profile_screen.dart`)
+
+- New private `_pacificoStyle({fontSize, color})` helper on `_ProfileScreenState`. Six Pacifico section-header sites (Sound DNA, Musical Ocean, Audiophile Stats, On This Day, Frets on Fire / Piano tile titles, and the nautical-header helper) now route through it. The 28-px hero username keeps its bespoke inline GoogleFonts call with the drop shadow — that's a single visual landmark, not a header.
+
+**Settings palette-toggle decoration de-noise** (`lib/screens/settings_screen.dart`)
+
+- The palette-selection card no longer layers `gradient + border + boxShadow` simultaneously when selected. Active state is now `gradient + shadow only`; inactive keeps the thin border. Shadow blur was nudged from 8 to 14 to compensate for the missing border weight. Pick-one minimalism — calmer to look at.
+
+**Spacing-token light migration**
+
+- `library_screen.dart`, `tabs/home_tab.dart`, `tabs/playlists_tab.dart` now import and use `NautuneSpacing` tokens (`sm`/`md`/`lg`) for ~30 % of common `SizedBox` and `EdgeInsets.symmetric` literals. Profile, Now Playing, and Full Player screens are intentionally left hand-tuned per the v8.2.0 landing-vs-legacy shim contract.
+
 ### v8.8.0 - Download Hardening, Settings/Profile Polish
 
 **Downloads & Offline**

@@ -109,6 +109,7 @@ class SyncPlayService extends ChangeNotifier {
   StreamSubscription<bool>? _connectionSubscription;
   Timer? _pingTimer;
   Timer? _driftCheckTimer;
+  bool _backgroundSuspended = false;
 
   // Debouncer for session change notifications (100ms)
   final Debouncer _sessionDebouncer = Debouncer(delay: const Duration(milliseconds: 100));
@@ -1602,6 +1603,23 @@ class SyncPlayService extends ChangeNotifier {
     _driftCheckTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       _checkPositionDrift();
     });
+  }
+
+  /// Stop ping + drift timers while the app is backgrounded so the phone radio
+  /// isn't woken every 5–15 s. Idempotent.
+  void pauseBackgroundPolling() {
+    if (_backgroundSuspended) return;
+    _backgroundSuspended = true;
+    _stopPingTimer();
+  }
+
+  /// Re-arm timers if a session is still active. Idempotent.
+  void resumeBackgroundPolling() {
+    if (!_backgroundSuspended) return;
+    _backgroundSuspended = false;
+    if (_currentSession != null) {
+      _startPingTimer();
+    }
   }
 
   /// Check if position has drifted more than 500ms and emit corrective seek

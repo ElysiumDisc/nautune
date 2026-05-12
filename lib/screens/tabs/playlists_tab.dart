@@ -111,7 +111,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(Icons.error, size: 64, color: Theme.of(context).colorScheme.error),
-            const SizedBox(height: 16),
+            const SizedBox(height: NautuneSpacing.lg),
             const Text('Failed to load playlists'),
             const SizedBox(height: 8),
             ElevatedButton.icon(onPressed: onRefresh, icon: const Icon(Icons.refresh), label: const Text('Retry')),
@@ -159,7 +159,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                                   color: theme.colorScheme.onPrimary,
                                 ),
                               ),
-                              const SizedBox(width: 16),
+                              const SizedBox(width: NautuneSpacing.lg),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -274,7 +274,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Icon(Icons.playlist_play, size: 64, color: theme.colorScheme.onSurfaceVariant),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: NautuneSpacing.lg),
                     const Text('No playlists found'),
                     const SizedBox(height: 24),
                     ElevatedButton.icon(
@@ -284,7 +284,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                       icon: const Icon(Icons.add),
                       label: const Text('Create Playlist'),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: NautuneSpacing.md),
                     if (!appState.isOfflineMode)
                       OutlinedButton.icon(
                         onPressed: () {
@@ -294,7 +294,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                         label: const Text('Create Fleet'),
                       ),
                     if (!appState.isOfflineMode)
-                      const SizedBox(height: 12),
+                      const SizedBox(height: NautuneSpacing.md),
                     if (!appState.isOfflineMode)
                       OutlinedButton.icon(
                         onPressed: () {
@@ -357,7 +357,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                                     color: theme.colorScheme.onPrimary,
                                   ),
                                 ),
-                                const SizedBox(width: 16),
+                                const SizedBox(width: NautuneSpacing.lg),
                                 Expanded(
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -457,7 +457,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                             ),
                           ),
                         )),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: NautuneSpacing.lg),
                       ],
                     );
                   },
@@ -539,7 +539,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                     itemBuilder: (context, index) => _buildCompactMoodCard(Mood.values[index], theme),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: NautuneSpacing.lg),
                 const Divider(),
                 Padding(
                   padding: const EdgeInsets.only(top: 12, bottom: 8),
