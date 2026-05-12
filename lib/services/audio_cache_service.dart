@@ -86,20 +86,6 @@ class AudioCacheService {
         return fileInfo.file;
       }
 
-      // Fallback: O(1) in-memory path index lookup (replaces directory scan)
-      for (final entry in _pathIndex.entries) {
-        if (entry.key.contains(trackId) || entry.value.contains(trackId)) {
-          final file = File(entry.value);
-          if (await file.exists()) {
-            debugPrint('✅ Found cached file via index: ${entry.value}');
-            return file;
-          } else {
-            // Stale index entry
-            _pathIndex.remove(entry.key);
-          }
-          break;
-        }
-      }
     } catch (e) {
       debugPrint('⚠️ Error checking cache for $trackId: $e');
     }

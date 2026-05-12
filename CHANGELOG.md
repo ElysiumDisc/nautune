@@ -1,3 +1,29 @@
+### v8.7.0 - Audit Pass: Connectivity, Downloads, Cache, Player
+
+A wide-surface bug/perf audit (six Explore agents, ~55 raw candidates, ~10 verified-real after manual review) produced a small, targeted set of fixes. Most agent findings were false positives — including phantom "syntax errors" against valid Dart 3.3+ null-aware collection elements, an `inMicroseconds * 10` "overflow" claim that has 27000 years of headroom, and a claim that Dart's default `Set` doesn't preserve insertion order (it does — it's a `LinkedHashSet`). Those are documented in the audit plan but explicitly *not* changed.
+
+**Bug Fixes**
+
+- Connectivity: `ConnectivityService._extractPrimaryResult` returned `vpn` as the primary transport when every result was `vpn`. Downstream WiFi-only gates and similar checks treat `vpn` as a real connection, so VPN-on-cellular-off devices misreported as connected. The fallthrough now returns `ConnectivityResult.none` so VPN-only is treated as "no real transport."
+- Downloads: `DownloadService._startDownload` had no timeout on the response body stream — a server that sent headers but stalled mid-body could freeze a download (and the whole queue) indefinitely. Added a 60-second no-progress timeout via `Stream.timeout`. Also fixed temp-file cleanup on error: the previous catch block deleted `${item.localPath}.tmp`, but the actual streaming target used the Content-Type-detected `correctPath.tmp` — so when the server returned `audio/mpeg` for an item recorded as `.flac`, the partial temp file leaked. The catch now uses the actual `correctPath.tmp` it was streaming to.
+- Dialogs: Two `TextEditingController` instances created inside dialog callbacks were never disposed — `queue_screen.dart` "Save queue as playlist" and `playlist_detail_screen.dart` `_showRenameDialog`. Both are now wrapped in `try/finally` so the controller is disposed regardless of how the dialog exits.
+- Audio cache: `AudioCacheService.getCachedFile`'s fallback path-index lookup used `entry.key.contains(trackId) || entry.value.contains(trackId)`. With short or prefix-sharing track IDs this can return the wrong file. In practice the index is keyed by hashed filename anyway (not by trackId) so the fallback never reliably resolved cache files — it was dead code at best, a wrong-file risk at worst. Removed; the primary `CacheManager.getFileFromCache(trackId)` lookup above remains the single source of truth.
+
+**Performance**
+
+- Now-playing → artist navigation: tapping the artist name in the full player previously did a linear `.where(...).firstOrNull` scan over `_appState.artists` and, on miss, called `loadMoreArtists()` up to 10 times (500 artists, 10 round-trips) before giving up. Now: try the local cache once, then ask the Jellyfin server directly for that one artist by ID via the existing `JellyfinService.getArtist` endpoint. One round-trip instead of ten.
+- Settings landing search: `onChanged: (_) => setState(() {})` rebuilt the entire landing ListView on every keystroke. Wrapped in the existing `Debouncer` (`lib/utils/debouncer.dart`) at 250 ms.
+
+**Audit findings deliberately not acted on**
+
+- `?varname` null-aware collection elements in `listenbrainz_service.dart`, `jellyfin_client.dart`, `syncplay_client.dart` — valid Dart 3.3+ syntax, `flutter analyze` is clean.
+- `inMicroseconds * 10` "ticks overflow" claims in `playback_reporting_service`, `syncplay_service`, `download_service` — int64 carries ~27000 years of headroom; the math is also correct (1 µs = 10 ticks).
+- `<String>{}` "not ordered" in `robust_http_client.dart` — Dart's default `Set` is `LinkedHashSet` and preserves insertion order.
+- Network-screen AudioPlayer stream listeners flagged as "leaking" — `_audioPlayer.dispose()` closes the underlying streams.
+- Per-event sorted-insert in `ListeningAnalyticsService` — the flagged sites are bulk-load/import/sync, not hot paths; replacing the single O(N log N) sort with N sorted-inserts would be a regression to O(N²).
+
+---
+
 ### v8.6.0 - Sort Overhaul, CarPlay Polish, Subsystem Hardening
 
 **Critical Bug Fixes**

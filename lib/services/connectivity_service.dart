@@ -99,6 +99,8 @@ class ConnectivityService {
         return result;
       }
     }
-    return results.first;
+    // All results are VPN — treat as no real transport so WiFi-only gates and
+    // similar downstream checks don't misinterpret VPN as a usable network.
+    return ConnectivityResult.none;
   }
 }

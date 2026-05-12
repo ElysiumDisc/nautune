@@ -1004,10 +1004,14 @@ class DownloadService extends ChangeNotifier {
     );
     notifyListeners();
 
+    // Hoisted so the catch block can clean up the actual tmp file even when the
+    // detected extension differs from item.localPath's extension.
+    String? activeTmpPath;
+
     try {
       final url = item.track.downloadUrl(jellyfinService.baseUrl, jellyfinService.token);
       final response = await _httpClient.send(http.Request('GET', Uri.parse(url)));
-      
+
       if (response.statusCode != 200) {
         throw Exception('Failed to download: HTTP ${response.statusCode}');
       }
@@ -1033,7 +1037,7 @@ class DownloadService extends ChangeNotifier {
 
       // Get correct path with detected extension
       final correctPath = await _getDownloadPath(item.track, extension: extension);
-      
+
       // Update item with correct path if it changed
       if (correctPath != item.localPath) {
         _downloads[trackId] = item.copyWith(localPath: correctPath);
@@ -1041,12 +1045,23 @@ class DownloadService extends ChangeNotifier {
 
       // Write to temp file first, then atomic rename to prevent corrupt partial files
       final tmpPath = '$correctPath.tmp';
+      activeTmpPath = tmpPath;
       final tmpFile = File(tmpPath);
       final sink = tmpFile.openWrite();
       final totalBytes = response.contentLength ?? 0;
       int downloadedBytes = 0;
 
-      await for (final chunk in response.stream) {
+      // 60s no-progress timeout: Stream.timeout fires when no event arrives
+      // within the duration, so a server that sends headers but stalls the body
+      // won't freeze the download queue indefinitely.
+      final stalledStream = response.stream.timeout(
+        const Duration(seconds: 60),
+        onTimeout: (_) => throw TimeoutException(
+          'Download stalled (no data for 60s)',
+        ),
+      );
+
+      await for (final chunk in stalledStream) {
         sink.add(chunk);
         downloadedBytes += chunk.length;
 
@@ -1119,9 +1134,12 @@ class DownloadService extends ChangeNotifier {
       debugPrint('Download completed: ${updatedTrack.name} ($extension)');
     } catch (e) {
       debugPrint('Download failed for ${item.track.name}: $e');
-      // Clean up partial temp file on failure
+      // Clean up partial temp file on failure. Prefer the actual tmp path used
+      // during streaming (correctPath.tmp) — falls back to item.localPath when
+      // we failed before the extension was negotiated.
+      final cleanupPath = activeTmpPath ?? '${item.localPath}.tmp';
       try {
-        final tmpFile = File('${item.localPath}.tmp');
+        final tmpFile = File(cleanupPath);
         if (await tmpFile.exists()) await tmpFile.delete();
       } catch (e) {
         debugPrint('DownloadService: partial temp cleanup failed: $e');

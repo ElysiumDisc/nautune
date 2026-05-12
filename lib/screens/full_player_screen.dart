@@ -2067,7 +2067,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                               final artistId = track.artistIds.isNotEmpty
                                   ? track.artistIds.first
                                   : null;
-                              var artists = _appState.artists ?? [];
+                              final artists = _appState.artists ?? [];
 
                               if (artistId != null) {
                                 artist = artists
@@ -2084,30 +2084,15 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                   )
                                   .firstOrNull;
 
-                              // If not found, keep loading more pages until we find it or run out
-                              if (artist == null && _appState.hasMoreArtists) {
-                                for (int i = 0; i < 10; i++) {
-                                  // Max 10 pages = 500 artists
-                                  await _appState.loadMoreArtists();
-                                  artists = _appState.artists ?? [];
-
-                                  if (artistId != null) {
-                                    artist = artists
-                                        .where((a) => a.id == artistId)
-                                        .firstOrNull;
-                                  }
-                                  artist ??= artists
-                                      .where(
-                                        (a) =>
-                                            a.name.toLowerCase() ==
-                                            artistName.toLowerCase(),
-                                      )
-                                      .firstOrNull;
-
-                                  if (artist != null ||
-                                      !_appState.hasMoreArtists) {
-                                    break;
-                                  }
+                              // Not in the local cache — ask the server directly for the
+                              // artist by ID. One round-trip beats paging through up to
+                              // 500 artists hunting for a single match.
+                              if (artist == null && artistId != null) {
+                                try {
+                                  artist = await _appState.jellyfinService
+                                      .getArtist(artistId);
+                                } catch (e) {
+                                  debugPrint('Direct artist fetch failed: $e');
                                 }
                               }
 

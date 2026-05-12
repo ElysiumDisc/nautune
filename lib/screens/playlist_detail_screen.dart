@@ -353,59 +353,62 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
 
   Future<void> _showRenameDialog() async {
     final nameController = TextEditingController(text: widget.playlist.name);
-
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Rename Playlist'),
-        content: TextField(
-          controller: nameController,
-          decoration: const InputDecoration(
-            labelText: 'Playlist Name',
-            border: OutlineInputBorder(),
+    try {
+      final result = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Rename Playlist'),
+          content: TextField(
+            controller: nameController,
+            decoration: const InputDecoration(
+              labelText: 'Playlist Name',
+              border: OutlineInputBorder(),
+            ),
+            autofocus: true,
           ),
-          autofocus: true,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Save'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
+      );
 
-    if (result == true && nameController.text.isNotEmpty && mounted) {
-      try {
-        await _appState!.updatePlaylist(
-          playlistId: widget.playlist.id,
-          newName: nameController.text,
-        );
-        if (mounted) {
-          setState(() {
-            // Update local name
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Renamed to "${nameController.text}"'),
-              backgroundColor: Colors.green,
-            ),
+      if (result == true && nameController.text.isNotEmpty && mounted) {
+        try {
+          await _appState!.updatePlaylist(
+            playlistId: widget.playlist.id,
+            newName: nameController.text,
           );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to rename: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          if (mounted) {
+            setState(() {
+              // Update local name
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Renamed to "${nameController.text}"'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Failed to rename: $e'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
         }
       }
+    } finally {
+      nameController.dispose();
     }
   }
 

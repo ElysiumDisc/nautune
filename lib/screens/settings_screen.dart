@@ -21,6 +21,7 @@ import '../providers/ui_state_provider.dart';
 import '../services/app_icon_service.dart';
 import '../services/audio_cache_service.dart';
 import '../services/download_service.dart';
+import '../utils/debouncer.dart';
 import '../services/listenbrainz_service.dart';
 import '../services/rewind_service.dart';
 import '../services/saved_loops_service.dart';
@@ -130,9 +131,13 @@ const List<_SettingsCategory> _settingsCategories = [
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final TextEditingController _landingSearchController = TextEditingController();
+  final Debouncer _landingSearchDebouncer = Debouncer(
+    delay: const Duration(milliseconds: 250),
+  );
 
   @override
   void dispose() {
+    _landingSearchDebouncer.dispose();
     _landingSearchController.dispose();
     super.dispose();
   }
@@ -1479,7 +1484,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
           TextField(
             controller: _landingSearchController,
-            onChanged: (_) => setState(() {}),
+            onChanged: (_) {
+              _landingSearchDebouncer.run(() {
+                if (mounted) setState(() {});
+              });
+            },
             decoration: InputDecoration(
               hintText: 'Search settings',
               prefixIcon: const Icon(Icons.search),
