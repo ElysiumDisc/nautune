@@ -16,6 +16,7 @@ import 'audio_cache_service.dart';
 import 'chart_cache_service.dart';
 import 'lyrics_service.dart';
 import 'connectivity_service.dart';
+import 'hive_init.dart';
 import 'notification_service.dart';
 import 'waveform_service.dart';
 
@@ -116,7 +117,6 @@ class DownloadService extends ChangeNotifier {
   static const _boxName = 'nautune_downloads';
   static const _downloadsKey = 'downloads';
   static const _stallTimeout = Duration(seconds: 60);
-  static bool _hiveInitialized = false;
   Box<dynamic>? _box;
 
   DownloadService({
@@ -134,10 +134,7 @@ class DownloadService extends ChangeNotifier {
   }
 
   Future<void> _initHive() async {
-    if (!_hiveInitialized) {
-      await Hive.initFlutter('nautune');
-      _hiveInitialized = true;
-    }
+    await ensureHiveInitialized();
     _box = await Hive.openBox<dynamic>(_boxName);
   }
 

@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 
@@ -32,14 +30,24 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
   // Track initialization state
   bool _initialized = false;
 
-  // Analytics tracking
-  Timer? _usageTimer;
+  // Analytics tracking — fully event-driven. Each sound has an optional
+  // start timestamp set when its volume transitions 0 → >0 and cleared
+  // (with accumulated time flushed) on >0 → 0 or on dispose. Active-listening
+  // is the union of any sound being on; tracked the same way via
+  // `_anyActiveStartedAt`. No periodic timer.
   int _activeListeningMs = 0; // Time when at least one sound is playing
   int _rainUsageMs = 0;
   int _thunderUsageMs = 0;
   int _campfireUsageMs = 0;
   int _waveUsageMs = 0;
   int _loonUsageMs = 0;
+
+  DateTime? _anyActiveStartedAt;
+  DateTime? _rainStartedAt;
+  DateTime? _thunderStartedAt;
+  DateTime? _campfireStartedAt;
+  DateTime? _waveStartedAt;
+  DateTime? _loonStartedAt;
 
   @override
   void initState() {
@@ -56,37 +64,29 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
     }
   }
 
-  void _startTracking() {
-    if (_usageTimer != null) return;
+  bool get _isAnySoundActive =>
+      _rainVolume > 0 ||
+      _thunderVolume > 0 ||
+      _campfireVolume > 0 ||
+      _waveVolume > 0 ||
+      _loonVolume > 0;
 
-    // Track slider usage every second
-    // Only count time when at least one sound is actively playing
-    _usageTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      final isAnySoundActive = _rainVolume > 0 || _thunderVolume > 0 ||
-          _campfireVolume > 0 || _waveVolume > 0 || _loonVolume > 0;
+  /// Update the "any sound active" window when a slider changes.
+  void _refreshAnyActiveTracking() {
+    final active = _isAnySoundActive;
+    if (active && _anyActiveStartedAt == null) {
+      _anyActiveStartedAt = DateTime.now();
+    } else if (!active && _anyActiveStartedAt != null) {
+      _activeListeningMs +=
+          DateTime.now().difference(_anyActiveStartedAt!).inMilliseconds;
+      _anyActiveStartedAt = null;
+    }
+  }
 
-      // Only count active listening time (when at least one sound is on)
-      if (isAnySoundActive) {
-        _activeListeningMs += 1000;
-      }
-
-      // Track individual sound usage
-      if (_rainVolume > 0) {
-        _rainUsageMs += 1000;
-      }
-      if (_thunderVolume > 0) {
-        _thunderUsageMs += 1000;
-      }
-      if (_campfireVolume > 0) {
-        _campfireUsageMs += 1000;
-      }
-      if (_waveVolume > 0) {
-        _waveUsageMs += 1000;
-      }
-      if (_loonVolume > 0) {
-        _loonUsageMs += 1000;
-      }
-    });
+  /// Flush a single sound's open interval into its accumulator.
+  void _flushSound(DateTime? startedAt, void Function(int deltaMs) accumulate) {
+    if (startedAt == null) return;
+    accumulate(DateTime.now().difference(startedAt).inMilliseconds);
   }
 
   Future<void> _initAudio() async {
@@ -119,8 +119,14 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
 
   @override
   void dispose() {
-    // Stop tracking
-    _usageTimer?.cancel();
+    // Flush any still-open per-sound intervals so the final session reflects
+    // listening up to the moment the user leaves the screen.
+    _flushSound(_rainStartedAt, (ms) => _rainUsageMs += ms);
+    _flushSound(_thunderStartedAt, (ms) => _thunderUsageMs += ms);
+    _flushSound(_campfireStartedAt, (ms) => _campfireUsageMs += ms);
+    _flushSound(_waveStartedAt, (ms) => _waveUsageMs += ms);
+    _flushSound(_loonStartedAt, (ms) => _loonUsageMs += ms);
+    _flushSound(_anyActiveStartedAt, (ms) => _activeListeningMs += ms);
 
     // Record session to analytics only if user actually listened (> 5 seconds of active sound)
     final analytics = ListeningAnalyticsService();
@@ -147,60 +153,93 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
   }
 
   void _onRainVolumeChanged(double value) {
+    final wasOn = _rainVolume > 0;
+    final isOn = value > 0;
     setState(() => _rainVolume = value);
     _rainPlayer.setVolume(value);
-    if (value > 0 && _rainPlayer.state != PlayerState.playing) {
+    if (isOn && _rainPlayer.state != PlayerState.playing) {
       _rainPlayer.resume();
-      _ensureTrackingStarted();
     }
+    if (isOn && !wasOn) {
+      _rainStartedAt = DateTime.now();
+    } else if (!isOn && wasOn) {
+      _flushSound(_rainStartedAt, (ms) => _rainUsageMs += ms);
+      _rainStartedAt = null;
+    }
+    _refreshAnyActiveTracking();
     HapticService.selectionClick();
   }
 
   void _onThunderVolumeChanged(double value) {
+    final wasOn = _thunderVolume > 0;
+    final isOn = value > 0;
     setState(() => _thunderVolume = value);
     _thunderPlayer.setVolume(value);
-    if (value > 0 && _thunderPlayer.state != PlayerState.playing) {
+    if (isOn && _thunderPlayer.state != PlayerState.playing) {
       _thunderPlayer.resume();
-      _ensureTrackingStarted();
     }
+    if (isOn && !wasOn) {
+      _thunderStartedAt = DateTime.now();
+    } else if (!isOn && wasOn) {
+      _flushSound(_thunderStartedAt, (ms) => _thunderUsageMs += ms);
+      _thunderStartedAt = null;
+    }
+    _refreshAnyActiveTracking();
     HapticService.selectionClick();
   }
 
   void _onCampfireVolumeChanged(double value) {
+    final wasOn = _campfireVolume > 0;
+    final isOn = value > 0;
     setState(() => _campfireVolume = value);
     _campfirePlayer.setVolume(value);
-    if (value > 0 && _campfirePlayer.state != PlayerState.playing) {
+    if (isOn && _campfirePlayer.state != PlayerState.playing) {
       _campfirePlayer.resume();
-      _ensureTrackingStarted();
     }
+    if (isOn && !wasOn) {
+      _campfireStartedAt = DateTime.now();
+    } else if (!isOn && wasOn) {
+      _flushSound(_campfireStartedAt, (ms) => _campfireUsageMs += ms);
+      _campfireStartedAt = null;
+    }
+    _refreshAnyActiveTracking();
     HapticService.selectionClick();
   }
 
   void _onWaveVolumeChanged(double value) {
+    final wasOn = _waveVolume > 0;
+    final isOn = value > 0;
     setState(() => _waveVolume = value);
     _wavePlayer.setVolume(value);
-    if (value > 0 && _wavePlayer.state != PlayerState.playing) {
+    if (isOn && _wavePlayer.state != PlayerState.playing) {
       _wavePlayer.resume();
-      _ensureTrackingStarted();
     }
+    if (isOn && !wasOn) {
+      _waveStartedAt = DateTime.now();
+    } else if (!isOn && wasOn) {
+      _flushSound(_waveStartedAt, (ms) => _waveUsageMs += ms);
+      _waveStartedAt = null;
+    }
+    _refreshAnyActiveTracking();
     HapticService.selectionClick();
   }
 
   void _onLoonVolumeChanged(double value) {
+    final wasOn = _loonVolume > 0;
+    final isOn = value > 0;
     setState(() => _loonVolume = value);
     _loonPlayer.setVolume(value);
-    if (value > 0 && _loonPlayer.state != PlayerState.playing) {
+    if (isOn && _loonPlayer.state != PlayerState.playing) {
       _loonPlayer.resume();
-      _ensureTrackingStarted();
     }
+    if (isOn && !wasOn) {
+      _loonStartedAt = DateTime.now();
+    } else if (!isOn && wasOn) {
+      _flushSound(_loonStartedAt, (ms) => _loonUsageMs += ms);
+      _loonStartedAt = null;
+    }
+    _refreshAnyActiveTracking();
     HapticService.selectionClick();
-  }
-
-  /// Start analytics tracking only when at least one sound is active.
-  void _ensureTrackingStarted() {
-    if (_usageTimer == null) {
-      _startTracking();
-    }
   }
 
   @override

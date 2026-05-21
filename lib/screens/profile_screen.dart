@@ -1384,9 +1384,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
         boxShadow: [
           BoxShadow(
-            color: oceanBlue.withValues(alpha: 0.1),
-            blurRadius: 20,
-            offset: const Offset(0, 4),
+            color: oceanBlue.withValues(alpha: 0.06),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -5277,16 +5277,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     return Container(
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            theme.colorScheme.tertiary.withValues(alpha: 0.1),
-            theme.colorScheme.tertiary.withValues(alpha: 0.05),
-          ],
-        ),
+        color: theme.colorScheme.tertiary.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: theme.colorScheme.tertiary.withValues(alpha: 0.2)),
       ),
       child: Column(
         children: [

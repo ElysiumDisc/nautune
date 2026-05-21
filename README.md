@@ -21,7 +21,7 @@
 - **Smart Playlists**: Tag-aware mood playlists (Chill, Energetic, Melancholy, Upbeat) using actual file tags
 - **Smart Pre-Cache**: Configurable pre-caching of current and upcoming tracks (3, 5, or 10) with WiFi-only option
 - **Smart Lyrics**: Multi-source lyrics with sync, caching, and pre-fetching
-- **47 Nautical Milestones**: Earn achievements as you listen
+- **46 Nautical Milestones**: Earn achievements as you listen
 - **Track Sharing**: Share downloaded audio files via AirDrop (iOS) or file manager (Linux)
 - **Storage Management**: Separate views for downloads, cache, loops, waveforms, and charts with accurate stats
 - **Listening Analytics**: Heatmaps, streaks, weekly comparisons, 28-day activity sparkline, and animated stat counters with trend indicators
@@ -53,7 +53,7 @@ A hidden radio feature [other-people.network](https://www.other-people.network) 
 ### Using The Network
 
 - **Channel Dial**: Enter any number between 0-333 to tune to the nearest available channel
-- **Channel List**: Browse and tap any of the 60+ available channels
+- **Channel List**: Browse and tap any of the 120 available channels
 - **Mute**: Toggle audio with the speaker icon in the top bar
 
 ### Save for Offline

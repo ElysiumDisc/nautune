@@ -315,7 +315,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
       onRefresh: () async => onRefresh(),
       child: ListView.builder(
         controller: scrollController,
-        cacheExtent: 500, // Pre-render items above/below viewport for smoother scrolling
+        scrollCacheExtent: ScrollCacheExtent.pixels(500), // Pre-render items above/below viewport for smoother scrolling
         padding: const EdgeInsets.all(16),
         itemCount: playlists!.length + (isLoading ? 1 : 0) + 1, // +1 for header button
         itemBuilder: (context, index) {
@@ -710,53 +710,56 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
 
   Future<void> _showCreatePlaylistDialog(BuildContext context) async {
     final nameController = TextEditingController();
-
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Create Playlist'),
-        content: TextField(
-          controller: nameController,
-          decoration: const InputDecoration(
-            labelText: 'Playlist Name',
-            border: OutlineInputBorder(),
+    try {
+      final result = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Create Playlist'),
+          content: TextField(
+            controller: nameController,
+            decoration: const InputDecoration(
+              labelText: 'Playlist Name',
+              border: OutlineInputBorder(),
+            ),
+            autofocus: true,
           ),
-          autofocus: true,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Create'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Create'),
-          ),
-        ],
-      ),
-    );
+      );
 
-    if (result == true && nameController.text.isNotEmpty && context.mounted) {
-      try {
-        await appState.createPlaylist(name: nameController.text);
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Created playlist "${nameController.text}"'),
-              backgroundColor: Theme.of(context).colorScheme.primary,
-            ),
-          );
-        }
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to create playlist: $e'),
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ),
-          );
+      if (result == true && nameController.text.isNotEmpty && context.mounted) {
+        try {
+          await appState.createPlaylist(name: nameController.text);
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Created playlist "${nameController.text}"'),
+                backgroundColor: Theme.of(context).colorScheme.primary,
+              ),
+            );
+          }
+        } catch (e) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Failed to create playlist: $e'),
+                backgroundColor: Theme.of(context).colorScheme.error,
+              ),
+            );
+          }
         }
       }
+    } finally {
+      nameController.dispose();
     }
   }
 

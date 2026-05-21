@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../data/network_channels.dart';
 import '../models/network_channel.dart';
+import 'hive_init.dart';
 
 /// Download status for a network channel.
 enum NetworkDownloadStatus {
@@ -199,7 +200,6 @@ class NetworkDownloadService extends ChangeNotifier {
   static const _downloadsKey = 'downloads';
   static const _autoCacheKey = 'auto_cache_enabled';
   static const _statsKey = 'channel_stats';
-  static bool _hiveInitialized = false;
   Box<dynamic>? _box;
 
   bool _isInitialized = false;
@@ -229,10 +229,7 @@ class NetworkDownloadService extends ChangeNotifier {
   }
 
   Future<void> _initHive() async {
-    if (!_hiveInitialized) {
-      await Hive.initFlutter('nautune');
-      _hiveInitialized = true;
-    }
+    await ensureHiveInitialized();
     _box = await Hive.openBox<dynamic>(_boxName);
   }
 

@@ -368,8 +368,7 @@ class _CollabPlaylistScreenState extends State<CollabPlaylistScreen> {
   ) {
     return ReorderableListView.builder(
       itemCount: provider.queue.length,
-      onReorder: (oldIndex, newIndex) {
-        if (newIndex > oldIndex) newIndex--;
+      onReorderItem: (oldIndex, newIndex) {
         provider.reorderQueue(oldIndex, newIndex);
       },
       itemBuilder: (context, index) {

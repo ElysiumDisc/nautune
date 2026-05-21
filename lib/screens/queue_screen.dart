@@ -192,11 +192,7 @@ class _QueueScreenState extends State<QueueScreen> {
               return ReorderableListView.builder(
                 itemCount: queue.length,
                 itemExtent: 72, // Fixed height improves scroll calculation performance
-                onReorder: (oldIndex, newIndex) {
-                  // Adjust newIndex if moving down
-                  if (newIndex > oldIndex) {
-                    newIndex -= 1;
-                  }
+                onReorderItem: (oldIndex, newIndex) {
                   audioService.reorderQueue(oldIndex, newIndex);
                 },
                 itemBuilder: (context, index) {

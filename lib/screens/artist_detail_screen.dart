@@ -5,6 +5,7 @@ import 'dart:ui' as ui show FontFeature, Image;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
@@ -440,7 +441,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
 
     return Scaffold(
       body: CustomScrollView(
-        cacheExtent: 500,
+        scrollCacheExtent: ScrollCacheExtent.pixels(500),
         slivers: [
           SliverAppBar(
             expandedHeight: isDesktop ? 380 : 340,

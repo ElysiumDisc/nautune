@@ -70,7 +70,7 @@ class _FavoritesTab extends StatelessWidget {
     return RefreshIndicator(
       onRefresh: () async => onRefresh(),
       child: ListView.builder(
-        cacheExtent: 500, // Pre-render items above/below viewport for smoother scrolling
+        scrollCacheExtent: ScrollCacheExtent.pixels(500), // Pre-render items above/below viewport for smoother scrolling
         padding: const EdgeInsets.all(16),
         itemCount: recentTracks?.length ?? 0,
         itemBuilder: (context, index) {

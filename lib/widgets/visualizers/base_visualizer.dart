@@ -53,6 +53,7 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
   // a new List<double> at 30-60 Hz (pre-iOS this was the hottest GC source
   // in the visualizer pipeline).
   List<double>? _fakeSpectrumBuffer;
+  List<double>? _spectrumBarsBuffer;
 
   // Real FFT sources - check synchronously from singleton services
   bool get usePulseAudioFFT => Platform.isLinux && PulseAudioFFTService.instance.isAvailable;
@@ -216,7 +217,10 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
       return _generateBarsFromBands(barCount);
     }
 
-    final bars = <double>[];
+    final bars = (_spectrumBarsBuffer == null ||
+            _spectrumBarsBuffer!.length != barCount)
+        ? (_spectrumBarsBuffer = List<double>.filled(barCount, 0.0))
+        : _spectrumBarsBuffer!;
     final spectrumLength = smoothSpectrum.length;
 
     for (int i = 0; i < barCount; i++) {
@@ -255,7 +259,7 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
       }
 
       avg = (avg * boost).clamp(0.0, 1.0);
-      bars.add(avg);
+      bars[i] = avg;
     }
 
     return bars;
@@ -263,7 +267,10 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
 
   /// Generate bars from frequency bands when spectrum is not available
   List<double> _generateBarsFromBands(int barCount) {
-    final bars = <double>[];
+    final bars = (_spectrumBarsBuffer == null ||
+            _spectrumBarsBuffer!.length != barCount)
+        ? (_spectrumBarsBuffer = List<double>.filled(barCount, 0.0))
+        : _spectrumBarsBuffer!;
 
     for (int i = 0; i < barCount; i++) {
       final ratio = i / barCount;
@@ -287,7 +294,7 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
 
       // Add overall amplitude influence
       value = (value * (0.7 + smoothAmplitude * 0.5)).clamp(0.0, 1.0);
-      bars.add(value);
+      bars[i] = value;
     }
 
     return bars;
@@ -295,12 +302,21 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: animationController,
-      builder: (context, child) {
-        updateSmoothedValues();
-        return buildVisualizer(context);
-      },
+    // Pause the visualizer ticker when its route isn't on top (e.g. user
+    // navigated away from the full player while music keeps playing). The
+    // animation controller's vsync resolves TickerMode at attach time, so
+    // descendant tickers stop firing — no rebuilds, no GPU cost.
+    final route = ModalRoute.of(context);
+    final routeIsCurrent = route?.isCurrent ?? true;
+    return TickerMode(
+      enabled: routeIsCurrent,
+      child: AnimatedBuilder(
+        animation: animationController,
+        builder: (context, child) {
+          updateSmoothedValues();
+          return buildVisualizer(context);
+        },
+      ),
     );
   }
 

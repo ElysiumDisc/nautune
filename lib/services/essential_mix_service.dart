@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../jellyfin/jellyfin_track.dart';
 import '../models/essential_mix_track.dart';
+import 'hive_init.dart';
 
 /// Download status for the Essential Mix.
 enum EssentialMixDownloadStatus {
@@ -122,7 +123,6 @@ class EssentialMixService extends ChangeNotifier {
   static const _boxName = 'nautune_essential_mix';
   static const _stateKey = 'download_state';
   static const _listenTimeKey = 'listen_time_seconds';
-  static bool _hiveInitialized = false;
   Box<dynamic>? _box;
 
   EssentialMixDownloadState _state = const EssentialMixDownloadState(
@@ -193,10 +193,7 @@ class EssentialMixService extends ChangeNotifier {
   }
 
   Future<void> _initHive() async {
-    if (!_hiveInitialized) {
-      await Hive.initFlutter('nautune');
-      _hiveInitialized = true;
-    }
+    await ensureHiveInitialized();
     _box = await Hive.openBox<dynamic>(_boxName);
   }
 

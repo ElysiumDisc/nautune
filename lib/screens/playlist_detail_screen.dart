@@ -92,9 +92,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
 
   void _onReorder(int oldIndex, int newIndex) async {
     if (_tracks == null) return;
-    if (oldIndex < newIndex) {
-      newIndex -= 1;
-    }
     final item = _tracks!.removeAt(oldIndex);
     _tracks!.insert(newIndex, item);
     setState(() {}); // Optimistic update
@@ -250,7 +247,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                   : ReorderableListView.builder(
                       padding: const EdgeInsets.all(16),
                       itemCount: _tracks!.length,
-                      onReorder: _onReorder,
+                      onReorderItem: _onReorder,
                       itemBuilder: (context, index) {
                         final track = _tracks![index];
                         final duration = track.duration;

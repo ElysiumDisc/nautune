@@ -125,10 +125,11 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Set global image cache limits to prevent OOM on large libraries.
-  // 50 MB balances smooth scrolling in large grids against memory pressure.
-  // Increased maximumSize to 500 to reduce eviction thrashing.
-  PaintingBinding.instance.imageCache.maximumSize = 500;
-  PaintingBinding.instance.imageCache.maximumSizeBytes = 50 * 1024 * 1024; // 50MB
+  // Tuned for music-app workload (1000-5000 album grid scrolling) — at 500/50MB
+  // we saw eviction thrashing on libraries >2000 albums; 1500/100MB stays safe
+  // on phones and removes the thrashing on desktop/tablet.
+  PaintingBinding.instance.imageCache.maximumSize = 1500;
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 100 * 1024 * 1024; // 100MB
 
   // Parallelize non-dependent initializations
   final results = await Future.wait([

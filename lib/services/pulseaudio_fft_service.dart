@@ -4,6 +4,8 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:rxdart/rxdart.dart';
 
+import 'fft_math.dart';
+
 // Pre-allocated reusable FFT buffers (avoid GC churn at ~43fps)
 const int _fftSize = 1024;
 const int _fftHalf = _fftSize ~/ 2;
@@ -72,23 +74,10 @@ List<double> _performFFT(List<double> samples) {
     _fftMagnitudes[i] = math.sqrt(_fftReal[i] * _fftReal[i] + _fftImag[i] * _fftImag[i]) / halfN;
   }
 
-  return _fftMagnitudes.toList();
-}
-
-/// Compute RMS average for a range of frequency bins
-double _averageRange(List<double> data, int start, int end) {
-  if (data.isEmpty || start >= end) return 0.0;
-  final s = start.clamp(0, data.length);
-  final e = end.clamp(s, data.length);
-  if (s >= e) return 0.0;
-  final slice = data.sublist(s, e);
-  if (slice.isEmpty) return 0.0;
-
-  var sumSq = 0.0;
-  for (final v in slice) {
-    sumSq += v * v;
-  }
-  return math.sqrt(sumSq / slice.length);
+  // Return the shared buffer directly: consumers run on the same isolate and
+  // read synchronously when _fftController.add fires, so they finish before
+  // the next FFT cycle can overwrite. Saves ~halfN doubles allocated every ~23ms.
+  return _fftMagnitudes;
 }
 
 /// Intermediate result from isolate FFT processing
@@ -338,9 +327,9 @@ class PulseAudioFFTService {
         // Treble is 2000Hz+ (rest of spectrum)
 
         // AGGRESSIVE boosting for dramatic visualization
-        final rawBass = _averageRange(spectrum, 0, bassEnd);
-        final rawMid = _averageRange(spectrum, bassEnd, midEnd);
-        final rawTreble = _averageRange(spectrum, midEnd, len);
+        final rawBass = rmsAverageRange(spectrum, 0, bassEnd);
+        final rawMid = rmsAverageRange(spectrum, bassEnd, midEnd);
+        final rawTreble = rmsAverageRange(spectrum, midEnd, len);
 
         final bass = rawBass * 30.0;
         final mid = rawMid * 40.0;

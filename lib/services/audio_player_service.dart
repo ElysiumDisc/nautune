@@ -175,7 +175,9 @@ class AudioPlayerService {
   List<JellyfinTrack> _queue = [];
   int _currentIndex = 0;
   Timer? _positionSaveTimer;
+  int? _lastSavedPositionMs;
   bool _isTransitioning = false;
+  bool _disposed = false;
   Duration _lastPosition = Duration.zero;
   bool _lastPlayingState = false;
   RepeatMode _repeatMode = RepeatMode.off;
@@ -279,13 +281,15 @@ class AudioPlayerService {
 
     // When exiting battery saver, trigger waveform extraction for current track
     if (!enabled && _currentTrack != null && WaveformService.instance.isAvailable) {
-      _triggerWaveformForCurrentTrack();
+      unawaited(_triggerWaveformForCurrentTrack().catchError(
+        (e) => debugPrint('🌊 Waveform trigger failed: $e'),
+      ));
     }
   }
 
   /// Trigger waveform extraction for the currently playing track.
   /// Called when exiting battery saver mode to catch up on skipped extractions.
-  void _triggerWaveformForCurrentTrack() async {
+  Future<void> _triggerWaveformForCurrentTrack() async {
     final track = _currentTrack;
     if (track == null) return;
 
@@ -763,6 +767,10 @@ class AudioPlayerService {
     
     // Position updates
     _playerPosSub = player.onPositionChanged.listen((position) {
+      // Late-arriving callbacks after dispose() would hit closed controllers.
+      // The _detachListeners() cancel future races with controller.close() in
+      // dispose(); checking _disposed here is the synchronous guard.
+      if (_disposed) return;
       _positionController.add(position);
       _lastPosition = position;
       if (player.state == PlayerState.playing && !_batterySaverMode) {
@@ -776,13 +784,21 @@ class AudioPlayerService {
       if (posMs - _lastThresholdCheckMs >= 1000) {
         _lastThresholdCheckMs = posMs;
         // Check if we should start crossfade
-        _checkCrossfadeTrigger(position);
+        unawaited(_checkCrossfadeTrigger(position).catchError(
+          (e) => debugPrint('🌊 Crossfade trigger failed: $e'),
+        ));
         // Check if we should pre-load next track
-        _checkPreloadTrigger(position);
+        unawaited(_checkPreloadTrigger(position).catchError(
+          (e) => debugPrint('⏩ Preload trigger failed: $e'),
+        ));
         // Pre-fetch lyrics for next track at ~50% playback
-        _checkLyricsPrefetch(position);
+        unawaited(_checkLyricsPrefetch(position).catchError(
+          (e) => debugPrint('🎤 Lyrics prefetch failed: $e'),
+        ));
         // Check ListenBrainz scrobble threshold
-        _checkListenBrainzScrobble(position);
+        unawaited(_checkListenBrainzScrobble(position).catchError(
+          (e) => debugPrint('🎵 ListenBrainz scrobble check failed: $e'),
+        ));
         // Sync iOS FFT shadow player position
         if (Platform.isIOS) {
           IOSFFTService.instance.syncPosition(posMs / 1000.0);
@@ -794,6 +810,7 @@ class AudioPlayerService {
     // IMPORTANT: Prefer player-reported duration over metadata since it reflects
     // actual audio length. Metadata can be inaccurate (especially for variable bitrate files).
     _playerDurSub = player.onDurationChanged.listen((duration) {
+      if (_disposed) return;
       // Use player duration if it's reasonable (> 1 second)
       // This prevents progress bar showing "complete" while audio still plays
       if (duration.inSeconds > 1) {
@@ -813,6 +830,7 @@ class AudioPlayerService {
     // State changes
     _playerStateSub = player.onPlayerStateChanged.listen(
       (state) {
+        if (_disposed) return;
         final isPlaying = state == PlayerState.playing;
         _playingController.add(isPlaying);
 
@@ -846,6 +864,7 @@ class AudioPlayerService {
     // Track completion - gapless transition
     _playerCompleteSub = player.onPlayerComplete.listen(
       (_) async {
+        if (_disposed) return;
         if (!_isTransitioning) {
           await _gaplessTransition();
         }
@@ -998,7 +1017,9 @@ class AudioPlayerService {
               // Streaming track during gapless - cache for FFT in background
               final (streamUrl, _) = _getStreamUrl(nextTrack);
               if (streamUrl != null) {
-                _cacheTrackForIOSFFT(nextTrack, streamUrl);
+                unawaited(_cacheTrackForIOSFFT(nextTrack, streamUrl).catchError(
+                  (e) => debugPrint('🎵 iOS FFT cache (gapless) failed: $e'),
+                ));
               }
             }
           } catch (fftError) {
@@ -1489,7 +1510,9 @@ class AudioPlayerService {
           await IOSFFTService.instance.startCapture();
         } else {
           // Streaming - cache in background (same quality as playback), then start FFT
-          _cacheTrackForIOSFFT(track, activeUrl);
+          unawaited(_cacheTrackForIOSFFT(track, activeUrl).catchError(
+            (e) => debugPrint('🎵 iOS FFT cache failed: $e'),
+          ));
         }
       }
 
@@ -1685,6 +1708,8 @@ class AudioPlayerService {
 
     // Update position immediately for responsive UI (before player confirms)
     _lastPosition = clampedPosition;
+    // After a seek, the next periodic save should write the new position.
+    _lastSavedPositionMs = null;
     _positionController.add(clampedPosition);
 
     // Perform the actual seek
@@ -1779,7 +1804,7 @@ class AudioPlayerService {
   /// Cache streaming track for iOS FFT visualization.
   /// Once cached, starts FFT from local file and syncs to current position.
   /// Uses the same [streamUrl] as playback to match transcoding quality.
-  void _cacheTrackForIOSFFT(JellyfinTrack track, String streamUrl) async {
+  Future<void> _cacheTrackForIOSFFT(JellyfinTrack track, String streamUrl) async {
     if (!Platform.isIOS) return;
 
     final trackId = track.id;
@@ -2497,9 +2522,13 @@ class AudioPlayerService {
 
   void _startPositionSaving() {
     _positionSaveTimer?.cancel();
+    // Normal: 15s (was 5s). Battery saver: 30s. Crash-resume granularity
+    // of 15s is acceptable for music and saves ~66% of disk writes on long
+    // playback sessions.
+    _lastSavedPositionMs = null;
     final interval = _batterySaverMode
         ? const Duration(seconds: 30)
-        : const Duration(seconds: 5);
+        : const Duration(seconds: 15);
     _positionSaveTimer = Timer.periodic(interval, (_) {
       _saveCurrentPosition();
     });
@@ -2538,36 +2567,48 @@ class AudioPlayerService {
 
   Future<void> _saveCurrentPosition() async {
     if (_currentTrack == null) return;
+    // Skip entirely when not playing — paused/buffering snapshots aren't
+    // useful and the background lifecycle already calls saveFullPlaybackState()
+    // on suspend.
+    if (!isPlaying) return;
 
     final position = await _player.getCurrentPosition();
-    if (position != null) {
-      // Track listen time using actual elapsed time instead of fixed interval
-      if (isPlaying) {
-        final now = DateTime.now();
-        final elapsed = _lastListenTimeRecord != null
-            ? now.difference(_lastListenTimeRecord!)
-            : (_batterySaverMode
-                ? const Duration(seconds: 30)
-                : const Duration(seconds: 5));
-        _lastListenTimeRecord = now;
-        _playStats.addListenTime(_currentTrack!.id, elapsed);
-        _accumulatedTime += elapsed;
-        // Save every minute
-        if (_accumulatedTime.inSeconds >= 60) {
-          _accumulatedTime = Duration.zero;
-          unawaited(_savePlayStats());
-        }
-      }
+    if (position == null) return;
 
-      _lastPosition = position;
-      await _stateStore.savePlaybackSnapshot(
-        currentTrack: _currentTrack,
-        position: position,
-        queue: null,
-        currentQueueIndex: _currentIndex,
-        isPlaying: isPlaying,
-      );
+    // Listen-time accounting (uses real elapsed time, not the fixed tick).
+    final now = DateTime.now();
+    final elapsed = _lastListenTimeRecord != null
+        ? now.difference(_lastListenTimeRecord!)
+        : (_batterySaverMode
+            ? const Duration(seconds: 30)
+            : const Duration(seconds: 15));
+    _lastListenTimeRecord = now;
+    _playStats.addListenTime(_currentTrack!.id, elapsed);
+    _accumulatedTime += elapsed;
+    if (_accumulatedTime.inSeconds >= 60) {
+      _accumulatedTime = Duration.zero;
+      unawaited(_savePlayStats());
     }
+
+    _lastPosition = position;
+
+    // Skip the disk snapshot if position hasn't meaningfully advanced since
+    // the last save (e.g. user paused right after a save, or the player is
+    // momentarily stalled). Threshold: 1s.
+    final positionMs = position.inMilliseconds;
+    if (_lastSavedPositionMs != null &&
+        (positionMs - _lastSavedPositionMs!).abs() < 1000) {
+      return;
+    }
+    _lastSavedPositionMs = positionMs;
+
+    await _stateStore.savePlaybackSnapshot(
+      currentTrack: _currentTrack,
+      position: position,
+      queue: null,
+      currentQueueIndex: _currentIndex,
+      isPlaying: isPlaying,
+    );
   }
 
   /// Saves full playback state including queue - called when app goes to background
@@ -2614,7 +2655,7 @@ class AudioPlayerService {
   // ========== CROSSFADE METHODS ==========
 
   /// Check if we should trigger crossfade based on current position
-  void _checkCrossfadeTrigger(Duration position) async {
+  Future<void> _checkCrossfadeTrigger(Duration position) async {
     if (!_crossfadeEnabled || _isCrossfading || _crossfadeDurationSeconds == 0) {
       return;
     }
@@ -2794,7 +2835,7 @@ class AudioPlayerService {
   // ========== PRE-LOADING METHODS FOR GAPLESS PLAYBACK ==========
 
   /// Check if we should pre-load the next track (when current track reaches 70%)
-  void _checkPreloadTrigger(Duration position) async {
+  Future<void> _checkPreloadTrigger(Duration position) async {
     if (!_gaplessPlaybackEnabled) return;
     if (_isPreloading || _currentTrack == null) return;
 
@@ -2818,7 +2859,7 @@ class AudioPlayerService {
   }
 
   /// Pre-fetch lyrics for the next track at ~50% playback
-  void _checkLyricsPrefetch(Duration position) async {
+  Future<void> _checkLyricsPrefetch(Duration position) async {
     if (_batterySaverMode) return;
     if (_lyricsPrefetched || _currentTrack == null || _lyricsService == null) return;
 
@@ -2841,7 +2882,7 @@ class AudioPlayerService {
 
   /// Check if we should scrobble to ListenBrainz
   /// Scrobbles when track has played for 50% OR 4 minutes, whichever is less
-  void _checkListenBrainzScrobble(Duration position) async {
+  Future<void> _checkListenBrainzScrobble(Duration position) async {
     if (_batterySaverMode) return;
     if (_hasScrobbled || _currentTrack == null || _trackStartTime == null) return;
 
@@ -3109,6 +3150,11 @@ class AudioPlayerService {
   }
 
   void dispose() {
+    // Set flag FIRST: player listener callbacks check this to short-circuit
+    // before touching controllers that are about to close below. Without it,
+    // the unawaited _detachListeners() race would let a queued onPositionChanged
+    // call _positionController.add() after close() and throw "Bad state".
+    _disposed = true;
     _positionSaveTimer?.cancel();
     _crossfadeTimer?.cancel();
     _sleepTimer?.cancel();

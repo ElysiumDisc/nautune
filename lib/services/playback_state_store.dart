@@ -48,8 +48,7 @@ class PlaybackStateStore {
       }
       return PlaybackState.fromJson(data);
     } catch (e, stack) {
-      // ignore: avoid_print
-      print('Error loading playback state: $e\n$stack');
+      debugPrint('Error loading playback state: $e\n$stack');
       return null;
     }
   }

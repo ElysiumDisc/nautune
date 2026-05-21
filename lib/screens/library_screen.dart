@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -808,9 +809,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
                     itemCount: reorderList.length,
-                    onReorder: (oldIndex, newIndex) {
+                    onReorderItem: (oldIndex, newIndex) {
                       setSheetState(() {
-                        if (newIndex > oldIndex) newIndex--;
                         final item = reorderList.removeAt(oldIndex);
                         reorderList.insert(newIndex, item);
                       });
@@ -1338,7 +1338,7 @@ class _DownloadsTab extends StatelessWidget {
                 ),
               Expanded(
                 child: ListView.builder(
-                  cacheExtent: 500, // Pre-render items above/below viewport for smoother scrolling
+                  scrollCacheExtent: ScrollCacheExtent.pixels(500), // Pre-render items above/below viewport for smoother scrolling
                   itemCount: downloads.length,
                   itemBuilder: (context, index) {
                     final download = downloads[index];

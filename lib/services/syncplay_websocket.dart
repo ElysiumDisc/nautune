@@ -360,7 +360,9 @@ class SyncPlayWebSocket {
     } catch (error) {
       debugPrint('SyncPlayWebSocket: Failed to send message: $error');
       _isConnected = false;
-      _connectionStateController.add(false);
+      if (!_isDisposed) {
+        _connectionStateController.add(false);
+      }
       _stopKeepAlive();
       _scheduleReconnect();
     }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:hive_flutter/hive_flutter.dart';
 
+import 'hive_init.dart';
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_library.dart';
@@ -17,16 +18,11 @@ class LocalCacheService {
   static const _payloadKey = 'payload';
   static const _updatedAtKey = 'updatedAt';
 
-  static bool _hiveInitialized = false;
-
   final Box<dynamic> _box;
 
   /// Ensures Hive is ready and returns a cache service instance.
   static Future<LocalCacheService> create() async {
-    if (!_hiveInitialized) {
-      await Hive.initFlutter('nautune');
-      _hiveInitialized = true;
-    }
+    await ensureHiveInitialized();
     final box = await Hive.openBox<dynamic>(_boxName);
     return LocalCacheService._(box);
   }

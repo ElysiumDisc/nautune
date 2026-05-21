@@ -3222,10 +3222,6 @@ class _SettingsCategoryTile extends StatelessWidget {
                 primary.withValues(alpha: 0.05),
               ],
             ),
-            border: Border.all(
-              color: primary.withValues(alpha: 0.25),
-              width: 1,
-            ),
           ),
           padding: const EdgeInsets.all(16),
           child: Column(

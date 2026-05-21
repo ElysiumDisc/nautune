@@ -5,6 +5,7 @@ import 'dart:ui' as ui show FontFeature, Image;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
@@ -372,7 +373,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               : null,
         ),
         child: CustomScrollView(
-        cacheExtent: 500, // Pre-render items above/below viewport for smoother scrolling
+        scrollCacheExtent: ScrollCacheExtent.pixels(500), // Pre-render items above/below viewport for smoother scrolling
         slivers: [
           SliverAppBar(
             expandedHeight: isDesktop ? 350 : 300,

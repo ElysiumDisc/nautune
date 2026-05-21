@@ -576,6 +576,7 @@ class _NetworkScreenState extends State<NetworkScreen>
                                   );
                                   if (confirm == true) {
                                     await _downloadService.deleteAllChannels();
+                                    if (!mounted) return;
                                     setSheetState(() {});
                                     setState(() {});
                                   }

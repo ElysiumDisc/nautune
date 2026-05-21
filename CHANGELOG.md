@@ -1,3 +1,171 @@
+### v8.9.0 - Full Audit Pass: Perf Hot-Path + Dispose Safety + Test Bootstrap
+
+Another full audit pass (three parallel Explore agents — perf, code quality,
+correctness — every finding hand-verified against current source, false
+positives intentionally NOT "fixed"). Verified-real findings only:
+
+**Performance — visualizer hot path**
+- **FFT magnitude allocation removed** (`lib/services/pulseaudio_fft_service.dart:75`):
+  `_performFFT` no longer copies `_fftMagnitudes` via `.toList()` on every
+  cycle. The pre-allocated `Float64List` buffer is returned directly; consumers
+  read synchronously on the same isolate so the next cycle can't tear reads.
+  Saves ~512 doubles allocated every ~23ms (≈22 KB/s of GC pressure).
+- **`_averageRange` inlined, sublist allocation gone** (now `rmsAverageRange`
+  in `lib/services/fft_math.dart`): the helper used to allocate a `.sublist()`
+  on each of the 3 frequency-band calls per FFT cycle. Now iterates `data[s..e]`
+  directly. Also extracted to a pure-Dart module so it's unit testable.
+- **Spectrum bars buffer reused** (`lib/widgets/visualizers/base_visualizer.dart`):
+  `getSpectrumBars(N)` and `_generateBarsFromBands(N)` shared a per-frame `<double>[]`
+  allocation (30–60 Hz × per-visualizer). Now both write into a reused
+  `_spectrumBarsBuffer` field, sized once per `N` change. Same pattern that
+  `_fakeSpectrumBuffer` already used elsewhere in the file.
+- **Image cache tuned for music workload** (`lib/main.dart:130`): bumped from
+  500 entries / 50 MB to **1500 entries / 100 MB**. Eviction thrashing was
+  measurable on libraries >2000 albums while scrolling the library grid.
+
+**Correctness**
+- **Dispose race in `AudioPlayerService`** (`lib/services/audio_player_service.dart`):
+  `dispose()` fired `unawaited(_detachListeners())` and then immediately closed
+  the position / duration / state / playing controllers. An onPositionChanged
+  callback queued between those two lines would call `_positionController.add()`
+  on a closed sink → "Bad state: Cannot add event after close was called".
+  Added a `_disposed` flag set synchronously at the top of `dispose()`, and a
+  `if (_disposed) return;` guard at the top of each player listener callback.
+  Listeners still cancel async, but the synchronous flag closes the window.
+- **SyncPlay WebSocket disposed-guard** (`lib/services/syncplay_websocket.dart:363`):
+  the error handler in `send()` called `_connectionStateController.add(false)`
+  without the `if (!_isDisposed)` guard that every other `.add` site in the
+  same file uses. A send failure after `dispose()` would throw on the closed
+  controller. Guard added; behaviour now matches the rest of the file.
+- **`void async` fire-and-forget eliminated** (6 sites in
+  `lib/services/audio_player_service.dart` — `_triggerWaveformForCurrentTrack`,
+  `_cacheTrackForIOSFFT`, `_checkCrossfadeTrigger`, `_checkPreloadTrigger`,
+  `_checkLyricsPrefetch`, `_checkListenBrainzScrobble`): all converted to
+  `Future<void>`, call sites wrapped with `unawaited(...).catchError(debugPrint)`.
+  Errors thrown inside (e.g. a bad track that throws during preload) used to
+  be silently swallowed by Dart's uncaught-future plumbing; now they log.
+
+**Code quality**
+- **Hive init consolidated** (`lib/services/hive_init.dart` — new): four
+  services (`local_cache_service`, `download_service`, `network_download_service`,
+  `essential_mix_service`) each kept their own `static bool _hiveInitialized`
+  + `Hive.initFlutter('nautune')` guard. Consolidated into one
+  `ensureHiveInitialized()` helper, so the `'nautune'` subdirectory string lives
+  in one place and parallel service init can't race.
+- **Stray `print` → `debugPrint`** (`lib/services/playback_state_store.dart:52`):
+  one remaining bare `print` (with `// ignore: avoid_print`) converted; release
+  builds no longer write this line to the log buffer.
+
+**Test infrastructure (bootstrap)**
+- Added `test/unit/services/fft_math_test.dart` — 7 unit tests covering
+  `rmsAverageRange` (empty list, inverted range, clamping, RMS formula
+  correctness, sub-range, single-element, all-zero). First real unit test
+  in the repo; was a placeholder smoke test before.
+- Added `test/README.md` documenting the layout, mocking guidance, and the
+  pattern of extracting pure logic into free-standing library files for
+  testability (which is what `fft_math.dart` demonstrates).
+
+**Verified false positives — not "fixed"** (recorded so a future audit doesn't
+re-flag them):
+- `download_service.dart` "hardcoded `/` path separators" — inside iOS-only
+  branches where `/` is correct.
+- `download_service.dart` "concurrent download spawn race" — `_startDownload`
+  increments `_activeDownloads` *synchronously* before its first `await`;
+  Dart's single-threaded event loop makes the spawn loop atomic.
+- `audio_player_service.dart` "queue index can be -1" — the only access path
+  is immediately guarded by `if (_queue.isNotEmpty)` two lines later.
+- `playback_state_store.dart` "Hive flush on every update is expensive" —
+  intentional, documented in the source: it survives iOS background
+  termination. Position saves are already throttled to ≥15 s.
+
+**Explicitly deferred** (multi-week refactors, revisited once test coverage
+grows): splitting `profile_screen.dart` (5577 LOC), `audio_player_service.dart`
+(3177 LOC), `listening_analytics_service.dart` (2287 LOC) into smaller modules;
+moving direct `JellyfinService` calls out of screens into providers.
+
+### v8.8.3 - Verified Perf + Logic + Minimalist Polish (no regressions)
+
+This release is the result of a full performance, code-logic and design audit
+(three parallel Explore agents, every flagged finding hand-verified against
+current code). Findings that turned out to be false positives — already-guarded
+sites, bounded caches, conditional timers — were deliberately not "fixed" so
+the diff stays honest. What follows is the verified-real subset.
+
+**Battery / perf**
+
+- **Relax mode** (`lib/screens/relax_mode_screen.dart`): the 1 Hz
+  `Timer.periodic` that did nothing but increment per-sound usage counters is
+  gone. Per-sound tracking is now event-driven via `_<sound>StartedAt`
+  timestamps written when a slider crosses 0, and flushed on the next
+  transition or on `dispose()`. Net: zero per-second CPU wake-ups while the
+  ambient mixer is open. Analytics output is mathematically identical.
+- **Position-save cadence** (`lib/services/audio_player_service.dart`): the
+  normal interval was 5 s (battery-saver: 30 s). Bumped normal to **15 s** —
+  crash-resume granularity goes from 5 s to 15 s of replay-on-restart, which
+  is fine for music. `_saveCurrentPosition` now also: (a) returns early when
+  `!isPlaying` (paused snapshots aren't useful; the existing
+  `saveFullPlaybackState` lifecycle hook covers backgrounding), and (b) skips
+  the disk write entirely if position hasn't advanced by ≥1 s since the last
+  save (new `_lastSavedPositionMs` field, reset on track change and on seek).
+  ~66 % fewer Hive writes on long sessions.
+- **Visualizer ticker** (`lib/widgets/visualizers/base_visualizer.dart`): the
+  `AnimatedBuilder` is now wrapped in
+  `TickerMode(enabled: ModalRoute.of(context)?.isCurrent ?? true, …)`. When
+  the user navigates away from the full player while music keeps playing, the
+  visualizer's animation controller stops ticking (vsync resolves TickerMode
+  at attach time), so no more off-screen FFT-driven rebuilds. The FFT streams
+  stay subscribed — that cost is tiny, and resuming on `RoutePopped` is
+  instant.
+
+**Logic / correctness**
+
+- **Playlist dialog leak** (`lib/screens/tabs/playlists_tab.dart`): the
+  `TextEditingController` created in `_showCreatePlaylistDialog` was never
+  disposed. Wrapped the body in `try { … } finally { nameController.dispose(); }`
+  so it's released whether the user cancels, creates, or hits a network
+  failure.
+- **`setState` after dispose** (`lib/screens/network_screen.dart`): after
+  `await _downloadService.deleteAllChannels()` the "Clear All" handler called
+  `setSheetState(() {})` + `setState(() {})` with no `mounted` check —
+  dismissing the bottom sheet mid-delete would crash. Added
+  `if (!mounted) return;` between the await and the setState calls.
+
+**Minimalist UI (Nautune vibe preserved)**
+
+- **Hero ring shadow** (`lib/screens/profile_screen.dart` `_buildHeroRing`):
+  the stacked `gradient + border + boxShadow(blur 20, alpha 0.1)` made the
+  card feel heavier than the rest of the bento. Shadow is now
+  `blurRadius: 8, alpha: 0.06, offset: (0, 2)` — keeps the subtle glow but
+  lighter. Gradient + border (the ring's identity) unchanged.
+- **Settings landing tiles** (`lib/screens/settings_screen.dart`
+  `_SettingsCategoryTile`): dropped the `Border.all(alpha: 0.25)` from every
+  tile. The gradient alone now separates the tile from the surface — one
+  visual layer instead of two. `_settingsCategories` const list,
+  `focusSection` routing, and the icon container are untouched.
+- **"On This Day" section** (`lib/screens/profile_screen.dart`
+  `_buildOnThisDaySection`): collapsed `gradient + border` to a single
+  `tertiary.withValues(alpha: 0.08)` surface. The Pacifico section header
+  (still routed through `_pacificoStyle`) remains the visual anchor; the
+  expand/collapse animation, count badge, and per-event rows are unchanged.
+- **Empty-state audit**: reviewed every `SizedBox.shrink()` in profile and
+  playlists. Existing empty states (playlists tab has icon + CTAs) are
+  already thoughtful; the silent `shrink()` cases on data-dependent sections
+  (sparkline, codec card, On This Day on a date with no events) are the
+  correct minimalist call. No changes — adding placeholder text everywhere
+  would add noise, not minimalism.
+
+**Audit notes**
+
+- Findings considered but rejected on verification: `helm_service.dart`
+  adaptive polling (already gated, low cost), `playback_reporting_service.dart`
+  10 s cadence (already 60 s when paused + suspends on background),
+  `healing_frequency_service.dart` byte cache (bounded by frequency count,
+  not unbounded), `audio_player_service.dart` 1 s sleep-timer tick (only
+  runs while a sleep timer is set), `full_player_screen.dart` scroll timer
+  (already cancels prior timer before recreate).
+- `flutter analyze`: 9 issues, **all pre-existing** Flutter-SDK deprecation
+  infos (`cacheExtent`, `onReorder`) unrelated to this pass.
+
 ### v8.8.1 - Battery, Background-Work Hygiene & Minimalist Polish
 
 **Battery / lifecycle hub** (`lib/main.dart`)

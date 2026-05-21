@@ -2,7 +2,7 @@ name: nautune
 description: "Nautune - Poseidon Music Player for Jellyfin"
 publish_to: 'none'
 
-version: 8.8.1+1
+version: 8.9.0+1
 
 environment:
   sdk: ^3.9.2
@@ -16,7 +16,7 @@ dependencies:
   path_provider: ^2.1.5
   path: ^1.9.0
   google_fonts: ^8.0.0
-  package_info_plus: ^9.0.0
+  package_info_plus: ^10.1.0
   flutter_cache_manager: ^3.4.1
   
   # Cross-platform audio with native backends:
