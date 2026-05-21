@@ -93,9 +93,9 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     // Only load albums once after _appState is initialized
     if (!_hasInitialized) {
       _hasInitialized = true;
-      _loadAlbums();
-      _loadTopTracks();
-      _loadLibraryTracks();
+      unawaited(_loadAlbums());
+      unawaited(_loadTopTracks());
+      unawaited(_loadLibraryTracks());
       _extractColors();
     }
   }

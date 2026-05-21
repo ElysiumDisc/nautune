@@ -1,3 +1,196 @@
+### v8.9.7 - Audit Pass: Analytics Crash Guard, PulseAudio Chunker, CarPlay Polish
+
+A maintenance release driven by a full code/performance/logic/security audit
+across audio (iOS + Linux), CarPlay, and the post-rewind codebase. One real
+crash-on-load bug fixed, three perf/cleanup wins, two new test files, and a
+new doc snippet for verifying the iOS CarPlay entitlement after Codemagic
+builds.
+
+**Bug fixes**
+- **Analytics history wipe (P2):** `PlayEvent.fromJson` crashed on any
+  Hive-stored event missing the `artists` field, and the bulk try/catch in
+  `_loadEvents` then reset `_events = []` — silently wiping the user's
+  entire listening history. Fix matches the `genres` pattern
+  (`(json['artists'] as List<dynamic>?)?.cast<String>() ?? []`), and the
+  load path now decodes per-event so a single bad row can no longer take
+  the rest down with it.
+
+**Performance**
+- **PulseAudio FFT chunker (Linux):** The per-chunk inline buffer in
+  `PulseAudioFFTService.startCapture` did an O(n) `removeRange` shift plus
+  two allocations on every audio callback (~43 fps for the lifetime of any
+  Linux playback session). Replaced with a `PcmChunker` helper backed by
+  `BytesBuilder` + `Uint8List.sublistView` — mostly zero-copy and now unit-
+  testable in pure Dart.
+- **Analytics notify dedup:** `_saveRelaxModeStats` and `_savePianoStats`
+  no longer call `notifyListeners()` themselves. The single-event callers
+  (`recordRelaxModeSession`, `recordPianoSession`) and the import path now
+  emit exactly one aggregate notification each, instead of up to four
+  during `importAllStatsFromJson`.
+
+**CarPlay**
+- **Letter-bucket pagination:** Browse A–Z letter buckets previously
+  silently truncated at 100 items per letter — a "T" bucket with 250
+  albums showed only 100 with no affordance for the rest. Now mirrors the
+  existing `Load More...` pattern used by `_showAlbums` / `_showArtists`.
+- **Disconnect timer cleanup:** `_onCarPlayDisconnect` now cancels
+  `_refreshDebounceTimer` so a pending debounced refresh can't fire post-
+  disconnect.
+- **DEVELOPMENT.md** gains a one-line snippet for verifying the
+  `com.apple.developer.carplay-audio` entitlement survived Codemagic
+  signing (`unzip embedded.mobileprovision | security cms -D | grep
+  carplay`). Catches the silent automatic-signing entitlement-strip
+  failure mode without needing a CarPlay head unit.
+
+**Tests**
+- `test/unit/services/listening_play_event_test.dart` — locks in F1 with
+  round-trip + missing/null artists + missing-genres regression cases.
+- `test/unit/services/pulseaudio_buffer_test.dart` — covers `PcmChunker`
+  boundaries (empty, partial, exact, 2.5×, many-small-writes, clear,
+  assertion).
+
+**Verified false positives (no change required)**
+- iOS FFT gapless transition (`audio_player_service.dart:1003-1028`) —
+  the `_cacheTrackForIOSFFT` chain does start capture once the cache
+  lands, gated by a stale-track check.
+- `carplay_service.dart:209` `_carplay.forceUpdateRootTemplate()` — does
+  exist in the resolved `flutter_carplay` 1.3.3, not 1.1.4.
+- `remote_control_service.dart` "Rewind" string — this is the media-key
+  rewind (seek −15s), not the deleted Spotify-Wrapped feature.
+- Credential storage, HTTPS, URL injection, path traversal, process
+  exec, log redaction, BuildContext discipline, StreamSubscription
+  cleanup — all clean.
+
+### v8.9.6 - Audit Pass, Smart-Playlist Tag Filter Perf, Test Coverage, Doc Refresh
+
+A maintenance release: full code/perf/logic audit of the rewind-removed
+codebase, one cold-path allocation fix, six new pure-Dart unit test
+files, and a documentation accuracy pass.
+
+**Code audit**
+- Verified the v8.9.5 rewind removal end-to-end — no dangling imports,
+  routes, callers, or `*ForYear` helpers remain in `lib/`. The only
+  surviving "Rewind" string matches are unrelated (system media-key
+  in `remote_control_service.dart`, Jellyfin OpenAPI enum, and a
+  historical comment in `listening_analytics_service.dart`).
+- No null-safety, race-condition, or stale-API findings.
+
+**Performance**
+- **Smart-playlist tag filter**: `SmartPlaylistService.getTracksByAllTags`
+  no longer allocates a lowercased `trackTagsNormalized` list per track
+  inside its `.where()` predicate. On a 5K-track library this drops
+  ~5000 ephemeral lists per filter activation to zero. The predicate
+  was extracted into `lib/services/smart_playlist_filter.dart` so the
+  behavior is locked behind a unit-test equivalence check.
+
+**Tests**
+- Added six unit-test files (`test/unit/services/wav_builder_test`,
+  `test/unit/utils/color_utils_test`, `test/unit/utils/debouncer_test`,
+  `test/unit/tui/tui_metrics_test`, `test/unit/tui/tui_keybindings_test`,
+  `test/unit/services/smart_playlist_filter_test`). All pure-Dart, no
+  Hive/audio/Jellyfin dependencies (per `test/README.md`). Covers
+  RIFF/WAV serialisation, ARGB pixel sampling + luminance sort,
+  debounce/throttle timing, responsive sidebar sizing, vim-style key
+  sequence handling, and the smart-playlist tag predicate.
+- Refactored the responsive-sidebar boundary math out of
+  `TuiMetrics.sidebarCharsForWidth` into a pure
+  `sidebarCharsForTotalChars(int)` so it can be tested without a
+  `TextPainter` / Flutter binding.
+- Added a `@visibleForTesting handleCharacterForTest` shim on
+  `TuiKeyBindings` so multi-key sequences can be exercised without
+  building full `KeyEvent` objects.
+
+**Documentation**
+- `DEVELOPMENT.md` AppImage filename example bumped to 8.9.6.
+- Version-bump `sed` example shifted to 8.9.6 → 8.9.7 to model the
+  next bump from the new baseline.
+
+### v8.9.5 - Slim Cleanup: Milestones & Rewind Retired, TUI Polish, Jellyfin 10.11.9
+
+A focused cleanup pass: two large gamification/marketing surfaces ripped out
+in favor of a smaller core, plus a TUI usability pass and a Jellyfin API
+refresh.
+
+**Removed features**
+- **46 Nautical Milestones / Achievements system** — the entire badge grid,
+  "next milestone" card, achievements sliver, and 47-entry milestone table
+  are gone. The Profile screen no longer renders any of it. The underlying
+  easter-egg features (Relax Mode, Network Radio, Essential Mix, Frets on
+  Fire, Piano, Healing Frequencies) all remain — only the gamification
+  layer on top is retired. The five `*_discovered` Hive keys are best-effort
+  deleted on next launch so existing installs auto-clean.
+- **Your Rewind** (Spotify Wrapped-style yearly report) — 6 files / ~3.5K
+  LOC removed (`rewind_data.dart`, `rewind_service.dart`,
+  `rewind_export_service.dart`, `rewind_screen.dart`, plus the two card
+  widgets). The Rewind banner is gone from both Profile bento and legacy
+  modes, the Settings tile is gone, and the 15 `*ForYear()` methods that
+  only Rewind consumed have been removed from `ListeningAnalyticsService`.
+  The `pdf: ^3.11.1` package dependency was also dropped (it was used
+  exclusively by Rewind PDF export).
+- Event retention trimmed from 730 days → 365 days. The two-year window
+  only existed to let Rewind show "last year"; the Profile dashboard
+  stats (streaks, period comparisons, top content) all fit in 12 months.
+
+**TUI (Linux Terminal UI) polish**
+- **Responsive sidebar**: `TuiMetrics.sidebarCharsForWidth` scales the
+  sidebar with the actual window width — 18 chars under 90 cols, 22 chars
+  at 90–120, 26 chars above 120, with a hard guarantee that the content
+  pane never drops below 32 chars.
+- **30 fps color-lerp throttle**: the per-frame color ticker in `TuiShell`
+  was firing at the display refresh rate (60–144 Hz). For text-grid color
+  drift it's wasted work — now accumulates deltas and dispatches at
+  ~30 fps, which still looks smooth on monospace text.
+- **Pending key-sequence indicator**: typing `g` (waiting for `gg`) now
+  shows `:g█` in the status bar's control-hint row so the user knows a
+  multi-key sequence is open. Powered by `TuiKeyBindings` already being a
+  `ChangeNotifier` — the status bar just subscribes.
+- **Sequence-timeout dispatch**: when a partial sequence times out and
+  the prefix is itself a valid action (e.g. lone `g`), the action is now
+  actually dispatched via an `onSequenceTimeout` callback. Previously the
+  timeout just `debugPrint`ed and dropped the input.
+- **Vim-style search repeat** (`n`/`N`): after `/query<Enter>`, while you
+  stay in the Search section, `n` steps to the next match and `N` to the
+  previous (instead of next/prev track). Reverts to next/prev-track as
+  soon as you Tab to another section. Up to 20 recent queries are kept in
+  in-memory history.
+
+**Jellyfin API audit + 10.11.8 → 10.11.9 refresh**
+- Migrated the favorites toggle from the undocumented
+  `/Users/{userId}/FavoriteItems/{itemId}` alias to the spec-documented
+  `/UserFavoriteItems/{itemId}` with `userId` as a query parameter.
+- Migrated `fetchLibraries` from `/Users/{userId}/Views` to the
+  spec-documented `/UserViews?userId=...` endpoint.
+- Left the ~20 `/Users/{userId}/Items` browse calls on their legacy alias
+  intentionally — verified that this is a deliberate compatibility choice
+  (served reliably by every Jellyfin since 10.8; the spec-documented
+  `/Items?userId=...` has subtle `Recursive`/`ParentId` semantics
+  differences). Comment in `fetchAlbums` now documents this trade-off.
+- Updated all `10.11.8` source comments → `10.11.9`; refreshed the
+  "verified against the spec on …" dates to 2026-05-20.
+- Audit agent flagged a "BLOCKING syntax error" for `?expr` in
+  `jellyfin_client.dart:812` / `syncplay_client.dart` — **false positive**;
+  Dart 3.9 added null-aware elements (`'Key': ?value`), and pubspec
+  pins `sdk: ^3.9.2`. No fix needed.
+
+**Audit fixes (verified only)**
+- Added `if (mounted)` guard before `setState` in
+  `genre_detail_screen.dart` (the `finally` block after the async album
+  fetch).
+- Wrapped fire-and-forget async calls with `unawaited(...)` in
+  `genre_detail_screen.dart` (didChangeDependencies + connectivity
+  listener), `artist_detail_screen.dart` (all three initial loaders),
+  and `profile_screen.dart:555` (`_loadRecentTracks`).
+- Audit agent flagged 8 other "setState-after-await" / "controller race"
+  sites — all hand-verified as false positives (early returns before any
+  await, or existing guards the agent missed); no changes made.
+
+**Follow-ups deferred** (tracked for a later release):
+- Star ratings via `/UserItems/{itemId}/Rating`
+- HLS streaming via `/Audio/{id}/hls/*` for slower networks
+- Server-side lyrics via `/Audio/{id}/RemoteSearch/Lyrics`
+- Unified `/Search/Hints` to consolidate per-type searches
+- `enableImages=false` on browse screens that don't render art
+
 ### v8.9.0 - Full Audit Pass: Perf Hot-Path + Dispose Safety + Test Bootstrap
 
 Another full audit pass (three parallel Explore agents — perf, code quality,

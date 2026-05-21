@@ -15,7 +15,6 @@ import '../providers/demo_mode_provider.dart';
 import '../services/chart_cache_service.dart';
 import '../services/chart_generator_service.dart';
 import '../services/ios_fft_service.dart';
-import '../services/listening_analytics_service.dart';
 import '../services/pulseaudio_fft_service.dart';
 import '../theme/nautune_theme.dart';
 import '../widgets/jellyfin_image.dart';
@@ -126,9 +125,6 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     }).catchError((e) {
       debugPrint('ChartCache initialization failed: $e');
     });
-
-    // Mark easter egg as discovered for milestone badge
-    ListeningAnalyticsService().markFretsOnFireDiscovered();
 
     _noteController = AnimationController(
       vsync: this,

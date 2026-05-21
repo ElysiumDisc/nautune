@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../data/healing_frequencies.dart';
 import '../services/healing_frequency_service.dart';
-import '../services/listening_analytics_service.dart';
 
 /// Healing Frequencies Easter egg.
 /// Inspired by https://github.com/evoluteur/healing-frequencies (MIT © Olivier Giulieri).
@@ -26,7 +25,6 @@ class _HealingFrequenciesScreenState extends State<HealingFrequenciesScreen> {
   void initState() {
     super.initState();
     _init();
-    _markDiscovered();
   }
 
   Future<void> _init() async {
@@ -35,13 +33,6 @@ class _HealingFrequenciesScreenState extends State<HealingFrequenciesScreen> {
       if (mounted) setState(() {});
     });
     if (mounted) setState(() => _ready = true);
-  }
-
-  void _markDiscovered() {
-    final analytics = ListeningAnalyticsService();
-    if (analytics.isInitialized) {
-      analytics.markHealingFrequenciesDiscovered();
-    }
   }
 
   @override

@@ -65,7 +65,6 @@ class _TuiPianoOverlayState extends State<TuiPianoOverlay> {
     super.initState();
     _sessionTimer = Stopwatch()..start();
     _initSynth();
-    _markDiscovered();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
     });
@@ -79,12 +78,6 @@ class _TuiPianoOverlayState extends State<TuiPianoOverlay> {
     }
   }
 
-  void _markDiscovered() {
-    final analytics = ListeningAnalyticsService();
-    if (analytics.isInitialized) {
-      analytics.markPianoDiscovered();
-    }
-  }
 
   @override
   void dispose() {

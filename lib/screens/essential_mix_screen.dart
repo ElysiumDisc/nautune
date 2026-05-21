@@ -14,7 +14,6 @@ import '../models/waveform_data.dart';
 import '../services/audio_player_service.dart';
 import '../services/essential_mix_service.dart';
 import '../services/ios_fft_service.dart';
-import '../services/listening_analytics_service.dart';
 import '../services/power_mode_service.dart';
 import '../services/pulseaudio_fft_service.dart';
 import '../services/waveform_service.dart';
@@ -107,7 +106,6 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     _service.addListener(_onServiceChanged);
 
     // Mark Essential Mix as discovered for the milestone
-    _markDiscovered();
 
     // Load waveform if downloaded
     _loadWaveform();
@@ -219,13 +217,6 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
         }
       }
     });
-  }
-
-  void _markDiscovered() {
-    final analytics = ListeningAnalyticsService();
-    if (analytics.isInitialized) {
-      analytics.markEssentialMixDiscovered();
-    }
   }
 
   // Track previous download state to avoid unnecessary rebuilds

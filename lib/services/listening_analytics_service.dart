@@ -66,7 +66,7 @@ class PlayEvent {
     trackName: json['trackName'] as String,
     albumId: json['albumId'] as String?,
     albumName: json['albumName'] as String?,
-    artists: (json['artists'] as List<dynamic>).cast<String>(),
+    artists: (json['artists'] as List<dynamic>?)?.cast<String>() ?? [],
     genres: (json['genres'] as List<dynamic>?)?.cast<String>() ?? [],
     timestamp: DateTime.parse(json['timestamp'] as String),
     durationMs: json['durationMs'] as int? ?? 0,
@@ -124,58 +124,6 @@ class PeriodComparison {
   }
 }
 
-/// Represents a listening milestone/achievement
-class ListeningMilestone {
-  final String id;
-  final String name;
-  final String description;
-  final IconType iconType;
-  final int targetValue;
-  final int currentValue;
-  final bool isUnlocked;
-
-  ListeningMilestone({
-    required this.id,
-    required this.name,
-    required this.description,
-    required this.iconType,
-    required this.targetValue,
-    required this.currentValue,
-  }) : isUnlocked = currentValue >= targetValue;
-
-  double get progress => (currentValue / targetValue).clamp(0.0, 1.0);
-}
-
-enum IconType {
-  plays,
-  hours,
-  streak,
-  artists,
-  albums,
-  tracks,
-  genres,
-  special,
-  game, // For game-related milestones (Frets on Fire)
-}
-
-/// Collection of all milestones with progress
-class ListeningMilestones {
-  final List<ListeningMilestone> all;
-  final List<ListeningMilestone> unlocked;
-  final ListeningMilestone? nextToUnlock;
-
-  ListeningMilestones({
-    required this.all,
-  })  : unlocked = all.where((m) => m.isUnlocked).toList(),
-        nextToUnlock = all.where((m) => !m.isUnlocked).fold<ListeningMilestone?>(
-          null,
-          (closest, m) => closest == null || m.progress > closest.progress ? m : closest,
-        );
-
-  int get unlockedCount => unlocked.length;
-  int get totalCount => all.length;
-}
-
 /// Heatmap data for listening activity
 class ListeningHeatmap {
   /// Map of (dayOfWeek 0-6, hourOfDay 0-23) -> play count
@@ -205,7 +153,6 @@ class RelaxModeStats {
   final int campfireUsageMs;
   final int waveUsageMs;
   final int loonUsageMs;
-  final bool discovered;
 
   RelaxModeStats({
     this.totalSessionsMs = 0,
@@ -214,7 +161,6 @@ class RelaxModeStats {
     this.campfireUsageMs = 0,
     this.waveUsageMs = 0,
     this.loonUsageMs = 0,
-    this.discovered = false,
   });
 
   Duration get totalTime => Duration(milliseconds: totalSessionsMs);
@@ -268,7 +214,6 @@ class RelaxModeStats {
     'campfireUsageMs': campfireUsageMs,
     'waveUsageMs': waveUsageMs,
     'loonUsageMs': loonUsageMs,
-    'discovered': discovered,
   };
 
   factory RelaxModeStats.fromJson(Map<String, dynamic> json) => RelaxModeStats(
@@ -278,7 +223,6 @@ class RelaxModeStats {
     campfireUsageMs: json['campfireUsageMs'] as int? ?? 0,
     waveUsageMs: json['waveUsageMs'] as int? ?? 0,
     loonUsageMs: json['loonUsageMs'] as int? ?? 0,
-    discovered: json['discovered'] as bool? ?? false,
   );
 
   RelaxModeStats copyWith({
@@ -288,7 +232,6 @@ class RelaxModeStats {
     int? campfireUsageMs,
     int? waveUsageMs,
     int? loonUsageMs,
-    bool? discovered,
   }) => RelaxModeStats(
     totalSessionsMs: totalSessionsMs ?? this.totalSessionsMs,
     rainUsageMs: rainUsageMs ?? this.rainUsageMs,
@@ -296,7 +239,6 @@ class RelaxModeStats {
     campfireUsageMs: campfireUsageMs ?? this.campfireUsageMs,
     waveUsageMs: waveUsageMs ?? this.waveUsageMs,
     loonUsageMs: loonUsageMs ?? this.loonUsageMs,
-    discovered: discovered ?? this.discovered,
   );
 }
 
@@ -306,23 +248,23 @@ class ListeningAnalyticsService extends ChangeNotifier {
   static const _eventsKey = 'play_events';
   static const _streakKey = 'streak_data';
   static const _relaxModeKey = 'relax_mode_stats';
-  static const _networkDiscoveredKey = 'network_discovered';
-  static const _essentialMixDiscoveredKey = 'essential_mix_discovered';
-  static const _fretsOnFireDiscoveredKey = 'frets_on_fire_discovered';
-  static const _pianoDiscoveredKey = 'piano_discovered';
   static const _pianoStatsKey = 'piano_stats';
-  static const _healingFrequenciesDiscoveredKey = 'healing_frequencies_discovered';
+
+  // Legacy Hive keys from the retired milestone/badge system. Kept here only
+  // so initialize() can best-effort delete them from existing installs.
+  static const _legacyDiscoveryKeys = <String>[
+    'network_discovered',
+    'essential_mix_discovered',
+    'frets_on_fire_discovered',
+    'piano_discovered',
+    'healing_frequencies_discovered',
+  ];
 
   Box? _box;
   List<PlayEvent> _events = [];
   RelaxModeStats _relaxModeStats = RelaxModeStats();
-  bool _networkDiscovered = false;
-  bool _essentialMixDiscovered = false;
-  bool _fretsOnFireDiscovered = false;
-  bool _pianoDiscovered = false;
   int _pianoTotalNotes = 0;
   int _pianoTotalSessionMs = 0;
-  bool _healingFrequenciesDiscovered = false;
   bool _initialized = false;
 
   /// Singleton instance
@@ -347,11 +289,8 @@ class ListeningAnalyticsService extends ChangeNotifier {
       _box = await Hive.openBox(_boxName);
       await _loadEvents();
       await _loadRelaxModeStats();
-      await _loadNetworkDiscovered();
-      await _loadEssentialMixDiscovered();
-      await _loadFretsOnFireDiscovered();
       await _loadPianoStats();
-      await _loadHealingFrequenciesDiscovered();
+      await _cleanupLegacyDiscoveryKeys();
       _initialized = true;
       debugPrint('ListeningAnalyticsService: Initialized with ${_events.length} events');
     } catch (e) {
@@ -367,11 +306,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
       await Future.wait([
         _saveEvents(),
         _saveRelaxModeStats(),
-        _saveNetworkDiscovered(),
-        _saveEssentialMixDiscovered(),
         _savePianoStats(),
-        _saveFretsOnFireDiscovered(),
-        _saveHealingFrequenciesDiscovered(),
       ]);
       debugPrint('ListeningAnalyticsService: Analytics saved');
     } catch (e) {
@@ -402,19 +337,10 @@ class ListeningAnalyticsService extends ChangeNotifier {
   Future<void> _saveRelaxModeStats() async {
     if (_box == null) return;
     await _box!.put(_relaxModeKey, jsonEncode(_relaxModeStats.toJson()));
-    notifyListeners();
   }
 
   /// Get Relax Mode statistics
   RelaxModeStats getRelaxModeStats() => _relaxModeStats;
-
-  /// Mark Relax Mode as discovered (for milestone)
-  Future<void> markRelaxModeDiscovered() async {
-    if (_relaxModeStats.discovered) return;
-    _relaxModeStats = _relaxModeStats.copyWith(discovered: true);
-    await _saveRelaxModeStats();
-    debugPrint('ListeningAnalyticsService: Relax Mode discovered!');
-  }
 
   /// Record Relax Mode session usage
   /// Call this when exiting Relax Mode with the duration and slider usage
@@ -435,79 +361,32 @@ class ListeningAnalyticsService extends ChangeNotifier {
       campfireUsageMs: _relaxModeStats.campfireUsageMs + campfireUsage.inMilliseconds,
       waveUsageMs: _relaxModeStats.waveUsageMs + waveUsage.inMilliseconds,
       loonUsageMs: _relaxModeStats.loonUsageMs + loonUsage.inMilliseconds,
-      discovered: true,
     );
 
     await _saveRelaxModeStats();
+    notifyListeners();
     debugPrint('ListeningAnalyticsService: Recorded Relax Mode session (${sessionDuration.inMinutes}m)');
   }
 
-  // Network Easter Egg discovery tracking
-  Future<void> _loadNetworkDiscovered() async {
-    _networkDiscovered = _box?.get(_networkDiscoveredKey) as bool? ?? false;
+  // Best-effort cleanup of Hive keys left over from the retired milestone /
+  // discovery system. Runs once per init; no-op on fresh installs.
+  Future<void> _cleanupLegacyDiscoveryKeys() async {
+    final box = _box;
+    if (box == null) return;
+    for (final key in _legacyDiscoveryKeys) {
+      try {
+        if (box.containsKey(key)) {
+          await box.delete(key);
+        }
+      } catch (_) {
+        // Ignore — stale key cleanup is non-critical.
+      }
+    }
   }
 
-  Future<void> _saveNetworkDiscovered() async {
-    if (_box == null) return;
-    await _box!.put(_networkDiscoveredKey, _networkDiscovered);
-  }
-
-  /// Check if Network easter egg has been discovered
-  bool get networkDiscovered => _networkDiscovered;
-
-  /// Mark Network easter egg as discovered (for milestone)
-  Future<void> markNetworkDiscovered() async {
-    if (_networkDiscovered) return;
-    _networkDiscovered = true;
-    await _saveNetworkDiscovered();
-    debugPrint('ListeningAnalyticsService: Network easter egg discovered!');
-  }
-
-  // Essential Mix Easter Egg discovery tracking
-  Future<void> _loadEssentialMixDiscovered() async {
-    _essentialMixDiscovered = _box?.get(_essentialMixDiscoveredKey) as bool? ?? false;
-  }
-
-  Future<void> _saveEssentialMixDiscovered() async {
-    if (_box == null) return;
-    await _box!.put(_essentialMixDiscoveredKey, _essentialMixDiscovered);
-  }
-
-  /// Check if Essential Mix easter egg has been discovered
-  bool get essentialMixDiscovered => _essentialMixDiscovered;
-
-  /// Mark Essential Mix easter egg as discovered (for milestone)
-  Future<void> markEssentialMixDiscovered() async {
-    if (_essentialMixDiscovered) return;
-    _essentialMixDiscovered = true;
-    await _saveEssentialMixDiscovered();
-    debugPrint('ListeningAnalyticsService: Essential Mix easter egg discovered!');
-  }
-
-  // Frets on Fire Easter Egg discovery tracking
-  Future<void> _loadFretsOnFireDiscovered() async {
-    _fretsOnFireDiscovered = _box?.get(_fretsOnFireDiscoveredKey) as bool? ?? false;
-  }
-
-  Future<void> _saveFretsOnFireDiscovered() async {
-    if (_box == null) return;
-    await _box!.put(_fretsOnFireDiscoveredKey, _fretsOnFireDiscovered);
-  }
-
-  /// Check if Frets on Fire easter egg has been discovered
-  bool get fretsOnFireDiscovered => _fretsOnFireDiscovered;
-
-  /// Mark Frets on Fire easter egg as discovered (for milestone)
-  Future<void> markFretsOnFireDiscovered() async {
-    if (_fretsOnFireDiscovered) return;
-    _fretsOnFireDiscovered = true;
-    await _saveFretsOnFireDiscovered();
-    debugPrint('ListeningAnalyticsService: Frets on Fire easter egg discovered!');
-  }
-
-  // Piano Easter Egg discovery and stats tracking
+  // Piano stats tracking (notes played, session time). The milestone-era
+  // `_pianoDiscovered` boolean was retired in v8.9.5.
   Future<void> _loadPianoStats() async {
-    _pianoDiscovered = _box?.get(_pianoDiscoveredKey) as bool? ?? false;
     final raw = _box?.get(_pianoStatsKey);
     if (raw != null) {
       try {
@@ -529,57 +408,17 @@ class ListeningAnalyticsService extends ChangeNotifier {
 
   Future<void> _savePianoStats() async {
     if (_box == null) return;
-    await _box!.put(_pianoDiscoveredKey, _pianoDiscovered);
     await _box!.put(_pianoStatsKey, jsonEncode({
       'totalNotes': _pianoTotalNotes,
       'totalSessionMs': _pianoTotalSessionMs,
     }));
-    notifyListeners();
   }
-
-  /// Check if Piano easter egg has been discovered
-  bool get pianoDiscovered => _pianoDiscovered;
 
   /// Get piano total notes played
   int get pianoTotalNotes => _pianoTotalNotes;
 
   /// Get piano total session time
   Duration get pianoTotalSessionTime => Duration(milliseconds: _pianoTotalSessionMs);
-
-  /// Mark Piano easter egg as discovered (for milestone)
-  Future<void> markPianoDiscovered() async {
-    if (_pianoDiscovered) return;
-    _pianoDiscovered = true;
-    await _savePianoStats();
-    debugPrint('ListeningAnalyticsService: Piano easter egg discovered!');
-  }
-
-  // Healing Frequencies Easter Egg discovery tracking
-  Future<void> _loadHealingFrequenciesDiscovered() async {
-    _healingFrequenciesDiscovered =
-        _box?.get(_healingFrequenciesDiscoveredKey) as bool? ?? false;
-  }
-
-  Future<void> _saveHealingFrequenciesDiscovered() async {
-    if (_box == null) return;
-    await _box!.put(
-      _healingFrequenciesDiscoveredKey,
-      _healingFrequenciesDiscovered,
-    );
-  }
-
-  /// Check if Healing Frequencies easter egg has been discovered
-  bool get healingFrequenciesDiscovered => _healingFrequenciesDiscovered;
-
-  /// Mark Healing Frequencies easter egg as discovered (for milestone)
-  Future<void> markHealingFrequenciesDiscovered() async {
-    if (_healingFrequenciesDiscovered) return;
-    _healingFrequenciesDiscovered = true;
-    await _saveHealingFrequenciesDiscovered();
-    debugPrint(
-      'ListeningAnalyticsService: Healing Frequencies easter egg discovered!',
-    );
-  }
 
   /// Record a piano session
   Future<void> recordPianoSession({
@@ -589,8 +428,8 @@ class ListeningAnalyticsService extends ChangeNotifier {
     if (!_initialized) return;
     _pianoTotalNotes += notesPlayed;
     _pianoTotalSessionMs += sessionDuration.inMilliseconds;
-    _pianoDiscovered = true;
     await _savePianoStats();
+    notifyListeners();
     debugPrint('ListeningAnalyticsService: Recorded piano session ($notesPlayed notes, ${sessionDuration.inSeconds}s)');
   }
 
@@ -612,9 +451,17 @@ class ListeningAnalyticsService extends ChangeNotifier {
         return;
       }
 
-      _events = jsonList
-          .map((e) => PlayEvent.fromJson(Map<String, dynamic>.from(e as Map)))
-          .toList();
+      // Decode per-event so one malformed row can't wipe the whole history.
+      _events = [];
+      for (final raw in jsonList) {
+        try {
+          _events.add(
+            PlayEvent.fromJson(Map<String, dynamic>.from(raw as Map)),
+          );
+        } catch (e) {
+          debugPrint('ListeningAnalyticsService: skipping bad event: $e');
+        }
+      }
 
       // Sort by timestamp descending (most recent first)
       _events.sort((a, b) => b.timestamp.compareTo(a.timestamp));
@@ -627,9 +474,10 @@ class ListeningAnalyticsService extends ChangeNotifier {
   Future<void> _saveEvents() async {
     if (_box == null) return;
 
-    // Keep last 730 days (2 years) of events to allow viewing previous year's Rewind
-    // This ensures you can always access last year's stats throughout the current year
-    final cutoff = DateTime.now().subtract(const Duration(days: 730));
+    // Keep last 365 days of events for streak / period-comparison / top-content
+    // stats on the Profile dashboard. Two-year retention was previously kept
+    // for the retired "Your Rewind" yearly report; trimmed in v8.9.5.
+    final cutoff = DateTime.now().subtract(const Duration(days: 365));
     _events.removeWhere((e) => e.timestamp.isBefore(cutoff));
 
     final jsonList = _events.map((e) => e.toJson()).toList();
@@ -1064,451 +912,6 @@ class ListeningAnalyticsService extends ChangeNotifier {
     }).toList();
   }
 
-  /// Get milestone achievements with progress
-  ListeningMilestones getMilestones() {
-    final totalPlays = _events.length;
-    final totalHoursValue = getTotalListeningTime().inMinutes / 60.0;
-    final streak = getStreakInfo();
-    final uniqueArtists = <String>{};
-    final uniqueAlbums = <String>{};
-    final uniqueTracks = <String>{};
-    final uniqueGenres = <String>{};
-
-    // Count night owl (10pm-4am), early bird (5am-8am), and weekend plays
-    int nightOwlPlays = 0;
-    int earlyBirdPlays = 0;
-    int weekendPlays = 0;
-
-    for (final event in _events) {
-      uniqueTracks.add(event.trackId);
-      uniqueArtists.addAll(event.artists);
-      uniqueGenres.addAll(event.genres);
-      if (event.albumId != null) {
-        uniqueAlbums.add(event.albumId!);
-      }
-
-      // Check time of day
-      final hour = event.timestamp.hour;
-      if (hour >= 22 || hour < 4) {
-        nightOwlPlays++;
-      } else if (hour >= 5 && hour <= 8) {
-        earlyBirdPlays++;
-      }
-
-      // Check if weekend (Saturday = 6, Sunday = 7)
-      final weekday = event.timestamp.weekday;
-      if (weekday == DateTime.saturday || weekday == DateTime.sunday) {
-        weekendPlays++;
-      }
-    }
-
-    // Calculate marathon sessions (sessions over 2 hours)
-    final marathonSessions = getMarathonSessionCount();
-
-    final milestones = <ListeningMilestone>[
-      // Play count milestones - Voyage themed
-      ListeningMilestone(
-        id: 'plays_10',
-        name: 'Setting Sail',
-        description: 'Play 10 tracks',
-        iconType: IconType.plays,
-        targetValue: 10,
-        currentValue: totalPlays,
-      ),
-      ListeningMilestone(
-        id: 'plays_100',
-        name: 'Open Waters',
-        description: 'Play 100 tracks',
-        iconType: IconType.plays,
-        targetValue: 100,
-        currentValue: totalPlays,
-      ),
-      ListeningMilestone(
-        id: 'plays_500',
-        name: 'Seasoned Sailor',
-        description: 'Play 500 tracks',
-        iconType: IconType.plays,
-        targetValue: 500,
-        currentValue: totalPlays,
-      ),
-      ListeningMilestone(
-        id: 'plays_1000',
-        name: 'Fleet Captain',
-        description: 'Play 1,000 tracks',
-        iconType: IconType.plays,
-        targetValue: 1000,
-        currentValue: totalPlays,
-      ),
-      ListeningMilestone(
-        id: 'plays_5000',
-        name: 'Admiral',
-        description: 'Play 5,000 tracks',
-        iconType: IconType.plays,
-        targetValue: 5000,
-        currentValue: totalPlays,
-      ),
-      ListeningMilestone(
-        id: 'plays_10000',
-        name: 'Grand Admiral',
-        description: 'Play 10,000 tracks',
-        iconType: IconType.plays,
-        targetValue: 10000,
-        currentValue: totalPlays,
-      ),
-
-      // Hours milestones - Depth themed
-      ListeningMilestone(
-        id: 'hours_1',
-        name: 'First Tide',
-        description: 'Listen for 1 hour',
-        iconType: IconType.hours,
-        targetValue: 1,
-        currentValue: totalHoursValue.floor(),
-      ),
-      ListeningMilestone(
-        id: 'hours_10',
-        name: 'Ocean Current',
-        description: 'Listen for 10 hours',
-        iconType: IconType.hours,
-        targetValue: 10,
-        currentValue: totalHoursValue.floor(),
-      ),
-      ListeningMilestone(
-        id: 'hours_50',
-        name: 'Deep Sea Diver',
-        description: 'Listen for 50 hours',
-        iconType: IconType.hours,
-        targetValue: 50,
-        currentValue: totalHoursValue.floor(),
-      ),
-      ListeningMilestone(
-        id: 'hours_100',
-        name: 'Mariana Depths',
-        description: 'Listen for 100 hours',
-        iconType: IconType.hours,
-        targetValue: 100,
-        currentValue: totalHoursValue.floor(),
-      ),
-      ListeningMilestone(
-        id: 'hours_250',
-        name: 'Abyssal Explorer',
-        description: 'Listen for 250 hours',
-        iconType: IconType.hours,
-        targetValue: 250,
-        currentValue: totalHoursValue.floor(),
-      ),
-      ListeningMilestone(
-        id: 'hours_500',
-        name: 'Kraken\'s Domain',
-        description: 'Listen for 500 hours',
-        iconType: IconType.hours,
-        targetValue: 500,
-        currentValue: totalHoursValue.floor(),
-      ),
-
-      // Streak milestones - Wind/Weather themed
-      ListeningMilestone(
-        id: 'streak_3',
-        name: 'Sea Breeze',
-        description: '3-day listening streak',
-        iconType: IconType.streak,
-        targetValue: 3,
-        currentValue: streak.longestStreak,
-      ),
-      ListeningMilestone(
-        id: 'streak_7',
-        name: 'Trade Winds',
-        description: '7-day listening streak',
-        iconType: IconType.streak,
-        targetValue: 7,
-        currentValue: streak.longestStreak,
-      ),
-      ListeningMilestone(
-        id: 'streak_14',
-        name: 'Monsoon Season',
-        description: '14-day listening streak',
-        iconType: IconType.streak,
-        targetValue: 14,
-        currentValue: streak.longestStreak,
-      ),
-      ListeningMilestone(
-        id: 'streak_30',
-        name: 'Steady Current',
-        description: '30-day listening streak',
-        iconType: IconType.streak,
-        targetValue: 30,
-        currentValue: streak.longestStreak,
-      ),
-      ListeningMilestone(
-        id: 'streak_60',
-        name: 'Tidal Force',
-        description: '60-day listening streak',
-        iconType: IconType.streak,
-        targetValue: 60,
-        currentValue: streak.longestStreak,
-      ),
-      ListeningMilestone(
-        id: 'streak_100',
-        name: 'Eternal Voyage',
-        description: '100-day listening streak',
-        iconType: IconType.streak,
-        targetValue: 100,
-        currentValue: streak.longestStreak,
-      ),
-      ListeningMilestone(
-        id: 'streak_365',
-        name: 'Poseidon\'s Blessing',
-        description: '365-day listening streak',
-        iconType: IconType.streak,
-        targetValue: 365,
-        currentValue: streak.longestStreak,
-      ),
-
-      // Artist milestones - Explorer themed
-      ListeningMilestone(
-        id: 'artists_10',
-        name: 'Port Explorer',
-        description: 'Listen to 10 different artists',
-        iconType: IconType.artists,
-        targetValue: 10,
-        currentValue: uniqueArtists.length,
-      ),
-      ListeningMilestone(
-        id: 'artists_50',
-        name: 'Island Hopper',
-        description: 'Listen to 50 different artists',
-        iconType: IconType.artists,
-        targetValue: 50,
-        currentValue: uniqueArtists.length,
-      ),
-      ListeningMilestone(
-        id: 'artists_100',
-        name: 'World Voyager',
-        description: 'Listen to 100 different artists',
-        iconType: IconType.artists,
-        targetValue: 100,
-        currentValue: uniqueArtists.length,
-      ),
-      ListeningMilestone(
-        id: 'artists_250',
-        name: 'Seven Seas Explorer',
-        description: 'Listen to 250 different artists',
-        iconType: IconType.artists,
-        targetValue: 250,
-        currentValue: uniqueArtists.length,
-      ),
-
-      // Album milestones - Treasure themed
-      ListeningMilestone(
-        id: 'albums_10',
-        name: 'Treasure Hunter',
-        description: 'Listen to tracks from 10 albums',
-        iconType: IconType.albums,
-        targetValue: 10,
-        currentValue: uniqueAlbums.length,
-      ),
-      ListeningMilestone(
-        id: 'albums_50',
-        name: 'Chest Collector',
-        description: 'Listen to tracks from 50 albums',
-        iconType: IconType.albums,
-        targetValue: 50,
-        currentValue: uniqueAlbums.length,
-      ),
-      ListeningMilestone(
-        id: 'albums_100',
-        name: 'Sunken Treasure',
-        description: 'Listen to tracks from 100 albums',
-        iconType: IconType.albums,
-        targetValue: 100,
-        currentValue: uniqueAlbums.length,
-      ),
-      ListeningMilestone(
-        id: 'albums_200',
-        name: 'Golden Armada',
-        description: 'Listen to tracks from 200 albums',
-        iconType: IconType.albums,
-        targetValue: 200,
-        currentValue: uniqueAlbums.length,
-      ),
-
-      // Track milestones - Shell/Pearl themed
-      ListeningMilestone(
-        id: 'tracks_50',
-        name: 'Shell Seeker',
-        description: 'Discover 50 unique tracks',
-        iconType: IconType.tracks,
-        targetValue: 50,
-        currentValue: uniqueTracks.length,
-      ),
-      ListeningMilestone(
-        id: 'tracks_200',
-        name: 'Pearl Diver',
-        description: 'Discover 200 unique tracks',
-        iconType: IconType.tracks,
-        targetValue: 200,
-        currentValue: uniqueTracks.length,
-      ),
-      ListeningMilestone(
-        id: 'tracks_500',
-        name: 'Coral Reef',
-        description: 'Discover 500 unique tracks',
-        iconType: IconType.tracks,
-        targetValue: 500,
-        currentValue: uniqueTracks.length,
-      ),
-      ListeningMilestone(
-        id: 'tracks_1000',
-        name: 'Ocean\'s Symphony',
-        description: 'Discover 1,000 unique tracks',
-        iconType: IconType.tracks,
-        targetValue: 1000,
-        currentValue: uniqueTracks.length,
-      ),
-
-      // Genre milestones - Navigation themed
-      ListeningMilestone(
-        id: 'genres_5',
-        name: 'Compass Rose',
-        description: 'Explore 5 different genres',
-        iconType: IconType.genres,
-        targetValue: 5,
-        currentValue: uniqueGenres.length,
-      ),
-      ListeningMilestone(
-        id: 'genres_10',
-        name: 'Chart Master',
-        description: 'Explore 10 different genres',
-        iconType: IconType.genres,
-        targetValue: 10,
-        currentValue: uniqueGenres.length,
-      ),
-      ListeningMilestone(
-        id: 'genres_20',
-        name: 'Musical Navigator',
-        description: 'Explore 20 different genres',
-        iconType: IconType.genres,
-        targetValue: 20,
-        currentValue: uniqueGenres.length,
-      ),
-
-      // Special time-based milestones - Creature themed
-      ListeningMilestone(
-        id: 'night_owl_50',
-        name: 'Night Whale',
-        description: 'Play 50 tracks between 10pm-4am',
-        iconType: IconType.special,
-        targetValue: 50,
-        currentValue: nightOwlPlays,
-      ),
-      ListeningMilestone(
-        id: 'night_owl_200',
-        name: 'Midnight Kraken',
-        description: 'Play 200 tracks between 10pm-4am',
-        iconType: IconType.special,
-        targetValue: 200,
-        currentValue: nightOwlPlays,
-      ),
-      ListeningMilestone(
-        id: 'early_bird_50',
-        name: 'Dawn Dolphin',
-        description: 'Play 50 tracks between 5am-8am',
-        iconType: IconType.special,
-        targetValue: 50,
-        currentValue: earlyBirdPlays,
-      ),
-      ListeningMilestone(
-        id: 'early_bird_200',
-        name: 'Sunrise Siren',
-        description: 'Play 200 tracks between 5am-8am',
-        iconType: IconType.special,
-        targetValue: 200,
-        currentValue: earlyBirdPlays,
-      ),
-
-      // Weekend milestones - Calendar themed
-      ListeningMilestone(
-        id: 'weekend_100',
-        name: 'Weekend Captain',
-        description: 'Play 100 tracks on weekends',
-        iconType: IconType.special,
-        targetValue: 100,
-        currentValue: weekendPlays,
-      ),
-
-      // Marathon milestones - Endurance themed
-      ListeningMilestone(
-        id: 'marathon_5',
-        name: 'Marathon Voyager',
-        description: 'Have 5 listening sessions over 2 hours',
-        iconType: IconType.special,
-        targetValue: 5,
-        currentValue: marathonSessions,
-      ),
-
-      // Relax Mode milestone - Hidden feature discovery
-      ListeningMilestone(
-        id: 'relax_mode',
-        name: 'Calm Waters',
-        description: 'Discover the hidden Relax Mode',
-        iconType: IconType.special,
-        targetValue: 1,
-        currentValue: _relaxModeStats.discovered ? 1 : 0,
-      ),
-
-      // Network milestone - Hidden easter egg discovery
-      ListeningMilestone(
-        id: 'network_radio',
-        name: 'Signal Found',
-        description: 'Tune into The Network radio',
-        iconType: IconType.special,
-        targetValue: 1,
-        currentValue: _networkDiscovered ? 1 : 0,
-      ),
-
-      // Essential Mix milestone - Hidden easter egg discovery
-      ListeningMilestone(
-        id: 'essential_mix',
-        name: 'Essential Discovery',
-        description: 'Find the Essential Mix easter egg',
-        iconType: IconType.special,
-        targetValue: 1,
-        currentValue: _essentialMixDiscovered ? 1 : 0,
-      ),
-
-      // Frets on Fire milestone - Rhythm game easter egg
-      ListeningMilestone(
-        id: 'frets_on_fire',
-        name: 'Rock Star',
-        description: 'Discover the Frets on Fire rhythm game',
-        iconType: IconType.game,
-        targetValue: 1,
-        currentValue: _fretsOnFireDiscovered ? 1 : 0,
-      ),
-
-      // Piano milestone - Synth easter egg
-      ListeningMilestone(
-        id: 'piano',
-        name: 'Virtuoso',
-        description: 'Discover the hidden Piano',
-        iconType: IconType.special,
-        targetValue: 1,
-        currentValue: _pianoDiscovered ? 1 : 0,
-      ),
-
-      // Healing Frequencies milestone - Hidden feature discovery
-      ListeningMilestone(
-        id: 'healing_frequencies',
-        name: 'Healing Harmony',
-        description: 'Discover the Healing Frequencies',
-        iconType: IconType.special,
-        targetValue: 1,
-        currentValue: _healingFrequenciesDiscovered ? 1 : 0,
-      ),
-    ];
-
-    return ListeningMilestones(all: milestones);
-  }
 
   /// Calculate average session length
   /// Groups plays into sessions (gap > 30 min = new session)
@@ -1591,19 +994,15 @@ class ListeningAnalyticsService extends ChangeNotifier {
   }
 
   /// Export ALL analytics data as JSON string for backup.
-  /// Includes: play events, relax mode stats, network discovered flag.
+  /// Includes: play events, relax mode stats, piano stats.
   /// Network channel stats should be exported separately via NetworkDownloadService.
   String exportAllStatsAsJson() {
     return jsonEncode({
       'nautune_stats_backup': true,
-      'version': 1,
+      'version': 2,
       'exported_at': DateTime.now().toIso8601String(),
       'play_events': _events.map((e) => e.toJson()).toList(),
       'relax_mode_stats': _relaxModeStats.toJson(),
-      'network_discovered': _networkDiscovered,
-      'essential_mix_discovered': _essentialMixDiscovered,
-      'frets_on_fire_discovered': _fretsOnFireDiscovered,
-      'piano_discovered': _pianoDiscovered,
       'piano_total_notes': _pianoTotalNotes,
       'piano_total_session_ms': _pianoTotalSessionMs,
     });
@@ -1674,33 +1073,10 @@ class ListeningAnalyticsService extends ChangeNotifier {
           campfireUsageMs: _relaxModeStats.campfireUsageMs > importedRelax.campfireUsageMs
               ? _relaxModeStats.campfireUsageMs
               : importedRelax.campfireUsageMs,
-          discovered: _relaxModeStats.discovered || importedRelax.discovered,
         );
       }
 
-      // Import network discovered flag (keep true if either is true)
-      final networkDiscovered = jsonData['network_discovered'] as bool?;
-      if (networkDiscovered == true) {
-        _networkDiscovered = true;
-      }
-
-      // Import essential mix discovered flag (keep true if either is true)
-      final essentialMixDiscovered = jsonData['essential_mix_discovered'] as bool?;
-      if (essentialMixDiscovered == true) {
-        _essentialMixDiscovered = true;
-      }
-
-      // Import frets on fire discovered flag (keep true if either is true)
-      final fretsOnFireDiscovered = jsonData['frets_on_fire_discovered'] as bool?;
-      if (fretsOnFireDiscovered == true) {
-        _fretsOnFireDiscovered = true;
-      }
-
-      // Import piano stats (keep true/higher values)
-      final pianoDiscovered = jsonData['piano_discovered'] as bool?;
-      if (pianoDiscovered == true) {
-        _pianoDiscovered = true;
-      }
+      // Import piano stats (keep higher values)
       final importedPianoNotes = jsonData['piano_total_notes'] as int? ?? 0;
       if (importedPianoNotes > _pianoTotalNotes) {
         _pianoTotalNotes = importedPianoNotes;
@@ -1711,18 +1087,15 @@ class ListeningAnalyticsService extends ChangeNotifier {
       }
 
       // Save all imported data
-      if (importedCount > 0 || relaxJson != null || networkDiscovered == true || essentialMixDiscovered == true || fretsOnFireDiscovered == true || pianoDiscovered == true) {
+      if (importedCount > 0 || relaxJson != null || importedPianoNotes > 0 || importedPianoMs > 0) {
         await Future.wait([
           _saveEvents(),
           _saveRelaxModeStats(),
-          _saveNetworkDiscovered(),
-          _saveEssentialMixDiscovered(),
-          _saveFretsOnFireDiscovered(),
           _savePianoStats(),
         ]);
         debugPrint('ListeningAnalyticsService: Imported $importedCount events');
-        // Several `_save*` helpers don't notify (events / discovery flags);
-        // emit a single aggregate notification so listeners refresh after import.
+        // Single aggregate notification — the `_save*` helpers no longer
+        // emit per-call, so listeners refresh once when the import is done.
         notifyListeners();
       }
 
@@ -1735,289 +1108,6 @@ class ListeningAnalyticsService extends ChangeNotifier {
 
   /// Get raw event count for stats display
   int get totalEventCount => _events.length;
-
-  // ============ Year-Based Methods for Rewind ============
-
-  /// Get all events for a specific year, or all events if year is null
-  List<PlayEvent> getEventsForYear(int? year) {
-    if (year == null) return List.from(_events);
-    return _events.where((e) => e.timestamp.year == year).toList();
-  }
-
-  /// Get list of years that have listening data
-  List<int> getAvailableYears() {
-    final years = <int>{};
-    for (final event in _events) {
-      years.add(event.timestamp.year);
-    }
-    final sortedYears = years.toList()..sort((a, b) => b.compareTo(a));
-    return sortedYears;
-  }
-
-  /// Get total plays for a specific year (null = all time)
-  int getTotalPlaysForYear(int? year) {
-    return getEventsForYear(year).length;
-  }
-
-  /// Get total listening time for a specific year (null = all time)
-  Duration getTotalListeningTimeForYear(int? year) {
-    final events = getEventsForYear(year);
-    int totalMs = 0;
-    for (final event in events) {
-      totalMs += event.durationMs;
-    }
-    return Duration(milliseconds: totalMs);
-  }
-
-  /// Get top artists for a specific year with play counts
-  List<Map<String, dynamic>> getTopArtistsForYear(int? year, {int limit = 5}) {
-    final events = getEventsForYear(year);
-    final artistCounts = <String, int>{};
-
-    for (final event in events) {
-      for (final artist in event.artists) {
-        artistCounts[artist] = (artistCounts[artist] ?? 0) + 1;
-      }
-    }
-
-    final sorted = artistCounts.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-
-    return sorted.take(limit).map((e) => {
-      'name': e.key,
-      'playCount': e.value,
-    }).toList();
-  }
-
-  /// Get top albums for a specific year with play counts
-  List<Map<String, dynamic>> getTopAlbumsForYear(int? year, {int limit = 5}) {
-    final events = getEventsForYear(year);
-    final albumCounts = <String, Map<String, dynamic>>{};
-
-    for (final event in events) {
-      if (event.albumId == null && event.albumName == null) continue;
-      final key = event.albumId ?? event.albumName ?? '';
-      if (key.isEmpty) continue;
-
-      if (!albumCounts.containsKey(key)) {
-        albumCounts[key] = {
-          'albumId': event.albumId,
-          'name': event.albumName ?? 'Unknown Album',
-          'artistName': event.artists.isNotEmpty ? event.artists.first : 'Unknown Artist',
-          'playCount': 0,
-        };
-      }
-      albumCounts[key]!['playCount'] = (albumCounts[key]!['playCount'] as int) + 1;
-    }
-
-    final sorted = albumCounts.values.toList()
-      ..sort((a, b) => (b['playCount'] as int).compareTo(a['playCount'] as int));
-
-    return sorted.take(limit).toList();
-  }
-
-  /// Get top tracks for a specific year with play counts
-  List<Map<String, dynamic>> getTopTracksForYear(int? year, {int limit = 5}) {
-    final events = getEventsForYear(year);
-    final trackCounts = <String, Map<String, dynamic>>{};
-
-    for (final event in events) {
-      if (!trackCounts.containsKey(event.trackId)) {
-        trackCounts[event.trackId] = {
-          'trackId': event.trackId,
-          'name': event.trackName,
-          'artistName': event.artists.isNotEmpty ? event.artists.first : 'Unknown Artist',
-          'albumName': event.albumName,
-          'albumId': event.albumId,
-          'playCount': 0,
-        };
-      }
-      trackCounts[event.trackId]!['playCount'] = (trackCounts[event.trackId]!['playCount'] as int) + 1;
-    }
-
-    final sorted = trackCounts.values.toList()
-      ..sort((a, b) => (b['playCount'] as int).compareTo(a['playCount'] as int));
-
-    return sorted.take(limit).toList();
-  }
-
-  /// Get top genre for a specific year
-  String? getTopGenreForYear(int? year) {
-    final events = getEventsForYear(year);
-    final genreCounts = <String, int>{};
-
-    for (final event in events) {
-      for (final genre in event.genres) {
-        genreCounts[genre] = (genreCounts[genre] ?? 0) + 1;
-      }
-    }
-
-    if (genreCounts.isEmpty) return null;
-
-    final sorted = genreCounts.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-
-    return sorted.first.key;
-  }
-
-  /// Get all genres for a specific year with play counts
-  Map<String, int> getGenresForYear(int? year) {
-    final events = getEventsForYear(year);
-    final genreCounts = <String, int>{};
-
-    for (final event in events) {
-      for (final genre in event.genres) {
-        genreCounts[genre] = (genreCounts[genre] ?? 0) + 1;
-      }
-    }
-
-    return genreCounts;
-  }
-
-  /// Get peak listening month (1-12) for a specific year
-  int? getPeakMonthForYear(int year) {
-    final events = getEventsForYear(year);
-    if (events.isEmpty) return null;
-
-    final monthCounts = <int, int>{};
-    for (final event in events) {
-      final month = event.timestamp.month;
-      monthCounts[month] = (monthCounts[month] ?? 0) + 1;
-    }
-
-    final sorted = monthCounts.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-
-    return sorted.first.key;
-  }
-
-  /// Get longest listening streak for a specific year
-  int getLongestStreakForYear(int year) {
-    final events = getEventsForYear(year);
-    if (events.isEmpty) return 0;
-
-    final listeningDays = <DateTime>{};
-    for (final event in events) {
-      final day = DateTime(event.timestamp.year, event.timestamp.month, event.timestamp.day);
-      listeningDays.add(day);
-    }
-
-    final sortedDays = listeningDays.toList()..sort();
-
-    int longestStreak = 0;
-    int currentStreak = 1;
-    DateTime? prevDay;
-
-    for (final day in sortedDays) {
-      if (prevDay != null) {
-        final diff = day.difference(prevDay).inDays;
-        if (diff == 1) {
-          currentStreak++;
-        } else {
-          if (currentStreak > longestStreak) {
-            longestStreak = currentStreak;
-          }
-          currentStreak = 1;
-        }
-      }
-      prevDay = day;
-    }
-    if (currentStreak > longestStreak) {
-      longestStreak = currentStreak;
-    }
-
-    return longestStreak;
-  }
-
-  /// Get unique artists count for a specific year
-  int getUniqueArtistsForYear(int? year) {
-    final events = getEventsForYear(year);
-    final artists = <String>{};
-    for (final event in events) {
-      artists.addAll(event.artists);
-    }
-    return artists.length;
-  }
-
-  /// Get unique tracks count for a specific year
-  int getUniqueTracksForYear(int? year) {
-    final events = getEventsForYear(year);
-    final tracks = <String>{};
-    for (final event in events) {
-      tracks.add(event.trackId);
-    }
-    return tracks.length;
-  }
-
-  /// Get unique albums count for a specific year
-  int getUniqueAlbumsForYear(int? year) {
-    final events = getEventsForYear(year);
-    final albums = <String>{};
-    for (final event in events) {
-      if (event.albumId != null) {
-        albums.add(event.albumId!);
-      }
-    }
-    return albums.length;
-  }
-
-  /// Get listening time by month for a year (for chart display)
-  Map<int, Duration> getListeningTimeByMonth(int year) {
-    final events = getEventsForYear(year);
-    final monthlyTime = <int, int>{};
-
-    for (int month = 1; month <= 12; month++) {
-      monthlyTime[month] = 0;
-    }
-
-    for (final event in events) {
-      final month = event.timestamp.month;
-      monthlyTime[month] = monthlyTime[month]! + event.durationMs;
-    }
-
-    return monthlyTime.map((k, v) => MapEntry(k, Duration(milliseconds: v)));
-  }
-
-  /// Get plays by day of week for a year
-  Map<int, int> getPlaysByDayOfWeekForYear(int? year) {
-    final events = getEventsForYear(year);
-    final counts = <int, int>{};
-    for (int i = 0; i < 7; i++) {
-      counts[i] = 0;
-    }
-    for (final event in events) {
-      final day = event.timestamp.weekday - 1; // 0-6
-      counts[day] = counts[day]! + 1;
-    }
-    return counts;
-  }
-
-  /// Get plays by hour for a year
-  Map<int, int> getPlaysByHourForYear(int? year) {
-    final events = getEventsForYear(year);
-    final counts = <int, int>{};
-    for (int i = 0; i < 24; i++) {
-      counts[i] = 0;
-    }
-    for (final event in events) {
-      final hour = event.timestamp.hour;
-      counts[hour] = counts[hour]! + 1;
-    }
-    return counts;
-  }
-
-  /// Calculate discovery rate for a year
-  double getDiscoveryRateForYear(int? year) {
-    final events = getEventsForYear(year);
-    if (events.isEmpty) return 0.0;
-
-    final uniqueTracks = <String>{};
-    for (final event in events) {
-      uniqueTracks.add(event.trackId);
-    }
-
-    return (uniqueTracks.length / events.length) * 100;
-  }
 
   // ============ Server Sync Methods ============
 

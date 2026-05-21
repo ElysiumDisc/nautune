@@ -21,9 +21,7 @@ import '../services/listening_analytics_service.dart';
 import '../services/essential_mix_service.dart';
 import '../services/network_download_service.dart';
 import '../services/chart_cache_service.dart';
-import '../services/rewind_service.dart';
 import '../theme/nautune_theme.dart';
-import 'rewind_screen.dart';
 
 /// Cache for profile stats to avoid recomputing on every visit
 class _ProfileStatsCache {
@@ -346,7 +344,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   ListeningHeatmap? _heatmap;
   ListeningStreak? _streak;
   PeriodComparison? _weekComparison;
-  ListeningMilestones? _milestones;
   RelaxModeStats? _relaxModeStats;
   int? _peakHour;
   int? _peakDay;
@@ -392,7 +389,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   FretsOnFireStats? _fretsOnFireStats;
 
   // Piano stats
-  bool _pianoDiscovered = false;
   int _pianoTotalNotes = 0;
   Duration _pianoTotalTime = Duration.zero;
 
@@ -457,7 +453,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final analytics = ListeningAnalyticsService();
     if (analytics.isInitialized) {
       setState(() {
-        _pianoDiscovered = analytics.pianoDiscovered;
         _pianoTotalNotes = analytics.pianoTotalNotes;
         _pianoTotalTime = analytics.pianoTotalSessionTime;
       });
@@ -490,7 +485,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _heatmap = _analyticsService!.getListeningHeatmap();
       _streak = _analyticsService!.getStreakInfo();
       _weekComparison = _analyticsService!.getWeekOverWeekComparison();
-      _milestones = _analyticsService!.getMilestones();
       _relaxModeStats = _analyticsService!.getRelaxModeStats();
       _peakHour = _analyticsService!.getPeakListeningHour();
       _peakDay = _analyticsService!.getPeakDayOfWeek();
@@ -558,7 +552,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         // If cache is still fresh, don't refresh from network
         if (_ProfileStatsCache.isFresh) {
           // Still load recent tracks (they change often)
-          _loadRecentTracks(appState, libraryId);
+          unawaited(_loadRecentTracks(appState, libraryId));
           return;
         }
       }
@@ -887,7 +881,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final sessionProvider = Provider.of<SessionProvider>(context, listen: false);
     final session = sessionProvider.session;
     if (session == null) return null;
-    // Jellyfin API note: /Users/{id}/Images/Primary is not in the 10.11.8
+    // Jellyfin API note: /Users/{id}/Images/Primary is not in the 10.11.9
     // OpenAPI but is backwards-compatible across every supported Jellyfin
     // server. See JellyfinClient.getUserImageUrl for context.
     return '${session.serverUrl}/Users/${session.credentials.userId}/Images/Primary';
@@ -1035,9 +1029,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   _buildQuickStatsBadges(theme),
                   const SizedBox(height: 16),
 
-                  // Rewind Banner (if data available)
-                  _buildRewindBanner(theme),
-
                   // 2. Key Metrics - Plays, Artists, Albums (3 cards)
                   _buildKeyMetricsRow(theme),
                   const SizedBox(height: 16),
@@ -1076,8 +1067,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     const SizedBox(height: 12),
                   ],
 
-                  // Piano Stats (if discovered)
-                  if (_pianoDiscovered && _pianoTotalNotes > 0) ...[
+                  // Piano Stats (if user has actually played the piano)
+                  if (_pianoTotalNotes > 0) ...[
                     _buildPianoStatsSection(theme),
                     const SizedBox(height: 12),
                   ],
@@ -1120,23 +1111,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     _buildNauticalSectionHeader(theme, 'Listening Activity', Icons.insights),
                     const SizedBox(height: 12),
                     _buildListeningActivitySection(theme),
-                  ],
-                ),
-              ),
-            ),
-
-          // Achievements Section (lazy loaded)
-          if (!_bentoMode && _milestones != null && _milestones!.all.isNotEmpty)
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildWaveDivider(theme),
-                    _buildNauticalSectionHeader(theme, 'Achievements', Icons.emoji_events),
-                    const SizedBox(height: 12),
-                    _buildMilestonesSection(theme),
                   ],
                 ),
               ),
@@ -1229,8 +1203,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   ///  │   (XL)         │  Artists          │
   ///  │                │  Albums           │
   ///  ├────────────────┴──────────────────-┤
-  ///  │  [ 🎁 Rewind 20xx  →  ]            │
-  ///  ├─────────────────────────────────────┤
   ///  │  badges: streak, faves, discovery   │
   ///  ├─────────────────────────────────────┤
   ///  │  Library Ocean card (full width)    │
@@ -1267,7 +1239,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         const SizedBox(height: 12),
         _buildQuickStatsBadges(theme),
         const SizedBox(height: 8),
-        _buildRewindBanner(theme),
         _buildLibraryOverviewCard(theme),
         const SizedBox(height: 12),
         // Side-by-side compact integration badges.
@@ -1492,98 +1463,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildRewindBanner(ThemeData theme) {
-    final rewindService = RewindService();
-    // Rewind always defaults to previous year (like Spotify Wrapped)
-    final previousYear = DateTime.now().year - 1;
-    final hasPreviousYearData = rewindService.hasEnoughData(previousYear);
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 24),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => RewindScreen(initialYear: previousYear),
-              ),
-            );
-          },
-          borderRadius: BorderRadius.circular(16),
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  theme.colorScheme.primary.withValues(alpha: 0.3),
-                  theme.colorScheme.tertiary.withValues(alpha: 0.2),
-                ],
-              ),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: theme.colorScheme.primary.withValues(alpha: 0.4),
-              ),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        theme.colorScheme.primary,
-                        theme.colorScheme.tertiary,
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(
-                    Icons.replay,
-                    color: Colors.white,
-                    size: 24,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        hasPreviousYearData
-                            ? 'Your $previousYear Rewind is Ready!'
-                            : 'Your $previousYear Rewind',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        hasPreviousYearData
-                            ? 'See your top artists, albums & listening personality'
-                            : 'Not enough listening data from $previousYear',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(
-                  Icons.chevron_right,
-                  color: theme.colorScheme.primary,
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -3821,8 +3700,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         if (_heatmap != null)
           _buildListeningHeatmap(theme),
 
-        // Relax Mode Stats (only show if discovered)
-        if (_relaxModeStats != null && _relaxModeStats!.discovered) ...[
+        // Relax Mode Stats (only show if user has actually used the feature)
+        if (_relaxModeStats != null && _relaxModeStats!.totalSessionsMs > 0) ...[
           const SizedBox(height: 16),
           _buildRelaxModeStatsCard(theme),
         ],
@@ -4403,357 +4282,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (hour == 12) return '12pm';
     if (hour < 12) return '${hour}am';
     return '${hour - 12}pm';
-  }
-
-  Widget _buildMilestonesSection(ThemeData theme) {
-    final milestones = _milestones!;
-    final unlocked = milestones.unlocked;
-    final nextToUnlock = milestones.nextToUnlock;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Progress summary
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Colors.amber.withValues(alpha: 0.2),
-                Colors.orange.withValues(alpha: 0.1),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: Colors.amber.withValues(alpha: 0.3),
-            ),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  color: Colors.amber.withValues(alpha: 0.2),
-                  shape: BoxShape.circle,
-                ),
-                child: Center(
-                  child: Text(
-                    '${milestones.unlockedCount}',
-                    style: theme.textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.amber,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${milestones.unlockedCount} of ${milestones.totalCount} Unlocked',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: milestones.unlockedCount / milestones.totalCount,
-                        backgroundColor: Colors.amber.withValues(alpha: 0.2),
-                        valueColor: const AlwaysStoppedAnimation<Color>(Colors.amber),
-                        minHeight: 8,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        // Next milestone to unlock
-        if (nextToUnlock != null) ...[
-          const SizedBox(height: 16),
-          _buildNextMilestoneCard(theme, nextToUnlock),
-        ],
-
-        // Unlocked badges grid
-        if (unlocked.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          Text(
-            'Earned Badges',
-            style: theme.textTheme.titleSmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: unlocked.map((m) => _buildMilestoneBadge(theme, m)).toList(),
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildNextMilestoneCard(ThemeData theme, ListeningMilestone milestone) {
-    final icon = _getMilestoneIcon(milestone.iconType);
-    final color = _getMilestoneColor(milestone.iconType);
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: color.withValues(alpha: 0.3),
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: color.withValues(alpha: 0.5), size: 24),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      'Next: ',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    Text(
-                      milestone.name,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: color,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  milestone.description,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: milestone.progress,
-                          backgroundColor: color.withValues(alpha: 0.1),
-                          valueColor: AlwaysStoppedAnimation<Color>(color),
-                          minHeight: 6,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      '${milestone.currentValue}/${milestone.targetValue}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: color,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMilestoneBadge(ThemeData theme, ListeningMilestone milestone) {
-    final icon = _getMilestoneIcon(milestone.iconType);
-    final color = _getMilestoneColor(milestone.iconType);
-
-    // Determine tier based on milestone target value
-    final tier = _getMilestoneTier(milestone);
-    final tierBorderColor = _getTierBorderColor(tier);
-
-    return Tooltip(
-      message: milestone.description,
-      child: Container(
-        width: 80,
-        height: 80,
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              color.withValues(alpha: 0.25),
-              color.withValues(alpha: 0.1),
-            ],
-          ),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: tierBorderColor,
-            width: 2,
-          ),
-          boxShadow: [
-            // Outer glow
-            BoxShadow(
-              color: color.withValues(alpha: 0.4),
-              blurRadius: 12,
-              spreadRadius: 1,
-            ),
-            // Inner highlight
-            BoxShadow(
-              color: Colors.white.withValues(alpha: 0.1),
-              blurRadius: 4,
-              offset: const Offset(-2, -2),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Icon with shine effect
-            Stack(
-              alignment: Alignment.center,
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    gradient: RadialGradient(
-                      colors: [
-                        color.withValues(alpha: 0.3),
-                        color.withValues(alpha: 0.1),
-                      ],
-                    ),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(icon, color: color, size: 20),
-                ),
-                // Shine highlight
-                Positioned(
-                  top: 4,
-                  left: 8,
-                  child: Container(
-                    width: 8,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.4),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 2),
-            Text(
-              milestone.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: theme.textTheme.labelSmall?.copyWith(
-                fontWeight: FontWeight.bold,
-                fontSize: 8,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _getMilestoneTier(ListeningMilestone milestone) {
-    // Determine tier based on milestone ID pattern
-    final id = milestone.id;
-    if (id.contains('10000') || id.contains('500') && id.contains('hours') ||
-        id.contains('365') || id.contains('1000') && !id.contains('10000')) {
-      return 'gold';
-    } else if (id.contains('5000') || id.contains('250') || id.contains('100') ||
-        id.contains('60') || id.contains('200')) {
-      return 'silver';
-    }
-    return 'bronze';
-  }
-
-  Color _getTierBorderColor(String tier) {
-    switch (tier) {
-      case 'gold':
-        return NautuneFeatureColors.treasureGold; // Gold
-      case 'silver':
-        return const Color(0xFFC0C0C0); // Silver
-      default:
-        return const Color(0xFFCD7F32); // Bronze
-    }
-  }
-
-  IconData _getMilestoneIcon(IconType type) {
-    switch (type) {
-      case IconType.plays:
-        return Icons.sailing; // Nautical - sailing/voyage
-      case IconType.hours:
-        return Icons.waves; // Ocean depths
-      case IconType.streak:
-        return Icons.air; // Trade winds
-      case IconType.artists:
-        return Icons.explore; // Explorer/compass
-      case IconType.albums:
-        return Icons.diamond; // Treasure
-      case IconType.tracks:
-        return Icons.auto_awesome; // Pearls/shells sparkle
-      case IconType.genres:
-        return Icons.navigation; // Navigation/compass for genre exploration
-      case IconType.special:
-        return Icons.nightlight_round; // Moon/night for time-based milestones
-      case IconType.game:
-        return Icons.sports_esports; // Video game controller
-    }
-  }
-
-  Color _getMilestoneColor(IconType type) {
-    switch (type) {
-      case IconType.plays:
-        return NautuneFeatureColors.oceanBlueAccent; // Ocean blue (Nautune theme)
-      case IconType.hours:
-        return const Color(0xFF7A3DF1); // Deep purple (Nautune theme)
-      case IconType.streak:
-        return Colors.orange; // Warm sunset
-      case IconType.artists:
-        return NautuneFeatureColors.verdantGreen; // Emerald sea
-      case IconType.albums:
-        return NautuneFeatureColors.treasureGold; // Gold treasure
-      case IconType.tracks:
-        return const Color(0xFFEC4899); // Pearl pink
-      case IconType.genres:
-        return const Color(0xFF06B6D4); // Cyan - navigation/compass color
-      case IconType.special:
-        return const Color(0xFF8B5CF6); // Violet - mystical night creatures
-      case IconType.game:
-        return const Color(0xFFFF4D6D); // Fire red/pink - for Frets on Fire
-    }
   }
 
   /// Calculate audio quality score for a track

@@ -23,7 +23,6 @@ import '../services/audio_cache_service.dart';
 import '../services/download_service.dart';
 import '../utils/debouncer.dart';
 import '../services/listenbrainz_service.dart';
-import '../services/rewind_service.dart';
 import '../services/saved_loops_service.dart';
 import '../services/chart_cache_service.dart';
 import '../services/waveform_service.dart';
@@ -34,7 +33,6 @@ import '../widgets/equalizer_widget.dart';
 import '../widgets/visualizer_picker.dart';
 import 'easter_eggs_screen.dart';
 import 'listenbrainz_settings_screen.dart';
-import 'rewind_screen.dart';
 
 /// Modern categorized Settings.
 ///
@@ -75,9 +73,9 @@ const List<_SettingsCategory> _settingsCategories = [
   _SettingsCategory(
     id: 'music',
     title: 'Your Music',
-    subtitle: 'Rewind, ListenBrainz, easter eggs',
+    subtitle: 'ListenBrainz & easter eggs',
     icon: Icons.auto_awesome,
-    keywords: ['rewind', 'listenbrainz', 'stats', 'easter', 'frets', 'piano', 'essential mix', 'healing'],
+    keywords: ['listenbrainz', 'stats', 'easter', 'frets', 'piano', 'essential mix', 'healing'],
   ),
   _SettingsCategory(
     id: 'server',
@@ -310,9 +308,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildYourMusicSection(BuildContext context) {
     final theme = Theme.of(context);
-    final rewindService = RewindService();
-    final previousYear = DateTime.now().year - 1;
-    final hasPreviousYearData = rewindService.hasEnoughData(previousYear);
     final listenBrainz = ListenBrainzService();
 
     return Column(
@@ -323,40 +318,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           margin: const EdgeInsets.only(bottom: 16),
           child: Column(
             children: [
-              // Rewind entry - always shows previous year (like Spotify Wrapped)
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        theme.colorScheme.primary,
-                        theme.colorScheme.tertiary,
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(Icons.replay, color: Colors.white, size: 20),
-                ),
-                title: Text('Your $previousYear Rewind'),
-                subtitle: Text(
-                  hasPreviousYearData
-                      ? 'View your $previousYear listening stats'
-                      : 'Not enough listening data from $previousYear',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => RewindScreen(
-                        initialYear: previousYear,
-                      ),
-                    ),
-                  );
-                },
-              ),
-              const Divider(height: 1),
               // ListenBrainz entry
               ListTile(
                 leading: Container(
@@ -1028,7 +989,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         children: [
-          // Your Music section with Rewind and ListenBrainz
+          // Your Music section (ListenBrainz + easter eggs)
           _group('music', () => [_buildYourMusicSection(context)]),
 
           _group('server', () => [

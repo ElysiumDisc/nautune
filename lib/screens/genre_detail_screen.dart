@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -42,7 +44,7 @@ class _GenreDetailScreenState extends State<GenreDetailScreen> {
       _previousNetworkAvailable = _appState!.networkAvailable;
       _hasInitialized = true;
       _appState!.addListener(_onConnectivityChanged);
-      _loadAlbums();
+      unawaited(_loadAlbums());
     }
   }
 
@@ -54,7 +56,7 @@ class _GenreDetailScreenState extends State<GenreDetailScreen> {
       debugPrint('🔄 GenreDetail: Connectivity changed');
       _previousOfflineMode = offline;
       _previousNetworkAvailable = network;
-      _loadAlbums();
+      unawaited(_loadAlbums());
     }
   }
 
@@ -88,7 +90,9 @@ class _GenreDetailScreenState extends State<GenreDetailScreen> {
     } catch (e) {
       _error = e;
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 

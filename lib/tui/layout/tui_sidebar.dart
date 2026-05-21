@@ -62,8 +62,12 @@ class TuiSidebar extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Use sidebar width but constrain to available space
-        final width = TuiMetrics.sidebarWidth.clamp(0.0, constraints.maxWidth * 0.4);
+        // Pick a width that scales with the whole window (so an 80-col
+        // terminal gets a narrower sidebar than a 200-col one), then cap at
+        // 40% of the local slot as a final safety.
+        final windowWidth = MediaQuery.of(context).size.width;
+        final responsivePx = TuiMetrics.sidebarWidthForWidth(windowWidth);
+        final width = responsivePx.clamp(0.0, constraints.maxWidth * 0.4);
         return SizedBox(
           width: width,
           child: TuiBox(

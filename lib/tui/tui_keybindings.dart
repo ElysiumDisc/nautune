@@ -71,6 +71,11 @@ class TuiKeyBindings extends ChangeNotifier {
   Timer? _sequenceTimer;
   static const Duration _sequenceTimeout = Duration(milliseconds: 500);
 
+  /// Optional callback fired when a multi-key sequence times out but its
+  /// prefix still matches a valid single-char action (e.g. user typed `g`
+  /// then waited; we dispatch `g` rather than silently dropping it).
+  void Function(TuiAction action)? onSequenceTimeout;
+
   /// Current pending key sequence (for display).
   String get pendingSequence => _pendingSequence;
 
@@ -159,6 +164,13 @@ class TuiKeyBindings extends ChangeNotifier {
 
     return TuiAction.none;
   }
+
+  /// Test-only entry point into the character-handling path. Lets unit tests
+  /// exercise multi-key sequences (`gg`, sequence timeout) without having to
+  /// construct full `KeyEvent` objects.
+  @visibleForTesting
+  TuiAction handleCharacterForTest(String char, {bool isShift = false}) =>
+      _handleCharacter(char, isShift);
 
   TuiAction _handleCharacter(String char, bool isShift) {
     // Add to pending sequence
@@ -317,12 +329,13 @@ class TuiKeyBindings extends ChangeNotifier {
     _sequenceTimer?.cancel();
     _sequenceTimer = Timer(_sequenceTimeout, () {
       if (_pendingSequence.isNotEmpty) {
-        // Timeout - try to match what we have
+        // Timeout — try to match what we have. If the lone first character
+        // is a valid action (e.g. user typed `g` then waited), surface it
+        // via the optional callback so the shell can actually dispatch it.
         final action = _matchSequence(_pendingSequence);
         _resetSequence();
         if (action != TuiAction.none) {
-          // Need to notify somehow - for now just log
-          debugPrint('TUI: Sequence timeout, action: $action');
+          onSequenceTimeout?.call(action);
         }
       }
     });

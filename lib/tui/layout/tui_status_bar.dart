@@ -5,6 +5,7 @@ import '../../app_state.dart';
 import '../../jellyfin/jellyfin_track.dart';
 import '../../models/loop_state.dart';
 import '../../services/audio_player_service.dart';
+import '../tui_keybindings.dart';
 import '../tui_theme.dart';
 import '../widgets/tui_braille_visualizer.dart';
 import '../widgets/tui_progress_bar.dart';
@@ -12,9 +13,14 @@ import '../widgets/tui_spectrum_visualizer.dart';
 
 /// The bottom status bar showing now playing info and controls hint.
 class TuiStatusBar extends StatelessWidget {
-  const TuiStatusBar({super.key, this.showVisualizer = true});
+  const TuiStatusBar({
+    super.key,
+    this.showVisualizer = true,
+    this.keyBindings,
+  });
 
   final bool showVisualizer;
+  final TuiKeyBindings? keyBindings;
 
   @override
   Widget build(BuildContext context) {
@@ -62,8 +68,8 @@ class TuiStatusBar extends StatelessWidget {
               // Now playing row
               _NowPlayingRow(audioService: audioService),
               const SizedBox(height: 4),
-              // Controls hint
-              const _ControlsHint(),
+              // Controls hint (with pending key-sequence indicator)
+              _ControlsHint(keyBindings: keyBindings),
             ],
           ),
         );
@@ -179,11 +185,13 @@ class _NowPlayingRow extends StatelessWidget {
 }
 
 class _ControlsHint extends StatelessWidget {
-  const _ControlsHint();
+  const _ControlsHint({this.keyBindings});
+
+  final TuiKeyBindings? keyBindings;
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
+    final hints = SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(
         children: [
@@ -212,6 +220,26 @@ class _ControlsHint extends StatelessWidget {
           _hint('q', 'quit'),
         ],
       ),
+    );
+
+    final kb = keyBindings;
+    if (kb == null) return hints;
+
+    // Wrap the hints with a pending-sequence indicator that updates whenever
+    // TuiKeyBindings notifies (e.g. after typing `g` while waiting for `gg`).
+    return ListenableBuilder(
+      listenable: kb,
+      builder: (context, _) {
+        final pending = kb.pendingSequence;
+        if (pending.isEmpty) return hints;
+        return Row(
+          children: [
+            Expanded(child: hints),
+            const SizedBox(width: 12),
+            Text(':$pending█', style: TuiTextStyles.accent),
+          ],
+        );
+      },
     );
   }
 

@@ -53,15 +53,6 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
   void initState() {
     super.initState();
     _initAudio();
-    _initAnalytics();
-  }
-
-  void _initAnalytics() {
-    // Mark Relax Mode as discovered for the milestone
-    final analytics = ListeningAnalyticsService();
-    if (analytics.isInitialized) {
-      analytics.markRelaxModeDiscovered();
-    }
   }
 
   bool get _isAnySoundActive =>

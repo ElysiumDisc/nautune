@@ -12,10 +12,10 @@ Four files must be updated together when bumping the version (they each carry an
 iOS/macOS/Linux generated config files regenerate on build; don't edit them by hand.
 
 ```bash
-# Example: bump from 8.9.0 to 8.9.1
-sed -i 's/version: 8.9.0+1/version: 8.9.1+1/' pubspec.yaml
-sed -i "s/8.9.0+1/8.9.1+1/" lib/app_version.dart
-sed -i 's/    version: 8.9.0/    version: 8.9.1/' AppImageBuilder.yml
+# Example: bump from 8.9.7 to 8.9.8
+sed -i 's/version: 8.9.7+1/version: 8.9.8+1/' pubspec.yaml
+sed -i "s/8.9.7+1/8.9.8+1/" lib/app_version.dart
+sed -i 's/    version: 8.9.7/    version: 8.9.8/' AppImageBuilder.yml
 ```
 
 After editing, run `flutter analyze` and add a new `### vX.Y.Z` block to `CHANGELOG.md`.
@@ -43,7 +43,7 @@ cp linux/nautune.desktop AppDir/ && \
 cp linux/nautune.png AppDir/ && \
 cd AppDir && ln -s usr/bin/nautune AppRun && cd .. && \
 mkdir -p dist && \
-ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.9.0.AppImage
+ARCH=x86_64 ./appimagetool AppDir dist/Nautune-x86_64-8.9.7.AppImage
 ```
 
 ### Build Deb Package (Linux)
@@ -196,7 +196,18 @@ flutter run -d linux --dart-define=TUI_MODE=true
 
 CarPlay is owned end-to-end by the `flutter_carplay` package — `Info.plist` declares `flutter_carplay.FlutterCarPlaySceneDelegate` as the scene delegate, and `lib/services/carplay_service.dart` builds the templates. `CPListItem` artwork uses `JellyfinService.buildSelfContainedImageUrl` (token embedded as `api_key` query param) so the system image loader can fetch without our auth headers. Tapping a track plays it via `AudioPlayerService` and then navigates to the shared `CPNowPlayingTemplate` via `FlutterCarplay.showSharedNowPlaying`. Lock-screen and now-playing artwork is plumbed through `audio_service` via `MediaItem.artUri` set in `AudioHandler.updateNautuneMediaItem`, not through CarPlay-specific code.
 
-`CPSearchTemplate` is not exposed by `flutter_carplay 1.3.1`, so search is replaced by a "Browse A–Z" entry on the Library tab that drills into letter-bucket lists.
+`CPSearchTemplate` is not exposed by `flutter_carplay 1.3.3`, so search is replaced by a "Browse A–Z" entry on the Library tab that drills into letter-bucket lists. Letter buckets paginate with the same `Load More...` row as the main album/artist lists, so a letter with > 100 entries is reachable.
+
+### Verifying the CarPlay entitlement survived signing
+
+CarPlay needs the special `com.apple.developer.carplay-audio` entitlement (Apple-approved, granted per team). The entitlement file at `ios/Runner/Runner.entitlements` declares it, but if Codemagic's automatic signing picks a provisioning profile that doesn't carry it, the entitlement is **silently stripped** and CarPlay never connects — the app still installs and audio still plays. Confirm any signed IPA carries it before shipping:
+
+```bash
+unzip -p build/ios/ipa/*.ipa Payload/Runner.app/embedded.mobileprovision \
+  | security cms -D | plutil -p - | grep -i carplay
+```
+
+Expected output: `"com.apple.developer.carplay-audio" => 1`. If empty, the signing team / bundle ID isn't approved or the profile is stale — re-issue from the Apple Developer portal and re-run the Codemagic build.
 
 ## 📂 File Structure (Linux)
 Nautune follows a clean data structure on Linux for easy backups and management:

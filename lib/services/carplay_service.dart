@@ -103,6 +103,10 @@ class CarPlayService {
     _isConnected = false;
     _userHasNavigated = false;
     _isRefreshing = false;
+    // Cancel any pending root-refresh debounce so it doesn't fire after
+    // disconnect (its inner guard would no-op, but the timer is wasted).
+    _refreshDebounceTimer?.cancel();
+    _refreshDebounceTimer = null;
     // Don't clear templateHistory manually — setRootTemplate handles it.
     // Manual clearing creates a race condition with reconnect.
     debugPrint('🚗 CarPlay disconnected');
@@ -1042,9 +1046,13 @@ class CarPlayService {
   }
 
   Future<void> _showLetterBucket(String letter,
-      {required bool forArtists}) async {
+      {required bool forArtists, int offset = 0}) async {
     _markUserNavigation();
     try {
+      // Pop the previous page on a Load-More transition so the back stack
+      // collapses to a single bucket page, matching _showAlbums et al.
+      if (offset > 0) await FlutterCarplay.pop(animated: false);
+
       bool matchesLetter(String name) {
         if (name.isEmpty) return letter == '#';
         final c = name[0].toUpperCase();
@@ -1054,16 +1062,19 @@ class CarPlayService {
       }
 
       if (forArtists) {
-        final artists = (appState.artists ?? const <JellyfinArtist>[])
+        final allMatching = (appState.artists ?? const <JellyfinArtist>[])
             .where((a) => matchesLetter(a.groupingName))
-            .take(_maxItemsPerPage)
             .toList();
         if (!_isConnected) return;
-        if (artists.isEmpty) {
+        if (allMatching.isEmpty) {
           await _showEmptyState('Letter $letter', 'No artists for this letter');
           return;
         }
-        final items = artists
+        final paginated =
+            allMatching.skip(offset).take(_maxItemsPerPage).toList();
+        final hasMore = offset + _maxItemsPerPage < allMatching.length;
+
+        final items = paginated
             .map((a) => CPListItem(
                   text: a.name,
                   image: appState.jellyfinService.buildSelfContainedImageUrl(
@@ -1076,6 +1087,20 @@ class CarPlayService {
                   },
                 ))
             .toList();
+
+        if (hasMore) {
+          final remaining = allMatching.length - (offset + _maxItemsPerPage);
+          items.add(CPListItem(
+            text: 'Load More...',
+            detailText: '$remaining more artists',
+            onPress: (complete, self) async {
+              complete();
+              await _showLetterBucket(letter,
+                  forArtists: true, offset: offset + _maxItemsPerPage);
+            },
+          ));
+        }
+
         await FlutterCarplay.push(
           template: CPListTemplate(
             title: 'Artists · $letter',
@@ -1084,16 +1109,19 @@ class CarPlayService {
           ),
         );
       } else {
-        final albums = (appState.albums ?? const <JellyfinAlbum>[])
+        final allMatching = (appState.albums ?? const <JellyfinAlbum>[])
             .where((a) => matchesLetter(a.groupingName))
-            .take(_maxItemsPerPage)
             .toList();
         if (!_isConnected) return;
-        if (albums.isEmpty) {
+        if (allMatching.isEmpty) {
           await _showEmptyState('Letter $letter', 'No albums for this letter');
           return;
         }
-        final items = albums
+        final paginated =
+            allMatching.skip(offset).take(_maxItemsPerPage).toList();
+        final hasMore = offset + _maxItemsPerPage < allMatching.length;
+
+        final items = paginated
             .map((a) => CPListItem(
                   text: a.name,
                   detailText: a.artists.join(', '),
@@ -1107,6 +1135,20 @@ class CarPlayService {
                   },
                 ))
             .toList();
+
+        if (hasMore) {
+          final remaining = allMatching.length - (offset + _maxItemsPerPage);
+          items.add(CPListItem(
+            text: 'Load More...',
+            detailText: '$remaining more albums',
+            onPress: (complete, self) async {
+              complete();
+              await _showLetterBucket(letter,
+                  forArtists: false, offset: offset + _maxItemsPerPage);
+            },
+          ));
+        }
+
         await FlutterCarplay.push(
           template: CPListTemplate(
             title: 'Albums · $letter',

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:rxdart/rxdart.dart';
 
@@ -104,9 +105,10 @@ class PulseAudioFFTService {
   double _lastY = 0;
   double _peakHistory = 0.1;
 
-  // Buffer for accumulating audio data
-  final List<int> _audioBuffer = [];
-  static const int _bufferSize = 2048; // Process every ~23ms at 44100Hz mono 16-bit (faster updates)
+  // Buffer for accumulating audio data into fixed-size FFT chunks.
+  // Extracted into PcmChunker so it can be unit-tested without parec.
+  static const int _bufferSize = 2048; // ~23ms at 44100Hz mono 16-bit
+  final PcmChunker _chunker = PcmChunker(_bufferSize);
 
   /// Check if PulseAudio loopback is available (Linux only)
   bool get isAvailable => Platform.isLinux;
@@ -196,17 +198,14 @@ class PulseAudioFFTService {
         '--latency-msec=20',  // Lower latency for snappier response
       ]);
 
-      _audioBuffer.clear();
+      _chunker.clear();
 
       // Listen to stdout (raw PCM data)
       _audioSubscription = _parecProcess!.stdout.listen((data) {
-        _audioBuffer.addAll(data);
-
-        // Process when we have enough data
-        while (_audioBuffer.length >= _bufferSize) {
-          final chunk = _audioBuffer.sublist(0, _bufferSize);
-          _audioBuffer.removeRange(0, _bufferSize);
-          _processAudioData(Uint8List.fromList(chunk));
+        _chunker.add(data);
+        Uint8List? chunk;
+        while ((chunk = _chunker.takeChunk()) != null) {
+          _processAudioData(chunk!);
         }
       });
 
@@ -246,7 +245,7 @@ class PulseAudioFFTService {
       _audioSubscription = null;
       _parecProcess = null;
       _isCapturing = false;
-      _audioBuffer.clear();
+      _chunker.clear();
       _fftController.add(FFTData.zero);
       debugPrint('🔊 PulseAudio FFT: Capture stopped');
     }
@@ -377,4 +376,38 @@ class FFTData {
     treble: 0,
     amplitude: 0,
   );
+}
+
+/// Accumulates incoming PCM byte ranges and emits fixed-size chunks via
+/// [takeChunk]. Backed by [BytesBuilder] so growth is amortised and chunk
+/// emission is mostly zero-copy (`Uint8List.sublistView`). Pure helper —
+/// no Flutter binding, no I/O — so the buffer behaviour can be unit-tested
+/// without running parec.
+class PcmChunker {
+  PcmChunker(this.chunkSize) : assert(chunkSize > 0);
+
+  final int chunkSize;
+  final BytesBuilder _accum = BytesBuilder(copy: false);
+
+  int get pendingLength => _accum.length;
+
+  void add(List<int> data) {
+    _accum.add(data);
+  }
+
+  /// Returns the next complete chunk, or null if not enough data buffered.
+  /// Call in a `while` loop after [add] to drain all available chunks.
+  Uint8List? takeChunk() {
+    if (_accum.length < chunkSize) return null;
+    final all = _accum.takeBytes();
+    final chunk = Uint8List.sublistView(all, 0, chunkSize);
+    if (all.length > chunkSize) {
+      _accum.add(Uint8List.sublistView(all, chunkSize));
+    }
+    return chunk;
+  }
+
+  void clear() {
+    _accum.clear();
+  }
 }

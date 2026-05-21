@@ -48,16 +48,46 @@ class TuiMetrics {
   /// Convert pixel height to line count (floor).
   static int heightToLines(double height) => (height / charHeight).floor();
 
-  /// Sidebar width in characters.
+  /// Default sidebar width in characters (used when no layout info is
+  /// available). Most callers should prefer `sidebarCharsForWidth`.
   static const int sidebarChars = 22;
 
   /// Status bar height in lines.
   static const int statusBarLines = 3;
 
   /// Minimum content pane width in characters.
-  static const int minContentChars = 40;
+  static const int minContentChars = 32;
 
-  /// Sidebar width in pixels.
+  /// Responsive sidebar width (in characters) for a given window pixel width.
+  /// Scales with terminal width so an 80-col window doesn't end up with the
+  /// sidebar eating the whole content area:
+  ///   total > 120 cols → 26
+  ///   total 90–120 cols → 22
+  ///   total < 90 cols → 18
+  /// Always leaves at least `minContentChars` for the content pane.
+  static int sidebarCharsForWidth(double pixelWidth) =>
+      sidebarCharsForTotalChars(widthToChars(pixelWidth));
+
+  /// Pure boundary math for `sidebarCharsForWidth`, factored out so it can be
+  /// unit-tested without bringing up a `TextPainter` / Flutter binding.
+  static int sidebarCharsForTotalChars(int totalChars) {
+    int sidebar;
+    if (totalChars > 120) {
+      sidebar = 26;
+    } else if (totalChars >= 90) {
+      sidebar = 22;
+    } else {
+      sidebar = 18;
+    }
+    final maxSidebar = (totalChars - minContentChars).clamp(12, 32);
+    return sidebar.clamp(12, maxSidebar).toInt();
+  }
+
+  /// Responsive sidebar width in pixels.
+  static double sidebarWidthForWidth(double pixelWidth) =>
+      charsToWidth(sidebarCharsForWidth(pixelWidth));
+
+  /// Default sidebar width in pixels (legacy, prefer `sidebarWidthForWidth`).
   static double get sidebarWidth => charsToWidth(sidebarChars);
 
   /// Status bar height in pixels.

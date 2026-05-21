@@ -5,7 +5,6 @@
 ## ✨ Key Features
 
 - **6 Now Playing Layouts**: Classic, Blur, Card, Gradient, Compact, and Full Art - choose your preferred player design
-- **Your Rewind**: Spotify Wrapped-style yearly listening reports with shareable exports
 - **ListenBrainz Integration**: Scrobble your plays and get personalized music recommendations (matches via MusicBrainz IDs for reliable library matching)
 - **Popular Tracks**: Artist pages show top 5 most popular tracks globally with dynamic accent colors, album pages highlight popular songs with flame icons (powered by ListenBrainz)
 - **Artist Page Redesign**: Dynamic gradient backgrounds extracted from artist artwork, expandable bio cards, compact album grid layout
@@ -21,7 +20,6 @@
 - **Smart Playlists**: Tag-aware mood playlists (Chill, Energetic, Melancholy, Upbeat) using actual file tags
 - **Smart Pre-Cache**: Configurable pre-caching of current and upcoming tracks (3, 5, or 10) with WiFi-only option
 - **Smart Lyrics**: Multi-source lyrics with sync, caching, and pre-fetching
-- **46 Nautical Milestones**: Earn achievements as you listen
 - **Track Sharing**: Share downloaded audio files via AirDrop (iOS) or file manager (Linux)
 - **Storage Management**: Separate views for downloads, cache, loops, waveforms, and charts with accurate stats
 - **Listening Analytics**: Heatmaps, streaks, weekly comparisons, 28-day activity sparkline, and animated stat counters with trend indicators
@@ -106,7 +104,6 @@ A hidden feature to play the legendary 2-hour Soulwax/2ManyDJs BBC Essential Mix
 - **Seekable Waveform**: Waveform doubles as progress bar - tap or drag to seek
 - **Profile Badge**: BBC Radio 1 Essential Mix badge with archive.org aesthetic appears in your Profile
 - **iOS Low Power Mode**: Visualizer auto-disables when Low Power Mode is enabled to save battery
-- **"Essential Discovery" Milestone**: Unlock a badge for discovering this easter egg
 
 ### Storage Location
 
@@ -159,7 +156,6 @@ A Guitar Hero-style rhythm game that auto-generates playable charts from any tra
 - **Profile Stats**: Total songs, plays, notes hit, and best score displayed in fire-themed card
 - **Score Tracking**: High scores and stats saved per track
 - **Accuracy Grades**: S/A/B/C/D/F based on hit percentage
-- **"Rock Star" Milestone**: Unlock a badge for discovering this easter egg
 - **Storage Management**: Manage cached charts in Settings > Data Management
 
 ### Visual Feedback
@@ -174,7 +170,7 @@ A Guitar Hero-style rhythm game that auto-generates playable charts from any tra
 - **PERFECT/GOOD Hit Text**: Floating feedback text on note hits (gold for PERFECT, white for GOOD)
 - **Lightning Effects**: Animated blue lightning with traveling sparks for Lightning Lane bonus
 - **Streak Fire Glow**: Fire effect on hit line when combo reaches 10+
-- **Milestone Flashes**: "ON FIRE!", "BLAZING!", "INFERNO!", "LEGENDARY!", "GODLIKE!" celebrations
+- **Combo Flashes**: "ON FIRE!", "BLAZING!", "INFERNO!", "LEGENDARY!", "GODLIKE!" celebrations at combo tiers
 
 ### Controls
 
@@ -237,7 +233,6 @@ An ambient sound mixer for focus or relaxation, inspired by [ebithril/relax-play
 - **Seamless Loops**: Ambient audio loops continuously without gaps
 - **Works Everywhere**: Available in demo mode, offline mode, and airplane mode (uses bundled assets)
 - **Stats Tracking**: Track total time spent and sound usage breakdown
-- **"Calm Waters" Milestone**: Unlock a badge for discovering Relax Mode
 
 
 ## 🎹 Piano (Easter Egg)
@@ -267,7 +262,6 @@ A playable synth keyboard inspired by [upiano](https://github.com/eliasdorneles/
 - **Works Everywhere**: Fully offline — available in online, offline, demo, and airplane modes
 - **TUI Overlay**: ASCII piano with box-drawing art, key highlights, and keyboard mapping reference
 - **Stats Tracking**: Total notes played and session time displayed in Profile
-- **"Virtuoso" Milestone**: Unlock a badge for discovering the Piano
 
 ### Storage
 
@@ -311,7 +305,6 @@ Also reachable from Settings → Your Music → Easter Eggs.
 - **Schumann (7.83 Hz)** is below the audible range; the app plays its 6-octave audible equivalent (~501 Hz) with a hint in the UI.
 - **Volume slider + master stop** in the app bar; tap a pill to play, tap again to stop.
 - **iOS/macOS mix-with-others** — tones layer over other playing audio.
-- **"Healing Frequencies Discovered"** tracked for the milestone system.
 
 Credit: Inspired by [healing-frequencies](https://github.com/evoluteur/healing-frequencies) by Olivier Giulieri — MIT licensed. All Hz values and labels mirror the reference directory.
 

@@ -129,7 +129,7 @@ class JellyfinService {
 
   /// Gets the URL for the current user's profile image.
   ///
-  /// Jellyfin API note: `/Users/{id}/Images/Primary` is not in the 10.11.8
+  /// Jellyfin API note: `/Users/{id}/Images/Primary` is not in the 10.11.9
   /// OpenAPI spec but remains backwards-compatible across all supported
   /// Jellyfin versions. See `JellyfinClient.getUserImageUrl` for details.
   String? getUserProfileImageUrl() {
@@ -902,27 +902,31 @@ class JellyfinService {
     if (activeClient == null) throw Exception('Client not initialized');
 
     try {
-      if (shouldBeFavorite) {
-        // Add to favorites - POST request (correct endpoint)
-        final addPath = '/Users/${session.credentials.userId}/FavoriteItems/$itemId';
-        debugPrint('🔵 Adding favorite - Sending POST to $addPath');
+      // Spec-documented favorites endpoint as of Jellyfin 10.11.9:
+      // `/UserFavoriteItems/{itemId}` with `userId` as a query parameter.
+      // (The older `/Users/{userId}/FavoriteItems/{itemId}` alias was retired
+      // here during the v8.9.5 cleanup.) Verified against 10.11.9 spec on
+      // 2026-05-20.
+      final favoritePath = '/UserFavoriteItems/$itemId';
+      final favoriteQuery = {'userId': session.credentials.userId};
 
+      if (shouldBeFavorite) {
+        debugPrint('🔵 Adding favorite - Sending POST to $favoritePath');
         final response = await activeClient.request(
           method: 'POST',
-          path: addPath,
+          path: favoritePath,
           credentials: session.credentials,
+          queryParams: favoriteQuery,
         );
         debugPrint('✅ Add favorite response: $response');
         debugPrint('✅ Successfully added item $itemId to Jellyfin favorites');
       } else {
-        // Remove from favorites - DELETE request (correct endpoint)
-        final deletePath = '/Users/${session.credentials.userId}/FavoriteItems/$itemId';
-        debugPrint('🔵 Removing favorite - Sending DELETE to $deletePath');
-
+        debugPrint('🔵 Removing favorite - Sending DELETE to $favoritePath');
         final response = await activeClient.request(
           method: 'DELETE',
-          path: deletePath,
+          path: favoritePath,
           credentials: session.credentials,
+          queryParams: favoriteQuery,
         );
         debugPrint('✅ Delete favorite response: $response');
 

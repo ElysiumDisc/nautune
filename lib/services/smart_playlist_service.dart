@@ -2,6 +2,8 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import '../jellyfin/jellyfin_service.dart';
 import '../jellyfin/jellyfin_track.dart';
+import 'smart_playlist_filter.dart';
+export 'smart_playlist_filter.dart' show trackMatchesAllTags;
 
 /// Mood categories for smart playlist generation
 enum Mood {
@@ -617,13 +619,9 @@ class SmartPlaylistService {
       final allTracks = await _jellyfinService.getAllTracks(libraryId: _libraryId);
       final normalizedTags = tags.map((t) => t.toLowerCase()).toList();
 
-      final matchingTracks = allTracks.where((track) {
-        final trackTags = track.tags;
-        if (trackTags == null || trackTags.isEmpty) return false;
-        final trackTagsNormalized = trackTags.map((t) => t.toLowerCase()).toList();
-        return normalizedTags.every((nt) =>
-            trackTagsNormalized.any((tt) => tt.contains(nt)));
-      }).toList();
+      final matchingTracks = allTracks
+          .where((track) => trackMatchesAllTags(track.tags, normalizedTags))
+          .toList();
 
       debugPrint('SmartPlaylist: Found ${matchingTracks.length} tracks with all tags $tags');
 

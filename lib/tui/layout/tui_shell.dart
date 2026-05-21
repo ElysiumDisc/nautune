@@ -63,6 +63,12 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
+  // True while the user is browsing search results; in this mode `n`/`N`
+  // step to next/prev match (vim-style) rather than next/prev track.
+  // Cleared as soon as the user navigates away from the Search section.
+  bool _inSearchResults = false;
+  // Recent search queries (most-recent-first, deduped, capped at 20).
+  final List<String> _searchHistory = [];
 
   // Help overlay state
   bool _showHelp = false;
@@ -83,9 +89,13 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
   StreamSubscription? _queueSubscription;
   StreamSubscription? _trackColorSubscription;
 
-  // Animation ticker for color lerp
+  // Animation ticker for color lerp. Throttled to ~30 fps — TUI is a
+  // monospace text grid, so sub-33ms color updates are imperceptible and
+  // just burn CPU on high-refresh monitors.
   late Ticker _colorTicker;
   Duration _lastTickTime = Duration.zero;
+  Duration _accumulatedTick = Duration.zero;
+  static const Duration _colorTickInterval = Duration(milliseconds: 33);
 
   @override
   void initState() {
@@ -112,6 +122,14 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
     _colorTicker = createTicker(_onColorTick);
     _colorTicker.start();
 
+    // If the user types a single char that's the start of a longer sequence
+    // (e.g. `g` for `gg`) and never presses the second key, fire the lone
+    // char's action after the timeout instead of silently dropping it.
+    _keyBindings.onSequenceTimeout = (action) {
+      if (!mounted) return;
+      _handleAction(action);
+    };
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
       _loadInitialData();
@@ -121,7 +139,10 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
   void _onColorTick(Duration elapsed) {
     final delta = elapsed - _lastTickTime;
     _lastTickTime = elapsed;
-    TuiThemeManager.instance.tickLerp(delta);
+    _accumulatedTick += delta;
+    if (_accumulatedTick < _colorTickInterval) return;
+    TuiThemeManager.instance.tickLerp(_accumulatedTick);
+    _accumulatedTick = Duration.zero;
   }
 
   void _loadInitialData() {
@@ -220,7 +241,10 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
                         ),
                       ),
                       // Status bar
-                      TuiStatusBar(showVisualizer: _showVisualizer),
+                      TuiStatusBar(
+                        showVisualizer: _showVisualizer,
+                        keyBindings: _keyBindings,
+                      ),
                     ],
                   ),
                 ),
@@ -459,11 +483,24 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
         break;
 
       case TuiAction.nextTrack:
-        audioService.next();
+        if (_inSearchResults &&
+            _selectedSection == TuiSidebarItem.search &&
+            _trackListState.items.isNotEmpty) {
+          // Vim-style: n = step to next search match in the result list.
+          _handleMoveDown();
+        } else {
+          audioService.next();
+        }
         break;
 
       case TuiAction.previousTrack:
-        audioService.previous();
+        if (_inSearchResults &&
+            _selectedSection == TuiSidebarItem.search &&
+            _trackListState.items.isNotEmpty) {
+          _handleMoveUp();
+        } else {
+          audioService.previous();
+        }
         break;
 
       case TuiAction.volumeUp:
@@ -910,6 +947,10 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
     _selectedAlbum = null;
     _selectedArtist = null;
     _trackListState.setItems([]);
+    // Leaving the Search section reverts `n`/`N` to next/prev-track.
+    if (_selectedSection != TuiSidebarItem.search) {
+      _inSearchResults = false;
+    }
 
     if (_selectedSection == TuiSidebarItem.albums) {
       _reloadAlbums();
@@ -992,6 +1033,16 @@ class _TuiShellState extends State<TuiShell> with SingleTickerProviderStateMixin
     setState(() {
       _isSearchMode = false;
       _searchQuery = query;
+      if (query.isNotEmpty) {
+        _searchHistory.remove(query);
+        _searchHistory.insert(0, query);
+        if (_searchHistory.length > 20) {
+          _searchHistory.removeRange(20, _searchHistory.length);
+        }
+        _inSearchResults = true;
+      } else {
+        _inSearchResults = false;
+      }
     });
     _focusNode.requestFocus();
 

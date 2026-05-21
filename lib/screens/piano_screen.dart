@@ -62,7 +62,6 @@ class _PianoScreenState extends State<PianoScreen> {
     super.initState();
     _sessionTimer = Stopwatch()..start();
     _initSynth();
-    _markDiscovered();
   }
 
   Future<void> _initSynth() async {
@@ -71,13 +70,6 @@ class _PianoScreenState extends State<PianoScreen> {
     await _synth.preloadRange(_octaveBase, 24);
     if (mounted) {
       setState(() => _initialized = true);
-    }
-  }
-
-  void _markDiscovered() {
-    final analytics = ListeningAnalyticsService();
-    if (analytics.isInitialized) {
-      analytics.markPianoDiscovered();
     }
   }
 

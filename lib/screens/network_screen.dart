@@ -11,7 +11,6 @@ import '../data/network_channels.dart';
 import '../models/network_channel.dart';
 import '../providers/connectivity_provider.dart';
 import '../providers/demo_mode_provider.dart';
-import '../services/listening_analytics_service.dart';
 import '../services/network_download_service.dart';
 
 /// Network easter egg screen - mimics other-people.network radio interface.
@@ -85,14 +84,6 @@ class _NetworkScreenState extends State<NetworkScreen>
     _downloadService.addListener(_onDownloadServiceChanged);
 
     // Mark Network easter egg as discovered for the milestone
-    _markDiscovered();
-  }
-
-  void _markDiscovered() {
-    final analytics = ListeningAnalyticsService();
-    if (analytics.isInitialized) {
-      analytics.markNetworkDiscovered();
-    }
   }
 
   void _onDownloadServiceChanged() {

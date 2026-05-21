@@ -167,22 +167,25 @@ class JellyfinClient {
   /// Builds the URL for a user's profile image.
   ///
   /// Jellyfin API note: `/Users/{id}/Images/Primary` is not documented in
-  /// `jellyfin-openapi-10.11.8.json` but is served by every Jellyfin release
+  /// `jellyfin-openapi-10.11.9.json` but is served by every Jellyfin release
   /// since 10.8 (and earlier). No documented alternative exists — verified
-  /// against the 10.11.8 spec on 2026-04-22. If this regresses, fall back to
+  /// against the 10.11.9 spec on 2026-05-20. If this regresses, fall back to
   /// `/Items/{userId}/Images/Primary`.
   String? getUserImageUrl(String userId, String? imageTag) {
     if (imageTag == null) return null;
     return '$serverUrl/Users/$userId/Images/Primary?tag=$imageTag';
   }
 
-  /// Jellyfin API note: `/Users/{id}/Views` is not in the 10.11.8 OpenAPI
-  /// spec but is the standard endpoint for fetching a user's library list.
-  /// Backwards-compatible across all supported Jellyfin versions.
+  /// Fetches the user's library list (a.k.a. "views"). Uses the
+  /// spec-documented `/UserViews?userId=...` endpoint as of 10.11.9 — the
+  /// older `/Users/{id}/Views` alias was undocumented and was retired here
+  /// during the v8.9.5 cleanup. Verified against 10.11.9 spec on 2026-05-20.
   Future<List<JellyfinLibrary>> fetchLibraries(
     JellyfinCredentials credentials,
   ) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Views');
+    final uri = _buildUri('/UserViews', {
+      'userId': credentials.userId,
+    });
     final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
@@ -203,6 +206,12 @@ class JellyfinClient {
         .toList();
   }
 
+  /// Note: this method (and the other ~20 browse methods below) uses the
+  /// undocumented `/Users/{userId}/Items` path. This is a deliberate
+  /// compatibility choice — the path is served reliably by every Jellyfin
+  /// release since 10.8, and the spec-documented `/Items?userId=...`
+  /// alternative has subtle behavior differences around `Recursive` /
+  /// `ParentId` resolution. Verified against 10.11.9 spec on 2026-05-20.
   Future<List<JellyfinAlbum>> fetchAlbums({
     required JellyfinCredentials credentials,
     required String libraryId,
