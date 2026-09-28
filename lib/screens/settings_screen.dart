@@ -13,6 +13,7 @@ import '../app_state.dart';
 import '../services/listening_analytics_service.dart';
 import '../services/network_download_service.dart';
 import '../models/now_playing_layout.dart';
+import '../models/replay_gain_mode.dart';
 import '../models/playback_state.dart' show StreamingQuality, StreamingQualityExtension;
 import '../models/visualizer_type.dart';
 import '../providers/session_provider.dart';
@@ -95,9 +96,9 @@ const List<_SettingsCategory> _settingsCategories = [
   _SettingsCategory(
     id: 'audio',
     title: 'Audio',
-    subtitle: 'Streaming, crossfade, gapless',
+    subtitle: 'Streaming, crossfade, gapless, volume levelling',
     icon: Icons.audiotrack,
-    keywords: ['streaming', 'quality', 'crossfade', 'gapless', 'infinite radio'],
+    keywords: ['streaming', 'quality', 'crossfade', 'gapless', 'infinite radio', 'replaygain', 'normalization', 'loudness', 'preamp', 'volume'],
   ),
   _SettingsCategory(
     id: 'performance',
@@ -1072,6 +1073,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   value: appState.gaplessPlaybackEnabled,
                   onChanged: appState.toggleGaplessPlayback,
                 ),
+                _NautuneSettingsTile(
+                  icon: Icons.equalizer,
+                  title: 'Volume Levelling',
+                  subtitle: 'ReplayGain from your Jellyfin server',
+                  trailing: SegmentedButton<ReplayGainMode>(
+                    showSelectedIcon: false,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    segments: [
+                      for (final mode in ReplayGainMode.values)
+                        ButtonSegment(value: mode, label: Text(mode.label)),
+                    ],
+                    selected: {appState.replayGainMode},
+                    onSelectionChanged: (selection) =>
+                        appState.setReplayGain(mode: selection.first),
+                  ),
+                ),
+                if (appState.replayGainMode != ReplayGainMode.off)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Preamp: ${appState.replayGainPreampDb.round()} dB',
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                        Slider(
+                          value: appState.replayGainPreampDb,
+                          min: -15,
+                          max: 0,
+                          divisions: 15,
+                          label: '${appState.replayGainPreampDb.round()} dB',
+                          onChanged: (value) =>
+                              appState.setReplayGain(preampDb: value),
+                        ),
+                        Text(
+                          'Lower the preamp to give quiet tracks room to be raised to match loud ones',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                    ),
+                  ),
                 _NautuneToggleTile(
                   icon: Icons.all_inclusive,
                   title: 'Infinite Radio',

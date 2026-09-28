@@ -36,6 +36,7 @@ import 'providers/session_provider.dart';
 
 // Import repository layer for offline UI parity
 import 'models/playback_state.dart';
+import 'models/replay_gain_mode.dart';
 import 'repositories/music_repository.dart';
 import 'repositories/repository_factory.dart';
 
@@ -474,6 +475,8 @@ class NautuneAppState extends ChangeNotifier {
   bool get gaplessPlaybackEnabled => _gaplessPlaybackEnabled;
   int get cacheTtlMinutes => _cacheTtlMinutes;
   StreamingQuality get streamingQuality => _streamingQuality;
+  ReplayGainMode get replayGainMode => _audioPlayerService.replayGainMode;
+  double get replayGainPreampDb => _audioPlayerService.replayGainPreampDb;
   bool get visualizerEnabled => _visualizerEnabled;
   VisualizerType get visualizerType => _visualizerType;
   VisualizerPosition get visualizerPosition => _visualizerPosition;
@@ -736,6 +739,16 @@ class NautuneAppState extends ChangeNotifier {
     _audioPlayerService.setGaplessPlaybackEnabled(enabled);
     unawaited(_playbackStateStore.saveUiState(
       gaplessPlaybackEnabled: enabled,
+    ));
+    notifyListeners();
+  }
+
+  /// Set ReplayGain mode and/or preamp (dB, -15..0) and persist them.
+  void setReplayGain({ReplayGainMode? mode, double? preampDb}) {
+    unawaited(_audioPlayerService.setReplayGain(mode: mode, preampDb: preampDb));
+    unawaited(_playbackStateStore.saveUiState(
+      replayGainMode: _audioPlayerService.replayGainMode,
+      replayGainPreampDb: _audioPlayerService.replayGainPreampDb,
     ));
     notifyListeners();
   }
@@ -1198,6 +1211,10 @@ class NautuneAppState extends ChangeNotifier {
       _audioPlayerService.setInfiniteRadioEnabled(_infiniteRadioEnabled);
       _audioPlayerService.setGaplessPlaybackEnabled(_gaplessPlaybackEnabled);
       _audioPlayerService.setStreamingQuality(_streamingQuality);
+      unawaited(_audioPlayerService.setReplayGain(
+        mode: storedPlaybackState.replayGainMode,
+        preampDb: storedPlaybackState.replayGainPreampDb,
+      ));
       _audioPlayerService.setPreCacheTrackCount(storedPlaybackState.preCacheTrackCount);
       _audioPlayerService.setWifiOnlyCaching(storedPlaybackState.wifiOnlyCaching);
       _jellyfinService.setCacheTtl(Duration(minutes: _cacheTtlMinutes));

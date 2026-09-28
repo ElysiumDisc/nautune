@@ -4,7 +4,31 @@
 /// without an audio backend.
 library;
 
-import 'dart:math' show Random;
+import 'dart:math' show Random, pow;
+
+import '../models/replay_gain_mode.dart';
+
+/// Linear volume multiplier for ReplayGain [mode].
+///
+/// [trackGainDb] / [albumGainDb] are Jellyfin's normalization gains (dB to
+/// reach its loudness target). Album mode falls back to the track gain.
+/// [preampDb] shifts every track; because the player cannot amplify past
+/// full scale, a negative preamp is what gives quiet tracks (positive gain)
+/// room to be raised to match loud ones. The result is clamped to (0, 1].
+double replayGainMultiplier({
+  required ReplayGainMode mode,
+  double? trackGainDb,
+  double? albumGainDb,
+  double preampDb = 0,
+}) {
+  if (mode == ReplayGainMode.off) return 1.0;
+  final gain = mode == ReplayGainMode.album
+      ? (albumGainDb ?? trackGainDb)
+      : trackGainDb;
+  final db = (gain ?? 0) + preampDb;
+  final linear = pow(10, db / 20).toDouble();
+  return linear.clamp(0.05, 1.0);
+}
 
 /// Resolves which queue slot a track should play from.
 ///

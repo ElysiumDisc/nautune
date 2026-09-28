@@ -5,6 +5,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import '../jellyfin/jellyfin_track.dart';
 import '../models/now_playing_layout.dart';
+import '../models/replay_gain_mode.dart';
 import '../models/playback_state.dart';
 import '../models/visualizer_type.dart';
 export '../models/playback_state.dart' show StreamingQuality, StreamingQualityExtension;
@@ -166,6 +167,8 @@ class PlaybackStateStore {
     VisualizerPosition? visualizerPosition,
     int? preCacheTrackCount,
     bool? wifiOnlyCaching,
+    double? replayGainPreampDb,
+    ReplayGainMode? replayGainMode,
     bool? isOfflineMode,
     bool? submarineModeEnabled,
     Map<String, dynamic>? batterySaverSnapshot,
@@ -204,6 +207,8 @@ class PlaybackStateStore {
         visualizerPosition: visualizerPosition ?? state.visualizerPosition,
         preCacheTrackCount: preCacheTrackCount ?? state.preCacheTrackCount,
         wifiOnlyCaching: wifiOnlyCaching ?? state.wifiOnlyCaching,
+        replayGainPreampDb: replayGainPreampDb ?? state.replayGainPreampDb,
+        replayGainMode: replayGainMode ?? state.replayGainMode,
         isOfflineMode: isOfflineMode ?? state.isOfflineMode,
         submarineModeEnabled: submarineModeEnabled ?? state.submarineModeEnabled,
         batterySaverSnapshot: batterySaverSnapshot ?? state.batterySaverSnapshot,

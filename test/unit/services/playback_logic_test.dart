@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nautune/models/replay_gain_mode.dart';
 import 'package:nautune/services/playback_logic.dart';
 
 void main() {
@@ -437,6 +438,47 @@ void main() {
     test('same slot or empty queue is 0', () {
       expect(queueStepsBetween(length: 6, from: 2, target: 2, direction: 1), 0);
       expect(queueStepsBetween(length: 0, from: 0, target: 0, direction: 1), 0);
+    });
+  });
+
+  group('replayGainMultiplier', () {
+    double gain(ReplayGainMode mode,
+            {double? track, double? album, double preamp = 0}) =>
+        replayGainMultiplier(
+          mode: mode,
+          trackGainDb: track,
+          albumGainDb: album,
+          preampDb: preamp,
+        );
+
+    test('off ignores gain and preamp', () {
+      expect(gain(ReplayGainMode.off, track: -6, preamp: -6), 1.0);
+    });
+
+    test('track mode attenuates loud tracks', () {
+      expect(gain(ReplayGainMode.track, track: -6), closeTo(0.501, 0.001));
+    });
+
+    test('positive gain cannot exceed full scale without preamp', () {
+      expect(gain(ReplayGainMode.track, track: 4), 1.0);
+    });
+
+    test('negative preamp leaves room to raise quiet tracks', () {
+      final quiet = gain(ReplayGainMode.track, track: 4, preamp: -6);
+      final loud = gain(ReplayGainMode.track, track: -4, preamp: -6);
+      expect(quiet, lessThan(1.0));
+      expect(quiet / loud, closeTo(pow(10, 8 / 20), 0.001));
+    });
+
+    test('album mode prefers album gain, falls back to track gain', () {
+      expect(gain(ReplayGainMode.album, track: -2, album: -6),
+          closeTo(0.501, 0.001));
+      expect(gain(ReplayGainMode.album, track: -6), closeTo(0.501, 0.001));
+    });
+
+    test('missing gain only applies the preamp', () {
+      expect(gain(ReplayGainMode.track), 1.0);
+      expect(gain(ReplayGainMode.track, preamp: -6), closeTo(0.501, 0.001));
     });
   });
 }

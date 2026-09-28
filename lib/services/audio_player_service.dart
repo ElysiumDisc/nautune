@@ -25,6 +25,7 @@ import 'playback_reporting_service.dart';
 import 'playback_state_store.dart';
 import 'power_mode_service.dart';
 import '../models/playback_state.dart';
+import '../models/replay_gain_mode.dart';
 import '../models/play_stats.dart';
 import 'local_cache_service.dart';
 import 'ios_fft_service.dart';
@@ -307,6 +308,33 @@ class AudioPlayerService {
       return Uri.file(artworkPath);
     }
     return null;
+  }
+
+  ReplayGainMode _replayGainMode = ReplayGainMode.track;
+  double _replayGainPreampDb = 0;
+
+  ReplayGainMode get replayGainMode => _replayGainMode;
+  double get replayGainPreampDb => _replayGainPreampDb;
+
+  /// Volume multiplier for [track] under the current ReplayGain settings.
+  double _gainFor(JellyfinTrack? track) {
+    if (track == null) return 1.0;
+    return replayGainMultiplier(
+      mode: _replayGainMode,
+      trackGainDb: track.normalizationGain,
+      albumGainDb: track.albumNormalizationGain,
+      preampDb: _replayGainPreampDb,
+    );
+  }
+
+  /// Change ReplayGain settings and re-apply volume to the live players.
+  Future<void> setReplayGain({ReplayGainMode? mode, double? preampDb}) async {
+    _replayGainMode = mode ?? _replayGainMode;
+    _replayGainPreampDb = (preampDb ?? _replayGainPreampDb).clamp(-15.0, 0.0);
+    await Future.wait([
+      _player.setVolume((_volume * _gainFor(_currentTrack)).clamp(0.0, 1.0)),
+      _nextPlayer.setVolume((_volume * _gainFor(_preloadedTrack)).clamp(0.0, 1.0)),
+    ]);
   }
 
   void setCrossfadeEnabled(bool enabled) {
@@ -794,12 +822,12 @@ class AudioPlayerService {
     _volumeController.add(_volume);
 
     // Apply ReplayGain normalization if available
-    final currentMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
+    final currentMultiplier = _gainFor(_currentTrack);
     final adjustedVolume = (_volume * currentMultiplier).clamp(0.0, 1.0);
 
     // Apply ReplayGain to both main and preloaded player
     final nextTrack = _preloadedTrack;
-    final nextMultiplier = nextTrack?.replayGainMultiplier ?? 1.0;
+    final nextMultiplier = _gainFor(nextTrack);
     final nextAdjustedVolume = (_volume * nextMultiplier).clamp(0.0, 1.0);
     await Future.wait([
       _player.setVolume(adjustedVolume),
@@ -926,7 +954,7 @@ class AudioPlayerService {
       if (event.type == AudioInterruptionType.duck) {
         if (isPlaying && !_isDucked) {
           _isDucked = true;
-          final multiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
+          final multiplier = _gainFor(_currentTrack);
           unawaited(_player.setVolume((_volume * multiplier * 0.3).clamp(0.0, 1.0)));
         }
         return;
@@ -958,7 +986,7 @@ class AudioPlayerService {
   /// Re-apply the user's volume (with ReplayGain) to the main player, e.g.
   /// after ducking or a cancelled sleep-timer fade.
   Future<void> _applyUserVolumeToPlayer() async {
-    final multiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
+    final multiplier = _gainFor(_currentTrack);
     await _player.setVolume((_volume * multiplier).clamp(0.0, 1.0));
   }
 
@@ -1282,7 +1310,7 @@ class AudioPlayerService {
           // 1. Start playback on the pre-loaded player as early as possible,
           //    at the user's volume with the new track's ReplayGain applied.
           await _nextPlayer.setVolume(
-            (_volume * nextTrack.replayGainMultiplier).clamp(0.0, 1.0),
+            (_volume * _gainFor(nextTrack)).clamp(0.0, 1.0),
           );
           await _nextPlayer.resume();
 
@@ -2152,7 +2180,7 @@ class AudioPlayerService {
           }
 
           // Apply ReplayGain normalization
-          final adjustedVolume = _volume * track.replayGainMultiplier;
+          final adjustedVolume = _volume * _gainFor(track);
           await player.setVolume(adjustedVolume.clamp(0.0, 1.0));
           if (track.normalizationGain != null) {
             debugPrint('🔊 Applied ReplayGain: ${track.normalizationGain} dB');
@@ -2542,7 +2570,7 @@ class AudioPlayerService {
         }
         if (!superseded()) {
           await player.setVolume(
-            (_volume * track.replayGainMultiplier).clamp(0.0, 1.0),
+            (_volume * _gainFor(track)).clamp(0.0, 1.0),
           );
         }
         return true;
@@ -2629,7 +2657,7 @@ class AudioPlayerService {
     const steps = 8;
     const stepDuration = Duration(milliseconds: 50);
     final targetVolume = _volume;
-    final currentMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
+    final currentMultiplier = _gainFor(_currentTrack);
 
     for (int i = 1; i <= steps; i++) {
       // A pause (or another fade) took over.
@@ -3787,8 +3815,8 @@ class AudioPlayerService {
     final stepDuration = Duration(milliseconds: (_crossfadeDurationSeconds * 1000) ~/ steps);
     // ReplayGain for each side of the fade
     final outgoing = _player;
-    final outMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
-    final inMultiplier = nextTrack.replayGainMultiplier;
+    final outMultiplier = _gainFor(_currentTrack);
+    final inMultiplier = _gainFor(nextTrack);
 
     // Start the next track at volume 0.0 immediately
     await incoming.setVolume(0.0);
@@ -4203,7 +4231,7 @@ class AudioPlayerService {
           return;
         }
         await player.setVolume(
-          (_volume * track.replayGainMultiplier).clamp(0.0, 1.0),
+          (_volume * _gainFor(track)).clamp(0.0, 1.0),
         );
         await player.resume();
       });
@@ -4253,8 +4281,8 @@ class AudioPlayerService {
       );
       if (fadedVolume != null) {
         _sleepFadeApplied = true;
-        final replayGainMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
-        _player.setVolume((fadedVolume * replayGainMultiplier).clamp(0.0, 1.0));
+        final gain = _gainFor(_currentTrack);
+        _player.setVolume((fadedVolume * gain).clamp(0.0, 1.0));
       }
 
       // Timer complete

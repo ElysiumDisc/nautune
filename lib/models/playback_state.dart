@@ -1,5 +1,6 @@
 import '../jellyfin/jellyfin_track.dart';
 import 'now_playing_layout.dart';
+import 'replay_gain_mode.dart';
 import 'visualizer_type.dart';
 
 /// Streaming quality options for audio playback
@@ -104,6 +105,8 @@ class PlaybackState {
     // Smart caching
     this.preCacheTrackCount = 3,  // 0 = off, 3, 5, or 10
     this.wifiOnlyCaching = false,
+    this.replayGainPreampDb = 0.0,
+    this.replayGainMode = ReplayGainMode.track,
     // Offline mode
     this.isOfflineMode = false,
     // Submarine Mode (battery saver)
@@ -160,6 +163,8 @@ class PlaybackState {
   // Smart caching
   final int preCacheTrackCount;  // 0 = off, 3, 5, or 10
   final bool wifiOnlyCaching;
+  final double replayGainPreampDb;
+  final ReplayGainMode replayGainMode;
   // Offline mode
   final bool isOfflineMode;
   // Submarine Mode (battery saver)
@@ -213,6 +218,8 @@ class PlaybackState {
     VisualizerPosition? visualizerPosition,
     int? preCacheTrackCount,
     bool? wifiOnlyCaching,
+    double? replayGainPreampDb,
+    ReplayGainMode? replayGainMode,
     bool? isOfflineMode,
     bool? submarineModeEnabled,
     Map<String, dynamic>? batterySaverSnapshot,
@@ -258,6 +265,8 @@ class PlaybackState {
       visualizerPosition: visualizerPosition ?? this.visualizerPosition,
       preCacheTrackCount: preCacheTrackCount ?? this.preCacheTrackCount,
       wifiOnlyCaching: wifiOnlyCaching ?? this.wifiOnlyCaching,
+      replayGainPreampDb: replayGainPreampDb ?? this.replayGainPreampDb,
+      replayGainMode: replayGainMode ?? this.replayGainMode,
       isOfflineMode: isOfflineMode ?? this.isOfflineMode,
       submarineModeEnabled: submarineModeEnabled ?? this.submarineModeEnabled,
       batterySaverSnapshot: batterySaverSnapshot ?? this.batterySaverSnapshot,
@@ -306,6 +315,8 @@ class PlaybackState {
       'visualizerPosition': visualizerPosition.name,
       'preCacheTrackCount': preCacheTrackCount,
       'wifiOnlyCaching': wifiOnlyCaching,
+      'replayGainPreampDb': replayGainPreampDb,
+      'replayGainMode': replayGainMode.name,
       'isOfflineMode': isOfflineMode,
       'submarineModeEnabled': submarineModeEnabled,
       'batterySaverSnapshot': batterySaverSnapshot,
@@ -366,6 +377,8 @@ class PlaybackState {
       visualizerPosition: VisualizerPositionExtension.fromString(json['visualizerPosition'] as String?),
       preCacheTrackCount: (json['preCacheTrackCount'] as num?)?.toInt() ?? 3,
       wifiOnlyCaching: json['wifiOnlyCaching'] as bool? ?? false,
+      replayGainPreampDb: (json['replayGainPreampDb'] as num?)?.toDouble() ?? 0.0,
+      replayGainMode: ReplayGainMode.fromName(json['replayGainMode'] as String?),
       isOfflineMode: json['isOfflineMode'] as bool? ?? false,
       submarineModeEnabled: json['submarineModeEnabled'] as bool? ?? false,
       batterySaverSnapshot: (json['batterySaverSnapshot'] as Map?)?.cast<String, dynamic>(),
@@ -420,6 +433,8 @@ class PlaybackState {
       visualizerPosition: visualizerPosition, // Preserve visualizer position
       preCacheTrackCount: preCacheTrackCount, // Preserve smart cache settings
       wifiOnlyCaching: wifiOnlyCaching,
+      replayGainPreampDb: replayGainPreampDb,
+      replayGainMode: replayGainMode,
       submarineModeEnabled: submarineModeEnabled, // Preserve submarine mode
       batterySaverSnapshot: batterySaverSnapshot, // Preserve snapshot
       gridSize: gridSize, // Preserve grid size preference

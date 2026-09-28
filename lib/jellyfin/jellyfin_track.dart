@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 
 import 'jellyfin_auth_header.dart';
 import 'server_uri.dart';
@@ -86,6 +85,7 @@ class JellyfinTrack {
     this.streamUrlOverride,
     this.assetPathOverride,
     this.normalizationGain,
+    this.albumNormalizationGain,
     this.container,
     this.codec,
     this.bitrate,
@@ -118,6 +118,7 @@ class JellyfinTrack {
   final String? streamUrlOverride;
   final String? assetPathOverride;
   final double? normalizationGain; // dB adjustment for ReplayGain
+  final double? albumNormalizationGain; // album-level dB adjustment
 
   // Audio metadata from MediaStreams
   final String? container; // File format (FLAC, MP3, M4A, etc.)
@@ -172,6 +173,9 @@ class JellyfinTrack {
 
     final normVal = json['NormalizationGain'];
     final normalizationGain = normVal is num ? normVal.toDouble() : null;
+    final albumNormVal = json['AlbumNormalizationGain'];
+    final albumNormalizationGain =
+        albumNormVal is num ? albumNormVal.toDouble() : null;
 
     // Parse audio metadata from MediaStreams (first audio stream)
     String? container;
@@ -264,6 +268,7 @@ class JellyfinTrack {
       streamUrlOverride: null,
       assetPathOverride: null,
       normalizationGain: normalizationGain,
+      albumNormalizationGain: albumNormalizationGain,
       container: container,
       codec: codec,
       bitrate: bitrate,
@@ -298,6 +303,7 @@ class JellyfinTrack {
     String? streamUrlOverride,
     String? assetPathOverride,
     double? normalizationGain,
+    double? albumNormalizationGain,
     String? container,
     String? codec,
     int? bitrate,
@@ -330,6 +336,8 @@ class JellyfinTrack {
       streamUrlOverride: streamUrlOverride ?? this.streamUrlOverride,
       assetPathOverride: assetPathOverride ?? this.assetPathOverride,
       normalizationGain: normalizationGain ?? this.normalizationGain,
+      albumNormalizationGain:
+          albumNormalizationGain ?? this.albumNormalizationGain,
       container: container ?? this.container,
       codec: codec ?? this.codec,
       bitrate: bitrate ?? this.bitrate,
@@ -367,17 +375,6 @@ class JellyfinTrack {
   /// Returns the best available track number for display.
   int effectiveTrackNumber(int fallback) {
     return indexNumber ?? fallback;
-  }
-
-  /// Returns the volume multiplier to apply for ReplayGain normalization.
-  /// Returns 1.0 if no normalization gain is available.
-  /// Formula: 10^(gain_dB / 20)
-  double get replayGainMultiplier {
-    if (normalizationGain == null) return 1.0;
-    // Convert dB to linear volume multiplier
-    // Clamp to reasonable range (0.1 to 2.0) to prevent extreme adjustments
-    final multiplier = math.pow(10, normalizationGain! / 20).toDouble();
-    return multiplier.clamp(0.1, 2.0);
   }
 
   /// Returns formatted audio quality info for display
@@ -709,6 +706,7 @@ class JellyfinTrack {
       'streamUrlOverride': streamUrlOverride,
       'assetPathOverride': assetPathOverride,
       'normalizationGain': normalizationGain,
+      'albumNormalizationGain': albumNormalizationGain,
       'container': container,
       'codec': codec,
       'bitrate': bitrate,
@@ -733,6 +731,9 @@ class JellyfinTrack {
 
     final normVal = json['normalizationGain'];
     final normalizationGain = normVal is num ? normVal.toDouble() : null;
+    final albumNormVal = json['albumNormalizationGain'];
+    final albumNormalizationGain =
+        albumNormVal is num ? albumNormVal.toDouble() : null;
 
     final rawGenres = json['genres'];
     final genresList = (rawGenres is List) ? rawGenres.whereType<String>().toList() : null;
@@ -764,6 +765,7 @@ class JellyfinTrack {
       streamUrlOverride: json['streamUrlOverride'] is String ? json['streamUrlOverride'] as String : null,
       assetPathOverride: json['assetPathOverride'] is String ? json['assetPathOverride'] as String : null,
       normalizationGain: normalizationGain,
+      albumNormalizationGain: albumNormalizationGain,
       container: json['container'] is String ? json['container'] as String : null,
       codec: json['codec'] is String ? json['codec'] as String : null,
       bitrate: json['bitrate'] is int ? json['bitrate'] as int : (json['bitrate'] is num ? (json['bitrate'] as num).toInt() : null),
