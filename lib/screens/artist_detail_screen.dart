@@ -15,7 +15,11 @@ import '../jellyfin/jellyfin_track.dart';
 import '../repositories/offline_repository.dart';
 import '../services/listenbrainz_service.dart';
 import '../services/palette_cache_service.dart';
+import '../theme/nautune_spacing.dart';
+import '../theme/nautune_theme.dart';
 import '../widgets/download_indicators.dart';
+import '../widgets/ios/action_sheet.dart';
+import '../widgets/library_tiles.dart';
 import '../widgets/jellyfin_image.dart';
 import '../widgets/now_playing_bar.dart';
 import '../utils/color_utils.dart';
@@ -204,35 +208,31 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        InkWell(
-          onTap: onToggle,
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Row(
-              children: [
-                Icon(
-                  icon,
-                  size: 22,
-                  color: theme.colorScheme.primary,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.bold,
+        Semantics(
+          button: true,
+          expanded: expanded,
+          child: InkWell(
+            onTap: onToggle,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(title, style: theme.textTheme.title2),
+                  ),
+                  ?trailing,
+                  const SizedBox(width: 4),
+                  AnimatedRotation(
+                    turns: expanded ? 0.25 : 0,
+                    duration: const Duration(milliseconds: 200),
+                    child: Icon(
+                      Icons.chevron_right_rounded,
+                      size: 26,
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                ),
-                ?trailing,
-                const SizedBox(width: 8),
-                Icon(
-                  expanded ? Icons.expand_less : Icons.expand_more,
-                  size: 24,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -439,11 +439,121 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     }
   }
 
+  /// Translucent round button over the header artwork.
+  Widget _headerButton(ThemeData theme, IconData icon) => Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface.withValues(alpha: 0.7),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, size: 18),
+      );
+
+  void _snack(String message, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 2),
+        backgroundColor: error ? Theme.of(context).colorScheme.error : null,
+      ),
+    );
+  }
+
+  Future<void> _showArtistActions() async {
+    final action = await showNautuneActionSheet<String>(
+      context,
+      title: widget.artist.name,
+      actions: const [
+        NautuneSheetAction(label: 'Start Radio', value: 'radio', icon: Icons.radio),
+        NautuneSheetAction(label: 'Instant Mix', value: 'mix', icon: Icons.auto_awesome),
+      ],
+    );
+    if (action == 'radio') await _startRadio();
+    if (action == 'mix') await _startInstantMix();
+  }
+
+  /// Endless radio seeded by this artist (Infinite Radio keeps it going).
+  Future<void> _startRadio() async {
+    try {
+      _snack('Starting artist radio...');
+      final mixTracks = await _appState.jellyfinService.getInstantMix(
+        itemId: widget.artist.id,
+        limit: 50,
+      );
+      if (mixTracks.isEmpty) {
+        _snack('No similar tracks found');
+        return;
+      }
+      _appState.audioPlayerService.setInfiniteRadioEnabled(true);
+      await _appState.audioPlayerService.playTrack(
+        mixTracks.first,
+        queueContext: mixTracks,
+      );
+      _snack('Radio started (${mixTracks.length} tracks)');
+    } catch (e) {
+      _snack('Failed to start radio: $e', error: true);
+    }
+  }
+
+  Future<void> _startInstantMix() async {
+    try {
+      _snack('Creating instant mix...');
+      final mixTracks = await _appState.jellyfinService.getArtistMix(
+        artistId: widget.artist.id,
+        limit: 50,
+      );
+      if (mixTracks.isEmpty) {
+        _snack('No similar tracks found');
+        return;
+      }
+      await _appState.audioPlayerService.playTrack(
+        mixTracks.first,
+        queueContext: mixTracks,
+      );
+      _snack('Playing instant mix (${mixTracks.length} tracks)');
+    } catch (e) {
+      _snack('Failed to create mix: $e', error: true);
+    }
+  }
+
+  /// Play / Shuffle buttons for every library track of the artist.
+  Widget _playButtons(ThemeData theme) {
+    final tracks = _sortedLibraryTracks;
+    final enabled = tracks != null && tracks.isNotEmpty;
+    final style = NautuneStyle.of(context);
+    Widget button(IconData icon, String label, VoidCallback? onPressed) =>
+        Expanded(
+          child: FilledButton.tonalIcon(
+            onPressed: onPressed,
+            icon: Icon(icon, size: 20),
+            label: Text(label),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(46),
+              shape: style.shape(NautuneRadius.md),
+              foregroundColor: theme.colorScheme.primary,
+              backgroundColor: theme.colorScheme.onSurface.withValues(alpha: 0.08),
+            ),
+          ),
+        );
+    return Row(
+      children: [
+        button(Icons.play_arrow_rounded, 'Play', !enabled ? null : () {
+          _appState.audioPlayerService.playTrack(tracks.first, queueContext: tracks);
+        }),
+        const SizedBox(width: 12),
+        button(Icons.shuffle_rounded, 'Shuffle', !enabled ? null : () {
+          _appState.audioPlayerService.playShuffled(tracks);
+        }),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final artist = widget.artist;
-    final isDesktop = MediaQuery.of(context).size.width > 600;
+    final isWide = MediaQuery.of(context).size.width > 600;
 
     Widget artwork;
     final tag = artist.primaryImageTag;
@@ -492,19 +602,13 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         scrollCacheExtent: ScrollCacheExtent.pixels(500),
         slivers: [
           SliverAppBar(
-            expandedHeight: isDesktop ? 380 : 340,
+            expandedHeight: isWide ? 380 : 340,
             pinned: true,
             stretch: true,
             backgroundColor: gradientColors.first.withValues(alpha: 1.0),
             leading: IconButton(
-              icon: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surface.withValues(alpha: 0.7),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.arrow_back, size: 20),
-              ),
+              icon: _headerButton(theme, Icons.arrow_back_ios_new),
+              tooltip: 'Back',
               onPressed: () => Navigator.of(context).pop(),
             ),
             actions: [
@@ -519,138 +623,15 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                       theme.colorScheme.surface.withValues(alpha: 0.7),
                 ),
               // Radio and Instant Mix need the server.
-              if (!_appState.isOfflineMode) ...[
-              // Artist Radio button
-              Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: IconButton(
-                  icon: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surface.withValues(alpha: 0.7),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.radio, size: 20),
+              if (!_appState.isOfflineMode)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: IconButton(
+                    icon: _headerButton(theme, Icons.more_horiz),
+                    tooltip: 'More',
+                    onPressed: _showArtistActions,
                   ),
-                  tooltip: 'Start Radio',
-                  onPressed: () async {
-                    try {
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Starting artist radio...'),
-                          duration: Duration(seconds: 1),
-                        ),
-                      );
-
-                      final mixTracks = await _appState.jellyfinService.getInstantMix(
-                        itemId: widget.artist.id,
-                        limit: 50,
-                      );
-
-                      if (mixTracks.isEmpty) {
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('No similar tracks found'),
-                            duration: Duration(seconds: 2),
-                          ),
-                        );
-                        return;
-                      }
-
-                      _appState.audioPlayerService.setInfiniteRadioEnabled(true);
-                      await _appState.audioPlayerService.playTrack(
-                        mixTracks.first,
-                        queueContext: mixTracks,
-                      );
-
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Radio started (${mixTracks.length} tracks)'),
-                          duration: const Duration(seconds: 2),
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    } catch (e) {
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Failed to start radio: $e'),
-                          backgroundColor: Theme.of(context).colorScheme.error,
-                        ),
-                      );
-                    }
-                  },
                 ),
-              ),
-              // Instant Mix button
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: IconButton(
-                  icon: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surface.withValues(alpha: 0.7),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.auto_awesome, size: 20),
-                  ),
-                  tooltip: 'Instant Mix',
-                  // (offline: hidden, see above)
-                  onPressed: () async {
-                    try {
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Creating instant mix...'),
-                          duration: Duration(seconds: 1),
-                        ),
-                      );
-
-                      final mixTracks = await _appState.jellyfinService.getArtistMix(
-                        artistId: widget.artist.id,
-                        limit: 50,
-                      );
-
-                      if (mixTracks.isEmpty) {
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('No similar tracks found'),
-                            duration: Duration(seconds: 2),
-                          ),
-                        );
-                        return;
-                      }
-
-                      await _appState.audioPlayerService.playTrack(
-                        mixTracks.first,
-                        queueContext: mixTracks,
-                      );
-
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Playing instant mix (${mixTracks.length} tracks)'),
-                          duration: const Duration(seconds: 2),
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    } catch (e) {
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Failed to create mix: $e'),
-                          backgroundColor: Theme.of(context).colorScheme.error,
-                        ),
-                      );
-                    }
-                  },
-                ),
-              ),
-              ],
             ],
             flexibleSpace: FlexibleSpaceBar(
               stretchModes: const [
@@ -678,8 +659,8 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                     right: 0,
                     child: Center(
                       child: SizedBox(
-                        width: isDesktop ? 220 : 180,
-                        height: isDesktop ? 220 : 180,
+                        width: isWide ? 220 : 180,
+                        height: isWide ? 220 : 180,
                         child: artwork,
                       ),
                     ),
@@ -755,6 +736,8 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                       }).toList(),
                     ),
                   ],
+                  const SizedBox(height: 16),
+                  _playButtons(theme),
                 ],
               ),
             ),
@@ -780,7 +763,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
                 child: _buildCollapsibleSection(
-                  title: 'Popular',
+                  title: 'Top Songs',
                   icon: Icons.trending_up_rounded,
                   expanded: _popularExpanded,
                   onToggle: () => setState(() => _popularExpanded = !_popularExpanded),
@@ -837,7 +820,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          'Popular',
+                          'Top Songs',
                           style: theme.textTheme.titleLarge?.copyWith(
                             fontWeight: FontWeight.bold,
                           ),
@@ -862,7 +845,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
                 child: _buildCollapsibleSection(
-                  title: 'Tracks',
+                  title: 'Songs',
                   icon: Icons.music_note_outlined,
                   expanded: _tracksExpanded,
                   onToggle: () => setState(() => _tracksExpanded = !_tracksExpanded),
@@ -975,7 +958,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          'Tracks',
+                          'Songs',
                           style: theme.textTheme.titleLarge?.copyWith(
                             fontWeight: FontWeight.bold,
                           ),
@@ -1000,7 +983,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
                 child: _buildCollapsibleSection(
-                  title: 'Discography',
+                  title: 'Albums',
                   icon: Icons.album_outlined,
                   expanded: _albumsExpanded,
                   onToggle: () => setState(() => _albumsExpanded = !_albumsExpanded),
@@ -1058,8 +1041,11 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
               sliver: SliverGrid(
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: isDesktop ? 5 : 3,
-                  childAspectRatio: 0.78,
+                  crossAxisCount: isWide ? 5 : 3,
+                  mainAxisExtent: LibraryTileMetrics.of(context).gridExtent(
+                    (MediaQuery.sizeOf(context).width - 40 - (isWide ? 4 : 2) * 12) /
+                        (isWide ? 5 : 3),
+                  ),
                   crossAxisSpacing: 12,
                   mainAxisSpacing: 16,
                 ),
@@ -1246,62 +1232,15 @@ class _AlbumCard extends StatelessWidget {
       );
     }
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => AlbumDetailScreen(
-                album: album,
-              ),
-            ),
-          );
-        },
-        borderRadius: BorderRadius.circular(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: AspectRatio(
-                aspectRatio: 1,
-                child: Container(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: [
-                      BoxShadow(
-                        color: theme.colorScheme.shadow.withValues(alpha: 0.12),
-                        blurRadius: 8,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: artwork,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              album.name,
-              style: theme.textTheme.bodySmall?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            if (album.productionYear != null)
-              Text(
-                '${album.productionYear}',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-          ],
-        ),
-      ),
+    return ArtworkGridTile(
+      artwork: artwork,
+      title: album.name,
+      subtitle: album.productionYear?.toString(),
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)),
+        );
+      },
     );
   }
 }
