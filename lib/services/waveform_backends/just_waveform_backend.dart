@@ -5,10 +5,10 @@ import 'package:just_waveform/just_waveform.dart';
 
 import '../../models/waveform_data.dart';
 
-/// Waveform extraction backend for iOS, macOS, and Android using just_waveform package.
+/// Waveform extraction backend for iOS using just_waveform package.
 class JustWaveformBackend {
   /// Check if this backend is available on the current platform
-  bool get isAvailable => Platform.isIOS || Platform.isMacOS || Platform.isAndroid;
+  bool get isAvailable => Platform.isIOS;
 
   /// Extract waveform from audio file and save to output path.
   /// Yields progress values from 0.0 to 1.0.

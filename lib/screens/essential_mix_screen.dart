@@ -15,7 +15,6 @@ import '../services/audio_player_service.dart';
 import '../services/essential_mix_service.dart';
 import '../services/ios_fft_service.dart';
 import '../services/power_mode_service.dart';
-import '../services/pulseaudio_fft_service.dart';
 import '../services/waveform_service.dart';
 
 /// Essential Mix Easter Egg screen - Full player UI for the Soulwax/2ManyDJs mix.
@@ -292,12 +291,6 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     // FFT listener just sets target values - animation controller does interpolation
     if (Platform.isIOS) {
       _fftSubscription = IOSFFTService.instance.fftStream.listen((data) {
-        _targetBass = data.bass;
-        _targetMid = data.mid;
-        _targetTreble = data.treble;
-      });
-    } else if (Platform.isLinux) {
-      _fftSubscription = PulseAudioFFTService.instance.fftStream.listen((data) {
         _targetBass = data.bass;
         _targetMid = data.mid;
         _targetTreble = data.treble;

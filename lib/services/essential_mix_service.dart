@@ -518,13 +518,7 @@ class EssentialMixService extends ChangeNotifier {
   /// Get the audio download directory.
   Future<Directory> _getAudioDirectory() async {
     final docsDir = await getApplicationDocumentsDirectory();
-    final Directory audioDir;
-
-    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      audioDir = Directory('${docsDir.path}/nautune/essential/audio');
-    } else {
-      audioDir = Directory('${docsDir.path}/essential/audio');
-    }
+    final audioDir = Directory('${docsDir.path}/essential/audio');
 
     if (!await audioDir.exists()) {
       await audioDir.create(recursive: true);
@@ -535,13 +529,7 @@ class EssentialMixService extends ChangeNotifier {
   /// Get the artwork download directory.
   Future<Directory> _getArtworkDirectory() async {
     final docsDir = await getApplicationDocumentsDirectory();
-    final Directory artworkDir;
-
-    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      artworkDir = Directory('${docsDir.path}/nautune/essential/artwork');
-    } else {
-      artworkDir = Directory('${docsDir.path}/essential/artwork');
-    }
+    final artworkDir = Directory('${docsDir.path}/essential/artwork');
 
     if (!await artworkDir.exists()) {
       await artworkDir.create(recursive: true);

@@ -2,12 +2,11 @@
 
 ### Bumping the App Version
 
-Four files must be updated together when bumping the version (they each carry an independent string that can silently drift):
+Three files must be updated together when bumping the version (they each carry an independent string that can silently drift):
 
 1. **`pubspec.yaml`** — the `version:` field (Flutter reads this at build time; Android pulls from it automatically)
 2. **`lib/app_version.dart`** — the `_version` fallback used when `PackageInfo` fails at runtime
-3. **`AppImageBuilder.yml`** — the `version:` field nested under `AppDir.app_info` (NOT the top-level `version: 1` which is the schema version)
-4. **This file** — the example commands below and the AppImage filename in the build snippet
+3. **This file** — the example commands below
 
 iOS/macOS/Linux generated config files regenerate on build; don't edit them by hand.
 
@@ -15,7 +14,6 @@ iOS/macOS/Linux generated config files regenerate on build; don't edit them by h
 # Example: bump from 8.9.7 to 8.9.8
 sed -i 's/version: 8.9.7+1/version: 8.9.8+1/' pubspec.yaml
 sed -i "s/8.9.7+1/8.9.8+1/" lib/app_version.dart
-sed -i 's/    version: 8.9.7/    version: 8.9.8/' AppImageBuilder.yml
 ```
 
 After editing, run `flutter analyze` and add a new `### vX.Y.Z` block to `CHANGELOG.md`.

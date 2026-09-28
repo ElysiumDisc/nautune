@@ -632,14 +632,7 @@ class DownloadService extends ChangeNotifier {
   Future<void> _cleanupStaleTmpFiles() async {
     try {
       final docsDir = await getApplicationDocumentsDirectory();
-      final Directory downloadsDir;
-      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-        downloadsDir = Directory(
-          '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads',
-        );
-      } else {
-        downloadsDir = Directory('${docsDir.path}/downloads');
-      }
+      final downloadsDir = Directory('${docsDir.path}/downloads');
       if (!await downloadsDir.exists()) return;
       await for (final entity in downloadsDir.list()) {
         if (entity is File && entity.path.endsWith('.tmp')) {
@@ -737,16 +730,7 @@ class DownloadService extends ChangeNotifier {
 
   Future<String> _getDownloadPath(JellyfinTrack track, {String? extension}) async {
     final docsDir = await getApplicationDocumentsDirectory();
-    final Directory downloadsDir;
-
-    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      downloadsDir = Directory(
-        '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads',
-      );
-    } else {
-      // iOS/Android: MUST use app documents directory (sandbox requirement)
-      downloadsDir = Directory('${docsDir.path}/downloads');
-    }
+    final downloadsDir = Directory('${docsDir.path}/downloads');
     
     if (!await downloadsDir.exists()) {
       await downloadsDir.create(recursive: true);
@@ -763,15 +747,7 @@ class DownloadService extends ChangeNotifier {
   /// Get artwork path - uses albumId to avoid duplicating same album art for every track
   Future<String> _getArtworkPath(String albumId) async {
     final docsDir = await getApplicationDocumentsDirectory();
-    final Directory artworkDir;
-
-    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      artworkDir = Directory(
-        '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads${Platform.pathSeparator}artwork',
-      );
-    } else {
-      artworkDir = Directory('${docsDir.path}/downloads/artwork');
-    }
+    final artworkDir = Directory('${docsDir.path}/downloads/artwork');
 
     if (!await artworkDir.exists()) {
       await artworkDir.create(recursive: true);
@@ -821,15 +797,7 @@ class DownloadService extends ChangeNotifier {
   /// Get artist image path - stores artist images by artist ID
   Future<String> _getArtistImagePath(String artistId) async {
     final docsDir = await getApplicationDocumentsDirectory();
-    final Directory artistImageDir;
-
-    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      artistImageDir = Directory(
-        '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads${Platform.pathSeparator}artists',
-      );
-    } else {
-      artistImageDir = Directory('${docsDir.path}/downloads/artists');
-    }
+    final artistImageDir = Directory('${docsDir.path}/downloads/artists');
 
     if (!await artistImageDir.exists()) {
       await artistImageDir.create(recursive: true);
@@ -1446,14 +1414,7 @@ class DownloadService extends ChangeNotifier {
     // Delete entire artwork folder to handle any orphaned/corrupted artwork
     try {
       final docsDir = await getApplicationDocumentsDirectory();
-      final Directory artworkDir;
-      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-        artworkDir = Directory(
-          '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads${Platform.pathSeparator}artwork',
-        );
-      } else {
-        artworkDir = Directory('${docsDir.path}/downloads/artwork');
-      }
+      final artworkDir = Directory('${docsDir.path}/downloads/artwork');
 
       if (await artworkDir.exists()) {
         await artworkDir.delete(recursive: true);
@@ -1466,14 +1427,7 @@ class DownloadService extends ChangeNotifier {
     // Delete entire artists folder (artist images)
     try {
       final docsDir = await getApplicationDocumentsDirectory();
-      final Directory artistsDir;
-      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-        artistsDir = Directory(
-          '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads${Platform.pathSeparator}artists',
-        );
-      } else {
-        artistsDir = Directory('${docsDir.path}/downloads/artists');
-      }
+      final artistsDir = Directory('${docsDir.path}/downloads/artists');
 
       if (await artistsDir.exists()) {
         await artistsDir.delete(recursive: true);
@@ -1486,14 +1440,7 @@ class DownloadService extends ChangeNotifier {
     // Also scan for orphaned audio files not in our tracking
     try {
       final docsDir = await getApplicationDocumentsDirectory();
-      final Directory downloadsDir;
-      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-        downloadsDir = Directory(
-          '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}downloads',
-        );
-      } else {
-        downloadsDir = Directory('${docsDir.path}/downloads');
-      }
+      final downloadsDir = Directory('${docsDir.path}/downloads');
 
       if (await downloadsDir.exists()) {
         await for (final entity in downloadsDir.list()) {

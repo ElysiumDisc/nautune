@@ -24,7 +24,6 @@ import '../models/playback_state.dart';
 import '../models/play_stats.dart';
 import 'local_cache_service.dart';
 import 'ios_fft_service.dart';
-import 'pulseaudio_fft_service.dart';
 import 'connectivity_service.dart';
 import 'waveform_service.dart';
 import '../models/loop_state.dart';
@@ -664,9 +663,6 @@ class AudioPlayerService {
     // Initialize FFT services for real audio visualization
     if (Platform.isIOS) {
       unawaited(IOSFFTService.instance.initialize());
-    }
-    if (Platform.isLinux) {
-      unawaited(PulseAudioFFTService.instance.initialize());
     }
 
     try {
@@ -1516,11 +1512,6 @@ class AudioPlayerService {
         }
       }
 
-      // Linux FFT: PulseAudio captures system audio directly (no file path needed)
-      if (Platform.isLinux) {
-        PulseAudioFFTService.instance.startCapture();
-      }
-
       // Waveform extraction: Extract for all tracks (local and streaming)
       if (WaveformService.instance.isAvailable && !_batterySaverMode) {
         if (isLocalFile) {
@@ -1722,11 +1713,6 @@ class AudioPlayerService {
     }
   }
 
-  /// Set playback speed rate. Used by Fleet Mode drift correction.
-  Future<void> setPlaybackRate(double rate) async {
-    await _player.setPlaybackRate(rate);
-  }
-  
   Future<void> skipToNext() async {
     HapticService.mediumTap();
     // Record actual listening time before skipping
@@ -1959,9 +1945,6 @@ class AudioPlayerService {
     // Stop FFT capture
     if (Platform.isIOS) {
       await IOSFFTService.instance.stopCapture();
-    }
-    if (Platform.isLinux) {
-      PulseAudioFFTService.instance.stopCapture();
     }
 
     // 2. CLEAR persistence so app starts fresh on next launch

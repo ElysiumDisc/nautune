@@ -1,7 +1,0 @@
-display_name: Nautune
-summary: Poseidon Music Player
-description: |
-  Nautune is a beautiful Jellyfin music client for Linux.
-  Stream your music library with style and elegance.
-license: MIT
-url: https://github.com/elysiumdisc/nautune

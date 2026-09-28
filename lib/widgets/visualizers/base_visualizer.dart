@@ -2,7 +2,6 @@ import 'dart:async' show StreamSubscription;
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import '../../services/audio_player_service.dart';
-import '../../services/pulseaudio_fft_service.dart';
 import '../../services/ios_fft_service.dart';
 
 /// Abstract base class for all audio visualizers.
@@ -56,9 +55,8 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
   List<double>? _spectrumBarsBuffer;
 
   // Real FFT sources - check synchronously from singleton services
-  bool get usePulseAudioFFT => Platform.isLinux && PulseAudioFFTService.instance.isAvailable;
   bool get useIOSFFT => Platform.isIOS && IOSFFTService.instance.isAvailable;
-  bool get useRealFFT => usePulseAudioFFT || useIOSFFT;
+  bool get useRealFFT => useIOSFFT;
 
   /// Number of spectrum bars to use (subclasses can override)
   int get spectrumBarCount => 64;
@@ -92,20 +90,9 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
 
   void _initFFTSource() {
     // Subscribe to real FFT stream if available
-    if (usePulseAudioFFT) {
-      _fftSubscription = PulseAudioFFTService.instance.fftStream.listen((fft) {
-        _targetBass = fft.bass;
-        _targetMid = fft.mid;
-        _targetTreble = fft.treble;
-        _targetAmplitude = fft.amplitude;
-        _targetSpectrum = fft.spectrum;
-      });
-      return;
-    }
-
     if (useIOSFFT) {
       _fftSubscription = IOSFFTService.instance.fftStream.listen((fft) {
-        // iOS FFT values tend to be more elevated than Linux, scale down for visual parity
+        // iOS FFT values tend to run hot, scale down for visual parity
         const iosScale = 0.65;
         _targetBass = fft.bass * iosScale;
         _targetMid = fft.mid * iosScale;

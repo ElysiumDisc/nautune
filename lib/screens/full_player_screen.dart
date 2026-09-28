@@ -11,10 +11,8 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:material_color_utilities/material_color_utilities.dart';
 import 'package:provider/provider.dart';
-import 'package:window_manager/window_manager.dart';
 
 import '../app_state.dart';
-import '../providers/syncplay_provider.dart';
 import '../services/lyrics_service.dart';
 import '../models/now_playing_layout.dart';
 import '../services/playback_state_store.dart' show StreamingQuality, VisualizerPosition;
@@ -93,13 +91,7 @@ Future<List<int>> _extractColorsInIsolate(Uint32List pixels) async {
 }
 
 class FullPlayerScreen extends StatefulWidget {
-  const FullPlayerScreen({
-    super.key,
-    this.sailorMode = false,
-  });
-
-  /// When true, shows collab playlist info without waveform/FFT (for Sailors)
-  final bool sailorMode;
+  const FullPlayerScreen({super.key});
 
   @override
   State<FullPlayerScreen> createState() => _FullPlayerScreenState();
@@ -329,20 +321,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
       total += c.computeLuminance();
     }
     return total / colorsToCheck.length;
-  }
-
-  Future<void> _switchToMiniPlayer() async {
-    if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
-      // 1. Resize window to compact size
-      await windowManager.setMinimumSize(const Size(300, 120));
-      await windowManager.setSize(const Size(400, 160));
-      await windowManager.setAlignment(Alignment.bottomRight);
-
-      if (mounted) {
-        // 2. Navigate to mini player
-        Navigator.of(context).pushNamed('/mini');
-      }
-    }
   }
 
   void _showTrackMenu(BuildContext ctx, JellyfinTrack track) {
@@ -1364,7 +1342,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     final isAlbumArtPosition = visualizerPosition == VisualizerPosition.albumArt;
 
     // If visualizer is disabled or position is controlsBar, just return the artwork
-    if (!visualizerEnabled || !isAlbumArtPosition || widget.sailorMode) {
+    if (!visualizerEnabled || !isAlbumArtPosition) {
       return artwork;
     }
 
@@ -1519,258 +1497,11 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     }
   }
 
-  /// Build a simplified player view for Sailors (no audio output, no waveform/FFT)
-  Widget _buildSailorPlayer(BuildContext context, ThemeData theme, Size size, bool isDesktop) {
-    return Consumer<SyncPlayProvider>(
-      builder: (context, syncPlay, _) {
-        final currentTrack = syncPlay.currentTrack;
-        if (currentTrack == null) {
-          return Scaffold(
-            appBar: AppBar(
-              title: const Text('Fleet Mode'),
-            ),
-            body: const Center(
-              child: Text('No track playing in collab session'),
-            ),
-          );
-        }
-
-        final track = currentTrack.track;
-        final isPlaying = !syncPlay.isPaused;
-        final position = syncPlay.position;
-        final duration = track.duration ?? Duration.zero;
-
-        return Scaffold(
-          extendBodyBehindAppBar: true,
-          appBar: AppBar(
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            leading: IconButton(
-              icon: const Icon(Icons.keyboard_arrow_down),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            actions: [
-              // Collab indicator
-              Container(
-                margin: const EdgeInsets.only(right: 16),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.group, size: 16, color: theme.colorScheme.onPrimaryContainer),
-                    const SizedBox(width: 6),
-                    Text(
-                      '${syncPlay.participants.length} listening',
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: theme.colorScheme.onPrimaryContainer,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          body: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  theme.colorScheme.primary.withValues(alpha: 0.3),
-                  theme.colorScheme.surface,
-                ],
-              ),
-            ),
-            child: SafeArea(
-              child: Column(
-                children: [
-                  const SizedBox(height: 40),
-                  // Album art
-                  Expanded(
-                    flex: 3,
-                    child: Center(
-                      child: AspectRatio(
-                        aspectRatio: 1,
-                        child: Container(
-                          margin: const EdgeInsets.all(32),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.3),
-                                blurRadius: 20,
-                                offset: const Offset(0, 10),
-                              ),
-                            ],
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(16),
-                            child: track.albumPrimaryImageTag != null
-                                ? JellyfinImage(
-                                    itemId: track.albumId ?? track.id,
-                                    imageTag: track.albumPrimaryImageTag!,
-                                    trackId: track.id,
-                                    albumId: track.albumId,
-                                    boxFit: BoxFit.cover,
-                                  )
-                                : Container(
-                                    color: theme.colorScheme.surfaceContainerHighest,
-                                    child: Icon(
-                                      Icons.music_note,
-                                      size: 80,
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  // Track info
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 32),
-                    child: Column(
-                      children: [
-                        Text(
-                          track.name,
-                          style: theme.textTheme.headlineSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          track.displayArtist,
-                          style: theme.textTheme.bodyLarge?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Added by @${currentTrack.addedByUsername}',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.primary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  // Progress bar (simple, no waveform)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 32),
-                    child: Column(
-                      children: [
-                        SliderTheme(
-                          data: SliderThemeData(
-                            trackHeight: 4,
-                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
-                            activeTrackColor: theme.colorScheme.primary,
-                            inactiveTrackColor: theme.colorScheme.surfaceContainerHighest,
-                            thumbColor: theme.colorScheme.primary,
-                          ),
-                          child: Slider(
-                            value: duration.inMilliseconds > 0
-                                ? (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
-                                : 0.0,
-                            onChanged: (value) {
-                              final newPosition = Duration(
-                                milliseconds: (value * duration.inMilliseconds).round(),
-                              );
-                              syncPlay.seek(newPosition);
-                            },
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                _formatDuration(position),
-                                style: theme.textTheme.bodySmall,
-                              ),
-                              Text(
-                                _formatDuration(duration),
-                                style: theme.textTheme.bodySmall,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  // Playback controls
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        iconSize: 36,
-                        icon: const Icon(Icons.skip_previous),
-                        onPressed: () => syncPlay.previousTrack(),
-                      ),
-                      const SizedBox(width: 16),
-                      Container(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: theme.colorScheme.primary,
-                        ),
-                        child: IconButton(
-                          iconSize: 48,
-                          icon: Icon(
-                            isPlaying ? Icons.pause : Icons.play_arrow,
-                            color: theme.colorScheme.onPrimary,
-                          ),
-                          onPressed: () => syncPlay.togglePlayPause(),
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      IconButton(
-                        iconSize: 36,
-                        icon: const Icon(Icons.skip_next),
-                        onPressed: () => syncPlay.nextTrack(),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 32),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  String _formatDuration(Duration duration) {
-    final hours = duration.inHours;
-    final minutes = duration.inMinutes.remainder(60);
-    final seconds = duration.inSeconds % 60;
-    if (hours > 0) {
-      return '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-    }
-    return '$minutes:${seconds.toString().padLeft(2, '0')}';
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final size = MediaQuery.of(context).size;
     final isDesktop = size.width > 600;
-
-    // Sailor mode: Use SyncPlayProvider data instead of AudioService
-    if (widget.sailorMode) {
-      return _buildSailorPlayer(context, theme, size, isDesktop);
-    }
 
     // Single combined stream instead of 4 nested StreamBuilders
     // Reduces widget rebuilds by ~75% during playback
@@ -1867,14 +1598,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                               ],
                             ),
                             const Spacer(),
-                            if (isDesktop)
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.picture_in_picture_alt_rounded,
-                                ),
-                                tooltip: 'Mini Player',
-                                onPressed: _switchToMiniPlayer,
-                              ),
                             // Sleep Timer Button
                             StreamBuilder<Duration>(
                               stream: _audioService.sleepTimerStream,
@@ -2376,11 +2099,10 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                   // Bottom section: Controls with bioluminescent visualizer
                   Stack(
                     children: [
-                      // Visualizer behind controls (disabled for Sailors - no audio)
+                      // Visualizer behind controls
                       // Only shown when visualizerPosition is controlsBar
                       // Wrapped in RepaintBoundary to isolate repaints from parent layout
                       if (_appState.visualizerEnabled &&
-                          !widget.sailorMode &&
                           _appState.visualizerPosition == VisualizerPosition.controlsBar)
                         Positioned.fill(
                           child: RepaintBoundary(
@@ -2519,8 +2241,8 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                                 ),
                                               ),
                                             ),
-                                          // Waveform layer (disabled for Sailors - no cached audio file)
-                                          if (track != null && !widget.sailorMode)
+                                          // Waveform layer
+                                          if (track != null)
                                             Positioned(
                                               left: 0,
                                               right: 0,

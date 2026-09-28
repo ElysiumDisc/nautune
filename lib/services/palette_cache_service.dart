@@ -1,7 +1,7 @@
 import 'dart:ui' show Color;
 
 /// Shared palette cache to avoid duplicating color extraction across screens.
-/// All screens (FullPlayer, MiniPlayer, AlbumDetail, ArtistDetail) share this
+/// All screens (FullPlayer, AlbumDetail, ArtistDetail) share this
 /// single cache, reducing memory usage by ~4x and avoiding redundant extraction.
 class PaletteCacheService {
   PaletteCacheService._();

@@ -9,7 +9,6 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
-import '../providers/syncplay_provider.dart';
 import '../providers/ui_state_provider.dart';
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_artist.dart';
@@ -20,11 +19,9 @@ import '../jellyfin/jellyfin_track.dart';
 import '../models/download_item.dart';
 import '../repositories/music_repository.dart';
 import '../services/haptic_service.dart';
-import '../services/helm_service.dart';
 import '../services/listenbrainz_service.dart';
 import '../services/share_service.dart';
 import '../services/smart_playlist_service.dart';
-import '../widgets/helm_mode_selector.dart';
 import '../models/listenbrainz_config.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/jellyfin_image.dart';
@@ -36,7 +33,6 @@ import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
 import 'genre_detail_screen.dart';
 import 'offline_library_screen.dart';
-import 'collab_playlist_screen.dart';
 import 'essential_mix_screen.dart';
 import 'frets_on_fire_screen.dart';
 import 'relax_mode_screen.dart';
@@ -59,13 +55,7 @@ part 'tabs/search_tab.dart';
 part '../widgets/alphabet_scrollbar.dart';
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({
-    super.key,
-    this.collabBrowseMode = false,
-  });
-
-  /// When true, shows "Add to Collab" buttons instead of normal play buttons
-  final bool collabBrowseMode;
+  const LibraryScreen({super.key});
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -89,8 +79,6 @@ class _LibraryScreenState extends State<LibraryScreen>
   ];
 
   List<int> _tabOrder = const [0, 1, 2, 3, 4];
-  HelmService? _helmService;
-  String? _helmSessionDeviceId; // Track which session the helm service was created for
 
   // Provider-based state
   NautuneAppState? _appState;
@@ -267,11 +255,6 @@ class _LibraryScreenState extends State<LibraryScreen>
       debugPrint('🔄 LibraryScreen: Connectivity changed (offline: $_previousOfflineMode -> $offline, network: $_previousNetworkAvailable -> $network)');
       _previousOfflineMode = offline;
       _previousNetworkAvailable = network;
-      if (!network || offline) {
-        _helmService?.suspendPolling();
-      } else {
-        _helmService?.resumePolling();
-      }
     }
 
     if (dataChanged) {
@@ -312,8 +295,6 @@ class _LibraryScreenState extends State<LibraryScreen>
   @override
   void dispose() {
     _appState?.removeListener(_onAppStateChanged);
-    _helmService?.dispose();
-    _helmService = null;
     _tabController.removeListener(_handleTabChange);
     _tabController.dispose();
     _albumsScrollController.dispose();
@@ -398,9 +379,6 @@ class _LibraryScreenState extends State<LibraryScreen>
         break;
       case 3: // Playlists
         await appState.refreshPlaylists();
-        if (mounted) {
-          context.read<SyncPlayProvider>().refreshGroups();
-        }
         break;
       case 4: // Search
         // Search doesn't have a "refresh"
@@ -617,38 +595,6 @@ class _LibraryScreenState extends State<LibraryScreen>
                 IconButton(
                   icon: const Icon(Icons.library_books_outlined),
                   onPressed: () => appState.clearLibrarySelection(),
-                ),
-              if (!appState.isDemoMode && !appState.isOfflineMode)
-                Builder(
-                  builder: (ctx) {
-                    final isHelmActive = _helmService?.isActive ?? false;
-                    return IconButton(
-                      icon: Icon(
-                        Icons.sailing,
-                        color: isHelmActive ? theme.colorScheme.primary : null,
-                      ),
-                      tooltip: 'Helm Mode',
-                      onPressed: () {
-                        final jellyfinService = appState.jellyfinService;
-                        final client = jellyfinService.jellyfinClient;
-                        final session = jellyfinService.session;
-                        if (client == null || session == null) return;
-
-                        // Recreate if session changed (prevents stale credentials)
-                        if (_helmService == null || _helmSessionDeviceId != session.deviceId) {
-                          _helmService?.dispose();
-                          _helmService = HelmService(
-                            client: client,
-                            credentials: session.credentials,
-                            ownDeviceId: session.deviceId,
-                          );
-                          _helmSessionDeviceId = session.deviceId;
-                        }
-
-                        HelmModeSelector.show(ctx, _helmService!);
-                      },
-                    );
-                  },
                 ),
               IconButton(
                 icon: const Icon(Icons.person_outline),

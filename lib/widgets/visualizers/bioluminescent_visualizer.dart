@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import 'base_visualizer.dart';
 
 /// Bioluminescent ocean-themed audio visualizer.
-/// On Linux: Uses real FFT from PulseAudio system audio loopback.
-/// On other platforms: Uses metadata-driven frequency bands (genre/ReplayGain).
+/// Uses real FFT from the iOS audio tap when available, otherwise
+/// metadata-driven frequency bands (genre/ReplayGain).
 class BioluminescentVisualizer extends BaseVisualizer {
   const BioluminescentVisualizer({
     super.key,

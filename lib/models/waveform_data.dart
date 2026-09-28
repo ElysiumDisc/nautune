@@ -102,35 +102,4 @@ class WaveformData {
       durationMs: durationMs > 0 ? durationMs : null,
     );
   }
-
-  /// Create from raw PCM samples (used by FFmpeg backend)
-  factory WaveformData.fromPcmSamples(
-    List<double> samples, {
-    int targetSampleCount = 1000,
-    int? durationMs,
-  }) {
-    if (samples.isEmpty) return WaveformData.empty;
-
-    final samplesPerBucket = (samples.length / targetSampleCount).ceil();
-    final amplitudes = <double>[];
-
-    for (var i = 0; i < targetSampleCount && i * samplesPerBucket < samples.length; i++) {
-      final start = i * samplesPerBucket;
-      final end = (start + samplesPerBucket).clamp(0, samples.length);
-
-      // Find max absolute value in this bucket
-      var maxAmp = 0.0;
-      for (var j = start; j < end; j++) {
-        final absVal = samples[j].abs();
-        if (absVal > maxAmp) maxAmp = absVal;
-      }
-
-      amplitudes.add(maxAmp.clamp(0.0, 1.0));
-    }
-
-    return WaveformData(
-      amplitudes: amplitudes,
-      durationMs: durationMs,
-    );
-  }
 }

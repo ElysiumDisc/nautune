@@ -5,20 +5,16 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/waveform_data.dart';
 import 'waveform_backends/just_waveform_backend.dart';
-import 'waveform_backends/ffmpeg_waveform_backend.dart';
 
-/// Unified waveform extraction service with platform-specific backends.
-/// - iOS/macOS/Android: Uses just_waveform package
-/// - Linux: Uses ffmpeg for PCM extraction
+/// Waveform extraction service backed by the just_waveform package (iOS).
 class WaveformService {
   static WaveformService? _instance;
   static WaveformService get instance => _instance ??= WaveformService._();
 
   WaveformService._();
 
-  // Platform backends
+  // Platform backend
   JustWaveformBackend? _justWaveformBackend;
-  FFmpegWaveformBackend? _ffmpegBackend;
 
   // In-memory LRU cache. 200 entries ≈ enough for a long listening session
   // without hammering disk I/O; bump higher for power users if needed.
@@ -36,27 +32,15 @@ class WaveformService {
   bool _initialized = false;
 
   /// Check if waveform extraction is available on this platform
-  bool get isAvailable =>
-      Platform.isIOS ||
-      Platform.isMacOS ||
-      Platform.isAndroid ||
-      (Platform.isLinux && (_ffmpegBackend?.isAvailable ?? false));
+  bool get isAvailable => Platform.isIOS;
 
   /// Initialize the service and platform backends
   Future<void> initialize() async {
     if (_initialized) return;
 
-    if (Platform.isIOS || Platform.isMacOS || Platform.isAndroid) {
+    if (Platform.isIOS) {
       _justWaveformBackend = JustWaveformBackend();
       debugPrint('WaveformService: Initialized with JustWaveform backend');
-    } else if (Platform.isLinux) {
-      _ffmpegBackend = FFmpegWaveformBackend();
-      final available = await _ffmpegBackend!.initialize();
-      if (available) {
-        debugPrint('WaveformService: Initialized with FFmpeg backend');
-      } else {
-        debugPrint('WaveformService: FFmpeg not available on Linux');
-      }
     }
 
     _initialized = true;
@@ -65,16 +49,7 @@ class WaveformService {
   /// Get waveform path for a track
   Future<String> _getWaveformPath(String trackId) async {
     final docsDir = await getApplicationDocumentsDirectory();
-    final Directory waveformDir;
-
-    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      waveformDir = Directory(
-        '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}waveforms',
-      );
-    } else {
-      // iOS/Android: Use app documents directory
-      waveformDir = Directory('${docsDir.path}/waveforms');
-    }
+    final waveformDir = Directory('${docsDir.path}/waveforms');
 
     if (!await waveformDir.exists()) {
       await waveformDir.create(recursive: true);
@@ -97,8 +72,6 @@ class WaveformService {
 
     if (_justWaveformBackend != null) {
       data = await _justWaveformBackend!.load(path);
-    } else if (_ffmpegBackend != null) {
-      data = await _ffmpegBackend!.load(path);
     }
 
     if (data != null && data.amplitudes.isNotEmpty) {
@@ -156,8 +129,6 @@ class WaveformService {
       Stream<double> progressStream;
       if (_justWaveformBackend != null && _justWaveformBackend!.isAvailable) {
         progressStream = _justWaveformBackend!.extract(audioPath, outputPath);
-      } else if (_ffmpegBackend != null && _ffmpegBackend!.isAvailable) {
-        progressStream = _ffmpegBackend!.extract(audioPath, outputPath);
       } else {
         debugPrint('WaveformService: No backend available for extraction');
         return;
@@ -215,15 +186,7 @@ class WaveformService {
     _cache.clear();
 
     final docsDir = await getApplicationDocumentsDirectory();
-    final Directory waveformDir;
-
-    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      waveformDir = Directory(
-        '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}waveforms',
-      );
-    } else {
-      waveformDir = Directory('${docsDir.path}/waveforms');
-    }
+    final waveformDir = Directory('${docsDir.path}/waveforms');
 
     if (await waveformDir.exists()) {
       await waveformDir.delete(recursive: true);
@@ -234,15 +197,7 @@ class WaveformService {
   /// Get storage statistics for waveforms
   Future<Map<String, dynamic>> getStorageStats() async {
     final docsDir = await getApplicationDocumentsDirectory();
-    final Directory waveformDir;
-
-    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      waveformDir = Directory(
-        '${docsDir.path}${Platform.pathSeparator}nautune${Platform.pathSeparator}waveforms',
-      );
-    } else {
-      waveformDir = Directory('${docsDir.path}/waveforms');
-    }
+    final waveformDir = Directory('${docsDir.path}/waveforms');
 
     int fileCount = 0;
     int totalBytes = 0;

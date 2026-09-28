@@ -34,21 +34,6 @@ class AppIconService extends ChangeNotifier {
     }
   }
 
-  /// Returns the path for tray icon (same as main icon for now)
-  String get trayIconPath {
-    switch (_currentIcon) {
-      case 'orange':
-        return 'assets/iconorange.png';
-      case 'red':
-        return 'assets/iconred.png';
-      case 'green':
-        return 'assets/icongreen.png';
-      case 'default':
-      default:
-        return 'assets/icon.png';
-    }
-  }
-
   /// Display name for UI
   String get iconDisplayName {
     switch (_currentIcon) {

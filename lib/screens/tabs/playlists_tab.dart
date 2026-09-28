@@ -24,17 +24,6 @@ class _PlaylistsTab extends StatefulWidget {
 class _PlaylistsTabState extends State<_PlaylistsTab> {
   Mood? _loadingMood;
 
-  @override
-  void initState() {
-    super.initState();
-    // Refresh available SyncPlay groups when entering the tab
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        context.read<SyncPlayProvider>().refreshGroups();
-      }
-    });
-  }
-
   // Convenience getters
   List<JellyfinPlaylist>? get playlists => widget.playlists;
   bool get isLoading => widget.isLoading;
@@ -126,146 +115,6 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
         onRefresh: () async => onRefresh(),
         child: CustomScrollView(
           slivers: [
-            // Active Collab Session Card (if in session and online)
-            SliverToBoxAdapter(
-              child: Consumer<SyncPlayProvider>(
-                builder: (context, syncPlay, _) {
-                  if (!syncPlay.isInSession || appState.isOfflineMode) return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Card(
-                      color: theme.colorScheme.primaryContainer,
-                      child: InkWell(
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => const CollabPlaylistScreen(),
-                            ),
-                          );
-                        },
-                        borderRadius: BorderRadius.circular(12),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: theme.colorScheme.primary,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Icon(
-                                  Icons.group,
-                                  color: theme.colorScheme.onPrimary,
-                                ),
-                              ),
-                              const SizedBox(width: NautuneSpacing.lg),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Active Collab Session',
-                                      style: theme.textTheme.labelSmall?.copyWith(
-                                        color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      syncPlay.groupName ?? 'Fleet Mode',
-                                      style: theme.textTheme.titleMedium?.copyWith(
-                                        fontWeight: FontWeight.bold,
-                                        color: theme.colorScheme.onPrimaryContainer,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      '${syncPlay.participants.length} listeners • ${syncPlay.queue.length} tracks',
-                                      style: theme.textTheme.bodySmall?.copyWith(
-                                        color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Icon(
-                                Icons.chevron_right,
-                                color: theme.colorScheme.onPrimaryContainer,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-            // Available Collab Sessions (Empty State)
-            SliverToBoxAdapter(
-              child: Consumer<SyncPlayProvider>(
-                builder: (context, syncPlay, _) {
-                  if (syncPlay.isInSession || syncPlay.availableGroups.isEmpty || appState.isOfflineMode) {
-                    return const SizedBox.shrink();
-                  }
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Join a Session',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        ...syncPlay.availableGroups.map((group) => Card(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          child: ListTile(
-                            leading: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.secondaryContainer,
-                                shape: BoxShape.circle,
-                              ),
-                              child: Icon(
-                                Icons.group_add,
-                                color: theme.colorScheme.onSecondaryContainer,
-                                size: 20,
-                              ),
-                            ),
-                            title: Text(group.groupName),
-                            subtitle: Text('${group.participantCount} active listeners'),
-                            trailing: FilledButton.tonal(
-                              onPressed: () async {
-                                try {
-                                  await syncPlay.joinCollabPlaylist(group.groupId);
-                                  if (context.mounted) {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (context) => const CollabPlaylistScreen(),
-                                      ),
-                                    );
-                                  }
-                                } catch (e) {
-                                  if (context.mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('Failed to join: $e')),
-                                    );
-                                  }
-                                }
-                              },
-                              child: const Text('Join'),
-                            ),
-                          ),
-                        )),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
             // Empty state content
             SliverFillRemaining(
               hasScrollBody: false,
@@ -284,25 +133,6 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                       icon: const Icon(Icons.add),
                       label: const Text('Create Playlist'),
                     ),
-                    const SizedBox(height: NautuneSpacing.md),
-                    if (!appState.isOfflineMode)
-                      OutlinedButton.icon(
-                        onPressed: () {
-                          _showCreateCollabPlaylistDialog(context);
-                        },
-                        icon: const Icon(Icons.group_add),
-                        label: const Text('Create Fleet'),
-                      ),
-                    if (!appState.isOfflineMode)
-                      const SizedBox(height: NautuneSpacing.md),
-                    if (!appState.isOfflineMode)
-                      OutlinedButton.icon(
-                        onPressed: () {
-                          _showJoinCollabPlaylistDialog(context);
-                        },
-                        icon: const Icon(Icons.link),
-                        label: const Text('Join via Link'),
-                      ),
                   ],
                 ),
               ),
@@ -325,144 +155,6 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Active Collab Session Card (hidden in offline mode)
-                Consumer<SyncPlayProvider>(
-                  builder: (context, syncPlay, _) {
-                    if (!syncPlay.isInSession || appState.isOfflineMode) return const SizedBox.shrink();
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 16),
-                      child: Card(
-                        color: theme.colorScheme.primaryContainer,
-                        child: InkWell(
-                          onTap: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (context) => const CollabPlaylistScreen(),
-                              ),
-                            );
-                          },
-                          borderRadius: BorderRadius.circular(12),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: theme.colorScheme.primary,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Icon(
-                                    Icons.group,
-                                    color: theme.colorScheme.onPrimary,
-                                  ),
-                                ),
-                                const SizedBox(width: NautuneSpacing.lg),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        'Active Collab Session',
-                                        style: theme.textTheme.labelSmall?.copyWith(
-                                          color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        syncPlay.groupName ?? 'Fleet Mode',
-                                        style: theme.textTheme.titleMedium?.copyWith(
-                                          fontWeight: FontWeight.bold,
-                                          color: theme.colorScheme.onPrimaryContainer,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        '${syncPlay.participants.length} listeners • ${syncPlay.queue.length} tracks',
-                                        style: theme.textTheme.bodySmall?.copyWith(
-                                          color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Icon(
-                                  Icons.chevron_right,
-                                  color: theme.colorScheme.onPrimaryContainer,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-
-                // Available Collab Sessions
-                Consumer<SyncPlayProvider>(
-                  builder: (context, syncPlay, _) {
-                    if (syncPlay.isInSession || syncPlay.availableGroups.isEmpty || appState.isOfflineMode) {
-                      return const SizedBox.shrink();
-                    }
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Text(
-                            'Join a Session',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        ...syncPlay.availableGroups.map((group) => Card(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          child: ListTile(
-                            leading: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.secondaryContainer,
-                                shape: BoxShape.circle,
-                              ),
-                              child: Icon(
-                                Icons.group_add,
-                                color: theme.colorScheme.onSecondaryContainer,
-                                size: 20,
-                              ),
-                            ),
-                            title: Text(group.groupName),
-                            subtitle: Text('${group.participantCount} active listeners'),
-                            trailing: FilledButton.tonal(
-                              onPressed: () async {
-                                try {
-                                  await syncPlay.joinCollabPlaylist(group.groupId);
-                                  if (context.mounted) {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (context) => const CollabPlaylistScreen(),
-                                      ),
-                                    );
-                                  }
-                                } catch (e) {
-                                  if (context.mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('Failed to join: $e')),
-                                    );
-                                  }
-                                }
-                              },
-                              child: const Text('Join'),
-                            ),
-                          ),
-                        )),
-                        const SizedBox(height: NautuneSpacing.lg),
-                      ],
-                    );
-                  },
-                ),
-
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: ElevatedButton.icon(
@@ -476,36 +168,6 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                     ),
                   ),
                 ),
-                if (!appState.isOfflineMode)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        _showCreateCollabPlaylistDialog(context);
-                      },
-                      icon: const Icon(Icons.group_add),
-                      label: const Text('Create Fleet'),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.all(16),
-                        side: BorderSide(color: theme.colorScheme.primary),
-                      ),
-                    ),
-                  ),
-                if (!appState.isOfflineMode)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        _showJoinCollabPlaylistDialog(context);
-                      },
-                      icon: const Icon(Icons.link),
-                      label: const Text('Join via Link'),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.all(16),
-                        side: BorderSide(color: theme.colorScheme.primary),
-                      ),
-                    ),
-                  ),
                 // Smart Mix Section
                 const Divider(),
                 Padding(
@@ -761,20 +423,6 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
     } finally {
       nameController.dispose();
     }
-  }
-
-  void _showCreateCollabPlaylistDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => const CreateCollabDialog(),
-    );
-  }
-
-  void _showJoinCollabPlaylistDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => const JoinCollabDialog(),
-    );
   }
 
   void _showEditPlaylistDialog(BuildContext context, JellyfinPlaylist playlist) async {

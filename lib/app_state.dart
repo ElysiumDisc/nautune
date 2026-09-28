@@ -29,8 +29,6 @@ import 'services/playback_state_store.dart';
 import 'services/playlist_sync_queue.dart';
 import 'services/app_icon_service.dart';
 import 'services/power_mode_service.dart';
-import 'services/remote_control_service.dart';
-import 'services/tray_service.dart';
 
 // Import SessionProvider - this is new
 import 'providers/session_provider.dart';
@@ -98,26 +96,6 @@ class NautuneAppState extends ChangeNotifier {
       });
     }
 
-    // System tray service for desktop platforms
-    if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
-      scheduleMicrotask(() async {
-        try {
-          _trayService = TrayService(audioService: _audioPlayerService);
-          await _trayService?.initialize();
-          // Listen to track changes to update tray (store subscriptions for cleanup)
-          _trayTrackSubscription = _audioPlayerService.currentTrackStream.listen((track) {
-            _trayService?.updateCurrentTrack(track);
-          });
-          _trayPlayingSubscription = _audioPlayerService.playingStream.listen((isPlaying) {
-            _trayService?.updatePlayingState(isPlaying);
-          });
-          debugPrint('✅ System tray service initialized');
-        } catch (error) {
-          debugPrint('System tray service initialization failed: $error');
-        }
-      });
-    }
-
     // Listen to demo mode provider changes
     _demoModeProvider?.addListener(_onDemoModeChanged);
 
@@ -140,11 +118,7 @@ class NautuneAppState extends ChangeNotifier {
   late final AudioPlayerService _audioPlayerService;
   late final DownloadService _downloadService;
   CarPlayService? _carPlayService;
-  TrayService? _trayService;
-  RemoteControlService? _remoteControlService;
   StreamSubscription<bool>? _connectivitySubscription;
-  StreamSubscription<JellyfinTrack?>? _trayTrackSubscription;
-  StreamSubscription<bool>? _trayPlayingSubscription;
   Timer? _periodicSyncTimer; // Syncs analytics every 10 minutes
   bool _connectivityMonitorInitialized = false;
   Map<String, double> _libraryScrollOffsets = {};
@@ -354,12 +328,6 @@ class NautuneAppState extends ChangeNotifier {
         // Start periodic analytics sync for the new session
         _startPeriodicSyncTimer();
 
-        // Start remote control WebSocket for Helm Mode
-        // (only after full initialization to avoid race with initialize())
-        if (_initialized) {
-          _startRemoteControl(session);
-        }
-
         _loadLibraries();
         if (session.selectedLibraryId != null) {
           _loadLibraryDependentContent(forceRefresh: true);
@@ -368,9 +336,6 @@ class NautuneAppState extends ChangeNotifier {
         // Session cleared - stop periodic sync
         _stopPeriodicSyncTimer();
         _clearLibraryCaches();
-        // Disconnect remote control
-        _remoteControlService?.dispose();
-        _remoteControlService = null;
       }
     }
   }
@@ -494,7 +459,6 @@ class NautuneAppState extends ChangeNotifier {
   JellyfinService get jellyfinService => _jellyfinService;
   AudioPlayerService get audioPlayerService => _audioPlayerService;
   DownloadService get downloadService => _downloadService;
-  TrayService? get trayService => _trayService;
   List<JellyfinAlbum> get demoAlbums =>
       _demoContent?.albums ?? const <JellyfinAlbum>[];
   List<JellyfinArtist> get demoArtists =>
@@ -1132,9 +1096,6 @@ class NautuneAppState extends ChangeNotifier {
       AppIconService().initialize().then((_) => AppIconService().syncIOSIcon()),
     ]);
 
-    // Update tray icon if available
-    _trayService?.updateTrayIcon();
-
     // Parallelize playback state restoration and session loading
     final initResults = await Future.wait([
       _playbackStateStore.load(),
@@ -1241,7 +1202,6 @@ class NautuneAppState extends ChangeNotifier {
         if (_networkAvailable && !_userWantsOffline) {
           _startBootstrapSync(storedSession);
           unawaited(_syncAnalyticsToServer());
-          _startRemoteControl(storedSession);
         } else if (isOfflineMode) {
           _applyOfflineNetworkPolicy();
           _activateSubmarineFeatures();
@@ -1481,31 +1441,8 @@ class NautuneAppState extends ChangeNotifier {
         debugPrint('SessionProvider.logout failed: $error');
       }
     }
-    // Disconnect remote control WebSocket
-    _remoteControlService?.dispose();
-    _remoteControlService = null;
-
     await _teardownDemoMode();
     notifyListeners();
-  }
-
-  /// Start the persistent WebSocket for receiving remote control commands
-  /// (Helm Mode). Only connects for real, non-demo, online sessions.
-  void _startRemoteControl(JellyfinSession session) {
-    if (session.isDemo) return;
-
-    final client = _jellyfinService.jellyfinClient;
-    if (client == null) return;
-
-    _remoteControlService?.dispose();
-    _remoteControlService = RemoteControlService(
-      client: client,
-      credentials: session.credentials,
-      deviceId: session.deviceId,
-      jellyfinService: _jellyfinService,
-      audioPlayerService: _audioPlayerService,
-    );
-    _remoteControlService!.connect();
   }
 
   void clearError() {
@@ -2808,9 +2745,6 @@ class NautuneAppState extends ChangeNotifier {
     // Disable image prewarming
     _audioPlayerService.setImagePrewarmEnabled(false);
 
-    // Disconnect remote control WebSocket (fire-and-forget)
-    unawaited(_remoteControlService?.disconnect());
-
     // Cancel bootstrap sync
     _bootstrapService.cancelSync();
   }
@@ -2835,9 +2769,6 @@ class NautuneAppState extends ChangeNotifier {
 
     // Re-enable image prewarming
     _audioPlayerService.setImagePrewarmEnabled(true);
-
-    // Reconnect remote control WebSocket
-    _startRemoteControl(session);
 
     // Resume bootstrap sync
     _startBootstrapSync(session);
@@ -2902,17 +2833,13 @@ class NautuneAppState extends ChangeNotifier {
   @override
   void dispose() {
     _connectivitySubscription?.cancel();
-    _trayTrackSubscription?.cancel();
-    _trayPlayingSubscription?.cancel();
     _powerModeSub?.cancel();
     _periodicSyncTimer?.cancel();
     _demoModeProvider?.removeListener(_onDemoModeChanged);
     _sessionProvider?.removeListener(_onSessionChanged);
     _libraryDataProvider?.removeListener(notifyListeners);
     _carPlayService?.dispose();
-    _remoteControlService?.dispose();
     _audioPlayerService.dispose();
-    _trayService?.dispose();
     super.dispose();
   }
 

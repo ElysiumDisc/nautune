@@ -84,37 +84,10 @@ class _FavoritesTab extends StatelessWidget {
             showModalBottomSheet(
               context: parentContext,
               builder: (sheetContext) {
-                final syncPlay = context.read<SyncPlayProvider>();
                 return SafeArea(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Add to Fleet (if session active)
-                    if (syncPlay.isInSession)
-                      ListTile(
-                        leading: Icon(Icons.group_add, color: Theme.of(sheetContext).colorScheme.primary),
-                        title: Text(
-                          'Add to ${syncPlay.groupName ?? "Fleet"}',
-                          style: TextStyle(color: Theme.of(sheetContext).colorScheme.primary),
-                        ),
-                        onTap: () async {
-                          Navigator.pop(sheetContext);
-                          try {
-                            await syncPlay.addTrackToQueue(track);
-                            if (parentContext.mounted) {
-                              ScaffoldMessenger.of(parentContext).showSnackBar(
-                                SnackBar(content: Text('${track.name} added to fleet')),
-                              );
-                            }
-                          } catch (e) {
-                            if (parentContext.mounted) {
-                              ScaffoldMessenger.of(parentContext).showSnackBar(
-                                SnackBar(content: Text('Failed: $e'), backgroundColor: Theme.of(parentContext).colorScheme.error),
-                              );
-                            }
-                          }
-                        },
-                      ),
                     ListTile(
                       leading: const Icon(Icons.play_arrow),
                       title: const Text('Play Next'),

@@ -3,9 +3,9 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 
 /// Provides haptic feedback for user interactions.
-/// Only triggers on mobile platforms (iOS/Android).
+/// Only triggers on iOS.
 class HapticService {
-  static bool get _isMobile => Platform.isIOS || Platform.isAndroid;
+  static bool get _isMobile => Platform.isIOS;
 
   /// Light tap feedback - for button taps, toggles
   static void lightTap() {

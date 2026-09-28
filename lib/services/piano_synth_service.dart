@@ -49,9 +49,9 @@ class PianoSynthService {
       _players.add(player);
     }
 
-    // On iOS/macOS, configure audio context so piano can actually produce sound.
+    // On iOS, configure audio context so piano can actually produce sound.
     // Uses playback category with mixWithOthers so it won't interrupt music.
-    if (Platform.isIOS || Platform.isMacOS) {
+    if (Platform.isIOS) {
       final context = AudioContext(
         iOS: AudioContextIOS(
           category: AVAudioSessionCategory.playback,

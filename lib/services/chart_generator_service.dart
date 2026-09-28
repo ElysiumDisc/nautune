@@ -37,7 +37,6 @@ class ChartGeneratorService {
 
   // Maximum track duration for analysis (in minutes) - prevents memory crashes
   static const int _maxDurationMinutesIOS = 15;      // iOS: strict limit due to memory
-  static const int _maxDurationMinutesOther = 30;    // Android/Desktop: more lenient
 
   /// Progress callback for UI updates (0.0 - 1.0)
   ValueNotifier<double> progress = ValueNotifier(0.0);
@@ -46,18 +45,18 @@ class ChartGeneratorService {
   /// Returns error message if too long, null if OK
   String? checkDurationLimit(int durationMs) {
     final durationMinutes = durationMs / 60000;
-    final maxMinutes = Platform.isIOS ? _maxDurationMinutesIOS : _maxDurationMinutesOther;
+    const maxMinutes = _maxDurationMinutesIOS;
 
     if (durationMinutes > maxMinutes) {
       return 'Track is ${durationMinutes.toStringAsFixed(1)} minutes long. '
-          'Maximum for ${Platform.isIOS ? "iOS" : "this device"} is $maxMinutes minutes '
+          'Maximum for iOS is $maxMinutes minutes '
           'to prevent crashes.';
     }
     return null;
   }
 
   /// Maximum duration in minutes for current platform
-  int get maxDurationMinutes => Platform.isIOS ? _maxDurationMinutesIOS : _maxDurationMinutesOther;
+  int get maxDurationMinutes => _maxDurationMinutesIOS;
 
   /// Insert golden bonus notes into the chart at random intervals (30-60 seconds apart)
   List<ChartNote> _insertBonusNotes(List<ChartNote> notes, int durationMs) {
@@ -203,11 +202,7 @@ class ChartGeneratorService {
         return null;
       }
 
-      if (Platform.isIOS) {
-        return await _readAudioFileIOS(path);
-      } else {
-        return await _readAudioFileFFmpeg(path);
-      }
+      return await _readAudioFileIOS(path);
     } catch (e) {
       debugPrint('🎮 ChartGenerator: Error reading audio: $e');
       return null;
@@ -261,68 +256,6 @@ class ChartGeneratorService {
       debugPrint('🎮 ChartGenerator: iOS decode error: ${e.message}');
       return null;
     }
-  }
-
-  /// Linux/Desktop: Decode audio using FFmpeg
-  Future<Float64List?> _readAudioFileFFmpeg(String path) async {
-    debugPrint('🎮 ChartGenerator: Decoding audio with FFmpeg...');
-
-    final process = await Process.start('ffmpeg', [
-      '-i', path,
-      '-ac', '1',
-      '-ar', '$_sampleRate',
-      '-f', 's16le',
-      '-acodec', 'pcm_s16le',
-      '-v', 'quiet',
-      '-',
-    ]);
-
-    final completer = Completer<void>();
-    final chunks = <List<int>>[];
-
-    process.stdout.listen(
-      (chunk) => chunks.add(chunk),
-      onDone: () => completer.complete(),
-      onError: (e) {
-        debugPrint('🎮 ChartGenerator: FFmpeg stream error: $e');
-        completer.complete();
-      },
-    );
-
-    process.stderr.listen((_) {});
-
-    await completer.future;
-    final exitCode = await process.exitCode;
-
-    if (exitCode != 0) {
-      debugPrint('🎮 ChartGenerator: FFmpeg failed with exit code $exitCode');
-      return null;
-    }
-
-    final totalLength = chunks.fold<int>(0, (sum, chunk) => sum + chunk.length);
-    if (totalLength < 2) {
-      debugPrint('🎮 ChartGenerator: No audio data decoded');
-      return null;
-    }
-
-    final allBytes = Uint8List(totalLength);
-    var offset = 0;
-    for (final chunk in chunks) {
-      allBytes.setAll(offset, chunk);
-      offset += chunk.length;
-    }
-
-    final byteData = ByteData.sublistView(allBytes);
-    final sampleCount = byteData.lengthInBytes ~/ 2;
-    final samples = Float64List(sampleCount);
-
-    for (var i = 0; i < sampleCount; i++) {
-      final sample = byteData.getInt16(i * 2, Endian.little);
-      samples[i] = sample / 32768.0;
-    }
-
-    debugPrint('🎮 ChartGenerator: FFmpeg decoded ${samples.length} samples');
-    return samples;
   }
 }
 

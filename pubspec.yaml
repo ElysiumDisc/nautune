@@ -19,11 +19,7 @@ dependencies:
   package_info_plus: ^10.1.0
   flutter_cache_manager: ^3.4.1
   
-  # Cross-platform audio with native backends:
-  # - iOS/macOS: AVFoundation (audioplayers_darwin)
-  # - Linux: GStreamer (audioplayers_linux)
-  # - Android: MediaPlayer (audioplayers_android)
-  # - Windows: WinMM (audioplayers_windows)
+  # Audio playback via AVFoundation (audioplayers_darwin)
   audioplayers: ^6.1.0
   audio_session: ^0.2.2
   audio_service: ^0.18.15
@@ -36,20 +32,14 @@ dependencies:
   cached_network_image: ^3.4.1
   rxdart: ^0.28.0
   audio_video_progress_bar: ^2.0.3
-  tray_manager: ^0.5.2
-  window_manager: ^0.5.1
   material_color_utilities: ^0.13.0
   flutter_secure_storage: ^10.0.0
   flutter_local_notifications: ^21.0.0
   uuid: ^4.5.2
   flutter_colorpicker: ^1.1.0
-  just_waveform: ^0.0.7  # iOS, macOS, Android waveform extraction
+  just_waveform: ^0.0.7  # iOS waveform extraction
   url_launcher: ^6.2.5  # Open URLs in browser
   fftea: ^1.1.0  # Pure Dart FFT/STFT for Frets on Fire chart generation
-
-  # SyncPlay collaborative playlist
-  web_socket_channel: ^3.0.1  # WebSocket for real-time sync
-  app_links: ^7.0.0  # Deep link handling
 
 dev_dependencies:
   flutter_test:
@@ -77,10 +67,3 @@ flutter_launcher_icons:
   ios: true
   image_path: "assets/icon.png"
   remove_alpha_ios: true
-  web:
-    generate: false
-  windows:
-    generate: false
-  macos:
-    generate: false
-  linux: "icon.png"

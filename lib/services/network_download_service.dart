@@ -852,13 +852,7 @@ class NetworkDownloadService extends ChangeNotifier {
   /// Get the audio download directory.
   Future<Directory> _getAudioDirectory() async {
     final docsDir = await getApplicationDocumentsDirectory();
-    final Directory audioDir;
-
-    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      audioDir = Directory('${docsDir.path}/nautune/network/audio');
-    } else {
-      audioDir = Directory('${docsDir.path}/network/audio');
-    }
+    final audioDir = Directory('${docsDir.path}/network/audio');
 
     if (!await audioDir.exists()) {
       await audioDir.create(recursive: true);
@@ -869,13 +863,7 @@ class NetworkDownloadService extends ChangeNotifier {
   /// Get the image download directory.
   Future<Directory> _getImageDirectory() async {
     final docsDir = await getApplicationDocumentsDirectory();
-    final Directory imageDir;
-
-    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      imageDir = Directory('${docsDir.path}/nautune/network/images');
-    } else {
-      imageDir = Directory('${docsDir.path}/network/images');
-    }
+    final imageDir = Directory('${docsDir.path}/network/images');
 
     if (!await imageDir.exists()) {
       await imageDir.create(recursive: true);

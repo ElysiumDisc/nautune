@@ -41,18 +41,16 @@ class HealingFrequencyService {
   Future<void> init() async {
     if (_initialized || _disposed) return;
 
-    if (!kIsWeb) {
-      final dir = await getTemporaryDirectory();
-      _tempDir = p.join(dir.path, 'healing_freq');
-      await Directory(_tempDir!).create(recursive: true);
-    }
+    final dir = await getTemporaryDirectory();
+    _tempDir = p.join(dir.path, 'healing_freq');
+    await Directory(_tempDir!).create(recursive: true);
 
     final player = AudioPlayer();
     await player.setReleaseMode(ReleaseMode.loop);
     await player.setVolume(_volume);
 
-    // iOS/macOS: allow mixing so background music keeps playing.
-    if (!kIsWeb && (Platform.isIOS || Platform.isMacOS)) {
+    // iOS: allow mixing so background music keeps playing.
+    if (Platform.isIOS) {
       final context = AudioContext(
         iOS: AudioContextIOS(
           category: AVAudioSessionCategory.playback,
@@ -88,10 +86,6 @@ class HealingFrequencyService {
 
   Future<Source> _sourceFor(double hz) async {
     final bytes = _byteCache.putIfAbsent(hz, () => _generateLoopWav(hz));
-
-    if (kIsWeb) {
-      return BytesSource(bytes, mimeType: 'audio/wav');
-    }
 
     final cached = _fileCache[hz];
     if (cached != null) return DeviceFileSource(cached, mimeType: 'audio/wav');

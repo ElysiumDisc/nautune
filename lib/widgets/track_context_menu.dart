@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../jellyfin/jellyfin_track.dart';
-import '../providers/syncplay_provider.dart';
 import '../services/haptic_service.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/track_info_sheet.dart';
@@ -27,7 +25,6 @@ void showTrackContextMenu({
   showModalBottomSheet(
     context: parentContext,
     builder: (sheetContext) {
-      final syncPlay = parentContext.read<SyncPlayProvider>();
       return SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -65,32 +62,6 @@ void showTrackContextMenu({
               ),
             ),
             const Divider(),
-            // Add to Fleet (if session active)
-            if (syncPlay.isInSession)
-              ListTile(
-                leading: Icon(Icons.group_add, color: Theme.of(sheetContext).colorScheme.primary),
-                title: Text(
-                  'Add to ${syncPlay.groupName ?? "Fleet"}',
-                  style: TextStyle(color: Theme.of(sheetContext).colorScheme.primary),
-                ),
-                onTap: () async {
-                  Navigator.pop(sheetContext);
-                  try {
-                    await syncPlay.addTrackToQueue(track);
-                    if (parentContext.mounted) {
-                      ScaffoldMessenger.of(parentContext).showSnackBar(
-                        SnackBar(content: Text('${track.name} added to fleet')),
-                      );
-                    }
-                  } catch (e) {
-                    if (parentContext.mounted) {
-                      ScaffoldMessenger.of(parentContext).showSnackBar(
-                        SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
-                      );
-                    }
-                  }
-                },
-              ),
             ListTile(
               leading: const Icon(Icons.play_arrow),
               title: const Text('Play Next'),

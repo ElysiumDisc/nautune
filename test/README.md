@@ -16,7 +16,7 @@ flutter test
 ## Adding tests
 
 Prefer extracting pure logic into a free-standing library file
-(see `lib/services/fft_math.dart` for the pattern) so it can be tested
+(see `lib/services/wav_builder.dart` for the pattern) so it can be tested
 without bringing up the audio / Hive / Jellyfin subsystems.
 
 For services that need a Hive box, write a thin in-memory fake in

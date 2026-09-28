@@ -97,14 +97,8 @@ class SavedLoopsService extends ChangeNotifier {
 
   /// Get the loops directory path
   Future<Directory> getLoopsDirectory() async {
-    final Directory baseDir;
-    if (Platform.isLinux || Platform.isMacOS) {
-      final home = Platform.environment['HOME'] ?? '/tmp';
-      baseDir = Directory(path.join(home, 'Documents', 'nautune', _loopsFolderName));
-    } else {
-      final docsDir = await getApplicationDocumentsDirectory();
-      baseDir = Directory(path.join(docsDir.path, _loopsFolderName));
-    }
+    final docsDir = await getApplicationDocumentsDirectory();
+    final baseDir = Directory(path.join(docsDir.path, _loopsFolderName));
 
     if (!await baseDir.exists()) {
       await baseDir.create(recursive: true);

@@ -29,7 +29,6 @@ import '../services/waveform_service.dart';
 import '../widgets/jellyfin_waveform.dart';
 import '../theme/nautune_spacing.dart';
 import '../theme/nautune_theme.dart';
-import '../widgets/equalizer_widget.dart';
 import '../widgets/visualizer_picker.dart';
 import 'easter_eggs_screen.dart';
 import 'listenbrainz_settings_screen.dart';
@@ -94,9 +93,9 @@ const List<_SettingsCategory> _settingsCategories = [
   _SettingsCategory(
     id: 'audio',
     title: 'Audio',
-    subtitle: 'Streaming, crossfade, EQ, gapless',
+    subtitle: 'Streaming, crossfade, gapless',
     icon: Icons.audiotrack,
-    keywords: ['streaming', 'quality', 'crossfade', 'gapless', 'infinite radio', 'equalizer', 'eq'],
+    keywords: ['streaming', 'quality', 'crossfade', 'gapless', 'infinite radio'],
   ),
   _SettingsCategory(
     id: 'performance',
@@ -434,9 +433,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // Save to file
     try {
       final docsDir = await getApplicationDocumentsDirectory();
-      final backupDir = Platform.isLinux || Platform.isMacOS || Platform.isWindows
-          ? Directory('${docsDir.path}/nautune/backups')
-          : Directory('${docsDir.path}/backups');
+      final backupDir = Directory('${docsDir.path}/backups');
 
       if (!await backupDir.exists()) {
         await backupDir.create(recursive: true);
@@ -865,11 +862,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     label: 'Classic',
                     isSelected: iconService.currentIcon == 'default',
                     onTap: () async {
-                      final appState = Platform.isLinux || Platform.isMacOS
-                          ? Provider.of<NautuneAppState>(context, listen: false)
-                          : null;
                       await iconService.setIcon('default');
-                      appState?.trayService?.updateTrayIcon();
                       if (context.mounted) Navigator.pop(context);
                     },
                   ),
@@ -878,11 +871,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     label: 'Sunset',
                     isSelected: iconService.currentIcon == 'orange',
                     onTap: () async {
-                      final appState = Platform.isLinux || Platform.isMacOS
-                          ? Provider.of<NautuneAppState>(context, listen: false)
-                          : null;
                       await iconService.setIcon('orange');
-                      appState?.trayService?.updateTrayIcon();
                       if (context.mounted) Navigator.pop(context);
                     },
                   ),
@@ -897,11 +886,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     label: 'Crimson',
                     isSelected: iconService.currentIcon == 'red',
                     onTap: () async {
-                      final appState = Platform.isLinux || Platform.isMacOS
-                          ? Provider.of<NautuneAppState>(context, listen: false)
-                          : null;
                       await iconService.setIcon('red');
-                      appState?.trayService?.updateTrayIcon();
                       if (context.mounted) Navigator.pop(context);
                     },
                   ),
@@ -910,11 +895,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     label: 'Emerald',
                     isSelected: iconService.currentIcon == 'green',
                     onTap: () async {
-                      final appState = Platform.isLinux || Platform.isMacOS
-                          ? Provider.of<NautuneAppState>(context, listen: false)
-                          : null;
                       await iconService.setIcon('green');
-                      appState?.trayService?.updateTrayIcon();
                       if (context.mounted) Navigator.pop(context);
                     },
                   ),
@@ -1140,10 +1121,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                   ),
-                const Padding(
-                  padding: EdgeInsets.all(12),
-                  child: EqualizerWidget(),
-                ),
               ],
             ),
           ),
