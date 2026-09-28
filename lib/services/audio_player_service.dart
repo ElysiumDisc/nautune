@@ -756,7 +756,10 @@ class AudioPlayerService {
   
   // Use BehaviorSubject to ensure new listeners get the latest value immediately
   final BehaviorSubject<Duration> _positionController = BehaviorSubject<Duration>.seeded(Duration.zero);
-  final BehaviorSubject<Duration> _bufferedPositionController = BehaviorSubject<Duration>.seeded(Duration.zero);
+  /// Whether the current source is a local file (download/cache), i.e. fully
+  /// buffered. audioplayers doesn't report stream buffering, so streamed
+  /// sources show no buffered bar rather than a made-up one.
+  final BehaviorSubject<bool> _sourceIsLocalController = BehaviorSubject<bool>.seeded(false);
   final BehaviorSubject<Duration?> _durationController = BehaviorSubject<Duration?>.seeded(null);
 
   // Cached duration to avoid repeated async getDuration() calls in position update handlers
@@ -782,12 +785,15 @@ class AudioPlayerService {
   /// A stream that combines position, buffered position, and duration into a single snapshot.
   /// This is the "Silver Bullet" for smooth progress bars.
   Stream<PositionData> get positionDataStream =>
-      Rx.combineLatest3<Duration, Duration, Duration?, PositionData>(
+      Rx.combineLatest3<Duration, bool, Duration?, PositionData>(
           _positionController.stream,
-          _bufferedPositionController.stream,
+          _sourceIsLocalController.stream.distinct(),
           _durationController.stream,
-          (position, bufferedPosition, duration) => PositionData(
-              position, bufferedPosition, duration ?? Duration.zero));
+          (position, isLocal, duration) {
+            final total = duration ?? Duration.zero;
+            return PositionData(
+                position, isLocal ? total : Duration.zero, total);
+          });
 
   /// Track + playing state only, for UI that must not rebuild on every
   /// position tick (give the progress UI its own [positionDataStream]
@@ -1863,6 +1869,7 @@ class AudioPlayerService {
   void _setCurrentSource(String url, {required bool isLocal}) {
     _currentSourceUrl = url;
     _currentSourceIsLocal = isLocal;
+    _sourceIsLocalController.add(isLocal);
     _positionFromPreviousTrack = false;
   }
 
@@ -4391,7 +4398,7 @@ class AudioPlayerService {
     _currentTrackController.close();
     _playingController.close();
     _positionController.close();
-    _bufferedPositionController.close();
+    _sourceIsLocalController.close();
     _durationController.close();
     _queueController.close();
     _repeatModeController.close();
