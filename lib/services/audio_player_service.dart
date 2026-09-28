@@ -615,17 +615,86 @@ class AudioPlayerService {
   void setJellyfinService(JellyfinService service) {
     _jellyfinService = service;
     _imagePrewarmService = ImagePrewarmService(jellyfinService: service);
-    _lyricsService = LyricsService(jellyfinService: service);
+    _lyricsService = LyricsService(jellyfinService: service)
+      ..setOffline(_isOffline);
     _loadPlayStats();
     if (_pendingState != null && !_hasRestored) {
       unawaited(applyStoredState(_pendingState!));
     }
   }
 
-  /// Update offline state for lyrics caching (returns expired cache when offline)
+  /// Offline mode (user toggle or no network). While offline only
+  /// downloaded / cached tracks are played: nothing is streamed, and
+  /// tracks without a local copy are skipped (see
+  /// [_skipUnavailableOffline]). Lyrics return expired cache entries.
   void setOfflineMode(bool offline) {
     _lyricsService?.setOffline(offline);
+    if (offline == _isOffline) return;
+    _isOffline = offline;
+    _offlineCachedIds = null; // re-read the audio cache on next use
+    _offlineMissKey = null;
+    // A pre-loaded *stream* for the next track would die mid-swap.
+    final preloaded = _preloadedSource;
+    if (offline && preloaded != null && !preloaded.isLocalFile) {
+      _clearPreload();
+    }
   }
+
+  bool _isOffline = false;
+  bool get isOfflineMode => _isOffline;
+
+  // Track ids in the audio cache, as last read for offline skipping
+  // (refreshed at most every [_offlineCachedIdsTtl]).
+  Set<String>? _offlineCachedIds;
+  DateTime _offlineCachedIdsAt = DateTime.fromMillisecondsSinceEpoch(0);
+  static const Duration _offlineCachedIdsTtl = Duration(seconds: 30);
+  // "<track id>@<index>/<queue length>" for which the offline pre-load found
+  // nothing playable, so the once-per-second check doesn't rescan the queue.
+  String? _offlineMissKey;
+
+  Future<Set<String>> _offlineCachedTrackIds() async {
+    final memo = _offlineCachedIds;
+    final now = DateTime.now();
+    if (memo != null && now.difference(_offlineCachedIdsAt) < _offlineCachedIdsTtl) {
+      return memo;
+    }
+    Set<String> ids;
+    try {
+      await _audioCacheService.initialize();
+      ids = (await _audioCacheService.getCachedTrackIds()).toSet();
+    } catch (e) {
+      debugPrint('⚠️ Could not read audio cache index: $e');
+      ids = memo ?? <String>{};
+    }
+    _offlineCachedIds = ids;
+    _offlineCachedIdsAt = now;
+    return ids;
+  }
+
+  /// Whether [track] has a local source (download, audio cache, bundled
+  /// asset). Record-based: [_resolvePlaybackSource] still verifies the file.
+  bool _hasLocalCopy(JellyfinTrack track, Set<String> cachedIds) =>
+      track.assetPathOverride != null ||
+      (_downloadService?.isDownloaded(track.id) ?? false) ||
+      cachedIds.contains(track.id);
+
+  /// Offline: the next queue slot after [from] in [direction] that has a
+  /// local copy (wrapping under repeat-all), or -1.
+  Future<int> _nextOfflinePlayableIndex(int from, int direction) async {
+    final cachedIds = await _offlineCachedTrackIds();
+    final queue = _queue;
+    return nextPlayableIndex(
+      length: queue.length,
+      from: from,
+      direction: direction,
+      wrap: _repeatMode == RepeatMode.all,
+      isPlayable: (i) => _hasLocalCopy(queue[i], cachedIds),
+    );
+  }
+
+  static String _skippedMessage(JellyfinTrack track, int skipped) => skipped <= 1
+      ? '“${track.name}” isn\'t downloaded — skipped'
+      : 'Skipped $skipped tracks that aren\'t downloaded';
 
   /// Enable or disable image prewarming (called by offline mode gate).
   void setImagePrewarmEnabled(bool enabled) {
@@ -1159,8 +1228,26 @@ class AudioPlayerService {
       }
     }
 
+    // Offline: jump straight to the next downloaded/cached track (so a
+    // gapless pre-load of it can be used). Wrap-around and "nothing left"
+    // are handled by playTrack's offline skip below.
+    var nextIndex = _currentIndex + 1;
+    if (_isOffline && nextIndex < _queue.length) {
+      final fromIndex = _currentIndex;
+      final fromTrack = _currentTrack;
+      final target = await _nextOfflinePlayableIndex(fromIndex, 1);
+      if (_disposed || _currentTrack?.id != fromTrack?.id || _currentIndex != fromIndex) {
+        return; // the user moved on meanwhile
+      }
+      if (target > nextIndex && target < _queue.length) {
+        final skipped = target - nextIndex;
+        _playbackErrorController.add(_skippedMessage(_queue[nextIndex], skipped));
+        nextIndex = target;
+      }
+    }
+
     // Move to next track
-    if (_currentIndex + 1 < _queue.length) {
+    if (nextIndex < _queue.length) {
       _isTransitioning = true;
       // Claim the player: an older in-flight playTrack must not resume over
       // us, and a newer one (user tap mid-swap) makes us back off.
@@ -1169,7 +1256,6 @@ class AudioPlayerService {
       var usedFallback = false;
 
       try {
-        final nextIndex = _currentIndex + 1;
         final nextTrack = _queue[nextIndex];
         final preloaded = _preloadedSource;
 
@@ -1603,7 +1689,9 @@ class AudioPlayerService {
     // Auto quality: don't pick the URL with a network type that is being
     // re-checked right now (e.g. first track after launch).
     final networkCheck = _networkTypeRefresh;
-    if (_streamingQuality == StreamingQuality.auto && networkCheck != null) {
+    if (!_isOffline &&
+        _streamingQuality == StreamingQuality.auto &&
+        networkCheck != null) {
       await networkCheck.timeout(const Duration(seconds: 2), onTimeout: () {});
     }
     final (streamUrl, isDirectStream) = _getStreamUrl(track, sessionId: sessionId);
@@ -1639,8 +1727,9 @@ class AudioPlayerService {
       );
     }
 
-    // 3) Stream, based on quality preference
-    if (streamUrl != null) {
+    // 3) Stream, based on quality preference. Never while offline: the
+    // request would only hang until the load timeout.
+    if (streamUrl != null && !_isOffline) {
       if (isDirectStream) {
         debugPrint('🎵 Streaming: Original quality (direct)');
       } else {
@@ -1876,6 +1965,30 @@ class AudioPlayerService {
     bool reorderQueue = false,
     bool fromShuffle = false,
     int? queueIndex,
+  }) =>
+      _playTrack(
+        track,
+        queueContext: queueContext,
+        albumId: albumId,
+        albumName: albumName,
+        reorderQueue: reorderQueue,
+        fromShuffle: fromShuffle,
+        queueIndex: queueIndex,
+      );
+
+  /// [playTrack] body. [direction] is where to look for a playable track if
+  /// [track] has no local copy while offline (-1 for "previous");
+  /// [offlineSkipBudget] bounds how many such skips one request chains.
+  Future<void> _playTrack(
+    JellyfinTrack track, {
+    List<JellyfinTrack>? queueContext,
+    String? albumId,
+    String? albumName,
+    bool reorderQueue = false,
+    bool fromShuffle = false,
+    int? queueIndex,
+    int direction = 1,
+    int? offlineSkipBudget,
   }) async {
     // Newest request wins: every await below re-checks this token.
     final requestId = ++_playRequestId;
@@ -1995,6 +2108,17 @@ class AudioPlayerService {
     if (isStale()) return;
 
     if (resolved == null) {
+      if (_isOffline) {
+        // Not downloaded/cached and we can't stream: move on to the next
+        // track that is, instead of failing (or hanging on a stream).
+        await _skipUnavailableOffline(
+          track,
+          direction: direction,
+          budget: offlineSkipBudget ?? _queue.length,
+          isStale: isStale,
+        );
+        return;
+      }
       _onLoadFailed(track);
       throw PlatformException(
         code: 'no_source',
@@ -2054,6 +2178,7 @@ class AudioPlayerService {
         if (isStale()) return;
         final String? fallbackUrl;
         if (resolved.isLocalFile && !resolved.isDownloaded && resolved.streamUrl != null &&
+            !_isOffline &&
             !resolved.url.startsWith('assets/') && resolved.url != track.assetPathOverride) {
           // A pre-cached copy AVPlayer can't open (e.g. an Opus/Vorbis file
           // cached from the raw-file endpoint by an older build): drop it and
@@ -2140,6 +2265,73 @@ class AudioPlayerService {
     );
   }
 
+  /// Offline, [track] (the current queue slot) has no local copy: play the
+  /// next slot in [direction] that has one (wrapping under repeat-all) and
+  /// say what was skipped. When there is none, [track] is left paused (play
+  /// retries) with a message. Each hop spends one of [budget], so tracks
+  /// whose local copy vanished can't make this loop.
+  Future<void> _skipUnavailableOffline(
+    JellyfinTrack track, {
+    required int direction,
+    required int budget,
+    required bool Function() isStale,
+  }) async {
+    final from = _currentIndex;
+    final cachedIds = await _offlineCachedTrackIds();
+    if (isStale()) return;
+    final queue = _queue;
+    bool playable(int i) => _hasLocalCopy(queue[i], cachedIds);
+    final target = budget <= 0
+        ? -1
+        : nextPlayableIndex(
+            length: queue.length,
+            from: from,
+            direction: direction,
+            wrap: _repeatMode == RepeatMode.all,
+            isPlayable: playable,
+          );
+    if (target == -1) {
+      _onLoadFailed(track);
+      // Anything playable at all (ignoring direction / repeat)?
+      final anyPlayable = nextPlayableIndex(
+            length: queue.length,
+            from: from,
+            direction: 1,
+            wrap: true,
+            isPlayable: playable,
+          ) !=
+          -1;
+      final String reason;
+      if (!anyPlayable) {
+        reason = 'nothing in the queue is available offline';
+      } else if (budget <= 0) {
+        reason = 'couldn\'t open the downloaded tracks after it';
+      } else {
+        reason = direction > 0
+            ? 'no more downloaded tracks in the queue'
+            : 'no earlier downloaded tracks in the queue';
+      }
+      _playbackErrorController.add('“${track.name}” isn\'t downloaded — $reason');
+      return;
+    }
+    final skipped = queueStepsBetween(
+      length: _queue.length,
+      from: from,
+      target: target,
+      direction: direction,
+    );
+    debugPrint('📴 Offline: skipping $skipped unavailable track(s) → ${_queue[target].name}');
+    _playbackErrorController.add(_skippedMessage(track, skipped));
+    await _playTrack(
+      _queue[target],
+      queueContext: _queue,
+      fromShuffle: _isShuffleEnabled,
+      queueIndex: target,
+      direction: direction,
+      offlineSkipBudget: budget - 1,
+    );
+  }
+
   /// A load for the current [track] failed: leave a coherent, resumable
   /// state instead of a player that claims to be playing silence. Nothing is
   /// loaded, so show paused and (re)load it on the next play.
@@ -2197,7 +2389,7 @@ class AudioPlayerService {
   /// streaming it would.
   Future<void> _smartPreCacheUpcoming() async {
     final count = _preCacheTrackCount;
-    if (count <= 0 || _batterySaverMode) return;
+    if (count <= 0 || _batterySaverMode || _isOffline) return;
     if (PowerModeService.instance.isLowPowerMode) return;
     final queue = List<JellyfinTrack>.of(_queue);
     final start = _currentIndex + 1;
@@ -2271,6 +2463,20 @@ class AudioPlayerService {
       final track = _currentTrack;
       if (!await _prepareRestoredSource()) {
         if (!_disposed && track != null && _currentTrack?.id == track.id) {
+          if (_isOffline &&
+              !_hasLocalCopy(track, await _offlineCachedTrackIds()) &&
+              _currentTrack?.id == track.id) {
+            // Offline and this track was never downloaded: continue with
+            // the next one that was.
+            final requestId = ++_playRequestId;
+            await _skipUnavailableOffline(
+              track,
+              direction: 1,
+              budget: _queue.length,
+              isStale: () => _disposed || requestId != _playRequestId,
+            );
+            return;
+          }
           _playbackErrorController.add('Unable to play ${track.name}. Check your connection.');
         }
         return;
@@ -2561,11 +2767,13 @@ class AudioPlayerService {
 
     try {
       _currentIndex = targetIndex;
-      await playTrack(
+      await _playTrack(
         _queue[_currentIndex],
         queueContext: _queue,
         fromShuffle: _isShuffleEnabled,
         queueIndex: _currentIndex,
+        // Offline, skip back past tracks that aren't downloaded.
+        direction: action == PreviousAction.restartCurrent ? 1 : -1,
       );
     } catch (e) {
       debugPrint('❌ Skip to previous failed: $e');
@@ -3097,6 +3305,8 @@ class AudioPlayerService {
   
   /// Check if we need to fetch more tracks for infinite radio mode
   Future<void> _checkInfiniteRadio() async {
+    // Needs the server; offline it would only wait for a timeout.
+    if (_isOffline) return;
     // Wait for any in-flight fetch to complete first
     if (_infiniteRadioFetchCompleter != null) {
       await _infiniteRadioFetchCompleter!.future;
@@ -3115,6 +3325,7 @@ class AudioPlayerService {
   
   /// Fetch similar tracks using Jellyfin's Instant Mix and append to queue
   Future<void> _fetchInfiniteRadioTracks() async {
+    if (_isOffline) return;
     if (_infiniteRadioFetchCompleter != null || _jellyfinService == null || _currentTrack == null) {
       return;
     }
@@ -3497,6 +3708,13 @@ class AudioPlayerService {
 
     if (!_crossfadeWillHandle(nextTrack)) return;
 
+    // Offline and the next track isn't on the device: no crossfade; the
+    // end-of-track transition skips to the next downloaded one.
+    if (_isOffline && !_hasLocalCopy(nextTrack, await _offlineCachedTrackIds())) {
+      return;
+    }
+    if (_isCrossfading || _disposed || _currentTrack == null) return;
+
     // Trigger crossfade
     debugPrint('🌊 Starting crossfade: ${_currentTrack!.name} → ${nextTrack.name}');
     unawaited(_startCrossfade(nextTrack, resolvedIndex));
@@ -3711,14 +3929,36 @@ class AudioPlayerService {
     if (position < preloadThreshold) return;
 
     // Get next track
-    final nextTrack = _getNextTrack();
+    var nextTrack = _getNextTrack();
     if (nextTrack == null) return;
+    var skipsAhead = false;
+
+    if (_isOffline) {
+      // Pre-load the next track that is actually on the device (the one
+      // _gaplessTransition will skip to); never a stream.
+      final current = _currentTrack;
+      final missKey = '${current?.id}@$_currentIndex/${_queue.length}';
+      if (_offlineMissKey == missKey) return;
+      final fromIndex = _currentIndex;
+      final target = await _nextOfflinePlayableIndex(fromIndex, 1);
+      if (_disposed || _currentIndex != fromIndex || _currentTrack?.id != current?.id) {
+        return;
+      }
+      // Only forward targets: a wrap-around goes through playTrack.
+      if (target <= fromIndex || target >= _queue.length) {
+        _offlineMissKey = missKey;
+        return;
+      }
+      skipsAhead = target != fromIndex + 1;
+      nextTrack = _queue[target];
+    }
 
     // Don't pre-load if already loaded
     if (_preloadedTrack?.id == nextTrack.id) return;
 
-    // A crossfade will load it into the crossfade player instead.
-    if (_crossfadeWillHandle(nextTrack)) return;
+    // A crossfade will load it into the crossfade player instead (never
+    // across skipped offline tracks, see _checkCrossfadeTrigger).
+    if (!skipsAhead && _crossfadeWillHandle(nextTrack)) return;
 
     // Pre-load the next track
     await _preloadNextTrack(nextTrack);

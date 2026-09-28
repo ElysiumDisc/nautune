@@ -121,6 +121,48 @@ int currentIndexAfterInsert({
   return insertIndex <= currentIndex ? currentIndex + 1 : currentIndex;
 }
 
+/// The next queue slot after [from], moving in [direction] (`1` forward,
+/// `-1` backward), whose item [isPlayable] — e.g. the next downloaded track
+/// while offline. With [wrap] (repeat-all) the search continues past the end
+/// (or start) of the queue.
+///
+/// [from] itself is never returned and every other slot is checked at most
+/// once, so this always terminates. Returns -1 when no slot qualifies (or
+/// the queue is empty / [direction] is invalid).
+int nextPlayableIndex({
+  required int length,
+  required int from,
+  required int direction,
+  required bool wrap,
+  required bool Function(int index) isPlayable,
+}) {
+  if (length <= 0 || (direction != 1 && direction != -1)) return -1;
+  var i = from;
+  for (var step = 0; step < length; step++) {
+    i += direction;
+    if (i < 0 || i >= length) {
+      if (!wrap) return -1;
+      i = direction > 0 ? 0 : length - 1;
+    }
+    if (i == from) return -1;
+    if (isPlayable(i)) return i;
+  }
+  return -1;
+}
+
+/// How many queue slots are passed over going from [from] to [target] in
+/// [direction] (wrapping around a queue of [length]), counting [from] but
+/// not [target]. `0` when they are the same slot.
+int queueStepsBetween({
+  required int length,
+  required int from,
+  required int target,
+  required int direction,
+}) {
+  if (length <= 0) return 0;
+  return ((target - from) * direction) % length;
+}
+
 /// Shuffles [queue] keeping the item at [currentIndex] first.
 ///
 /// Only that one slot is pulled out, so other occurrences of the same track

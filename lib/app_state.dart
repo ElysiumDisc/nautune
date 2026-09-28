@@ -26,6 +26,7 @@ import 'services/download_service.dart';
 import 'services/local_cache_service.dart';
 import 'services/playback_reporting_service.dart';
 import 'services/playback_state_store.dart';
+import 'services/playlist_membership_store.dart';
 import 'services/playlist_sync_queue.dart';
 import 'services/app_icon_service.dart';
 import 'services/power_mode_service.dart';
@@ -313,6 +314,9 @@ class NautuneAppState extends ChangeNotifier {
         final session = _session!;
         // Ensure AudioPlayerService has the correct JellyfinService instance
         _audioPlayerService.setJellyfinService(_jellyfinService);
+        // Downloads: hydrate stored tracks with the new server/token and
+        // resume the queue now rather than on the service's 2 s poll.
+        _downloadService.onSessionChanged();
 
         // Install (or keep) the playback reporter for this session. Reuses
         // the existing one when nothing relevant changed (e.g. library
@@ -628,6 +632,7 @@ class NautuneAppState extends ChangeNotifier {
     _demoPlaylistCounter = content.playlists.length;
     _networkAvailable = true;
     _userWantsOffline = false;
+    _publishOfflineState();
 
     _session = JellyfinSession(
       serverUrl: 'demo://nautune',
@@ -1027,9 +1032,8 @@ class NautuneAppState extends ChangeNotifier {
     // We don't change _userWantsOffline - that's the user's explicit choice
     if (!isOnline && wasOnline) {
       debugPrint('📴 Network lost - app is now effectively offline');
-      _applyOfflineNetworkPolicy();
+      _publishOfflineState();
       _activateSubmarineFeatures();
-      audioPlayerService.setOfflineMode(true);
       notifyListeners();
       return;
     }
@@ -1041,8 +1045,7 @@ class NautuneAppState extends ChangeNotifier {
       if (!_userWantsOffline) {
         debugPrint('📶 User is online — restoring network services');
         _deactivateSubmarineFeatures();
-        _restoreOnlineNetworkPolicy();
-        audioPlayerService.setOfflineMode(false);
+        _publishOfflineState();
         // Refresh data in background - don't await, don't block UI
         unawaited(_refreshAfterReconnect());
       } else {
@@ -1074,6 +1077,9 @@ class NautuneAppState extends ChangeNotifier {
     } catch (error) {
       debugPrint('⚠️ Refresh after reconnect failed: $error');
     }
+    // Playlist edits / favorites made while offline (single-flight, so the
+    // bootstrap sync started by the online policy doesn't run them twice).
+    unawaited(_syncPendingPlaylistActions());
   }
 
   /// Start periodic analytics sync timer (10 min normal, 30 min in submarine mode)
@@ -1219,6 +1225,9 @@ class NautuneAppState extends ChangeNotifier {
         _audioPlayerService.reportingService?.setEnabled(false);
         _audioPlayerService.setImagePrewarmEnabled(false);
       }
+      // Before the queue is restored: offline, the restored track must not
+      // be prepared as a stream.
+      _audioPlayerService.setOfflineMode(isOfflineMode);
 
       // Restore the saved queue/track (paused). Doesn't wait on the network:
       // the source is prepared in the background.
@@ -1244,6 +1253,7 @@ class NautuneAppState extends ChangeNotifier {
         _session = storedSession;
         _jellyfinService.restoreSession(storedSession);
         _audioPlayerService.setJellyfinService(_jellyfinService);
+        _downloadService.onSessionChanged();
 
         _installReportingService(storedSession);
 
@@ -1258,12 +1268,13 @@ class NautuneAppState extends ChangeNotifier {
         }
 
         if (_networkAvailable && !_userWantsOffline) {
+          // Also syncs pending playlist edits / favorites.
           _startBootstrapSync(storedSession);
           unawaited(_syncAnalyticsToServer());
+          _publishOfflineState(); // records "online" (policy already live)
         } else if (isOfflineMode) {
-          _applyOfflineNetworkPolicy();
+          _publishOfflineState();
           _activateSubmarineFeatures();
-          audioPlayerService.setOfflineMode(true);
           unawaited(_loadLibraryDependentContent(forceRefresh: true));
         }
       } catch (error, stackTrace) {
@@ -1432,10 +1443,21 @@ class NautuneAppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The server answered again (bootstrap request or reachability probe).
+  /// Called on every successful bootstrap fetch, so only the offline →
+  /// online transition does anything.
   void _handleNetworkRecovered() {
     _stopReachabilityProbe();
     if (!_networkAvailable) {
       _networkAvailable = true;
+      // Re-enable reporting (flushing queued reports), analytics, image
+      // prewarm, playback streaming; kick queued downloads. The bootstrap
+      // isn't restarted: this is called from a running bootstrap sync, and
+      // the probe path refreshes via _refreshAfterReconnect.
+      _publishOfflineState(restartBootstrap: false);
+      if (!_userWantsOffline) {
+        unawaited(_syncPendingPlaylistActions());
+      }
       notifyListeners();
     }
   }
@@ -1492,6 +1514,8 @@ class NautuneAppState extends ChangeNotifier {
       _networkAvailable = false;
       // Note: isOfflineMode getter automatically returns true when !_networkAvailable
       debugPrint('Network lost while syncing: $error');
+      // Play downloads only, queue reports, stop background traffic.
+      _publishOfflineState();
 
       // Reset all loading flags to prevent stuck states (especially in CarPlay)
       _isLoadingLibraries = false;
@@ -1595,6 +1619,7 @@ class NautuneAppState extends ChangeNotifier {
     } catch (_) {
       // Keep the current value.
     }
+    _publishOfflineState();
 
     await _teardownDemoMode();
     notifyListeners();
@@ -1723,6 +1748,7 @@ class NautuneAppState extends ChangeNotifier {
     }
     
     await _jellyfinService.deletePlaylist(playlistId);
+    unawaited(PlaylistMembershipStore.instance.remove(playlistId));
     await refreshPlaylists();
   }
 
@@ -1782,7 +1808,12 @@ class NautuneAppState extends ChangeNotifier {
     if (isOfflineMode) {
       return await repository.getPlaylistTracks(playlistId);
     }
-    return await _jellyfinService.getPlaylistItems(playlistId);
+    final tracks = await _jellyfinService.getPlaylistItems(playlistId);
+    // Remember the order/membership so the offline library can show this
+    // playlist's downloaded tracks (however they were downloaded).
+    unawaited(PlaylistMembershipStore.instance
+        .save(playlistId, [for (final t in tracks) t.id]));
+    return tracks;
   }
 
   Future<List<JellyfinTrack>> getAlbumTracks(String albumId) async {
@@ -2852,14 +2883,13 @@ class NautuneAppState extends ChangeNotifier {
     unawaited(_playbackStateStore.saveUiState(isOfflineMode: _userWantsOffline));
 
     if (_userWantsOffline) {
-      _applyOfflineNetworkPolicy();
       _activateSubmarineFeatures();
     } else {
       _deactivateSubmarineFeatures();
-      if (_networkAvailable) {
-        _restoreOnlineNetworkPolicy();
-      }
     }
+    // Applies the offline policy, or restores the online one (only when the
+    // network is actually available).
+    _publishOfflineState();
 
     notifyListeners();
 
@@ -2880,10 +2910,42 @@ class NautuneAppState extends ChangeNotifier {
         // Revert to offline if refresh fails
         _userWantsOffline = true;
         unawaited(_playbackStateStore.saveUiState(isOfflineMode: true));
-        _applyOfflineNetworkPolicy();
+        _publishOfflineState();
         _activateSubmarineFeatures();
         notifyListeners();
       });
+    }
+  }
+
+  // Effective offline state last fanned out by [_publishOfflineState]
+  // (null until the first call).
+  bool? _publishedOffline;
+
+  /// The single place that pushes the effective offline state
+  /// ([isOfflineMode]: the user's toggle OR no network) to the services.
+  /// Call after every change to [_userWantsOffline] / [_networkAvailable];
+  /// idempotent.
+  ///
+  /// - Playback, every time: offline it plays only downloaded/cached tracks
+  ///   and skips the rest instead of trying to stream.
+  /// - On a change to offline: [_applyOfflineNetworkPolicy] (reports are
+  ///   queued, analytics sync / image prewarm / bootstrap stopped).
+  /// - On a change back to online: [_restoreOnlineNetworkPolicy] (flushes
+  ///   queued reports, restarts syncs; [restartBootstrap] false when called
+  ///   from inside a bootstrap sync) and retries queued downloads now
+  ///   instead of after their backoff. The first call only records the
+  ///   state: startup sets its own policy.
+  void _publishOfflineState({bool restartBootstrap = true}) {
+    final offline = isOfflineMode;
+    _audioPlayerService.setOfflineMode(offline);
+    final previous = _publishedOffline;
+    if (previous == offline) return;
+    _publishedOffline = offline;
+    if (offline) {
+      _applyOfflineNetworkPolicy();
+    } else if (previous != null) {
+      _restoreOnlineNetworkPolicy(restartBootstrap: restartBootstrap);
+      _downloadService.onSessionChanged();
     }
   }
 
@@ -2905,7 +2967,7 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   /// Restore all background network activity when coming back online.
-  void _restoreOnlineNetworkPolicy() {
+  void _restoreOnlineNetworkPolicy({bool restartBootstrap = true}) {
     debugPrint('📶 Restoring online network policy — re-enabling background services');
 
     final session = _session;
@@ -2925,11 +2987,31 @@ class NautuneAppState extends ChangeNotifier {
     // Re-enable image prewarming
     _audioPlayerService.setImagePrewarmEnabled(true);
 
-    // Resume bootstrap sync
-    _startBootstrapSync(session);
+    // Resume bootstrap sync (also syncs pending playlist actions)
+    if (restartBootstrap) _startBootstrapSync(session);
   }
 
-  Future<void> _syncPendingPlaylistActions() async {
+  Future<void>? _playlistSyncInFlight;
+
+  /// Replay playlist edits / favorites queued while offline. Runs whenever
+  /// the app is (back) online — startup, reconnect, "Go online" — and is
+  /// single-flight: overlapping triggers share one run, so no action is sent
+  /// twice.
+  Future<void> _syncPendingPlaylistActions() {
+    final running = _playlistSyncInFlight;
+    if (running != null) return running;
+    late final Future<void> run;
+    run = _runPendingPlaylistSync().catchError((Object e) {
+      debugPrint('❌ Pending playlist sync failed: $e');
+    }).whenComplete(() {
+      if (identical(_playlistSyncInFlight, run)) _playlistSyncInFlight = null;
+    });
+    _playlistSyncInFlight = run;
+    return run;
+  }
+
+  Future<void> _runPendingPlaylistSync() async {
+    if (isOfflineMode || isDemoMode || _session == null) return;
     final pending = await _syncQueue.load();
     if (pending.isEmpty) return;
 

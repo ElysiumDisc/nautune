@@ -336,4 +336,107 @@ void main() {
       );
     });
   });
+
+  group('nextPlayableIndex', () {
+    // Slots 1 and 4 hold downloaded tracks.
+    const downloaded = {1, 4};
+    bool playable(int i) => downloaded.contains(i);
+
+    int next(int from, {int direction = 1, bool wrap = false, int length = 6}) =>
+        nextPlayableIndex(
+          length: length,
+          from: from,
+          direction: direction,
+          wrap: wrap,
+          isPlayable: playable,
+        );
+
+    test('forward finds the next playable slot, skipping the rest', () {
+      expect(next(1), 4);
+      expect(next(2), 4);
+      expect(next(0), 1);
+    });
+
+    test('forward past the last playable slot is -1 without repeat', () {
+      expect(next(4), -1);
+      expect(next(5), -1);
+    });
+
+    test('repeat-all wraps forward', () {
+      expect(next(4, wrap: true), 1);
+      expect(next(5, wrap: true), 1);
+    });
+
+    test('backward finds the previous playable slot', () {
+      expect(next(3, direction: -1), 1);
+      expect(next(5, direction: -1), 4);
+      expect(next(1, direction: -1), -1);
+      expect(next(0, direction: -1), -1);
+    });
+
+    test('repeat-all wraps backward', () {
+      expect(next(1, direction: -1, wrap: true), 4);
+      expect(next(0, direction: -1, wrap: true), 4);
+    });
+
+    test('never returns the starting slot', () {
+      // Only slot 1 is playable; starting on it there is nowhere to go.
+      expect(
+        nextPlayableIndex(
+          length: 3,
+          from: 1,
+          direction: 1,
+          wrap: true,
+          isPlayable: (i) => i == 1,
+        ),
+        -1,
+      );
+    });
+
+    test('none playable returns -1 and checks each slot at most once', () {
+      var checks = 0;
+      final result = nextPlayableIndex(
+        length: 5,
+        from: 2,
+        direction: 1,
+        wrap: true,
+        isPlayable: (_) {
+          checks++;
+          return false;
+        },
+      );
+      expect(result, -1);
+      expect(checks, 4);
+    });
+
+    test('empty queue or invalid direction returns -1', () {
+      expect(
+        nextPlayableIndex(
+            length: 0, from: 0, direction: 1, wrap: true, isPlayable: (_) => true),
+        -1,
+      );
+      expect(
+        nextPlayableIndex(
+            length: 3, from: 0, direction: 0, wrap: true, isPlayable: (_) => true),
+        -1,
+      );
+    });
+  });
+
+  group('queueStepsBetween', () {
+    test('counts the slots passed over, including the start', () {
+      expect(queueStepsBetween(length: 6, from: 2, target: 3, direction: 1), 1);
+      expect(queueStepsBetween(length: 6, from: 2, target: 5, direction: 1), 3);
+    });
+
+    test('handles wrap-around in both directions', () {
+      expect(queueStepsBetween(length: 6, from: 5, target: 1, direction: 1), 2);
+      expect(queueStepsBetween(length: 6, from: 1, target: 4, direction: -1), 3);
+    });
+
+    test('same slot or empty queue is 0', () {
+      expect(queueStepsBetween(length: 6, from: 2, target: 2, direction: 1), 0);
+      expect(queueStepsBetween(length: 0, from: 0, target: 0, direction: 1), 0);
+    });
+  });
 }

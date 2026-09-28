@@ -5,9 +5,42 @@ import '../jellyfin/jellyfin_library.dart';
 import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_playlist_store.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../models/download_item.dart';
 import '../services/download_service.dart';
 import '../services/listening_analytics_service.dart';
+import '../services/playlist_membership_store.dart';
 import 'music_repository.dart';
+
+/// Looks up a playlist's cached track ids (playlist order), or null when the
+/// playlist was never loaded online.
+typedef PlaylistMembershipLookup = Future<List<String>?> Function(String playlistId);
+
+/// The downloaded tracks of playlist [playlistId], in playlist order.
+///
+/// With cached [memberIds] (the playlist's track ids as last fetched), every
+/// member with a completed download is listed — however it was downloaded
+/// (album, single track, this or another playlist). Duplicate entries in the
+/// playlist are kept. Without cached membership, falls back to the tracks
+/// downloaded *through* this playlist (download ownership), in download
+/// order.
+List<DownloadItem> offlinePlaylistDownloads({
+  required String playlistId,
+  required List<String>? memberIds,
+  required Iterable<DownloadItem> completed,
+}) {
+  if (memberIds == null) {
+    return completed
+        .where((d) => d.owners.contains(playlistId))
+        .toList(growable: false);
+  }
+  final byId = <String, DownloadItem>{
+    for (final d in completed) d.track.id: d,
+  };
+  return [
+    for (final id in memberIds)
+      if (byId[id] case final DownloadItem d) d,
+  ];
+}
 
 /// Offline implementation of MusicRepository.
 ///
@@ -20,11 +53,32 @@ class OfflineRepository implements MusicRepository {
   OfflineRepository({
     required DownloadService downloadService,
     JellyfinPlaylistStore? playlistStore,
+    PlaylistMembershipLookup? playlistMembership,
   })  : _downloadService = downloadService,
-        _playlistStore = playlistStore;
+        _playlistStore = playlistStore,
+        _playlistMembership =
+            playlistMembership ?? PlaylistMembershipStore.instance.load;
 
   final DownloadService _downloadService;
   final JellyfinPlaylistStore? _playlistStore;
+  final PlaylistMembershipLookup _playlistMembership;
+
+  Future<List<DownloadItem>> _playlistDownloads(
+    String playlistId,
+    List<DownloadItem> completed,
+  ) async {
+    List<String>? members;
+    try {
+      members = await _playlistMembership(playlistId);
+    } catch (_) {
+      members = null; // fall back to ownership
+    }
+    return offlinePlaylistDownloads(
+      playlistId: playlistId,
+      memberIds: members,
+      completed: completed,
+    );
+  }
 
   @override
   Future<List<JellyfinLibrary>> getLibraries() async {
@@ -188,13 +242,13 @@ class OfflineRepository implements MusicRepository {
     if (allPlaylists == null || allPlaylists.isEmpty) return [];
 
     final downloads = _downloadService.completedDownloads;
-    
-    // Filter to playlists that have at least one downloaded track
+
+    // Playlists with at least one downloaded track (by cached membership,
+    // else by download ownership).
     final offlinePlaylists = <JellyfinPlaylist>[];
     for (final playlist in allPlaylists) {
-      // Check if any downloaded track has this playlist as an owner
-      final hasDownloadedTracks = downloads.any((d) => d.owners.contains(playlist.id));
-      if (hasDownloadedTracks) {
+      final tracks = await _playlistDownloads(playlist.id, downloads);
+      if (tracks.isNotEmpty) {
         offlinePlaylists.add(playlist);
       }
     }
@@ -250,11 +304,9 @@ class OfflineRepository implements MusicRepository {
 
   @override
   Future<List<JellyfinTrack>> getPlaylistTracks(String playlistId) async {
-    final downloads = _downloadService.completedDownloads;
-    return downloads
-        .where((d) => d.owners.contains(playlistId))
-        .map((d) => d.track)
-        .toList();
+    final downloads =
+        await _playlistDownloads(playlistId, _downloadService.completedDownloads);
+    return downloads.map((d) => d.track).toList();
   }
 
   @override
