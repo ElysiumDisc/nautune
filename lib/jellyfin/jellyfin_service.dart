@@ -932,11 +932,11 @@ class JellyfinService {
     if (activeClient == null) throw Exception('Client not initialized');
 
     try {
-      // Spec-documented favorites endpoint as of Jellyfin 10.11.9:
+      // Spec-documented favorites endpoint (Jellyfin 10.9+):
       // `/UserFavoriteItems/{itemId}` with `userId` as a query parameter.
       // (The older `/Users/{userId}/FavoriteItems/{itemId}` alias was retired
-      // here during the v8.9.5 cleanup.) Verified against 10.11.9 spec on
-      // 2026-05-20.
+      // here during the v8.9.5 cleanup.) Verified against the 12.1.0 spec in
+      // docs/jellyfin-openapi-12.1.json.
       final favoritePath = '/UserFavoriteItems/$itemId';
       final favoriteQuery = {'userId': session.credentials.userId};
 

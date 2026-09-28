@@ -34,7 +34,7 @@ const String kJellyfinAuthorizationHeader = 'Authorization';
 /// with no backslash escaping and runs every value through
 /// `WebUtility.UrlDecode`, which also turns a literal `+` into a space — so
 /// encoding is required for correctness, not just safety: an unencoded
-/// version `8.9.7+1` would be recorded as `8.9.7 1`, while `8.9.7%2B1`
+/// version `1.2.3+4` would be recorded as `1.2.3 4`, while `1.2.3%2B4`
 /// round-trips. Empty fields are omitted, so [token] is left out when
 /// null/empty (e.g. before login).
 String buildJellyfinAuthorization({

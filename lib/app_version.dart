@@ -3,9 +3,12 @@ import 'package:package_info_plus/package_info_plus.dart';
 /// Centralized app version management.
 /// Initialize once at app startup, then use everywhere.
 class AppVersion {
-  static String _version = '8.9.7+1'; // Fallback, updated at runtime
+  /// Fallback used until [init] reads the real value (or if it fails).
+  /// Must equal pubspec.yaml `version:`; enforced by
+  /// test/unit/repo_consistency_test.dart.
+  static String _version = '9.0.0+1';
 
-  /// The current app version string (e.g., "5.5.6+1")
+  /// The current app version string, `name+build` (e.g. "1.2.3+4").
   static String get current => _version;
 
   /// Initialize from package info. Call once at app startup.

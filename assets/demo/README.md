@@ -7,7 +7,7 @@ This directory keeps the demo-specific files that drive App Store review mode.
 - `demo_online_track.mp3`: “Ocean Vibes” — https://pixabay.com/music/beats-ocean-vibes-391210/ (Pixabay License).
 - `demo_offline_track.mp3`: “Sirens and Silence” — https://pixabay.com/music/modern-classical-sirens-and-silence-10036/ (Pixabay License).
 
-Both MP3s are embedded directly in the build so demo playback works on every platform without network access. To replace them, drop new files here and update the metadata inside `lib/demo/demo_content.dart` (track name, artist credit, and asset paths).
+Both MP3s are embedded directly in the build so demo playback works without network access (including in airplane mode). To replace them, drop new files here and update the metadata inside `lib/demo/demo_content.dart` (track name, artist credit, and asset paths) and the seeded offline download in `lib/providers/demo_mode_provider.dart`.
 
 ## Artwork
 

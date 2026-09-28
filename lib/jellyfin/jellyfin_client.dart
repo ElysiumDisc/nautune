@@ -196,8 +196,8 @@ class JellyfinClient {
   /// Builds the URL for a user's profile image.
   ///
   /// Uses the spec-documented `GET /UserImage?userId=…&tag=…` (present in the
-  /// 10.11.9 and 12.1.0 OpenAPI specs; the old `/Users/{id}/Images/Primary`
-  /// alias is absent from both).
+  /// 10.11.9 and 12.1.0 OpenAPI specs — see docs/jellyfin-openapi-12.1.json;
+  /// the old `/Users/{id}/Images/Primary` alias is absent from both).
   String? getUserImageUrl(String userId, String? imageTag) {
     if (imageTag == null) return null;
     return buildServerUrl(serverUrl, '/UserImage', {
@@ -207,9 +207,10 @@ class JellyfinClient {
   }
 
   /// Fetches the user's library list (a.k.a. "views"). Uses the
-  /// spec-documented `/UserViews?userId=...` endpoint as of 10.11.9 — the
+  /// spec-documented `/UserViews?userId=...` endpoint (10.9+) — the
   /// older `/Users/{id}/Views` alias was undocumented and was retired here
-  /// during the v8.9.5 cleanup. Verified against 10.11.9 spec on 2026-05-20.
+  /// during the v8.9.5 cleanup. Verified against the 12.1.0 spec in
+  /// docs/jellyfin-openapi-12.1.json.
   Future<List<JellyfinLibrary>> fetchLibraries(
     JellyfinCredentials credentials,
   ) async {
@@ -238,7 +239,7 @@ class JellyfinClient {
 
   /// Browse methods use the spec-documented `GET /Items?userId=…` (the
   /// legacy `/Users/{userId}/Items` alias is absent from the 10.11.9 and
-  /// 12.1.0 OpenAPI specs).
+  /// 12.1.0 OpenAPI specs; see docs/jellyfin-openapi-12.1.json).
   Future<List<JellyfinAlbum>> fetchAlbums({
     required JellyfinCredentials credentials,
     required String libraryId,

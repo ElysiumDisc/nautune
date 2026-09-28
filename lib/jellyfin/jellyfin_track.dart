@@ -467,8 +467,8 @@ class JellyfinTrack {
 
   /// Builds a waveform preview URL provided by Jellyfin.
   ///
-  /// Jellyfin API note: `/Audio/{id}/Waveform` is not in the 10.11.9 OpenAPI
-  /// spec but is served by Jellyfin 10.9+ (provider plugin or built-in,
+  /// Jellyfin API note: `/Audio/{id}/Waveform` is not in the 10.11.9 or 12.1.0
+  /// OpenAPI specs (docs/jellyfin-openapi-12.1.json) but is served by Jellyfin 10.9+ (provider plugin or built-in,
   /// depending on server config). Nautune falls back to its own extracted
   /// waveforms via `WaveformService` when the server 404s, so this URL is
   /// safe to call even if unavailable.
