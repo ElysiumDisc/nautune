@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../models/essential_mix_track.dart';
 import 'hive_init.dart';
+import '../utils/backup_exclusion.dart';
 
 /// Download status for the Essential Mix.
 enum EssentialMixDownloadStatus {
@@ -523,6 +524,7 @@ class EssentialMixService extends ChangeNotifier {
     if (!await audioDir.exists()) {
       await audioDir.create(recursive: true);
     }
+    await excludeFromBackup(audioDir.path);
     return audioDir;
   }
 
@@ -534,6 +536,7 @@ class EssentialMixService extends ChangeNotifier {
     if (!await artworkDir.exists()) {
       await artworkDir.create(recursive: true);
     }
+    await excludeFromBackup(artworkDir.path);
     return artworkDir;
   }
 }

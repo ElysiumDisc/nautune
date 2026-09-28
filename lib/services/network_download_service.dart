@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../data/network_channels.dart';
 import '../models/network_channel.dart';
 import 'hive_init.dart';
+import '../utils/backup_exclusion.dart';
 
 /// Download status for a network channel.
 enum NetworkDownloadStatus {
@@ -857,6 +858,7 @@ class NetworkDownloadService extends ChangeNotifier {
     if (!await audioDir.exists()) {
       await audioDir.create(recursive: true);
     }
+    await excludeFromBackup(audioDir.path);
     return audioDir;
   }
 
@@ -868,6 +870,7 @@ class NetworkDownloadService extends ChangeNotifier {
     if (!await imageDir.exists()) {
       await imageDir.create(recursive: true);
     }
+    await excludeFromBackup(imageDir.path);
     return imageDir;
   }
 

@@ -10,8 +10,12 @@ import 'package:path_provider/path_provider.dart';
 
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_service.dart';
+import '../jellyfin/jellyfin_session.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../models/download_item.dart';
+import '../utils/download_migration.dart';
+import '../utils/download_paths.dart';
+import '../utils/progress_throttle.dart';
 import 'audio_cache_service.dart';
 import 'chart_cache_service.dart';
 import 'lyrics_service.dart';
@@ -19,6 +23,7 @@ import 'connectivity_service.dart';
 import 'hive_init.dart';
 import 'notification_service.dart';
 import 'waveform_service.dart';
+import '../utils/backup_exclusion.dart';
 
 /// Storage statistics for downloads AND cache
 class StorageStats {
@@ -117,7 +122,32 @@ class DownloadService extends ChangeNotifier {
   static const _boxName = 'nautune_downloads';
   static const _downloadsKey = 'downloads';
   static const _stallTimeout = Duration(seconds: 60);
+  static const _imageFetchTimeout = Duration(seconds: 15);
+  static const _durationProbeTimeout = Duration(seconds: 10);
   Box<dynamic>? _box;
+
+  // Downloads root: <Application Support>/downloads. Resolved (and the legacy
+  // Documents/downloads migrated) once; every path getter awaits it.
+  Future<Directory>? _rootFuture;
+  String? _rootPath;
+  // Legacy Documents/downloads path, kept only while the migration has not
+  // completed so records whose files were not moved yet can still be found.
+  String? _legacyRootPath;
+
+  // True once persisted records have been loaded; saves before that would
+  // overwrite the stored records with a partial in-memory map.
+  bool _loadCompleted = false;
+  bool _saveAfterLoad = false;
+  bool _disposed = false;
+
+  // Per-download cancellation tokens for in-flight downloads. Deleting or
+  // cancelling a download removes the token; the chunk loop notices and exits.
+  final Map<String, Object> _activeTokens = {};
+
+  // Session whose serverUrl/token/userId were last applied to restored tracks.
+  JellyfinSession? _hydratedSession;
+  // Polls for a Jellyfin session so restored queued downloads can resume.
+  Timer? _restoreKickTimer;
 
   DownloadService({
     required this.jellyfinService,
@@ -127,10 +157,158 @@ class DownloadService extends ChangeNotifier {
   }
 
   Future<void> _initializeAndLoad() async {
+    try {
+      await _downloadsRoot(); // runs the one-time Documents -> Support migration
+    } catch (e) {
+      debugPrint('DownloadService: failed to prepare downloads root: $e');
+    }
     await _initHive();
     await _loadDownloads();
     _rebuildIndexes(); // Build secondary indexes after loading
     await verifyAndCleanupDownloads();
+    _resumeRestoredQueue();
+  }
+
+  /// Resolve (once) the downloads root, migrating the legacy
+  /// Documents/downloads folder and excluding the root from backup.
+  Future<Directory> _downloadsRoot() {
+    return _rootFuture ??= _initDownloadsRoot().catchError(
+      (Object e, StackTrace st) {
+        _rootFuture = null; // allow a later retry
+        Error.throwWithStackTrace(e, st);
+      },
+    );
+  }
+
+  Future<Directory> _initDownloadsRoot() async {
+    final supportDir = await getApplicationSupportDirectory();
+    final root = Directory('${supportDir.path}/${DownloadPaths.folderName}');
+
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
+      final legacy = Directory('${docsDir.path}/${DownloadPaths.folderName}');
+      final migrated = await DownloadMigration.migrate(
+        from: legacy,
+        to: root,
+        log: (m) => debugPrint('DownloadService: $m'),
+      );
+      _legacyRootPath = migrated ? null : legacy.path;
+    } catch (e) {
+      debugPrint('DownloadService: legacy downloads migration skipped: $e');
+    }
+
+    if (!await root.exists()) {
+      await root.create(recursive: true);
+    }
+    _rootPath = root.absolute.path;
+    await excludeFromBackup(_rootPath!);
+    return root;
+  }
+
+  /// Relative form of an absolute download path, as persisted in Hive.
+  String _toStoredPath(String absolutePath) =>
+      DownloadPaths.toRelative(absolutePath, rootPath: _rootPath);
+
+  /// If [absolutePath] is missing but the legacy migration has not finished,
+  /// return the equivalent path under the legacy root when that file exists.
+  Future<String?> _findInLegacyRoot(String absolutePath) async {
+    final legacy = _legacyRootPath;
+    if (legacy == null || absolutePath.isEmpty) return null;
+    final candidate =
+        DownloadPaths.toAbsolute(_toStoredPath(absolutePath), legacy);
+    if (candidate.isEmpty) return null;
+    return await File(candidate).exists() ? candidate : null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Session hydration: records rebuilt from storage have no serverUrl / token /
+  // userId, so playback reporting and streaming fallback cannot work for them.
+  // ---------------------------------------------------------------------------
+
+  JellyfinTrack _hydrateTrack(JellyfinTrack track, JellyfinSession session) {
+    final serverUrl = session.serverUrl;
+    final token = session.credentials.accessToken;
+    final userId =
+        session.credentials.userId.isEmpty ? null : session.credentials.userId;
+    if (serverUrl.isEmpty) return track;
+    if (track.serverUrl == null || track.token == null) {
+      return track.copyWith(
+        serverUrl: track.serverUrl ?? serverUrl,
+        token: token,
+        userId: track.userId ?? userId,
+      );
+    }
+    // Same server, refreshed credentials (re-login): keep the track current.
+    if (track.serverUrl == serverUrl &&
+        (track.token != token || (userId != null && track.userId != userId))) {
+      return track.copyWith(token: token, userId: userId);
+    }
+    return track;
+  }
+
+  /// Apply the current Jellyfin session to downloaded tracks when the session
+  /// changed since the last call. Cheap (identity check) when nothing changed.
+  void _syncSessionFields() {
+    final session = jellyfinService.session;
+    if (identical(session, _hydratedSession)) return;
+    _hydratedSession = session;
+    if (session == null || session.isDemo) return;
+    var changed = false;
+    for (final entry in _downloads.entries.toList()) {
+      final item = entry.value;
+      if (item.isDemoAsset) continue;
+      final hydrated = _hydrateTrack(item.track, session);
+      if (!identical(hydrated, item.track)) {
+        _downloads[entry.key] = item.copyWith(track: hydrated);
+        changed = true;
+      }
+    }
+    if (changed) {
+      // Invalidate cached lists without notifying (may run inside a getter
+      // during build); the fresh values are returned on this same call.
+      _sortedDownloadsCache = null;
+      _completedDownloadsCache = null;
+      _activeDownloadsCache = null;
+    }
+  }
+
+  /// Call after the Jellyfin session is restored, created, or refreshed.
+  /// Hydrates downloaded tracks with serverUrl/token/userId and resumes
+  /// downloads that were restored from storage. Also happens automatically
+  /// (lazily on access and via a short poll while restored downloads wait),
+  /// so calling this is optional but makes it immediate.
+  void onSessionChanged() {
+    _syncSessionFields();
+    if (!_disposed) notifyListeners();
+    _resumeRestoredQueue();
+  }
+
+  /// Start processing downloads restored from storage once the service is
+  /// loaded and a Jellyfin session exists. The session is restored after
+  /// download settings (Wi-Fi only / concurrency) are applied, so waiting for
+  /// it also ensures those settings are respected.
+  void _resumeRestoredQueue() {
+    if (_disposed || !_loadCompleted || _downloadQueue.isEmpty) return;
+    if (jellyfinService.session != null) {
+      _restoreKickTimer?.cancel();
+      _restoreKickTimer = null;
+      _syncSessionFields();
+      unawaited(_processQueue());
+      return;
+    }
+    _restoreKickTimer ??=
+        Timer.periodic(const Duration(seconds: 2), (timer) {
+      if (_disposed || _downloadQueue.isEmpty) {
+        timer.cancel();
+        _restoreKickTimer = null;
+        return;
+      }
+      if (jellyfinService.session != null) {
+        timer.cancel();
+        _restoreKickTimer = null;
+        _resumeRestoredQueue();
+      }
+    });
   }
 
   Future<void> _initHive() async {
@@ -196,6 +374,7 @@ class DownloadService extends ChangeNotifier {
   List<DownloadItem>? _activeDownloadsCache;
 
   List<DownloadItem> get downloads {
+    _syncSessionFields();
     _sortedDownloadsCache ??= _downloads.values.toList()
       ..sort((a, b) => b.queuedAt.compareTo(a.queuedAt));
     return _sortedDownloadsCache!;
@@ -211,20 +390,31 @@ class DownloadService extends ChangeNotifier {
 
   // The offline repository touches this getter many times per library refresh
   // (~9 sites × N methods). Cache the filtered list and invalidate on notify.
-  List<DownloadItem> get completedDownloads =>
-      _completedDownloadsCache ??=
-          downloads.where((d) => d.isCompleted).toList(growable: false);
+  List<DownloadItem> get completedDownloads {
+    _syncSessionFields();
+    return _completedDownloadsCache ??=
+        downloads.where((d) => d.isCompleted).toList(growable: false);
+  }
 
-  List<DownloadItem> get activeDownloads =>
-      _activeDownloadsCache ??=
-          downloads.where((d) => d.isDownloading || d.isQueued).toList(growable: false);
+  List<DownloadItem> get activeDownloads {
+    _syncSessionFields();
+    return _activeDownloadsCache ??= downloads
+        .where((d) => d.isDownloading || d.isQueued)
+        .toList(growable: false);
+  }
 
   bool isDownloaded(String trackId) =>
       _downloads[trackId]?.isCompleted ?? false;
 
-  DownloadItem? getDownload(String trackId) => _downloads[trackId];
+  DownloadItem? getDownload(String trackId) {
+    _syncSessionFields();
+    return _downloads[trackId];
+  }
 
-  JellyfinTrack? trackFor(String trackId) => _downloads[trackId]?.track;
+  JellyfinTrack? trackFor(String trackId) {
+    _syncSessionFields();
+    return _downloads[trackId]?.track;
+  }
 
   /// Get all track IDs for an album (O(1) lookup)
   Set<String> trackIdsForAlbum(String albumId) => _albumIndex[albumId] ?? {};
@@ -316,6 +506,9 @@ class DownloadService extends ChangeNotifier {
     _connectivitySub = service.onStatusChange.listen((online) {
       if (online && _wifiOnlyDownloads && _pausedForMobileData) {
         unawaited(resumeIfOnWifi());
+      } else if (online && _activeDownloads == 0) {
+        // Back online with queued work (e.g. restored after relaunch).
+        _resumeRestoredQueue();
       }
     });
   }
@@ -481,6 +674,7 @@ class DownloadService extends ChangeNotifier {
     );
 
     _demoDownloadIds.add(track.id);
+    _addToIndexes(track);
     notifyListeners();
     await _saveDownloads();
   }
@@ -494,10 +688,21 @@ class DownloadService extends ChangeNotifier {
         return;
       }
 
+      String? rootPath = _rootPath;
+      if (rootPath == null) {
+        try {
+          rootPath = (await _downloadsRoot()).absolute.path;
+        } catch (e) {
+          debugPrint('DownloadService: downloads root unavailable at load: $e');
+        }
+      }
+
       final raw = box.get(_downloadsKey);
       if (raw != null && raw is Map) {
-        _downloads.clear();
         bool removedDemoEntries = false;
+        bool needsResave = false;
+        final restoredQueue = <DownloadItem>[];
+        final session = jellyfinService.session;
 
         for (final entry in raw.entries) {
           final trackId = entry.key as String;
@@ -560,27 +765,82 @@ class DownloadService extends ChangeNotifier {
             productionYear: (itemData['trackProductionYear'] as num?)?.toInt(),
           );
 
-          final item = DownloadItem.fromJson(itemData, track);
-          if (item != null) {
-            if (!_demoModeEnabled && item.isDemoAsset) {
-              removedDemoEntries = true;
-              continue;
-            }
-            _downloads[trackId] = item;
+          var item = DownloadItem.fromJson(itemData, track);
+          if (item == null) continue;
+          if (!_demoModeEnabled && item.isDemoAsset) {
+            removedDemoEntries = true;
+            continue;
           }
+          // Entries created in memory before load finished win.
+          if (_downloads.containsKey(trackId)) continue;
+
+          // Stored paths are relative to the downloads root; legacy records
+          // hold absolute paths from a possibly stale app container.
+          final stored = item.localPath;
+          if (rootPath != null && stored.isNotEmpty) {
+            final resolved = DownloadPaths.resolve(stored, rootPath);
+            if (stored != DownloadPaths.toRelative(stored, rootPath: rootPath)) {
+              needsResave = true; // migrate record to the relative form
+            }
+            if (resolved != stored) item = item.copyWith(localPath: resolved);
+          }
+
+          if (session != null && !session.isDemo && !item.isDemoAsset) {
+            item = item.copyWith(track: _hydrateTrack(item.track, session));
+          }
+
+          if (item.isDownloading) {
+            // The app was killed mid-download: the transfer is gone. Drop the
+            // partial file and queue it again.
+            if (item.localPath.isNotEmpty) {
+              try {
+                final partial = File('${item.localPath}.tmp');
+                if (await partial.exists()) await partial.delete();
+              } catch (e) {
+                debugPrint('DownloadService: partial cleanup failed: $e');
+              }
+            }
+            item = item.copyWith(
+              status: DownloadStatus.queued,
+              progress: 0.0,
+              downloadedBytes: 0,
+            );
+            needsResave = true;
+          }
+
+          _downloads[trackId] = item;
+          if (item.isQueued) restoredQueue.add(item);
         }
 
-        if (removedDemoEntries) {
+        // Re-enqueue restored work in its original order.
+        restoredQueue.sort((a, b) => a.queuedAt.compareTo(b.queuedAt));
+        for (final item in restoredQueue) {
+          if (!_downloadQueue.contains(item.track.id)) {
+            _downloadQueue.add(item.track.id);
+          }
+        }
+        if (restoredQueue.isNotEmpty) {
+          debugPrint('DownloadService: restored ${restoredQueue.length} queued download(s)');
+        }
+        if (session != null) _hydratedSession = session;
+
+        _loadCompleted = true;
+        if (removedDemoEntries || needsResave || _saveAfterLoad) {
+          _saveAfterLoad = false;
           await _saveDownloads();
         }
         notifyListeners();
       }
     } catch (e) {
       debugPrint('Error loading downloads: $e');
+    } finally {
+      _loadCompleted = true;
+      if (_saveAfterLoad) {
+        _saveAfterLoad = false;
+        unawaited(_saveDownloads());
+      }
     }
   }
-
-
 
   // Single-flight coalescer for Hive writes. Many async paths can call
   // _saveDownloads concurrently (download progress, retries, owner merges).
@@ -614,12 +874,20 @@ class DownloadService extends ChangeNotifier {
         debugPrint('Hive box not initialized, cannot save');
         return;
       }
+      if (!_loadCompleted) {
+        // Saving now would replace the stored records with a partial map.
+        _saveAfterLoad = true;
+        return;
+      }
 
       // Snapshot the map so a concurrent mutation during box.put doesn't
-      // corrupt the data we serialize.
+      // corrupt the data we serialize. Paths are stored relative to the
+      // downloads root so they survive container moves.
       final data = <String, dynamic>{};
       for (final entry in _downloads.entries) {
-        data[entry.key] = entry.value.toJson();
+        final json = entry.value.toJson();
+        json['localPath'] = _toStoredPath(entry.value.localPath);
+        data[entry.key] = json;
       }
 
       await box.put(_downloadsKey, data);
@@ -628,20 +896,42 @@ class DownloadService extends ChangeNotifier {
     }
   }
 
-  /// Remove stale .tmp files left by interrupted downloads
+  /// Remove stale .tmp files left by interrupted downloads. Skips files that
+  /// belong to a download currently in flight in this process.
   Future<void> _cleanupStaleTmpFiles() async {
     try {
-      final docsDir = await getApplicationDocumentsDirectory();
-      final downloadsDir = Directory('${docsDir.path}/downloads');
+      final downloadsDir = await _downloadsRoot();
       if (!await downloadsDir.exists()) return;
       await for (final entity in downloadsDir.list()) {
         if (entity is File && entity.path.endsWith('.tmp')) {
+          final name = entity.uri.pathSegments.last;
+          final ownerId = name.split('_').first;
+          if (_activeTokens.containsKey(ownerId)) continue;
           debugPrint('Cleaning up stale tmp file: ${entity.path}');
           await entity.delete();
         }
       }
     } catch (e) {
       debugPrint('Error cleaning up tmp files: $e');
+    }
+  }
+
+  /// Delete album artwork for [albumIds] that no remaining download
+  /// (any status) references. Artwork is stored per album, not per track.
+  Future<void> _deleteUnreferencedArtwork(Iterable<String> albumIds) async {
+    for (final albumId in albumIds.toSet()) {
+      final stillReferenced = _downloads.values
+          .any((d) => (d.track.albumId ?? d.track.id) == albumId);
+      if (stillReferenced) continue;
+      try {
+        final artworkFile = File(await _getArtworkPath(albumId));
+        if (await artworkFile.exists()) {
+          await artworkFile.delete();
+          debugPrint('Deleted orphaned artwork for album: $albumId');
+        }
+      } catch (e) {
+        debugPrint('Error cleaning artwork for $albumId: $e');
+      }
     }
   }
 
@@ -652,49 +942,26 @@ class DownloadService extends ChangeNotifier {
     final toRemove = <String>{};  // Use Set to prevent duplicates
     bool pathsUpdated = false;
 
-    for (final entry in _downloads.entries) {
+    for (final entry in _downloads.entries.toList()) {
       final trackId = entry.key;
       final item = entry.value;
 
       if (item.isCompleted) {
         final file = File(item.localPath);
         if (!await file.exists()) {
-          // Attempt rescue for iOS path changes
-          bool rescued = false;
-          if (Platform.isIOS) {
-            try {
-              final filename = item.localPath.split(Platform.pathSeparator).last;
-              final dir = await getApplicationDocumentsDirectory();
-              // Reconstruct path: Documents/downloads/filename
-              final newPath = '${dir.path}/downloads/$filename';
-              final newFile = File(newPath);
-              
-              if (await newFile.exists()) {
-                debugPrint('Rescued download path for ${item.track.name}: $newPath');
-                _downloads[trackId] = item.copyWith(localPath: newPath);
-                rescued = true;
-                pathsUpdated = true;
-              }
-            } catch (e) {
-              debugPrint('Failed to rescue iOS path for $trackId: $e');
-            }
+          // The legacy Documents/downloads migration may not have finished
+          // (e.g. interrupted, or a file failed to move): use the legacy
+          // copy until the next launch retries the move.
+          final legacyPath = await _findInLegacyRoot(item.localPath);
+          if (legacyPath != null) {
+            debugPrint('Using legacy download path for ${item.track.name}: $legacyPath');
+            _downloads[trackId] = item.copyWith(localPath: legacyPath);
+            pathsUpdated = true;
+            continue;
           }
 
-          if (!rescued) {
-            debugPrint('Missing file for track: ${item.track.name} (${item.localPath})');
-            toRemove.add(trackId);
-
-            // Also clean up artwork
-            try {
-              final artworkPath = await _getArtworkPath(trackId);
-              final artworkFile = File(artworkPath);
-              if (await artworkFile.exists()) {
-                await artworkFile.delete();
-              }
-            } catch (e) {
-              debugPrint('Error cleaning artwork: $e');
-            }
-          }
+          debugPrint('Missing file for track: ${item.track.name} (${item.localPath})');
+          toRemove.add(trackId);
         }
       }
     }
@@ -707,10 +974,18 @@ class DownloadService extends ChangeNotifier {
     // Remove orphaned entries (batch operation)
     if (toRemove.isNotEmpty) {
       debugPrint('Cleaning up ${toRemove.length} orphaned download(s)');
+      final affectedAlbums = <String>[];
       for (final trackId in toRemove) {
-        _downloads.remove(trackId);
+        final removed = _downloads.remove(trackId);
         _demoDownloadIds.remove(trackId);  // Also remove from demo set
+        if (removed != null) {
+          _removeFromIndexes(removed.track);
+          affectedAlbums.add(removed.track.albumId ?? removed.track.id);
+        }
       }
+      // Artwork is keyed by album id; only delete it when no remaining
+      // download references that album.
+      await _deleteUnreferencedArtwork(affectedAlbums);
       notifyListeners();
       await _saveDownloads();
       debugPrint('Cleanup complete');
@@ -729,9 +1004,8 @@ class DownloadService extends ChangeNotifier {
   }
 
   Future<String> _getDownloadPath(JellyfinTrack track, {String? extension}) async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final downloadsDir = Directory('${docsDir.path}/downloads');
-    
+    final downloadsDir = await _downloadsRoot();
+
     if (!await downloadsDir.exists()) {
       await downloadsDir.create(recursive: true);
     }
@@ -746,8 +1020,8 @@ class DownloadService extends ChangeNotifier {
 
   /// Get artwork path - uses albumId to avoid duplicating same album art for every track
   Future<String> _getArtworkPath(String albumId) async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final artworkDir = Directory('${docsDir.path}/downloads/artwork');
+    final root = await _downloadsRoot();
+    final artworkDir = Directory('${root.path}/artwork');
 
     if (!await artworkDir.exists()) {
       await artworkDir.create(recursive: true);
@@ -764,10 +1038,11 @@ class DownloadService extends ChangeNotifier {
     return _getArtworkPath(albumId);
   }
 
-  Future<void> _downloadArtwork(JellyfinTrack track) async {
+  /// Returns true if artwork is present (already cached or newly fetched).
+  Future<bool> _downloadArtwork(JellyfinTrack track) async {
     try {
       final artworkUrl = track.artworkUrl();
-      if (artworkUrl == null) return;
+      if (artworkUrl == null) return false;
 
       // Use albumId for artwork storage to avoid duplicates
       final albumId = track.albumId ?? track.id;
@@ -775,29 +1050,33 @@ class DownloadService extends ChangeNotifier {
       final file = File(artworkPath);
 
       if (await file.exists()) {
-        return; // Already cached for this album
+        return true; // Already cached for this album
       }
 
-      final response = await http.get(Uri.parse(artworkUrl));
+      final response = await _httpClient
+          .get(Uri.parse(artworkUrl))
+          .timeout(_imageFetchTimeout);
       if (response.statusCode == 200) {
         // Validate response is actually an image before caching
         final contentType = response.headers['content-type'] ?? '';
         if (!contentType.startsWith('image/')) {
           debugPrint('Artwork response is not an image ($contentType), skipping');
-          return;
+          return false;
         }
-        await file.writeAsBytes(response.bodyBytes);
+        await file.writeAsBytes(response.bodyBytes, flush: true);
         debugPrint('Artwork cached for album: $albumId');
+        return true;
       }
     } catch (e) {
       debugPrint('Failed to cache artwork for ${track.name}: $e');
     }
+    return false;
   }
 
   /// Get artist image path - stores artist images by artist ID
   Future<String> _getArtistImagePath(String artistId) async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final artistImageDir = Directory('${docsDir.path}/downloads/artists');
+    final root = await _downloadsRoot();
+    final artistImageDir = Directory('${root.path}/artists');
 
     if (!await artistImageDir.exists()) {
       await artistImageDir.create(recursive: true);
@@ -806,14 +1085,14 @@ class DownloadService extends ChangeNotifier {
     return File('${artistImageDir.path}/$artistId.jpg').absolute.path;
   }
 
-  /// Download artist image for offline use
-  Future<void> _downloadArtistImage(String artistId) async {
+  /// Download artist image for offline use. Returns true if newly fetched.
+  Future<bool> _downloadArtistImage(String artistId) async {
     try {
       final artistImagePath = await _getArtistImagePath(artistId);
       final file = File(artistImagePath);
 
       if (await file.exists()) {
-        return; // Already cached for this artist
+        return false; // Already cached for this artist
       }
 
       // Build artist image URL using Jellyfin service
@@ -822,24 +1101,34 @@ class DownloadService extends ChangeNotifier {
         maxWidth: 400,
       );
 
-      final response = await http.get(
-        Uri.parse(imageUrl),
-        headers: jellyfinService.imageHeaders(),
-      );
+      final response = await _httpClient
+          .get(
+            Uri.parse(imageUrl),
+            headers: jellyfinService.imageHeaders(),
+          )
+          .timeout(_imageFetchTimeout);
       if (response.statusCode == 200) {
-        await file.writeAsBytes(response.bodyBytes);
+        await file.writeAsBytes(response.bodyBytes, flush: true);
         debugPrint('Artist image cached for: $artistId');
+        return true;
       }
     } catch (e) {
       debugPrint('Failed to cache artist image for $artistId: $e');
     }
+    return false;
   }
 
-  /// Download all artist images for a track
-  Future<void> _downloadArtistImages(JellyfinTrack track) async {
+  /// Best-effort artwork + artist image fetch after a download completed.
+  /// Never blocks completion; each request times out after 15s.
+  Future<void> _fetchImagesForTrack(JellyfinTrack track) async {
+    var fetchedAny = await _downloadArtwork(track);
     for (final artistId in track.artistIds) {
-      await _downloadArtistImage(artistId);
+      if (_disposed) return;
+      if (await _downloadArtistImage(artistId)) fetchedAny = true;
     }
+    // Image files are addressed by album/artist id, not stored in records;
+    // notify so offline artwork widgets reload.
+    if (fetchedAny && !_disposed) _throttledNotify();
   }
 
   /// Get artist image file for offline display
@@ -939,6 +1228,7 @@ class DownloadService extends ChangeNotifier {
       owners: {'demo'}, // Add 'demo' as owner for simulated downloads
     );
     _demoDownloadIds.add(track.id);
+    _addToIndexes(track);
     notifyListeners();
     await _saveDownloads();
   }
@@ -1080,6 +1370,17 @@ class DownloadService extends ChangeNotifier {
     _activeDownloads++;
     _isDownloading = true;
 
+    // Cancellation token: deleteDownload/deleteDownloadReference/clearAll
+    // remove it, and the transfer loop exits cleanly without re-adding state.
+    final cancelToken = Object();
+    _activeTokens[trackId] = cancelToken;
+    bool isCancelled() =>
+        !identical(_activeTokens[trackId], cancelToken) ||
+        !_downloads.containsKey(trackId);
+    void throwIfCancelled() {
+      if (isCancelled()) throw const _DownloadCancelled();
+    }
+
     _downloads[trackId] = item.copyWith(
       status: DownloadStatus.downloading,
       progress: 0.0,
@@ -1089,6 +1390,30 @@ class DownloadService extends ChangeNotifier {
     // Hoisted so the catch block can clean up the actual tmp file even when the
     // detected extension differs from item.localPath's extension.
     String? activeTmpPath;
+    IOSink? sink;
+    Future<void> closeSink() async {
+      final s = sink;
+      sink = null;
+      if (s == null) return;
+      try {
+        await s.close();
+      } catch (e) {
+        debugPrint('DownloadService: closing partial file failed: $e');
+      }
+    }
+
+    Future<void> deleteTmp() async {
+      // Only the tmp file this attempt created; never a path another attempt
+      // for the same track might be writing.
+      final cleanupPath = activeTmpPath;
+      if (cleanupPath == null) return;
+      try {
+        final tmpFile = File(cleanupPath);
+        if (await tmpFile.exists()) await tmpFile.delete();
+      } catch (e) {
+        debugPrint('DownloadService: partial temp cleanup failed: $e');
+      }
+    }
 
     try {
       final url = item.track.downloadUrl(jellyfinService.baseUrl, jellyfinService.token);
@@ -1097,6 +1422,7 @@ class DownloadService extends ChangeNotifier {
       if (response.statusCode != 200) {
         throw Exception('Failed to download: HTTP ${response.statusCode}');
       }
+      throwIfCancelled();
 
       // Detect file extension from Content-Type header
       String extension = 'flac'; // Default to FLAC
@@ -1119,19 +1445,29 @@ class DownloadService extends ChangeNotifier {
 
       // Get correct path with detected extension
       final correctPath = await _getDownloadPath(item.track, extension: extension);
+      throwIfCancelled();
 
       // Update item with correct path if it changed
       if (correctPath != item.localPath) {
-        _downloads[trackId] = item.copyWith(localPath: correctPath);
+        _downloads[trackId] = _downloads[trackId]!.copyWith(localPath: correctPath);
       }
 
-      // Write to temp file first, then atomic rename to prevent corrupt partial files
-      final tmpPath = '$correctPath.tmp';
+      // Write to temp file first, then atomic rename to prevent corrupt partial
+      // files. The tmp name is unique per attempt so a cancelled transfer can
+      // never clobber a fresh re-download of the same track.
+      final tmpPath =
+          '$correctPath.${DateTime.now().microsecondsSinceEpoch}.tmp';
       activeTmpPath = tmpPath;
       final tmpFile = File(tmpPath);
-      final sink = tmpFile.openWrite();
+      sink = tmpFile.openWrite();
       final totalBytes = response.contentLength ?? 0;
       int downloadedBytes = 0;
+      final throttle = ProgressThrottle();
+      // System notification updates are rate-limited more aggressively.
+      final systemNotifyThrottle = ProgressThrottle(
+        interval: const Duration(seconds: 1),
+        byteInterval: 1 << 40,
+      );
 
       // No-progress timeout: Stream.timeout fires when no event arrives within
       // the duration, so a server that sends headers but stalls the body won't
@@ -1143,9 +1479,14 @@ class DownloadService extends ChangeNotifier {
         ),
       );
 
+      // Throwing inside the loop cancels the stream subscription, which
+      // aborts the HTTP transfer.
       await for (final chunk in stalledStream) {
-        sink.add(chunk);
+        throwIfCancelled();
+        sink!.add(chunk);
         downloadedBytes += chunk.length;
+
+        if (!throttle.shouldEmit(downloadedBytes, totalBytes)) continue;
 
         // Use -1.0 for indeterminate progress when Content-Length is unknown
         final progress = totalBytes > 0 ? downloadedBytes / totalBytes : -1.0;
@@ -1155,47 +1496,78 @@ class DownloadService extends ChangeNotifier {
           downloadedBytes: downloadedBytes,
         );
 
-        // Use throttled notify for progress updates (max 2Hz), immediate notify on completion
-        if (progress == 1.0) {
+        // Throttled notify for progress (max 2Hz), immediate on completion
+        if (progress >= 1.0) {
           notifyListeners();
-          _updateNotification();
-        } else if (downloadedBytes % (500 * 1024) == 0) {
+        } else {
           _throttledNotify();
+        }
+        if (systemNotifyThrottle.shouldEmit(downloadedBytes, totalBytes)) {
           _updateNotification();
         }
       }
 
-      await sink.close();
+      await sink!.close();
+      sink = null;
+      throwIfCancelled();
       // Atomic rename: only moves the file to final path after fully written
       await tmpFile.rename(correctPath);
+      activeTmpPath = null;
 
-      // Extract actual duration from downloaded file
-      JellyfinTrack updatedTrack = item.track;
-      final actualDuration = await _extractAudioDuration(correctPath);
-      if (actualDuration != null) {
-        final actualTicks = actualDuration.inMicroseconds * 10;
-        updatedTrack = item.track.copyWith(runTimeTicks: actualTicks);
-        debugPrint('Updated duration for ${item.track.name}: ${actualDuration.inSeconds}s (was ${item.track.duration?.inSeconds ?? 0}s)');
+      if (isCancelled()) {
+        // Deleted while finishing: don't leave an untracked file behind.
+        try {
+          await File(correctPath).delete();
+        } catch (_) {}
+        throw const _DownloadCancelled();
       }
 
       // Get file size and cache it to avoid repeated file I/O in getTotalDownloadSize
       final fileSize = await File(correctPath).length();
+      throwIfCancelled();
 
+      // Persist completion immediately: the audio is on disk. Everything
+      // after this point (duration probe, images, lyrics, waveform) is
+      // best-effort and must not be able to lose a finished download.
       _downloads[trackId] = _downloads[trackId]!.copyWith(
-        track: updatedTrack,
         status: DownloadStatus.completed,
         progress: 1.0,
+        totalBytes: totalBytes > 0 ? totalBytes : fileSize,
+        downloadedBytes: downloadedBytes,
         completedAt: DateTime.now(),
         fileSizeBytes: fileSize,
         clearErrorKind: true,
       );
       _retryAttempts.remove(trackId);
+      _addToIndexes(_downloads[trackId]!.track);
+      notifyListeners();
+      await _saveDownloads();
+      debugPrint('Download completed: ${item.track.name} ($extension)');
 
-      // Download artwork after track completes
-      await _downloadArtwork(updatedTrack);
+      // Extract actual duration from downloaded file (bounded).
+      JellyfinTrack updatedTrack = _downloads[trackId]?.track ?? item.track;
+      Duration? actualDuration;
+      try {
+        actualDuration = await _extractAudioDuration(correctPath)
+            .timeout(_durationProbeTimeout);
+      } on TimeoutException {
+        debugPrint('Duration probe timed out for ${item.track.name}');
+      }
+      final current = _downloads[trackId];
+      if (actualDuration != null && current != null && current.isCompleted) {
+        final actualTicks = actualDuration.inMicroseconds * 10;
+        if (actualTicks != current.track.runTimeTicks) {
+          updatedTrack = current.track.copyWith(runTimeTicks: actualTicks);
+          _downloads[trackId] = current.copyWith(track: updatedTrack);
+          debugPrint('Updated duration for ${item.track.name}: ${actualDuration.inSeconds}s (was ${item.track.duration?.inSeconds ?? 0}s)');
+          notifyListeners();
+          await _saveDownloads();
+        }
+      }
 
-      // Download artist images for offline use
-      await _downloadArtistImages(updatedTrack);
+      // Artwork + artist images: best-effort, time-bounded, off the
+      // download slot so they never hold up the queue.
+      unawaited(_fetchImagesForTrack(updatedTrack));
 
       // Pre-cache lyrics for offline playback
       if (_lyricsService != null) {
@@ -1211,31 +1583,34 @@ class DownloadService extends ChangeNotifier {
           correctPath,
         ));
       }
-
-      notifyListeners();
-      await _saveDownloads();
-
-      debugPrint('Download completed: ${updatedTrack.name} ($extension)');
+    } on _DownloadCancelled {
+      debugPrint('Download cancelled: ${item.track.name}');
+      await closeSink();
+      await deleteTmp();
     } catch (e) {
-      debugPrint('Download failed for ${item.track.name}: $e');
-      // Clean up partial temp file on failure. Prefer the actual tmp path used
-      // during streaming (correctPath.tmp) — falls back to item.localPath when
-      // we failed before the extension was negotiated.
-      final cleanupPath = activeTmpPath ?? '${item.localPath}.tmp';
-      try {
-        final tmpFile = File(cleanupPath);
-        if (await tmpFile.exists()) await tmpFile.delete();
-      } catch (e) {
-        debugPrint('DownloadService: partial temp cleanup failed: $e');
+      await closeSink();
+      await deleteTmp();
+      if (isCancelled()) {
+        // Deleted mid-transfer; the error is a side effect of cancellation.
+        debugPrint('Download cancelled: ${item.track.name} ($e)');
+      } else {
+        debugPrint('Download failed for ${item.track.name}: $e');
+        final current = _downloads[trackId] ?? item;
+        if (!current.isCompleted) {
+          _downloads[trackId] = current.copyWith(
+            status: DownloadStatus.failed,
+            errorMessage: e.toString(),
+            errorKind: _classifyDownloadError(e),
+          );
+          notifyListeners();
+          await _saveDownloads();
+        }
       }
-      _downloads[trackId] = item.copyWith(
-        status: DownloadStatus.failed,
-        errorMessage: e.toString(),
-        errorKind: _classifyDownloadError(e),
-      );
-      notifyListeners();
-      await _saveDownloads();
     } finally {
+      await closeSink();
+      if (identical(_activeTokens[trackId], cancelToken)) {
+        _activeTokens.remove(trackId);
+      }
       _activeDownloads--;
       if (_activeDownloads == 0) {
         _isDownloading = false;
@@ -1259,6 +1634,9 @@ class DownloadService extends ChangeNotifier {
       // This method is for permanently deleting a download regardless of owners
       // (e.g., from an "all downloads" list)
       // If there are owners, this implies a forced deletion.
+      // Signal an in-flight transfer (if any) to stop; it cleans up its own
+      // partial file and does not write any state back.
+      _activeTokens.remove(trackId);
       final deleted = await _performDelete(trackId, item);
       if (!deleted) {
         debugPrint('⚠️ Failed to delete files for ${item.track.name}');
@@ -1298,6 +1676,7 @@ class DownloadService extends ChangeNotifier {
       if (item.owners.isEmpty) {
         // If download is queued or in progress, just remove from queue/map
         if (item.isQueued || item.isDownloading) {
+          _activeTokens.remove(trackId); // stop an in-flight transfer
           _downloadQueue.remove(trackId);
           _removeFromIndexes(item.track);
           _downloads.remove(trackId);
@@ -1403,7 +1782,8 @@ class DownloadService extends ChangeNotifier {
       }
     }
 
-    // Clear all state
+    // Clear all state (removing tokens stops in-flight transfers)
+    _activeTokens.clear();
     _downloads.clear();
     _downloadQueue.clear();
     _demoDownloadIds.clear();
@@ -1411,52 +1791,55 @@ class DownloadService extends ChangeNotifier {
     _artistIndex.clear();
     _artistIdIndex.clear();
 
-    // Delete entire artwork folder to handle any orphaned/corrupted artwork
+    Directory? root;
     try {
-      final docsDir = await getApplicationDocumentsDirectory();
-      final artworkDir = Directory('${docsDir.path}/downloads/artwork');
-
-      if (await artworkDir.exists()) {
-        await artworkDir.delete(recursive: true);
-        debugPrint('Deleted artwork folder');
-      }
+      root = await _downloadsRoot();
     } catch (e) {
-      debugPrint('Error clearing artwork folder: $e');
+      debugPrint('Error resolving downloads root: $e');
     }
 
-    // Delete entire artists folder (artist images)
-    try {
-      final docsDir = await getApplicationDocumentsDirectory();
-      final artistsDir = Directory('${docsDir.path}/downloads/artists');
-
-      if (await artistsDir.exists()) {
-        await artistsDir.delete(recursive: true);
-        debugPrint('Deleted artists folder');
+    if (root != null) {
+      // Delete entire artwork folder to handle any orphaned/corrupted artwork
+      try {
+        final artworkDir = Directory('${root.path}/artwork');
+        if (await artworkDir.exists()) {
+          await artworkDir.delete(recursive: true);
+          debugPrint('Deleted artwork folder');
+        }
+      } catch (e) {
+        debugPrint('Error clearing artwork folder: $e');
       }
-    } catch (e) {
-      debugPrint('Error clearing artists folder: $e');
-    }
 
-    // Also scan for orphaned audio files not in our tracking
-    try {
-      final docsDir = await getApplicationDocumentsDirectory();
-      final downloadsDir = Directory('${docsDir.path}/downloads');
+      // Delete entire artists folder (artist images)
+      try {
+        final artistsDir = Directory('${root.path}/artists');
+        if (await artistsDir.exists()) {
+          await artistsDir.delete(recursive: true);
+          debugPrint('Deleted artists folder');
+        }
+      } catch (e) {
+        debugPrint('Error clearing artists folder: $e');
+      }
 
-      if (await downloadsDir.exists()) {
-        await for (final entity in downloadsDir.list()) {
-          if (entity is File) {
-            // Delete audio files (not directories)
-            try {
-              await entity.delete();
-              debugPrint('Deleted orphaned file: ${entity.path}');
-            } catch (e) {
-              debugPrint('Error deleting orphaned file: $e');
+      // Also scan for orphaned audio files not in our tracking
+      try {
+        if (await root.exists()) {
+          await for (final entity in root.list()) {
+            if (entity is File &&
+                !entity.path.endsWith(DownloadMigration.markerName)) {
+              // Delete audio files (not directories)
+              try {
+                await entity.delete();
+                debugPrint('Deleted orphaned file: ${entity.path}');
+              } catch (e) {
+                debugPrint('Error deleting orphaned file: $e');
+              }
             }
           }
         }
+      } catch (e) {
+        debugPrint('Error scanning for orphaned files: $e');
       }
-    } catch (e) {
-      debugPrint('Error scanning for orphaned files: $e');
     }
 
     await _saveDownloads();
@@ -1464,9 +1847,27 @@ class DownloadService extends ChangeNotifier {
     debugPrint('✅ Downloads reset complete');
   }
 
+  /// Retry any download that has not completed. Failed downloads retry with
+  /// exponential backoff (capped attempts); stuck queued/downloading/paused
+  /// records (e.g. restored after iOS killed the app) are re-queued at once.
   Future<void> retryDownload(String trackId) async {
     final item = _downloads[trackId];
-    if (item == null || !item.isFailed) return;
+    if (item == null || item.isCompleted) return;
+    // Genuinely transferring right now in this process: nothing to do.
+    if (_activeTokens.containsKey(trackId)) return;
+
+    if (!item.isFailed) {
+      _downloads[trackId] = item.copyWith(
+        status: DownloadStatus.queued,
+        progress: 0.0,
+        clearErrorKind: true,
+      );
+      if (!_downloadQueue.contains(trackId)) _downloadQueue.add(trackId);
+      notifyListeners();
+      await _saveDownloads();
+      unawaited(_processQueue());
+      return;
+    }
 
     final attempt = _retryAttempts[trackId] ?? 0;
     if (attempt >= _maxRetryAttempts) {
@@ -1489,7 +1890,7 @@ class DownloadService extends ChangeNotifier {
       // Re-check: user may have deleted the item or completed it via another path.
       final current = _downloads[trackId];
       if (current == null || !current.isQueued) return;
-      _downloadQueue.add(trackId);
+      if (!_downloadQueue.contains(trackId)) _downloadQueue.add(trackId);
       await _saveDownloads();
       unawaited(_processQueue());
     }));
@@ -1746,8 +2147,17 @@ class DownloadService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    _restoreKickTimer?.cancel();
+    _notifyThrottle?.cancel();
+    _activeTokens.clear();
     _connectivitySub?.cancel();
     _httpClient.close();
     super.dispose();
   }
+}
+
+/// Internal signal: the download was deleted/cancelled while in flight.
+class _DownloadCancelled implements Exception {
+  const _DownloadCancelled();
 }

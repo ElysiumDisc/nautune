@@ -5,7 +5,7 @@ let flutterEngine = FlutterEngine(name: "SharedEngine", project: nil, allowHeadl
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
-  var backgroundTaskIdentifier: UIBackgroundTaskIdentifier = .invalid
+  private var fileAttributesChannel: FlutterMethodChannel?
 
   override func application(
     _ application: UIApplication,
@@ -26,26 +26,42 @@ let flutterEngine = FlutterEngine(name: "SharedEngine", project: nil, allowHeadl
     // Register App Icon plugin for alternate icon support
     AppIconPlugin.register(with: flutterEngine.registrar(forPlugin: "AppIconPlugin")!)
 
-    // Return true directly for CarPlay compatibility
-    // super.application() can interfere with CarPlay initialization
+    // File attributes channel: lets Dart exclude the offline downloads
+    // directory from iCloud/iTunes backup (App Review 2.23).
+    registerFileAttributesChannel(messenger: flutterEngine.binaryMessenger)
+
+    // Background-time for saving playback state is requested in
+    // SceneDelegate.sceneDidEnterBackground (scene-based lifecycle).
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
-  override func applicationDidEnterBackground(_ application: UIApplication) {
-    // Request background time to ensure Flutter can save playback state
-    backgroundTaskIdentifier = application.beginBackgroundTask(withName: "SavePlaybackState") { [weak self] in
-      self?.endBackgroundTask()
+  /// Channel "nautune/file_attributes"
+  ///   excludeFromBackup({path: String}) -> Bool
+  /// Sets URLResourceValues.isExcludedFromBackup = true on the file or
+  /// directory at `path` (a directory's contents are excluded with it).
+  private func registerFileAttributesChannel(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(name: "nautune/file_attributes", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "excludeFromBackup":
+        guard let args = call.arguments as? [String: Any],
+              let path = args["path"] as? String, !path.isEmpty else {
+          result(FlutterError(code: "INVALID_ARGS", message: "path required", details: nil))
+          return
+        }
+        var url = URL(fileURLWithPath: path)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        do {
+          try url.setResourceValues(values)
+          result(true)
+        } catch {
+          result(FlutterError(code: "SET_FAILED", message: error.localizedDescription, details: path))
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
     }
-
-    // Allow 3 seconds for Flutter to save state
-    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-      self?.endBackgroundTask()
-    }
-  }
-
-  private func endBackgroundTask() {
-    guard backgroundTaskIdentifier != .invalid else { return }
-    UIApplication.shared.endBackgroundTask(backgroundTaskIdentifier)
-    backgroundTaskIdentifier = .invalid
+    fileAttributesChannel = channel
   }
 }

@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/waveform_data.dart';
 import 'waveform_backends/just_waveform_backend.dart';
+import '../utils/backup_exclusion.dart';
 
 /// Waveform extraction service backed by the just_waveform package (iOS).
 class WaveformService {
@@ -54,6 +55,7 @@ class WaveformService {
     if (!await waveformDir.exists()) {
       await waveformDir.create(recursive: true);
     }
+    await excludeFromBackup(waveformDir.path);
 
     return '${waveformDir.path}${Platform.pathSeparator}$trackId.waveform';
   }

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/chart_data.dart';
+import '../utils/backup_exclusion.dart';
 
 /// Service for caching generated rhythm game charts.
 /// Stores charts as JSON files for fast loading on replay.
@@ -44,6 +45,7 @@ class ChartCacheService extends ChangeNotifier {
       if (!await _cacheDir!.exists()) {
         await _cacheDir!.create(recursive: true);
       }
+      await excludeFromBackup(_cacheDir!.path);
 
       // Load existing charts into memory
       await _loadAllCharts();
@@ -312,6 +314,7 @@ class ChartCacheService extends ChangeNotifier {
       if (!await legendaryDir.exists()) {
         await legendaryDir.create(recursive: true);
       }
+      await excludeFromBackup(legendaryDir.path);
 
       final filePath = '${legendaryDir.path}/through_the_fire_and_flames.mp3';
       final file = File(filePath);
