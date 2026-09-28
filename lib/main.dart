@@ -157,6 +157,7 @@ Future<void> main() async {
 
   final uiStateProvider = UIStateProvider(
     playbackStateStore: playbackStateStore,
+    jellyfinService: jellyfinService,
   );
 
   final libraryDataProvider = LibraryDataProvider(

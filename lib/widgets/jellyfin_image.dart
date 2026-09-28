@@ -176,9 +176,10 @@ class _JellyfinImageState extends State<JellyfinImage> {
     final requestWidth = widget.maxWidth != null
         ? (widget.maxWidth! * dpr).toInt()
         : (widget.width != null ? (widget.width! * 2).toInt() : 400);
-    final requestHeight = widget.maxHeight != null
-        ? (widget.maxHeight! * dpr).toInt()
-        : (widget.height != null ? (widget.height! * 2).toInt() : null);
+    // Width-only unless a caller asks for a height: the server keeps the
+    // aspect ratio, and the URL then matches the prewarm/cache entries.
+    final requestHeight =
+        widget.maxHeight != null ? (widget.maxHeight! * dpr).toInt() : null;
 
     final imageUrl = appState.jellyfinService.buildImageUrl(
       itemId: widget.itemId,

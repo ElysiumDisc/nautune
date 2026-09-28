@@ -362,6 +362,8 @@ class NautuneAppState extends ChangeNotifier {
         accessToken: session.credentials.accessToken,
         deviceId: deviceId,
         userId: session.credentials.userId,
+        // Reuse the API client's keep-alive connections.
+        httpClient: _jellyfinService.jellyfinClient?.httpClient,
       );
       if (old != null) {
         if (service.isSameAccountAs(old)) {
