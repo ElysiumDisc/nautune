@@ -17,6 +17,9 @@ let flutterEngine = FlutterEngine(name: "SharedEngine", project: nil, allowHeadl
     // Register Audio FFT plugin for real-time visualization
     AudioFFTPlugin.register(with: flutterEngine.registrar(forPlugin: "AudioFFTPlugin")!)
 
+    // Register the equalizer (taps just_audio's AVQueuePlayer items)
+    AudioEffectsPlugin.register(with: flutterEngine.registrar(forPlugin: "AudioEffectsPlugin")!)
+
     // Register Audio Decoder plugin for chart generation
     AudioDecoderPlugin.register(with: flutterEngine.registrar(forPlugin: "AudioDecoderPlugin")!)
 

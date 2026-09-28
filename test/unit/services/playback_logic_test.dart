@@ -590,4 +590,63 @@ void main() {
       expect(r.index, 2);
     });
   });
+
+  group('sleepTimerLabel', () {
+    test('time, tracks, end of track, none', () {
+      expect(sleepTimerLabel(Duration.zero), isNull);
+      expect(sleepTimerLabel(const Duration(minutes: 12, seconds: 5)), '12:05');
+      expect(sleepTimerLabel(const Duration(hours: 1, minutes: 2, seconds: 9)), '1:02:09');
+      expect(sleepTimerLabel(const Duration(seconds: -1)), 'End of track');
+      expect(sleepTimerLabel(const Duration(seconds: -3)), '3 tracks');
+    });
+  });
+
+  group('smartShuffle', () {
+    final now = DateTime(2026, 9, 27);
+    List<String> run(List<String> items,
+            {Map<String, DateTime> played = const {}, int seed = 1, int keepFirst = -1}) =>
+        smartShuffle<String>(
+          items,
+          lastPlayedOf: (t) => played[t],
+          artistOf: (t) => t.substring(0, 1),
+          random: Random(seed),
+          now: now,
+          keepFirst: keepFirst,
+        );
+
+    test('is a permutation and keeps the current track first', () {
+      final items = ['a1', 'b1', 'c1', 'd1', 'e1'];
+      final r = run(items, keepFirst: 2);
+      expect(r.first, 'c1');
+      expect(r.toSet(), items.toSet());
+      expect(r.length, items.length);
+    });
+
+    test('avoids back-to-back artists when possible', () {
+      final items = ['a1', 'a2', 'a3', 'b1', 'b2', 'b3', 'c1', 'c2'];
+      for (var seed = 0; seed < 20; seed++) {
+        final r = run(items, seed: seed);
+        for (var i = 1; i < r.length; i++) {
+          expect(r[i][0] == r[i - 1][0], isFalse, reason: '$r');
+        }
+      }
+    });
+
+    test('recently played tracks tend to land later', () {
+      final items = [for (var i = 0; i < 20; i++) 'x$i'];
+      final played = {'x0': now.subtract(const Duration(hours: 1))};
+      var positions = 0;
+      for (var seed = 0; seed < 200; seed++) {
+        positions += run(items, played: played, seed: seed).indexOf('x0');
+      }
+      expect(positions / 200, greaterThan(12)); // uniform would be ~9.5
+    });
+  });
+
+  test('audioExtensionForMime maps stream content types', () {
+    expect(audioExtensionForMime('audio/flac'), 'flac');
+    expect(audioExtensionForMime('audio/mpeg; charset=binary'), 'mp3');
+    expect(audioExtensionForMime('audio/mp4'), 'm4a');
+    expect(audioExtensionForMime(''), 'mp3');
+  });
 }

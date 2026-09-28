@@ -141,6 +141,8 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
         ),
       );
     }
+    final uiState = context.watch<UIStateProvider>();
+    final sortedPlaylists = sortPlaylists(playlists!, uiState.playlistSort);
     return RefreshIndicator(
       onRefresh: () async => onRefresh(),
       child: ListView.builder(
@@ -205,11 +207,23 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                 const Divider(),
                 Padding(
                   padding: const EdgeInsets.only(top: 12, bottom: 8),
-                  child: Text(
-                    'Your Playlists',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Your Playlists',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      _SortMenuButton<PlaylistSort>(
+                        current: uiState.playlistSort,
+                        options: PlaylistSort.values,
+                        labelOf: (s) => s.label,
+                        onSelected: uiState.setPlaylistSort,
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -220,7 +234,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
           if (listIndex >= playlists!.length) {
             return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
           }
-          final playlist = playlists![listIndex];
+          final playlist = sortedPlaylists[listIndex];
           return Card(
             margin: const EdgeInsets.only(bottom: 12),
             child: ListTile(

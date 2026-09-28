@@ -91,6 +91,21 @@ double? sleepTimerFadeVolume({
   return (userVolume * (remainingSeconds / windowSeconds)).clamp(0.0, 1.0);
 }
 
+/// Short countdown label for the sleep timer, from the value on
+/// `sleepTimerStream`: positive is time left (`12:05`, `1:02:09`), negative
+/// is tracks left (`-1` is the end of this track), zero means no timer.
+String? sleepTimerLabel(Duration value) {
+  if (value == Duration.zero) return null;
+  if (value.isNegative) {
+    final tracks = -value.inSeconds;
+    return tracks == 1 ? 'End of track' : '$tracks tracks';
+  }
+  final h = value.inHours;
+  final m = value.inMinutes.remainder(60);
+  final sec = value.inSeconds.remainder(60).toString().padLeft(2, '0');
+  return h > 0 ? '$h:${m.toString().padLeft(2, '0')}:$sec' : '$m:$sec';
+}
+
 /// ListenBrainz scrobble threshold: 50% of the track or 4 minutes, whichever
 /// is less.
 int scrobbleThresholdSeconds(Duration trackDuration) {
@@ -246,6 +261,78 @@ List<T> shuffleKeepingCurrent<T>(
 }
 
 /// What the "previous" control (in-app, lock screen, CarPlay) should do.
+/// Smart shuffle: a random order that plays recently heard tracks later
+/// and avoids the same artist twice in a row where it can.
+///
+/// Tracks heard in the last three days are drawn with lower weight
+/// (weighted random sampling), so they tend to land near the end instead of
+/// being excluded. [keepFirst] (a slot index) stays at the front, as with
+/// [shuffleKeepingCurrent].
+List<T> smartShuffle<T>(
+  List<T> items, {
+  required DateTime? Function(T item) lastPlayedOf,
+  required String Function(T item) artistOf,
+  required Random random,
+  required DateTime now,
+  int keepFirst = -1,
+}) {
+  if (items.length < 2) return List<T>.of(items);
+  final hasFirst = keepFirst >= 0 && keepFirst < items.length;
+  final rest = List<T>.of(items);
+  final T? first = hasFirst ? rest.removeAt(keepFirst) : null;
+
+  double weight(T item) {
+    final last = lastPlayedOf(item);
+    if (last == null) return 1.0;
+    final hours = now.difference(last).inMinutes / 60.0;
+    return (hours / 72.0).clamp(0.1, 1.0);
+  }
+
+  // Efraimidis–Spirakis: sort by u^(1/w), larger first.
+  final keyed = [
+    for (final item in rest)
+      (item, pow(random.nextDouble(), 1 / weight(item)).toDouble()),
+  ]..sort((a, b) => b.$2.compareTo(a.$2));
+  final ordered = [
+    if (hasFirst) first as T,
+    for (final (item, _) in keyed) item,
+  ];
+
+  // Spread artists: if a track repeats the previous artist, pull the next
+  // track by someone else forward.
+  // Near the end only one artist may be left; then move the clashing track
+  // back into an earlier gap between two other artists.
+  bool fitsAt(List<T> list, int k, String artist) =>
+      (k == 0 || artistOf(list[k - 1]) != artist) &&
+      (k == list.length || artistOf(list[k]) != artist);
+  final minSlot = hasFirst ? 1 : 0;
+  for (var i = 1; i < ordered.length; i++) {
+    final prevArtist = artistOf(ordered[i - 1]);
+    if (artistOf(ordered[i]) != prevArtist) continue;
+    var fixed = false;
+    for (var j = i + 1; j < ordered.length; j++) {
+      if (artistOf(ordered[j]) != prevArtist) {
+        ordered.insert(i, ordered.removeAt(j));
+        fixed = true;
+        break;
+      }
+    }
+    if (fixed) continue;
+    final item = ordered.removeAt(i);
+    final artist = artistOf(item);
+    var placed = false;
+    for (var k = minSlot; k <= ordered.length; k++) {
+      if (fitsAt(ordered, k, artist)) {
+        ordered.insert(k, item);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) ordered.insert(i, item); // unavoidable (one artist dominates)
+  }
+  return ordered;
+}
+
 /// Undo a shuffle: [current] (the shuffled queue, possibly edited since)
 /// back in [original] order. Items added while shuffled keep their relative
 /// order after the restored ones; items removed while shuffled stay gone.
@@ -358,6 +445,20 @@ String cacheVariantForUrl(String? url) {
   }
   final codec = query['audioCodec'] ?? 'mp3';
   return '$bitrate-$codec';
+}
+
+/// File extension for an audio `Content-Type` (for files saved from a
+/// stream), so AVPlayer can open the cached copy later.
+String audioExtensionForMime(String mime) {
+  final m = mime.toLowerCase().split(';').first.trim();
+  return switch (m) {
+    'audio/mpeg' || 'audio/mp3' => 'mp3',
+    'audio/flac' || 'audio/x-flac' => 'flac',
+    'audio/mp4' || 'audio/m4a' || 'audio/x-m4a' || 'audio/aac' || 'audio/aacp' => 'm4a',
+    'audio/wav' || 'audio/x-wav' || 'audio/wave' => 'wav',
+    'audio/aiff' || 'audio/x-aiff' => 'aiff',
+    _ => 'mp3',
+  };
 }
 
 /// Cache key for [trackId] cached at [variant] (`id@variant`).

@@ -26,16 +26,20 @@ import '../models/listenbrainz_config.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/download_indicators.dart';
 import '../widgets/indexed_collection_view.dart';
+import '../widgets/ios/frosted_bar.dart';
 import '../widgets/ios/action_sheet.dart';
 import '../widgets/jellyfin_image.dart';
 import '../widgets/library_tiles.dart';
+import '../utils/collection_sort.dart';
 import '../utils/debouncer.dart';
 import '../utils/download_library.dart';
 import '../utils/easter_egg_keywords.dart';
+import '../utils/search_ranking.dart';
 import '../widgets/now_playing_bar.dart';
 import '../widgets/skeleton_loader.dart';
 import '../widgets/sync_status_indicator.dart';
 import '../widgets/track_context_menu.dart';
+import '../widgets/track_swipe_actions.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
 import 'genre_detail_screen.dart';
@@ -468,6 +472,9 @@ class _LibraryScreenState extends State<LibraryScreen>
           // Show tabbed interface
           body = TabBarView(
             controller: _tabController,
+            // Tabs switch from the tab bar only, as on iOS; horizontal
+            // swipes belong to rows (queue actions) and the mini player.
+            physics: const NeverScrollableScrollPhysics(),
             children: [
               _LibraryTab(
                 appState: appState,
@@ -672,7 +679,7 @@ class _LibraryScreenState extends State<LibraryScreen>
               ),
             ],
           ),
-          body: Column(
+          body: _withSidebar(context, appState, Column(
             children: [
               // Offline mode banner
               if (appState.isOfflineMode && !appState.networkAvailable)
@@ -711,43 +718,115 @@ class _LibraryScreenState extends State<LibraryScreen>
                 ),
               Expanded(child: body),
             ],
-          ),
-          bottomNavigationBar: Column(
+          )),
+          bottomNavigationBar: _isWide(context)
+              ? NowPlayingBar(
+                  audioService: appState.audioPlayerService,
+                  appState: appState,
+                )
+              : Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Mini player floats just above the tab bar, as in iOS Music.
+              NowPlayingBar(
+                audioService: appState.audioPlayerService,
+                appState: appState,
+                embedded: true,
+              ),
               GestureDetector(
                 onLongPress: () => _showReorderSheet(context),
-                child: NavigationBar(
-                  selectedIndex: _tabOrder.indexOf(_currentTabIndex),
-                  onDestinationSelected: (visualIndex) {
-                    final contentIndex = _tabOrder[visualIndex];
-                    setState(() => _currentTabIndex = contentIndex);
-                    _tabController.animateTo(contentIndex);
-                  },
-                  destinations: _tabOrder.map((contentIndex) {
+                child: _NautuneTabBar(
+                  currentIndex: _tabOrder.indexOf(_currentTabIndex),
+                  onTap: _selectVisualTab,
+                  items: _tabOrder.map((contentIndex) {
                     final def = _tabDefs[contentIndex];
                     // Special case for tab 2: dynamic icon/label based on offline mode
                     if (contentIndex == 2) {
-                      return NavigationDestination(
+                      return BottomNavigationBarItem(
                         icon: Icon(appState.isOfflineMode ? Icons.download : def.icon),
                         label: appState.isOfflineMode ? 'Downloads' : def.label,
                       );
                     }
-                    return NavigationDestination(
+                    return BottomNavigationBarItem(
                       icon: Icon(def.icon),
                       label: def.label,
                     );
                   }).toList(),
                 ),
               ),
-              NowPlayingBar(
-                audioService: appState.audioPlayerService,
-                appState: appState,
-              ),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  /// iPad and other wide windows use a sidebar instead of the tab bar.
+  static bool _isWide(BuildContext context) =>
+      MediaQuery.sizeOf(context).width >= 840;
+
+  void _selectVisualTab(int visualIndex) {
+    final contentIndex = _tabOrder[visualIndex];
+    if (contentIndex != _currentTabIndex) {
+      HapticService.selectionClick();
+    }
+    setState(() => _currentTabIndex = contentIndex);
+    _tabController.animateTo(contentIndex);
+  }
+
+  Widget _withSidebar(BuildContext context, NautuneAppState appState, Widget content) {
+    if (!_isWide(context)) return content;
+    final theme = Theme.of(context);
+    final style = NautuneStyle.of(context);
+    final selected = _tabOrder.indexOf(_currentTabIndex);
+    return Row(
+      children: [
+        Container(
+          width: 240,
+          decoration: BoxDecoration(
+            color: style.groupedCell,
+            border: Border(right: BorderSide(color: style.separator, width: 0.5)),
+          ),
+          child: ListView(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+            children: [
+              for (var i = 0; i < _tabOrder.length; i++)
+                Builder(builder: (context) {
+                  final contentIndex = _tabOrder[i];
+                  final def = _tabDefs[contentIndex];
+                  final offlineHome = contentIndex == 2 && appState.isOfflineMode;
+                  final isSelected = i == selected;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Material(
+                      color: isSelected
+                          ? theme.colorScheme.primary.withValues(alpha: 0.14)
+                          : Colors.transparent,
+                      shape: style.shape(NautuneRadius.sm),
+                      clipBehavior: Clip.antiAlias,
+                      child: ListTile(
+                        dense: true,
+                        selected: isSelected,
+                        selectedColor: theme.colorScheme.primary,
+                        leading: Icon(offlineHome ? Icons.download : def.icon),
+                        title: Text(
+                          offlineHome ? 'Downloads' : def.label,
+                          style: theme.textTheme.body.copyWith(
+                            fontWeight: isSelected ? FontWeight.w600 : null,
+                            color: isSelected ? theme.colorScheme.primary : null,
+                          ),
+                        ),
+                        onTap: () => _selectVisualTab(i),
+                        onLongPress: () => _showReorderSheet(context),
+                      ),
+                    ),
+                  );
+                }),
+            ],
+          ),
+        ),
+        Expanded(child: content),
+      ],
     );
   }
 
@@ -1231,6 +1310,78 @@ class _DownloadsTab extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+
+/// iOS tab bar: translucent and blurred (per the Frosted Glass setting),
+/// palette-coloured, with a hairline on top.
+class _NautuneTabBar extends StatelessWidget {
+  const _NautuneTabBar({
+    required this.items,
+    required this.currentIndex,
+    required this.onTap,
+  });
+
+  final List<BottomNavigationBarItem> items;
+  final int currentIndex;
+  final ValueChanged<int> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final style = NautuneStyle.of(context);
+    final blur = FrostedBar.blurEnabled(context);
+    return CupertinoTabBar(
+      items: items,
+      currentIndex: currentIndex,
+      onTap: onTap,
+      height: 54,
+      iconSize: 26,
+      activeColor: theme.colorScheme.primary,
+      inactiveColor: theme.colorScheme.onSurfaceVariant,
+      backgroundColor: blur
+          ? style.barColor
+          : Color.alphaBlend(style.barColor, style.groupedBackground)
+              .withValues(alpha: 1),
+      border: Border(top: BorderSide(color: style.separator, width: 0.5)),
+    );
+  }
+}
+
+
+/// "Sort: X" header button that opens an action sheet of [options].
+class _SortMenuButton<T> extends StatelessWidget {
+  const _SortMenuButton({
+    required this.current,
+    required this.options,
+    required this.labelOf,
+    required this.onSelected,
+  });
+
+  final T current;
+  final List<T> options;
+  final String Function(T) labelOf;
+  final ValueChanged<T> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return TextButton.icon(
+      icon: const Icon(Icons.swap_vert_rounded, size: 18),
+      label: Text('Sort: ${labelOf(current)}', style: theme.textTheme.subhead),
+      onPressed: () async {
+        final choice = await showNautuneActionSheet<T>(
+          context,
+          title: 'Sort by',
+          actions: [
+            for (final o in options)
+              NautuneSheetAction(label: labelOf(o), value: o, isDefault: o == current),
+          ],
+        );
+        if (choice != null) onSelected(choice);
+      },
     );
   }
 }

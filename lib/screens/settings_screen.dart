@@ -26,6 +26,8 @@ import '../services/audio_cache_service.dart';
 import '../services/download_service.dart';
 import '../utils/download_status.dart';
 import '../utils/debouncer.dart';
+import '../services/equalizer_service.dart';
+import '../services/lastfm_service.dart';
 import '../services/listenbrainz_service.dart';
 import '../services/saved_loops_service.dart';
 import '../services/chart_cache_service.dart';
@@ -37,6 +39,8 @@ import '../widgets/ios/action_sheet.dart';
 import '../widgets/visualizer_picker.dart';
 import 'easter_eggs_screen.dart';
 import 'offline_library_screen.dart';
+import 'equalizer_screen.dart';
+import 'lastfm_settings_screen.dart';
 import 'listenbrainz_settings_screen.dart';
 
 /// Modern categorized Settings.
@@ -101,7 +105,7 @@ const List<_SettingsCategory> _settingsCategories = [
     title: 'Audio',
     subtitle: 'Streaming, crossfade, gapless, volume levelling',
     icon: Icons.audiotrack,
-    keywords: ['streaming', 'quality', 'crossfade', 'gapless', 'infinite radio', 'replaygain', 'normalization', 'transcode', 'aac', 'mp3', 'codec', 'loudness', 'preamp', 'volume'],
+    keywords: ['streaming', 'quality', 'crossfade', 'gapless', 'infinite radio', 'equalizer', 'eq', 'bass', 'treble', 'speed', 'shuffle', 'smart shuffle', 'remote', 'remote control', 'cast', 'replaygain', 'normalization', 'transcode', 'aac', 'mp3', 'codec', 'loudness', 'preamp', 'volume'],
   ),
   _SettingsCategory(
     id: 'performance',
@@ -443,6 +447,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     context,
                     MaterialPageRoute(
                       builder: (context) => const ListenBrainzSettingsScreen(),
+                    ),
+                  );
+                },
+              ),
+              ListenableBuilder(
+                listenable: LastFmService.instance,
+                builder: (context, _) {
+                  final lastFm = LastFmService.instance;
+                  return ListTile(
+                    leading: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFD51007),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.graphic_eq, color: Colors.white, size: 20),
+                    ),
+                    title: const Text('Last.fm'),
+                    subtitle: Text(
+                      lastFm.isConfigured
+                          ? 'Scrobbling as ${lastFm.username}'
+                          : 'Scrobble your plays to Last.fm',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const LastFmSettingsScreen()),
                     ),
                   );
                 },
@@ -1171,6 +1202,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   value: appState.gaplessPlaybackEnabled,
                   onChanged: appState.toggleGaplessPlayback,
                 ),
+                ListenableBuilder(
+                  listenable: EqualizerService.instance,
+                  builder: (context, _) {
+                    final eq = EqualizerService.instance;
+                    return _NautuneSettingsTile(
+                      icon: Icons.graphic_eq,
+                      title: 'Equalizer',
+                      subtitle: eq.enabled ? eq.preset.label : 'Off',
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const EqualizerScreen()),
+                      ),
+                    );
+                  },
+                ),
                 _NautuneSettingsTile(
                   icon: Icons.equalizer,
                   title: 'Volume Levelling',
@@ -1219,6 +1266,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                   ),
+                _NautuneToggleTile(
+                  icon: Icons.shuffle,
+                  title: 'Smart Shuffle',
+                  subtitle: appState.smartShuffleEnabled
+                      ? 'Recently played songs come later; artists are spread out'
+                      : 'Plain random order',
+                  value: appState.smartShuffleEnabled,
+                  onChanged: appState.setSmartShuffleEnabled,
+                ),
+                _NautuneToggleTile(
+                  icon: Icons.settings_remote,
+                  title: 'Allow Remote Control',
+                  subtitle: appState.remoteControlEnabled
+                      ? 'The Jellyfin dashboard and your other apps can control playback'
+                      : 'Other Jellyfin clients can\'t control Nautune',
+                  value: appState.remoteControlEnabled,
+                  onChanged: appState.setRemoteControlEnabled,
+                ),
                 _NautuneToggleTile(
                   icon: Icons.all_inclusive,
                   title: 'Infinite Radio',

@@ -20,6 +20,8 @@ import '../widgets/jellyfin_image.dart';
 import '../utils/color_utils.dart';
 import '../widgets/now_playing_bar.dart';
 import '../widgets/track_context_menu.dart';
+import '../widgets/track_selection.dart';
+import '../widgets/track_swipe_actions.dart';
 
 class AlbumDetailScreen extends StatefulWidget {
   const AlbumDetailScreen({
@@ -34,6 +36,7 @@ class AlbumDetailScreen extends StatefulWidget {
 }
 
 class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
+  final TrackSelection _selection = TrackSelection();
   // Shared palette cache - shared with FullPlayerScreen
   static final _paletteCache = PaletteCacheService.instance;
 
@@ -91,6 +94,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   @override
   void dispose() {
+    _selection.dispose();
     _appState?.removeListener(_onConnectivityChanged);
     super.dispose();
   }
@@ -366,7 +370,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final album = widget.album;
-    final isDesktop = MediaQuery.of(context).size.width > 600;
+    final isWide = MediaQuery.of(context).size.width > 600;
     final List<JellyfinTrack> tracks = _tracks ?? const <JellyfinTrack>[];
 
     Widget artwork;
@@ -404,13 +408,19 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         scrollCacheExtent: ScrollCacheExtent.pixels(500), // Pre-render items above/below viewport for smoother scrolling
         slivers: [
           SliverAppBar(
-            expandedHeight: isDesktop ? 350 : 300,
+            expandedHeight: isWide ? 350 : 300,
             pinned: true,
             leading: IconButton(
               icon: const Icon(Icons.arrow_back),
               onPressed: () => Navigator.of(context).pop(),
             ),
             actions: [
+              if ((_tracks?.isNotEmpty ?? false))
+                IconButton(
+                  icon: const Icon(Icons.checklist_rounded),
+                  tooltip: 'Select tracks',
+                  onPressed: _selection.start,
+                ),
               // Instant Mix needs the server.
               if (!(_appState?.isOfflineMode ?? false))
               IconButton(
@@ -667,6 +677,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                               track: track,
                               displayTrackNumber: displayNumber,
                               appState: _appState!,
+                              selection: _selection,
                               isHotTrack: _hotTrackIds?.contains(track.id) ?? false,
                               isPlaying: currentlyPlayingId == track.id,
                               onTap: () async {
@@ -710,9 +721,18 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         ),
       ),
       bottomNavigationBar: _appState != null
-          ? NowPlayingBar(
-              audioService: _appState!.audioPlayerService,
-              appState: _appState!,
+          ? ListenableBuilder(
+              listenable: _selection,
+              builder: (context, _) => _selection.active
+                  ? SelectionActionBar(
+                      selection: _selection,
+                      tracks: _tracks ?? const [],
+                      appState: _appState!,
+                    )
+                  : NowPlayingBar(
+                      audioService: _appState!.audioPlayerService,
+                      appState: _appState!,
+                    ),
             )
           : null,
     );
@@ -727,7 +747,11 @@ class _TrackTile extends StatelessWidget {
     required this.appState,
     required this.isPlaying,
     this.isHotTrack = false,
+    this.selection,
   });
+
+  /// Multi-select state; when active, taps toggle selection.
+  final TrackSelection? selection;
 
   final JellyfinTrack track;
   final String displayTrackNumber;
@@ -744,21 +768,41 @@ class _TrackTile extends StatelessWidget {
         duration != null ? _formatDuration(duration) : '--:--';
     final showArtist = track.artists.isNotEmpty;
 
-    return RepaintBoundary(
+    final selection = this.selection;
+    if (selection != null) {
+      return ListenableBuilder(
+        listenable: selection,
+        builder: (context, _) => _buildRow(context, theme, durationText, showArtist, selection),
+      );
+    }
+    return _buildRow(context, theme, durationText, showArtist, null);
+  }
+
+  Widget _buildRow(
+    BuildContext context,
+    ThemeData theme,
+    String durationText,
+    bool showArtist,
+    TrackSelection? selection,
+  ) {
+    final selecting = selection?.active ?? false;
+    final row = RepaintBoundary(
       child: Material(
         color: isPlaying
             ? theme.colorScheme.primaryContainer.withValues(alpha: 0.2)
             : Colors.transparent,
         child: InkWell(
-          onTap: onTap,
-          onLongPress: () => _showTrackMenu(context),
+          onTap: selecting ? () => selection!.toggle(track) : onTap,
+          onLongPress: selecting ? null : () => _showTrackMenu(context),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
             child: Row(
               children: [
                 SizedBox(
                   width: 48,
-                  child: isPlaying
+                  child: selecting
+                      ? SelectionCheck(selected: selection!.isSelected(track))
+                      : isPlaying
                       ? Icon(
                           Icons.equalizer,
                           color: theme.colorScheme.primary,
@@ -846,6 +890,13 @@ class _TrackTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+    if (selecting) return row;
+    return TrackSwipeActions(
+      track: track,
+      appState: appState,
+      discriminator: displayTrackNumber,
+      child: row,
     );
   }
 

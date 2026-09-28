@@ -1,18 +1,22 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:audio_service/audio_service.dart' as audio_service;
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import '../jellyfin/jellyfin_track.dart';
+import 'engine/engine_player.dart';
 
 class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_service.QueueHandler, audio_service.SeekHandler {
-  AudioPlayer _player;
+  EnginePlayer _player;
   final Future<void> Function() onPlay;
   final Future<void> Function() onPause;
   final Future<void> Function() onStop;
   final Future<void> Function() onSkipToNext;
   final Future<void> Function() onSkipToPrevious;
   final void Function(Duration) onSeek;
+
+  /// Shuffle / repeat from Control Center, CarPlay or Siri.
+  final void Function(bool shuffle)? onSetShuffle;
+  final void Function(audio_service.AudioServiceRepeatMode mode)? onSetRepeat;
   
   StreamSubscription? _positionSubscription;
   StreamSubscription? _durationSubscription;
@@ -33,18 +37,20 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
   Completer<void>? _mediaUpdateCompleter;
 
   NautuneAudioHandler({
-    required AudioPlayer player,
+    required EnginePlayer player,
     required this.onPlay,
     required this.onPause,
     required this.onStop,
     required this.onSkipToNext,
     required this.onSkipToPrevious,
     required this.onSeek,
+    this.onSetShuffle,
+    this.onSetRepeat,
   }) : _player = player {
     _listenToPlayerState();
   }
 
-  void updatePlayer(AudioPlayer newPlayer) {
+  void updatePlayer(EnginePlayer newPlayer) {
     _positionSubscription?.cancel();
     _durationSubscription?.cancel();
     _stateSubscription?.cancel();
@@ -84,11 +90,11 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
     _broadcastState(_player.state);
   }
 
-  void _broadcastState(PlayerState state) {
-    final playing = state == PlayerState.playing;
-    final processingState = state == PlayerState.completed
+  void _broadcastState(EngineState state) {
+    final playing = state == EngineState.playing;
+    final processingState = state == EngineState.completed
         ? audio_service.AudioProcessingState.completed
-        : state == PlayerState.playing || state == PlayerState.paused
+        : state == EngineState.playing || state == EngineState.paused
             ? audio_service.AudioProcessingState.ready
             : audio_service.AudioProcessingState.idle;
 
@@ -103,12 +109,36 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
         audio_service.MediaControl.stop,
         audio_service.MediaControl.skipToNext,
       ],
-      systemActions: const {
-        audio_service.MediaAction.seek,
-        audio_service.MediaAction.seekForward,
-        audio_service.MediaAction.seekBackward,
-      },
+      systemActions: _systemActions,
       processingState: processingState,
+    ));
+  }
+
+  static const Set<audio_service.MediaAction> _systemActions = {
+    audio_service.MediaAction.seek,
+    audio_service.MediaAction.seekForward,
+    audio_service.MediaAction.seekBackward,
+    audio_service.MediaAction.setShuffleMode,
+    audio_service.MediaAction.setRepeatMode,
+  };
+
+  /// Mirror the app's shuffle / repeat state to the system (CarPlay's Now
+  /// Playing buttons, Siri).
+  void updateModes({
+    required bool shuffle,
+    required audio_service.AudioServiceRepeatMode repeat,
+  }) {
+    final shuffleMode = shuffle
+        ? audio_service.AudioServiceShuffleMode.all
+        : audio_service.AudioServiceShuffleMode.none;
+    final current = playbackState.value;
+    if (current.shuffleMode == shuffleMode && current.repeatMode == repeat) {
+      return;
+    }
+    playbackState.add(current.copyWith(
+      shuffleMode: shuffleMode,
+      repeatMode: repeat,
+      updatePosition: _lastKnownPosition,
     ));
   }
 
@@ -135,11 +165,7 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
         audio_service.MediaControl.stop,
         audio_service.MediaControl.skipToNext,
       ],
-      systemActions: const {
-        audio_service.MediaAction.seek,
-        audio_service.MediaAction.seekForward,
-        audio_service.MediaAction.seekBackward,
-      },
+      systemActions: _systemActions,
       processingState: audio_service.AudioProcessingState.ready,
     ));
   }
@@ -243,6 +269,16 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
     } catch (e) {
       debugPrint('⚠️ Skip to previous failed: $e');
     }
+  }
+
+  @override
+  Future<void> setShuffleMode(audio_service.AudioServiceShuffleMode shuffleMode) async {
+    onSetShuffle?.call(shuffleMode != audio_service.AudioServiceShuffleMode.none);
+  }
+
+  @override
+  Future<void> setRepeatMode(audio_service.AudioServiceRepeatMode repeatMode) async {
+    onSetRepeat?.call(repeatMode);
   }
 
   @override

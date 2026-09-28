@@ -24,6 +24,8 @@ import 'screens/network_screen.dart';
 import 'services/bootstrap_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/download_service.dart';
+import 'services/equalizer_service.dart';
+import 'services/lastfm_service.dart';
 import 'services/listening_analytics_service.dart';
 import 'services/local_cache_service.dart';
 import 'services/notification_service.dart';
@@ -210,6 +212,8 @@ Future<void> main() async {
     uiStateProvider.initialize(),
     themeProvider.initialize(),
     ListeningAnalyticsService().initialize(),
+    LastFmService.instance.initialize(),
+    EqualizerService.instance.initialize(playbackStateStore),
   ]);
 
   // Initialize legacy app state

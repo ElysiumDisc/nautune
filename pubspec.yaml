@@ -34,12 +34,14 @@ dependencies:
   audio_video_progress_bar: ^2.0.3
   material_color_utilities: ^0.13.0
   flutter_secure_storage: ^10.0.0
+  crypto: ^3.0.6  # Last.fm request signing (md5)
   flutter_local_notifications: ^21.0.0
   uuid: ^4.5.2
   flutter_colorpicker: ^1.1.0
   just_waveform: ^0.0.7  # iOS waveform extraction
   url_launcher: ^6.2.5  # Open URLs in browser
   fftea: ^1.1.0  # Pure Dart FFT/STFT for Frets on Fire chart generation
+  just_audio: ^0.10.6
 
 dev_dependencies:
   flutter_test:

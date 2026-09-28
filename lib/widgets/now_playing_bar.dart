@@ -10,6 +10,13 @@ import '../services/audio_player_service.dart';
 import '../services/haptic_service.dart';
 import '../app_state.dart';
 import '../models/visualizer_type.dart';
+import '../providers/now_playing_colors_provider.dart';
+import '../services/playback_logic.dart' show sleepTimerLabel;
+import '../theme/nautune_spacing.dart';
+import '../theme/nautune_theme.dart';
+import 'ios/frosted_bar.dart';
+import 'ios/now_playing_route.dart';
+import 'jellyfin_image.dart';
 import 'visualizers/visualizer_factory.dart';
 import 'jellyfin_waveform.dart';
 
@@ -19,10 +26,14 @@ class NowPlayingBar extends StatefulWidget {
     super.key,
     required this.audioService,
     required this.appState,
+    this.embedded = false,
   });
 
   final AudioPlayerService audioService;
   final NautuneAppState appState;
+
+  /// Sits above a tab bar that already handles the bottom safe area.
+  final bool embedded;
 
   @override
   State<NowPlayingBar> createState() => _NowPlayingBarState();
@@ -72,10 +83,9 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
 
   void _openFullPlayer(BuildContext context) {
     if (!mounted) return;
+    HapticService.lightTap();
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => const FullPlayerScreen(),
-      ),
+      NowPlayingRoute<void>(builder: (_) => const FullPlayerScreen()),
     );
   }
 
@@ -100,127 +110,161 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
     );
   }
 
-  /// Build the Now Playing bar
+  /// Build the Now Playing bar: a floating, frosted card (tinted from the
+  /// artwork when enabled) with artwork, title, and transport controls.
+  /// Tap or swipe up opens the full player; swipe sideways skips.
   Widget _buildNormalBar(BuildContext context, ThemeData theme, JellyfinTrack track, bool isPlaying) {
-    return Material(
-      elevation: 10,
-      color: theme.colorScheme.surface,
-      child: SafeArea(
-        top: false,
-        child: GestureDetector(
-          behavior: HitTestBehavior.translucent,
-          onHorizontalDragEnd: (details) {
-            final velocity = details.primaryVelocity;
-            if (velocity == null) return;
-            if (velocity < -200) {
-              HapticService.mediumTap();
-              audioService.next();
-            } else if (velocity > 200) {
-              HapticService.mediumTap();
-              audioService.previous();
-            }
-          },
-          child: Container(
-            decoration: BoxDecoration(
-              border: Border(
-                top: BorderSide(
-                  color: theme.colorScheme.secondary.withValues(alpha: 0.25),
-                ),
-              ),
+    final style = NautuneStyle.of(context);
+    final accent = style.artworkTint
+        ? context.select<NowPlayingColorsProvider, Color?>((c) => c.accent)
+        : null;
+    final tint = accent == null
+        ? null
+        : Color.alphaBlend(accent.withValues(alpha: 0.28), style.barColor);
+    final showWaveform = context.select<NautuneAppState, bool>(
+      (s) => s.visualizerEnabled && s.visualizerPosition == VisualizerPosition.controlsBar,
+    );
+    final shape = style.shape(NautuneRadius.lg);
+
+    final card = Padding(
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+      child: DecoratedBox(
+        decoration: ShapeDecoration(
+          shape: shape,
+          shadows: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.18),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
             ),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _WaveformStrip(
-                  audioService: audioService,
-                  positionDataStream: _positionDataStream,
-                  track: track,
-                  isPlaying: isPlaying,
-                ),
-                const SizedBox(height: 8),
-                Row(
+          ],
+        ),
+        child: ClipPath(
+          clipper: ShapeBorderClipper(shape: shape),
+          child: FrostedBar(
+            color: tint,
+            topBorder: false,
+            child: Semantics(
+              button: true,
+              label: 'Now playing: ${track.name}, ${_subtitleFor(track)}',
+              hint: 'Opens the player',
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _openFullPlayer(context),
+                onVerticalDragEnd: (details) {
+                  if ((details.primaryVelocity ?? 0) < -300) {
+                    _openFullPlayer(context);
+                  }
+                },
+                onHorizontalDragEnd: (details) {
+                  final velocity = details.primaryVelocity;
+                  if (velocity == null) return;
+                  if (velocity < -200) {
+                    HapticService.mediumTap();
+                    audioService.next();
+                  } else if (velocity > 200) {
+                    HapticService.mediumTap();
+                    audioService.previous();
+                  }
+                },
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.skip_previous),
-                      onPressed: () => audioService.previous(),
-                    ),
-                    _PlayPauseButton(
-                      audioService: audioService,
-                      isPlaying: isPlaying,
-                    ),
-                    IconButton(
-                      icon: Icon(
-                        Icons.stop,
-                        color: theme.colorScheme.error,
-                      ),
-                      onPressed: () => audioService.stop(),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.skip_next),
-                      onPressed: () => audioService.next(),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: () => _openFullPlayer(context),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                track.name,
-                                style: theme.textTheme.bodyLarge?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 2),
-                              Row(
-                                children: [
-                                  if (audioService.infiniteRadioEnabled) ...[
-                                    Icon(Icons.radio, size: 12, color: theme.colorScheme.primary),
-                                    const SizedBox(width: 4),
-                                  ],
-                                  Expanded(
-                                    child: Text(
-                                      _subtitleFor(track),
-                                      style: theme.textTheme.bodySmall?.copyWith(
-                                        color: theme.colorScheme.onSurfaceVariant,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
+                    if (showWaveform)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                        child: _WaveformStrip(
+                          audioService: audioService,
+                          positionDataStream: _positionDataStream,
+                          track: track,
+                          isPlaying: isPlaying,
                         ),
                       ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.queue_music),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (context) => const QueueScreen(),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
+                      child: Row(
+                        children: [
+                          Hero(
+                            tag: kNowPlayingArtworkHeroTag,
+                            transitionOnUserGestures: true,
+                            child: _MiniArtwork(track: track),
                           ),
-                        );
-                      },
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  track.name,
+                                  style: theme.textTheme.subhead.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Row(
+                                  children: [
+                                    if (audioService.infiniteRadioEnabled) ...[
+                                      Icon(Icons.radio, size: 12, color: theme.colorScheme.primary),
+                                      const SizedBox(width: 4),
+                                    ],
+                                    Expanded(
+                                      child: Text(
+                                        _subtitleFor(track),
+                                        style: theme.textTheme.footnote,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    _SleepTimerChip(audioService: audioService),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.skip_previous_rounded),
+                            tooltip: 'Previous',
+                            color: theme.colorScheme.onSurface,
+                            onPressed: () => audioService.previous(),
+                          ),
+                          _PlayPauseButton(
+                            audioService: audioService,
+                            isPlaying: isPlaying,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.skip_next_rounded),
+                            tooltip: 'Next',
+                            color: theme.colorScheme.onSurface,
+                            onPressed: () => audioService.next(),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.queue_music_rounded),
+                            tooltip: 'Queue',
+                            color: theme.colorScheme.onSurfaceVariant,
+                            onPressed: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (context) => const QueueScreen(),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
                     ),
+                    if (!showWaveform)
+                      _ProgressLine(positionDataStream: _positionDataStream),
                   ],
                 ),
-              ],
+              ),
             ),
           ),
         ),
       ),
     );
+    return widget.embedded ? card : SafeArea(top: false, child: card);
   }
 
   String _subtitleFor(JellyfinTrack track) {
@@ -243,25 +287,134 @@ class _PlayPauseButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Container(
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: theme.colorScheme.primary,
-        boxShadow: [
-          BoxShadow(
-            blurRadius: 14,
-            spreadRadius: 1,
-            color: theme.colorScheme.primary.withValues(alpha: 0.3),
-          ),
-        ],
-      ),
-      child: IconButton(
-        icon: Icon(
-          isPlaying ? Icons.pause : Icons.play_arrow,
-          color: theme.colorScheme.onPrimary,
+    return IconButton(
+      tooltip: isPlaying ? 'Pause' : 'Play',
+      iconSize: 34,
+      color: theme.colorScheme.onSurface,
+      onPressed: () {
+        HapticService.lightTap();
+        audioService.playPause();
+      },
+      icon: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 180),
+        transitionBuilder: (child, animation) =>
+            ScaleTransition(scale: animation, child: child),
+        child: Icon(
+          isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+          key: ValueKey(isPlaying),
         ),
-        onPressed: () => audioService.playPause(),
       ),
+    );
+  }
+}
+
+/// Small square artwork for the mini player (track → album → parent art).
+class _MiniArtwork extends StatelessWidget {
+  const _MiniArtwork({required this.track});
+
+  final JellyfinTrack track;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    String? tag = track.primaryImageTag;
+    String itemId = track.id;
+    if (tag == null || tag.isEmpty) {
+      tag = track.albumPrimaryImageTag;
+      itemId = track.albumId ?? track.id;
+    }
+    if (tag == null || tag.isEmpty) {
+      tag = track.parentThumbImageTag;
+      itemId = track.albumId ?? track.id;
+    }
+    final placeholder = ColoredBox(
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: Icon(Icons.music_note, color: theme.colorScheme.onSurfaceVariant),
+    );
+    return SizedBox.square(
+      dimension: 44,
+      child: ClipPath(
+        clipper: ShapeBorderClipper(
+          shape: NautuneStyle.of(context).shape(NautuneRadius.sm),
+        ),
+        child: tag == null || tag.isEmpty
+            ? placeholder
+            : JellyfinImage(
+                key: ValueKey('$itemId-$tag-mini'),
+                itemId: itemId,
+                imageTag: tag,
+                trackId: track.id,
+                maxWidth: 100,
+                boxFit: BoxFit.cover,
+                errorBuilder: (context, url, error) => placeholder,
+              ),
+      ),
+    );
+  }
+}
+
+/// Thin playback progress line along the bottom of the mini player.
+class _ProgressLine extends StatelessWidget {
+  const _ProgressLine({required this.positionDataStream});
+
+  final Stream<PositionData> positionDataStream;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return StreamBuilder<PositionData>(
+      stream: positionDataStream,
+      builder: (context, snapshot) {
+        final data = snapshot.data;
+        final total = data?.duration.inMilliseconds ?? 0;
+        final value = total > 0
+            ? (data!.position.inMilliseconds / total).clamp(0.0, 1.0)
+            : 0.0;
+        return SizedBox(
+          height: 2,
+          child: LinearProgressIndicator(
+            value: value,
+            backgroundColor: theme.colorScheme.onSurface.withValues(alpha: 0.08),
+            color: theme.colorScheme.primary,
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Remaining sleep-timer time (or tracks) next to the artist line.
+class _SleepTimerChip extends StatelessWidget {
+  const _SleepTimerChip({required this.audioService});
+
+  final AudioPlayerService audioService;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return StreamBuilder<Duration>(
+      stream: audioService.sleepTimerStream,
+      builder: (context, snapshot) {
+        final label = sleepTimerLabel(snapshot.data ?? Duration.zero);
+        if (label == null) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(left: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.nightlight_round, size: 11, color: theme.colorScheme.primary),
+              const SizedBox(width: 2),
+              Text(
+                label,
+                style: theme.textTheme.caption.copyWith(
+                  color: theme.colorScheme.primary,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

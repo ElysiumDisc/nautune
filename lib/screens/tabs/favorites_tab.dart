@@ -67,23 +67,38 @@ class _FavoritesTab extends StatelessWidget {
       );
     }
 
+    final uiState = context.watch<UIStateProvider>();
+    final tracks = sortFavorites(recentTracks!, uiState.favoritesSort);
     return RefreshIndicator(
       onRefresh: () async => onRefresh(),
       child: ListView.builder(
         scrollCacheExtent: ScrollCacheExtent.pixels(500), // Pre-render items above/below viewport for smoother scrolling
-        padding: const EdgeInsets.all(16),
-        itemCount: recentTracks?.length ?? 0,
-        itemBuilder: (context, index) {
-          if (recentTracks == null || index >= recentTracks!.length) {
-            return const SizedBox.shrink();
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+        itemCount: tracks.length + 1,
+        itemBuilder: (context, row) {
+          if (row == 0) {
+            return Align(
+              alignment: Alignment.centerRight,
+              child: _SortMenuButton<FavoritesSort>(
+                current: uiState.favoritesSort,
+                options: FavoritesSort.values,
+                labelOf: (s) => s.label,
+                onSelected: uiState.setFavoritesSort,
+              ),
+            );
           }
-          final track = recentTracks![index];
+          final index = row - 1;
+          final track = tracks[index];
           void showTrackMenu() => showTrackContextMenu(
                 context: context,
                 track: track,
                 appState: appState,
               );
-          return RepaintBoundary(
+          return TrackSwipeActions(
+            track: track,
+            appState: appState,
+            discriminator: index,
+            child: RepaintBoundary(
             child: Card(
               margin: const EdgeInsets.only(bottom: 8),
               child: ListTile(
@@ -149,7 +164,8 @@ class _FavoritesTab extends StatelessWidget {
               ),
               onTap: () => onTrackTap(track),
             ),
-          ));
+          )),
+          );
         },
       ),
     );

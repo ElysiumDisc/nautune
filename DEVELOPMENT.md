@@ -170,9 +170,20 @@ A `RepositoryFactory` picks `OnlineRepository` or `OfflineRepository`
 depending on offline mode.
 
 **Audio.** `AudioPlayerService` (`lib/services/audio_player_service.dart`) is
-the engine. It runs on `audioplayers` (AVPlayer) and handles the queue,
-gapless preloading, crossfade by swapping players, ReplayGain, the sleep
-timer, stall recovery and interruptions. The decision logic is pure and
+the engine. It plays through `just_audio` (AVQueuePlayer), wrapped by
+`EnginePlayer` (`lib/services/engine/engine_player.dart`), the only code
+that talks to just_audio. It handles the queue, gapless playback,
+crossfade, ReplayGain, playback speed, the sleep timer, stall recovery and
+interruptions (just_audio's own interruption handling is off; the service
+ducks and resumes itself). **Gapless:** at 70% the next track is queued on
+the same player (`appendNext`), so AVQueuePlayer starts it with no gap and
+`_onGaplessAdvance` does the per-track bookkeeping; a track-count sleep
+timer ending on the current track, repeat-one and queue edits keep or take
+it off the player. **Crossfade** still uses a second player with volume
+curves. **Streams** without transcoding play through
+`LockCachingAudioSource`, which saves them while they play; finished files
+move into the audio cache (`AudioCacheService.adoptFile`), so a track is
+downloaded once. The Easter egg screens still use `audioplayers`. The decision logic is pure and
 lives in `lib/services/playback_logic.dart`. `NautuneAudioHandler`
 (`lib/services/audio_handler.dart`, `audio_service`) publishes the lock
 screen and Control Center state. `PlaybackReportingService` reports
@@ -203,6 +214,32 @@ new UI from `lib/widgets/ios/`: `FrostedBar`, `LargeTitleScrollView`,
 `GroupedSection` / `GroupedTile` and `showNautuneActionSheet`.
 `NowPlayingColorsProvider` extracts artwork colours once per artwork, in an
 isolate, for every screen that tints from the artwork.
+
+**Library lists.** Albums, artists and genres render through
+`IndexedCollectionView` (`lib/widgets/indexed_collection_view.dart`):
+fixed-extent rows and grid cells, sticky letter headers, and an A-Z strip.
+The strip's scroll offsets come from `sectionOffsets()` in
+`lib/utils/letter_index.dart`, computed from the same `SectionGeometry` the
+slivers use, so any change to row heights, padding or headers must go
+through that geometry. Tiles (`LibraryListRow`, `ArtworkGridTile`) size
+themselves with `LibraryTileMetrics`, which scales with the text size.
+
+**Player chrome.** The full player opens with `NowPlayingRoute`
+(`lib/widgets/ios/now_playing_route.dart`), which drives its own animation
+from vertical drags. The mini player and full player artwork share
+`kNowPlayingArtworkHeroTag`. Track rows get queue swipes from
+`TrackSwipeActions` and multi-select from `TrackSelection` /
+`SelectionActionBar`.
+
+**Remote control and Last.fm.** `RemoteControlService` registers
+capabilities (`/Sessions/Capabilities/Full`) and listens on the server's
+`/socket` websocket (`dart:io`, reconnects with backoff); the pure
+`parseRemoteMessage()` is unit-tested, and `NautuneAppState` executes the
+commands. It runs only online, outside demo mode, and while enabled in
+Settings. `LastFmService` signs requests with the user's own API key and
+secret (`lastFmSignature()`), keeps credentials in the Keychain and queues
+failed scrobbles in the `lastfm_queue` Hive box. Scrobbles to both services
+fire from `AudioPlayerService._checkPlayThreshold()`.
 
 **CarPlay.** `CarPlayService` (`lib/services/carplay_service.dart`) builds
 the `flutter_carplay` templates. See [CarPlay](#carplay).
@@ -260,7 +297,8 @@ phone is locked. Other boxes include `nautune_downloads`,
 `nautune_playback` (queue and UI state), `nautune_cache` (library cache),
 `nautune_playlists`, `nautune_sync_queue` (offline playlist edits),
 `nautune_lyrics`, `nautune_analytics`, `nautune_saved_loops` and
-`playback_report_queue` (offline Jellyfin start/stop reports).
+`playback_report_queue` (offline Jellyfin start/stop reports) and
+`lastfm_queue` (Last.fm scrobbles waiting to be sent).
 
 **On-device storage.**
 
@@ -277,7 +315,8 @@ phone is locked. Other boxes include `nautune_downloads`,
 
 | Component | Channel | Purpose |
 |-----------|---------|---------|
-| `AudioFFTPlugin.swift` | `com.nautune.audio_fft/methods`, `/events` | real-time FFT (MTAudioProcessingTap + vDSP) for visualizers |
+| `AudioFFTPlugin.swift` | `com.nautune.audio_fft/methods`, `/events` | real-time FFT (MTAudioProcessingTap + vDSP) for visualizers, on its own muted shadow AVPlayer |
+| `AudioEffectsPlugin.swift` | `com.nautune.audio_effects` | 10-band equalizer: swizzles `AVQueuePlayer insertItem:afterItem:` (only just_audio uses AVQueuePlayer) and taps each queued item with `vDSP_biquadm` peaking filters. Settings from `EqualizerService` |
 | `AudioDecoderPlugin.swift` | `com.elysiumdisc.nautune/audio_decoder` | PCM decoding for Frets on Fire chart generation |
 | `SharePlugin.swift` | `com.nautune.share/methods` | share sheet / AirDrop (uses the phone scene, not CarPlay's) |
 | `AppIconPlugin.swift` | `com.nautune.app_icon/methods` | alternate app icons |
@@ -379,6 +418,14 @@ Simulator) before promoting a TestFlight build:
       and by tracks.
 - [ ] Kill the app during playback and relaunch: queue and position are
       restored without waiting on the network.
+- [ ] Gapless album (live album or classical): no gap between tracks, and
+      every track still scrobbles and reports to Jellyfin.
+- [ ] Streamed track: the seek bar's buffered track fills in; after the
+      track, replaying it plays from the cache.
+- [ ] Playback speed (⋯ menu in the player) and the Equalizer (Settings →
+      Audio): presets are clearly audible, Off bypasses it.
+- [ ] Visualizer reacts on downloaded, cached and streamed tracks.
+- [ ] Easter eggs (Relax Mode, Network, Piano, Frets on Fire) still play.
 - [ ] Lock the phone for a few minutes while playing: the Jellyfin
       dashboard shows the current position.
 - [ ] Skip a track after a few seconds: its play count doesn't go up.
@@ -388,6 +435,20 @@ Simulator) before promoting a TestFlight build:
 - [ ] Transcode Format AAC: an Opus or FLAC track at 128k plays and seeks.
 - [ ] Raise streaming quality to Original: a track cached at 128k is
       streamed again rather than replayed from cache.
+
+**Browsing and remote**
+- [ ] A-Z index on albums and artists (grid and list, ascending and
+      descending) lands on the tapped letter, including letters beyond the
+      first page of a large library.
+- [ ] Swipe a song right/left in an album, favorites and search; select
+      several songs on an album and add them to a playlist.
+- [ ] Control Nautune from the Jellyfin web dashboard (play/pause, next,
+      seek, send an album); turn off Allow Remote Control and confirm it
+      stops.
+- [ ] Connect Last.fm with a test API account; a play shows up after the
+      threshold, and an offline play is sent after reconnecting.
+- [ ] Drag the full player down to close it; the artwork flies back to the
+      mini player.
 
 **Look and feel**
 - [ ] Each preset and a custom palette in Light / Dark: Palette, System

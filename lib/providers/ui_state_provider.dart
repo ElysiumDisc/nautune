@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../jellyfin/jellyfin_service.dart';
+import '../utils/collection_sort.dart';
 import '../services/playback_state_store.dart';
 
 /// Manages UI-only state that doesn't affect data or business logic.
@@ -57,6 +58,26 @@ class UIStateProvider extends ChangeNotifier {
   // List mode (true = list view, false = grid view)
   bool _useListMode = false;
 
+  // Client-side sort orders
+  FavoritesSort _favoritesSort = FavoritesSort.recent;
+  PlaylistSort _playlistSort = PlaylistSort.recent;
+  FavoritesSort get favoritesSort => _favoritesSort;
+  PlaylistSort get playlistSort => _playlistSort;
+
+  void setFavoritesSort(FavoritesSort sort) {
+    if (_favoritesSort == sort) return;
+    _favoritesSort = sort;
+    unawaited(_playbackStateStore.saveUiState(favoritesSort: sort.name));
+    notifyListeners();
+  }
+
+  void setPlaylistSort(PlaylistSort sort) {
+    if (_playlistSort == sort) return;
+    _playlistSort = sort;
+    unawaited(_playbackStateStore.saveUiState(playlistSort: sort.name));
+    notifyListeners();
+  }
+
   // Getters
   int get cacheTtlMinutes => _cacheTtlMinutes;
   int get libraryTabIndex => _libraryTabIndex;
@@ -109,6 +130,8 @@ class UIStateProvider extends ChangeNotifier {
 
         // List mode
         _useListMode = storedPlaybackState.useListMode;
+        _favoritesSort = FavoritesSort.fromName(storedPlaybackState.favoritesSort);
+        _playlistSort = PlaylistSort.fromName(storedPlaybackState.playlistSort);
 
         debugPrint('UIStateProvider: Restored UI preferences');
         notifyListeners();

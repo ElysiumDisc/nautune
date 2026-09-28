@@ -12,12 +12,17 @@ Flutter, shipped for iOS.
 ## ✨ Features
 
 ### Playback
-- **Gapless playback and crossfade**
+- **Truly gapless playback** and crossfade
+- **10-band equalizer** with presets, and **playback speed**
 - **Volume levelling** with ReplayGain: Off, Track or Album mode, plus a
   preamp that leaves room to raise quiet tracks
 - **Queue** with reordering, shuffle, repeat, **Infinite Radio** (keeps the
   queue topped up with similar tracks) and **Artist Radio**
-- **Sleep timer** by time or by number of tracks, with a gentle fade-out
+- **Sleep timer** by time, by number of tracks or at the end of the
+  current track, with a gentle fade-out
+- **Smart Shuffle** spreads out artists and plays what you heard recently
+  later, and the shuffle button restores the original order when turned off
+- **Remote control** from the Jellyfin dashboard or your other Jellyfin apps
 - **Synced lyrics** from Jellyfin, with LRCLIB and lyrics.ovh as fallbacks
 - **A-B repeat loops** on downloaded or cached tracks, saved for later
 - **Streaming quality**: Original, 320k, 192k, 128k, or Auto (network-aware),
@@ -28,7 +33,12 @@ Flutter, shipped for iOS.
 ### Library
 - Albums, artists, genres, playlists and favorites, with server-side sorting
   and A-Z scrubbing
-- Live search as you type
+- Live search as you type, with Artists / Albums / Songs filters and a
+  Top Result
+- Swipe a song right to play it next, or left to add it to the queue, and
+  select several songs at once
+- A-Z index that jumps straight to any letter, even in huge libraries
+- Favorites and playlists sort however you like
 - Playlist management (create, rename, add and remove tracks) with changes
   queued while offline and synced later
 - Mood playlists (Chill, Energetic, Melancholy, Upbeat) from your own tags
@@ -68,7 +78,9 @@ Flutter, shipped for iOS.
 - Artwork loads from local files for downloaded music, and CarPlay works
   from a cold start while the phone is locked
 
-### ListenBrainz
+### ListenBrainz and Last.fm
+- Last.fm scrobbling with your own free Last.fm API account (Settings →
+  Your Music → Last.fm)
 - Scrobbles plays after you've actually listened to half the track or 4
   minutes, whichever comes first (seeking ahead doesn't count), and queues
   them while offline
@@ -88,7 +100,8 @@ Flutter, shipped for iOS.
   automatically in Low Power Mode
 - Theme presets plus a custom color picker, and alternate app icons
   (Classic, Sunset, Crimson, Emerald)
-- Reorderable bottom tabs
+- Reorderable bottom tabs, and a sidebar on iPad
+- VoiceOver labels on the player controls
 
 ## 🥚 Easter eggs
 

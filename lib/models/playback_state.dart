@@ -107,6 +107,13 @@ class PlaybackState {
     // Smart caching
     this.preCacheTrackCount = 3,  // 0 = off, 3, 5, or 10
     this.wifiOnlyCaching = false,
+    this.equalizerGains = const [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    this.equalizerEnabled = false,
+    this.playbackSpeed = 1.0,
+    this.remoteControlEnabled = true,
+    this.smartShuffleEnabled = true,
+    this.playlistSort = 'recent',
+    this.favoritesSort = 'recent',
     this.artworkTintEnabled = true,
     this.frostedBlurEnabled = true,
     this.accentSource = AccentSource.palette,
@@ -171,6 +178,13 @@ class PlaybackState {
   // Smart caching
   final int preCacheTrackCount;  // 0 = off, 3, 5, or 10
   final bool wifiOnlyCaching;
+  final List<double> equalizerGains;
+  final bool equalizerEnabled;
+  final double playbackSpeed;
+  final bool remoteControlEnabled;
+  final bool smartShuffleEnabled;
+  final String playlistSort;
+  final String favoritesSort;
   final bool artworkTintEnabled;
   final bool frostedBlurEnabled;
   final AccentSource accentSource;
@@ -232,6 +246,13 @@ class PlaybackState {
     VisualizerPosition? visualizerPosition,
     int? preCacheTrackCount,
     bool? wifiOnlyCaching,
+    List<double>? equalizerGains,
+    bool? equalizerEnabled,
+    double? playbackSpeed,
+    bool? remoteControlEnabled,
+    bool? smartShuffleEnabled,
+    String? playlistSort,
+    String? favoritesSort,
     bool? artworkTintEnabled,
     bool? frostedBlurEnabled,
     AccentSource? accentSource,
@@ -285,6 +306,13 @@ class PlaybackState {
       visualizerPosition: visualizerPosition ?? this.visualizerPosition,
       preCacheTrackCount: preCacheTrackCount ?? this.preCacheTrackCount,
       wifiOnlyCaching: wifiOnlyCaching ?? this.wifiOnlyCaching,
+      equalizerGains: equalizerGains ?? this.equalizerGains,
+      equalizerEnabled: equalizerEnabled ?? this.equalizerEnabled,
+      playbackSpeed: playbackSpeed ?? this.playbackSpeed,
+      remoteControlEnabled: remoteControlEnabled ?? this.remoteControlEnabled,
+      smartShuffleEnabled: smartShuffleEnabled ?? this.smartShuffleEnabled,
+      playlistSort: playlistSort ?? this.playlistSort,
+      favoritesSort: favoritesSort ?? this.favoritesSort,
       artworkTintEnabled: artworkTintEnabled ?? this.artworkTintEnabled,
       frostedBlurEnabled: frostedBlurEnabled ?? this.frostedBlurEnabled,
       accentSource: accentSource ?? this.accentSource,
@@ -341,6 +369,13 @@ class PlaybackState {
       'visualizerPosition': visualizerPosition.name,
       'preCacheTrackCount': preCacheTrackCount,
       'wifiOnlyCaching': wifiOnlyCaching,
+      'equalizerGains': equalizerGains,
+      'equalizerEnabled': equalizerEnabled,
+      'playbackSpeed': playbackSpeed,
+      'remoteControlEnabled': remoteControlEnabled,
+      'smartShuffleEnabled': smartShuffleEnabled,
+      'playlistSort': playlistSort,
+      'favoritesSort': favoritesSort,
       'artworkTintEnabled': artworkTintEnabled,
       'frostedBlurEnabled': frostedBlurEnabled,
       'accentSource': accentSource.name,
@@ -409,6 +444,13 @@ class PlaybackState {
       visualizerPosition: VisualizerPositionExtension.fromString(json['visualizerPosition'] as String?),
       preCacheTrackCount: (json['preCacheTrackCount'] as num?)?.toInt() ?? 3,
       wifiOnlyCaching: json['wifiOnlyCaching'] as bool? ?? false,
+      equalizerGains: [for (final g in (json['equalizerGains'] as List?) ?? const []) (g as num).toDouble()],
+      equalizerEnabled: json['equalizerEnabled'] as bool? ?? false,
+      playbackSpeed: (json['playbackSpeed'] as num?)?.toDouble() ?? 1.0,
+      remoteControlEnabled: json['remoteControlEnabled'] as bool? ?? true,
+      smartShuffleEnabled: json['smartShuffleEnabled'] as bool? ?? true,
+      playlistSort: json['playlistSort'] as String? ?? 'recent',
+      favoritesSort: json['favoritesSort'] as String? ?? 'recent',
       artworkTintEnabled: json['artworkTintEnabled'] as bool? ?? true,
       frostedBlurEnabled: json['frostedBlurEnabled'] as bool? ?? true,
       accentSource: AccentSource.fromName(json['accentSource'] as String?),
@@ -471,6 +513,13 @@ class PlaybackState {
       visualizerPosition: visualizerPosition, // Preserve visualizer position
       preCacheTrackCount: preCacheTrackCount, // Preserve smart cache settings
       wifiOnlyCaching: wifiOnlyCaching,
+      equalizerGains: equalizerGains,
+      equalizerEnabled: equalizerEnabled,
+      playbackSpeed: playbackSpeed,
+      remoteControlEnabled: remoteControlEnabled,
+      smartShuffleEnabled: smartShuffleEnabled,
+      playlistSort: playlistSort,
+      favoritesSort: favoritesSort,
       artworkTintEnabled: artworkTintEnabled,
       frostedBlurEnabled: frostedBlurEnabled,
       accentSource: accentSource,

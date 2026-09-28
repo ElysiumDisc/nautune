@@ -25,6 +25,7 @@ import 'services/connectivity_service.dart';
 import 'services/download_service.dart';
 import 'services/local_cache_service.dart';
 import 'services/pending_report_store.dart';
+import 'services/remote_control_service.dart';
 import 'services/playback_reporting_service.dart';
 import 'services/playback_state_store.dart';
 import 'services/playlist_membership_store.dart';
@@ -351,6 +352,138 @@ class NautuneAppState extends ChangeNotifier {
   ///   carrying its queued offline events and active session over when it
   ///   reported for the same server + user.
   /// - Never enables reporting while offline.
+  // ---------------------------------------------------------------------------
+  // Remote control (other Jellyfin clients driving this session)
+  // ---------------------------------------------------------------------------
+
+  RemoteControlService? _remoteControl;
+  bool _remoteControlEnabled = true;
+  bool get remoteControlEnabled => _remoteControlEnabled;
+
+  void setRemoteControlEnabled(bool enabled) {
+    if (_remoteControlEnabled == enabled) return;
+    _remoteControlEnabled = enabled;
+    unawaited(_playbackStateStore.saveUiState(remoteControlEnabled: enabled));
+    if (enabled) {
+      final session = _session;
+      if (session != null) _startRemoteControl(session);
+    } else {
+      _stopRemoteControl();
+    }
+    notifyListeners();
+  }
+
+  void _startRemoteControl(JellyfinSession session) {
+    if (!_remoteControlEnabled || session.isDemo || isOfflineMode) return;
+    final existing = _remoteControl;
+    if (existing != null &&
+        existing.serverUrl == session.serverUrl &&
+        existing.accessToken == session.credentials.accessToken) {
+      unawaited(existing.start());
+      return;
+    }
+    existing?.stop();
+    _remoteControl = RemoteControlService(
+      serverUrl: session.serverUrl,
+      accessToken: session.credentials.accessToken,
+      deviceId: session.deviceId,
+      httpClient: _jellyfinService.jellyfinClient?.httpClient,
+      onCommand: (command) => unawaited(_handleRemoteCommand(command)),
+    );
+    unawaited(_remoteControl!.start());
+  }
+
+  void _stopRemoteControl() {
+    _remoteControl?.stop();
+  }
+
+  double _volumeBeforeMute = 1.0;
+
+  Future<void> _handleRemoteCommand(RemoteCommand command) async {
+    final player = _audioPlayerService;
+    debugPrint('🎛️ Remote command: $command');
+    try {
+      switch (command) {
+        case RemotePlaystate(:final command, :final seekPosition):
+          switch (command) {
+            case 'PlayPause':
+              await player.playPause();
+            case 'Pause':
+              await player.pause();
+            case 'Unpause':
+              await player.resume();
+            case 'Stop':
+              await player.stop();
+            case 'NextTrack':
+              await player.next();
+            case 'PreviousTrack':
+              await player.previous();
+            case 'Seek':
+              if (seekPosition != null) await player.seek(seekPosition);
+            case 'FastForward':
+              await player.seek(player.currentPosition + const Duration(seconds: 15));
+            case 'Rewind':
+              final back = player.currentPosition - const Duration(seconds: 15);
+              await player.seek(back.isNegative ? Duration.zero : back);
+          }
+        case RemotePlay(:final itemIds, :final playCommand, :final startIndex):
+          if (playCommand == 'PlayInstantMix') {
+            final mix = await _jellyfinService.getInstantMix(itemId: itemIds.first, limit: 50);
+            if (mix.isNotEmpty) await player.playTrack(mix.first, queueContext: mix);
+            return;
+          }
+          final tracks = await _jellyfinService.loadTracksByIds(itemIds);
+          if (tracks.isEmpty) return;
+          switch (playCommand) {
+            case 'PlayNext':
+              player.playNext(tracks);
+            case 'PlayLast':
+              player.addToQueue(tracks);
+            case 'PlayShuffle':
+              await player.playShuffled(tracks);
+            default:
+              final start = startIndex.clamp(0, tracks.length - 1);
+              await player.playTrack(tracks[start], queueContext: tracks);
+          }
+        case RemoteGeneral(:final name, :final arguments):
+          switch (name) {
+            case 'SetVolume':
+              final v = int.tryParse(arguments['Volume'] ?? '');
+              if (v != null) await player.setVolume(v / 100);
+            case 'VolumeUp':
+              await player.setVolume(player.volume + 0.1);
+            case 'VolumeDown':
+              await player.setVolume(player.volume - 0.1);
+            case 'Mute':
+              _volumeBeforeMute = player.volume > 0 ? player.volume : _volumeBeforeMute;
+              await player.setVolume(0);
+            case 'Unmute':
+              await player.setVolume(_volumeBeforeMute);
+            case 'ToggleMute':
+              if (player.volume > 0) {
+                _volumeBeforeMute = player.volume;
+                await player.setVolume(0);
+              } else {
+                await player.setVolume(_volumeBeforeMute);
+              }
+            case 'SetRepeatMode':
+              player.setRepeatMode(switch (arguments['RepeatMode']) {
+                'RepeatOne' => RepeatMode.one,
+                'RepeatAll' => RepeatMode.all,
+                _ => RepeatMode.off,
+              });
+            case 'SetShuffleQueue':
+              final shuffle = arguments['ShuffleMode'] == 'Shuffle';
+              if (shuffle != player.shuffleEnabled) player.toggleShuffle();
+          }
+        case RemoteKeepAlive():
+          break;
+      }
+    } catch (e) {
+      debugPrint('🎛️ Remote command failed: $e');
+    }
+  }
+
   void _installReportingService(JellyfinSession session) {
     final old = _audioPlayerService.reportingService;
     final deviceId = session.isDemo ? null : session.deviceId;
@@ -386,6 +519,7 @@ class NautuneAppState extends ChangeNotifier {
     if (!isOfflineMode) {
       unawaited(service.flushPendingReports());
     }
+    _startRemoteControl(session);
     if (!identical(service, old)) {
       _audioPlayerService.setReportingService(service);
     }
@@ -744,6 +878,22 @@ class NautuneAppState extends ChangeNotifier {
     unawaited(_playbackStateStore.saveUiState(
       gaplessPlaybackEnabled: enabled,
     ));
+    notifyListeners();
+  }
+
+  double get playbackSpeed => _audioPlayerService.playbackSpeed;
+
+  void setPlaybackSpeed(double speed) {
+    unawaited(_audioPlayerService.setPlaybackSpeed(speed));
+    unawaited(_playbackStateStore.saveUiState(playbackSpeed: _audioPlayerService.playbackSpeed));
+    notifyListeners();
+  }
+
+  bool get smartShuffleEnabled => _audioPlayerService.smartShuffleEnabled;
+
+  void setSmartShuffleEnabled(bool enabled) {
+    _audioPlayerService.setSmartShuffleEnabled(enabled);
+    unawaited(_playbackStateStore.saveUiState(smartShuffleEnabled: enabled));
     notifyListeners();
   }
 
@@ -1224,6 +1374,9 @@ class NautuneAppState extends ChangeNotifier {
       _audioPlayerService.setGaplessPlaybackEnabled(_gaplessPlaybackEnabled);
       _audioPlayerService.setStreamingQuality(_streamingQuality);
       _audioPlayerService.setTranscodeCodec(storedPlaybackState.transcodeCodec);
+      _audioPlayerService.setSmartShuffleEnabled(storedPlaybackState.smartShuffleEnabled);
+      _remoteControlEnabled = storedPlaybackState.remoteControlEnabled;
+      unawaited(_audioPlayerService.setPlaybackSpeed(storedPlaybackState.playbackSpeed));
       unawaited(_audioPlayerService.setReplayGain(
         mode: storedPlaybackState.replayGainMode,
         preampDb: storedPlaybackState.replayGainPreampDb,
@@ -1599,6 +1752,8 @@ class NautuneAppState extends ChangeNotifier {
 
     // 2. Silence all background work tied to the old account.
     _retireReportingService();
+    _stopRemoteControl();
+    _remoteControl = null;
     _stopReachabilityProbe();
     _stopPeriodicSyncTimer();
     _bootstrapService.cancelSync();
@@ -2999,6 +3154,9 @@ class NautuneAppState extends ChangeNotifier {
     // Pause playback reporting
     _audioPlayerService.reportingService?.setEnabled(false);
 
+    // Stop listening for remote commands
+    _stopRemoteControl();
+
     // Disable image prewarming
     _audioPlayerService.setImagePrewarmEnabled(false);
 
@@ -3026,6 +3184,9 @@ class NautuneAppState extends ChangeNotifier {
 
     // Re-enable image prewarming
     _audioPlayerService.setImagePrewarmEnabled(true);
+
+    // Accept remote commands again
+    _startRemoteControl(session);
 
     // Resume bootstrap sync (also syncs pending playlist actions)
     if (restartBootstrap) _startBootstrapSync(session);

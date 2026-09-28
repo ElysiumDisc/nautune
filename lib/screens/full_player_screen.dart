@@ -18,6 +18,8 @@ import '../jellyfin/jellyfin_track.dart';
 import '../services/audio_player_service.dart';
 import '../services/haptic_service.dart';
 import '../services/saved_loops_service.dart';
+import '../widgets/ios/action_sheet.dart';
+import '../widgets/ios/now_playing_route.dart';
 import '../widgets/track_context_menu.dart';
 import '../widgets/visualizers/visualizer_factory.dart';
 import '../widgets/jellyfin_image.dart';
@@ -135,6 +137,27 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
       showTrackInfo: false,
       // Player-specific controls follow the shared track actions.
       extraActionsBuilder: (sheetContext) => [
+        ListTile(
+          leading: const Icon(Icons.speed),
+          title: const Text('Playback Speed'),
+          trailing: Text('${_appState.playbackSpeed}×'),
+          onTap: () async {
+            Navigator.pop(sheetContext);
+            final speed = await showNautuneActionSheet<double>(
+              parentContext,
+              title: 'Playback Speed',
+              actions: [
+                for (final s in const [0.75, 1.0, 1.25, 1.5, 2.0])
+                  NautuneSheetAction(
+                    label: s == 1.0 ? 'Normal (1×)' : '$s×',
+                    value: s,
+                    isDefault: s == _appState.playbackSpeed,
+                  ),
+              ],
+            );
+            if (speed != null) _appState.setPlaybackSpeed(speed);
+          },
+        ),
         ListTile(
           leading: Icon(Icons.stop_circle_outlined, color: Theme.of(sheetContext).colorScheme.error),
           title: const Text('Stop Playback'),
@@ -304,7 +327,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                   Wrap(
                     spacing: 8,
                     children: [
-                      _buildTrackChip(sheetContext, '1 track', 1),
+                      _buildTrackChip(sheetContext, 'End of this track', 1),
                       _buildTrackChip(sheetContext, '3 tracks', 3),
                       _buildTrackChip(sheetContext, '5 tracks', 5),
                       _buildTrackChip(sheetContext, '10 tracks', 10),
@@ -457,6 +480,12 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
       case StreamingQuality.auto:
         return 'Auto';
     }
+  }
+
+  static String _fmtPosition(Duration d) {
+    final m = d.inMinutes;
+    final sec = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$m:$sec';
   }
 
   void _onColorsChanged() {
@@ -665,7 +694,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   /// Build artwork with layout-specific styling
   Widget _buildLayoutStyledArtwork({
     required Widget artwork,
-    required bool isDesktop,
+    required bool isWide,
     required Size size,
     required ThemeData theme,
   }) {
@@ -677,28 +706,28 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
 
     switch (layout) {
       case NowPlayingLayout.compact:
-        maxWidthFactor = isDesktop ? 0.4 : 0.65;
-        maxHeightFactor = isDesktop ? 0.4 : 0.45;
+        maxWidthFactor = isWide ? 0.4 : 0.65;
+        maxHeightFactor = isWide ? 0.4 : 0.45;
         break;
       case NowPlayingLayout.fullArt:
         maxWidthFactor = 1.0;
         maxHeightFactor = 0.85;
         break;
       case NowPlayingLayout.card:
-        maxWidthFactor = isDesktop ? 0.5 : 0.85;
-        maxHeightFactor = isDesktop ? 0.6 : 0.55;
+        maxWidthFactor = isWide ? 0.5 : 0.85;
+        maxHeightFactor = isWide ? 0.6 : 0.55;
         break;
       default:
-        maxWidthFactor = isDesktop ? 0.6 : 0.98;
-        maxHeightFactor = isDesktop ? 0.7 : 0.7;
+        maxWidthFactor = isWide ? 0.6 : 0.98;
+        maxHeightFactor = isWide ? 0.7 : 0.7;
     }
 
     Widget styledArtwork = FittedBox(
       fit: BoxFit.contain,
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: isDesktop ? 1000 * maxWidthFactor : size.width * maxWidthFactor,
-          maxHeight: isDesktop ? 1000 * maxHeightFactor : size.height * maxHeightFactor,
+          maxWidth: isWide ? 1000 * maxWidthFactor : size.width * maxWidthFactor,
+          maxHeight: isWide ? 1000 * maxHeightFactor : size.height * maxHeightFactor,
         ),
         child: AspectRatio(
           aspectRatio: 1,
@@ -901,7 +930,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   /// Build artwork container with optional visualizer toggle (when position is albumArt)
   Widget _buildArtworkVisualizerContainer({
     required Widget artwork,
-    required bool isDesktop,
+    required bool isWide,
     required ThemeData theme,
   }) {
     final visualizerEnabled = _appState.visualizerEnabled;
@@ -915,7 +944,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
 
     final layout = _appState.nowPlayingLayout;
     final isFullArt = layout == NowPlayingLayout.fullArt;
-    final borderRadius = isFullArt ? BorderRadius.zero : BorderRadius.circular(isDesktop ? 24 : 16);
+    final borderRadius = isFullArt ? BorderRadius.zero : BorderRadius.circular(isWide ? 24 : 16);
 
     return GestureDetector(
       onTap: _toggleVisualizerInArtwork,
@@ -969,7 +998,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                 child: Icon(
                   _showingVisualizerInArtwork ? Icons.album : Icons.equalizer,
                   color: Colors.white,
-                  size: isDesktop ? 24 : 20,
+                  size: isWide ? 24 : 20,
                 ),
               ),
             ),
@@ -1068,7 +1097,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final size = MediaQuery.of(context).size;
-    final isDesktop = size.width > 600;
+    final isWide = size.width > 600;
 
     // Track + playing state only: position ticks (5/s) must not rebuild the
     // artwork, background, controls and menus.
@@ -1110,16 +1139,20 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
           );
         }
 
-        final baseArtwork = _buildArtwork(
-          track: track,
-          isDesktop: isDesktop,
-          theme: theme,
+        final baseArtwork = Hero(
+          tag: kNowPlayingArtworkHeroTag,
+          transitionOnUserGestures: true,
+          child: _buildArtwork(
+            track: track,
+            isWide: isWide,
+            theme: theme,
+          ),
         );
 
         // Wrap artwork with visualizer container if position is albumArt
         final artwork = _buildArtworkVisualizerContainer(
           artwork: baseArtwork,
-          isDesktop: isDesktop,
+          isWide: isWide,
           theme: theme,
         );
 
@@ -1147,7 +1180,8 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                         child: Row(
                           children: [
                             IconButton(
-                              icon: const Icon(Icons.expand_more),
+                              icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 30),
+                              tooltip: 'Close player',
                               onPressed: () => Navigator.of(context).pop(),
                             ),
                             const Spacer(),
@@ -1213,7 +1247,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                             _buildNowPlayingTab(
                               track: track,
                               isPlaying: isPlaying,
-                              isDesktop: isDesktop,
+                              isWide: isWide,
                               theme: theme,
                               artwork: artwork,
                             ),
@@ -1240,7 +1274,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   Widget _buildNowPlayingTab({
     required JellyfinTrack track,
     required bool isPlaying,
-    required bool isDesktop,
+    required bool isWide,
     required ThemeData theme,
     required Widget artwork,
   }) {
@@ -1249,7 +1283,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
         final size = MediaQuery.of(context).size;
         return Padding(
           padding: EdgeInsets.symmetric(
-            horizontal: isDesktop ? size.width * 0.15 : 24,
+            horizontal: isWide ? size.width * 0.15 : 24,
             vertical: 16,
           ),
           child: LayoutBuilder(
@@ -1269,7 +1303,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                         Flexible(
                           child: _buildLayoutStyledArtwork(
                             artwork: artwork,
-                            isDesktop: isDesktop,
+                            isWide: isWide,
                             size: size,
                             theme: theme,
                           ),
@@ -1283,7 +1317,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                           child: Text(
                             track.name,
                             style:
-                                (isDesktop
+                                (isWide
                                         ? theme.textTheme.headlineMedium
                                         : theme.textTheme.titleLarge)
                                     ?.copyWith(
@@ -1441,7 +1475,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                 child: Text(
                                   track.displayArtist,
                                   style:
-                                      (isDesktop
+                                      (isWide
                                               ? theme.textTheme.headlineSmall
                                               : theme.textTheme.titleMedium)
                                           ?.copyWith(
@@ -1814,8 +1848,16 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                                 height: 40,
                                               ),
                                             ),
-                                          // Progress bar on top
-                                          ProgressBar(
+                                          // Progress bar on top; VoiceOver
+                                          // adjusts it in 10 s steps.
+                                          Semantics(
+                                            slider: true,
+                                            label: 'Playback position',
+                                            value: '${_fmtPosition(positionData.position)} of ${_fmtPosition(positionData.duration)}',
+                                            onIncrease: () => _audioService.seek(positionData.position + const Duration(seconds: 10)),
+                                            onDecrease: () => _audioService.seek(positionData.position - const Duration(seconds: 10) < Duration.zero ? Duration.zero : positionData.position - const Duration(seconds: 10)),
+                                            child: ExcludeSemantics(
+                                              child: ProgressBar(
                                             progress: positionData.position,
                                             buffered: positionData.bufferedPosition,
                                             total: positionData.duration,
@@ -1832,6 +1874,8 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                             timeLabelLocation: TimeLabelLocation.below,
                                             timeLabelPadding: 8.0,
                                             timeLabelTextStyle: theme.textTheme.bodySmall,
+                                          ),
+                                            ),
                                           ),
                                         ],
                                       );
@@ -1980,9 +2024,11 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                               track.isFavorite
                                   ? Icons.favorite
                                   : Icons.favorite_border,
-                              size: isDesktop ? 32 : 26,
+                              size: isWide ? 32 : 26,
                             ),
+                            tooltip: track.isFavorite ? 'Remove from favorites' : 'Add to favorites',
                             onPressed: () async {
+                              HapticService.lightTap();
                               try {
                                 final currentFavoriteStatus = track.isFavorite;
                                 final newFavoriteStatus =
@@ -2064,7 +2110,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                             color: track.isFavorite ? Colors.red : null,
                           ),
 
-                          SizedBox(width: isDesktop ? 16 : 4),
+                          SizedBox(width: isWide ? 16 : 4),
 
                           StreamBuilder<bool>(
                             stream: _audioService.shuffleStream,
@@ -2074,7 +2120,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                               return IconButton(
                                 icon: Icon(
                                   Icons.shuffle_rounded,
-                                  size: isDesktop ? 32 : 26,
+                                  size: isWide ? 32 : 26,
                                   color: shuffled ? theme.colorScheme.primary : null,
                                 ),
                                 tooltip: shuffled ? 'Shuffle on' : 'Shuffle off',
@@ -2087,17 +2133,18 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                             },
                           ),
 
-                          SizedBox(width: isDesktop ? 16 : 4),
+                          SizedBox(width: isWide ? 16 : 4),
 
                           IconButton(
                             icon: Icon(
                               Icons.skip_previous,
-                              size: isDesktop ? 48 : 40,
+                              size: isWide ? 48 : 40,
                             ),
+                            tooltip: 'Previous',
                             onPressed: () => _audioService.previous(),
                           ),
 
-                          SizedBox(width: isDesktop ? 24 : 8),
+                          SizedBox(width: isWide ? 24 : 8),
 
                           Container(
                             decoration: BoxDecoration(
@@ -2114,26 +2161,37 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                               ],
                             ),
                             child: IconButton(
-                              icon: Icon(
-                                isPlaying ? Icons.pause : Icons.play_arrow,
-                                size: isDesktop ? 56 : 48,
+                              icon: AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 180),
+                                transitionBuilder: (child, animation) =>
+                                    ScaleTransition(scale: animation, child: child),
+                                child: Icon(
+                                  isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                  key: ValueKey(isPlaying),
+                                  size: isWide ? 56 : 48,
+                                ),
                               ),
-                              onPressed: () => _audioService.playPause(),
+                              tooltip: isPlaying ? 'Pause' : 'Play',
+                              onPressed: () {
+                                HapticService.lightTap();
+                                _audioService.playPause();
+                              },
                               color: theme.colorScheme.onPrimary,
                             ),
                           ),
 
-                          SizedBox(width: isDesktop ? 24 : 8),
+                          SizedBox(width: isWide ? 24 : 8),
 
                           IconButton(
                             icon: Icon(
                               Icons.skip_next,
-                              size: isDesktop ? 48 : 40,
+                              size: isWide ? 48 : 40,
                             ),
+                            tooltip: 'Next',
                             onPressed: () => _audioService.next(),
                           ),
 
-                          SizedBox(width: isDesktop ? 16 : 4),
+                          SizedBox(width: isWide ? 16 : 4),
 
                           // Repeat button
                           StreamBuilder<RepeatMode>(
@@ -2160,11 +2218,18 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                               return IconButton(
                                 icon: Icon(
                                   icon,
-                                  size: isDesktop ? 32 : 26,
+                                  size: isWide ? 32 : 26,
                                   color: color,
                                 ),
-                                onPressed: () =>
-                                    _audioService.toggleRepeatMode(),
+                                tooltip: switch (repeatMode) {
+                                  RepeatMode.off => 'Repeat off',
+                                  RepeatMode.all => 'Repeat all',
+                                  RepeatMode.one => 'Repeat one',
+                                },
+                                onPressed: () {
+                                  HapticService.selectionClick();
+                                  _audioService.toggleRepeatMode();
+                                },
                               );
                             },
                           ),
@@ -2357,7 +2422,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
 
   Widget _buildArtwork({
     required JellyfinTrack track,
-    required bool isDesktop,
+    required bool isWide,
     required ThemeData theme,
   }) {
     final layout = _appState.nowPlayingLayout;
@@ -2366,13 +2431,13 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     // Full Art layout: no rounded corners; others: rounded
     final borderRadius = isFullArt
         ? BorderRadius.zero
-        : BorderRadius.circular(isDesktop ? 24 : 16);
-    final maxWidth = isDesktop ? 1024 : 800;
+        : BorderRadius.circular(isWide ? 24 : 16);
+    final maxWidth = isWide ? 1024 : 800;
     final placeholder = Container(
       color: theme.colorScheme.primaryContainer,
       child: Icon(
         Icons.album,
-        size: isDesktop ? 160 : 100,
+        size: isWide ? 160 : 100,
         color: theme.colorScheme.onPrimaryContainer,
       ),
     );

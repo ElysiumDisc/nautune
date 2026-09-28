@@ -274,6 +274,26 @@ class AudioCacheService {
     }
   }
   
+  /// Take over a file saved while streaming (stored under [key], see
+  /// [audioCacheKey]) instead of downloading the track again.
+  Future<void> adoptFile(String key, File file, String extension) async {
+    await initialize();
+    final manager = _cacheManager;
+    if (manager == null) return;
+    try {
+      await manager.putFileStream(
+        'nautune-stream://$key',
+        file.openRead(),
+        key: key,
+        fileExtension: extension,
+        maxAge: _stalePeriod,
+      );
+      unawaited(_trimToBudget(protect: {key}));
+    } catch (e) {
+      debugPrint('⚠️ Could not adopt streamed copy $key: $e');
+    }
+  }
+
   /// Remove every cached copy of a track
   Future<void> removeFromCache(String trackId) async {
     if (_cacheManager == null) return;

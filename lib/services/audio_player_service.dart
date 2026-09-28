@@ -2,12 +2,12 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' show Random, sin;
 import 'dart:ui' show AppLifecycleState;
-import 'package:audioplayers/audioplayers.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:audio_service/audio_service.dart' as audio_service;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:rxdart/rxdart.dart';
 
 import '../jellyfin/jellyfin_service.dart';
@@ -15,9 +15,11 @@ import '../jellyfin/jellyfin_track.dart';
 import 'audio_cache_service.dart';
 import 'audio_handler.dart';
 import 'download_service.dart';
+import 'engine/engine_player.dart';
 import 'haptic_service.dart';
 import 'image_prewarm_service.dart';
 import 'listening_analytics_service.dart';
+import 'lastfm_service.dart';
 import 'listenbrainz_service.dart';
 import 'lyrics_service.dart';
 import 'playback_logic.dart';
@@ -72,34 +74,21 @@ class AudioPlayerService {
   static final List<double> _idleVisualizerFrame =
       List<double>.unmodifiable(List<double>.filled(_visualizerBarCount, 0.0));
 
-  AudioPlayer _player = _createPlayer();
-  AudioPlayer _nextPlayer = _createPlayer();
-
-  /// How often the player's position is polled while playing.
-  static const Duration _positionTickInterval = Duration(milliseconds: 200);
+  /// Main player. Gapless: the next track is queued on this same player
+  /// ([EnginePlayer.appendNext]) and starts with no gap.
+  EnginePlayer _player = _createPlayer();
 
   /// Upper bound for preparing a source (AVPlayerItem readyToPlay). Also keeps
   /// [_withPlayerLock] from being held forever if the native call never
-  /// returns (audioplayers leaks the pending call if the item is reset).
+  /// returns.
   static const Duration _sourceLoadTimeout = Duration(seconds: 30);
 
-  /// Creates a player that reports its position on a timer.
-  ///
-  /// audioplayers defaults to a FramePositionUpdater: one getCurrentPosition
-  /// platform call and one position event per rendered frame (60-120 Hz),
-  /// which also keeps frames being scheduled for as long as audio plays, and
-  /// every StreamBuilder on the position rebuilds at frame rate. Worse, frame
-  /// callbacks don't run while the app is backgrounded, so with the screen
-  /// locked the position stream froze: no gapless pre-load, crossfade,
-  /// ListenBrainz scrobble, A-B loop or accurate Jellyfin progress.
-  static AudioPlayer _createPlayer() {
-    final player = AudioPlayer();
-    player.positionUpdater = TimerPositionUpdater(
-      getPosition: player.getCurrentPosition,
-      interval: _positionTickInterval,
-    );
-    return player;
-  }
+  /// just_audio player behind [EnginePlayer]. Its position stream ticks
+  /// every 200 ms on a Dart timer, so it keeps running with the screen
+  /// locked (pre-load, crossfade, scrobbling, A-B loop, Jellyfin progress).
+  static EnginePlayer _createPlayer() => EnginePlayer();
+
+  StreamSubscription<void>? _advanceSub;
   final PlaybackStateStore _stateStore = PlaybackStateStore();
   DownloadService? _downloadService;
   PlaybackReportingService? _reportingService;
@@ -145,13 +134,14 @@ class AudioPlayerService {
   // Pre-loading support for gapless playback
   JellyfinTrack? _preloadedTrack;
   _ResolvedSource? _preloadedSource;
+  /// Queue slot of [_preloadedTrack] (may skip ahead offline).
+  int? _preloadedIndex;
   bool _isPreloading = false;
   // Bumped by _clearPreload so an in-flight pre-load can't publish a track
   // (or a source) that was invalidated while it was loading.
   int _preloadGeneration = 0;
   String? _preloadingTrackId;
   bool _gaplessPlaybackEnabled = true;
-  bool _preloadedTrackIsLocal = false; // Track if preloaded track is from local storage
 
   // Audio cache service for pre-caching album tracks
   final AudioCacheService _audioCacheService = AudioCacheService.instance;
@@ -232,7 +222,7 @@ class AudioPlayerService {
   bool _isDucked = false;
 
   // Crossfade support
-  AudioPlayer? _crossfadePlayer;
+  EnginePlayer? _crossfadePlayer;
   bool _crossfadeEnabled = false;
   int _crossfadeDurationSeconds = 3;
   Timer? _crossfadeTimer;
@@ -341,10 +331,7 @@ class AudioPlayerService {
   Future<void> setReplayGain({ReplayGainMode? mode, double? preampDb}) async {
     _replayGainMode = mode ?? _replayGainMode;
     _replayGainPreampDb = (preampDb ?? _replayGainPreampDb).clamp(-15.0, 0.0);
-    await Future.wait([
-      _player.setVolume((_volume * _gainFor(_currentTrack)).clamp(0.0, 1.0)),
-      _nextPlayer.setVolume((_volume * _gainFor(_preloadedTrack)).clamp(0.0, 1.0)),
-    ]);
+    await _player.setVolume((_volume * _gainFor(_currentTrack)).clamp(0.0, 1.0));
   }
 
   void setCrossfadeEnabled(bool enabled) {
@@ -761,10 +748,10 @@ class AudioPlayerService {
   
   // Use BehaviorSubject to ensure new listeners get the latest value immediately
   final BehaviorSubject<Duration> _positionController = BehaviorSubject<Duration>.seeded(Duration.zero);
-  /// Whether the current source is a local file (download/cache), i.e. fully
-  /// buffered. audioplayers doesn't report stream buffering, so streamed
-  /// sources show no buffered bar rather than a made-up one.
-  final BehaviorSubject<bool> _sourceIsLocalController = BehaviorSubject<bool>.seeded(false);
+  /// How far the current source has buffered (streams fill in as they
+  /// download; local files are fully buffered).
+  final BehaviorSubject<Duration> _bufferedController = BehaviorSubject<Duration>.seeded(Duration.zero);
+  StreamSubscription<Duration>? _bufferedSub;
   final BehaviorSubject<Duration?> _durationController = BehaviorSubject<Duration?>.seeded(null);
 
   // Cached duration to avoid repeated async getDuration() calls in position update handlers
@@ -790,15 +777,12 @@ class AudioPlayerService {
   /// A stream that combines position, buffered position, and duration into a single snapshot.
   /// This is the "Silver Bullet" for smooth progress bars.
   Stream<PositionData> get positionDataStream =>
-      Rx.combineLatest3<Duration, bool, Duration?, PositionData>(
+      Rx.combineLatest3<Duration, Duration, Duration?, PositionData>(
           _positionController.stream,
-          _sourceIsLocalController.stream.distinct(),
+          _bufferedController.stream.distinct(),
           _durationController.stream,
-          (position, isLocal, duration) {
-            final total = duration ?? Duration.zero;
-            return PositionData(
-                position, isLocal ? total : Duration.zero, total);
-          });
+          (position, buffered, duration) =>
+              PositionData(position, buffered, duration ?? Duration.zero));
 
   /// Track + playing state only, for UI that must not rebuild on every
   /// position tick (give the progress UI its own [positionDataStream]
@@ -814,9 +798,8 @@ class AudioPlayerService {
       );
 
   JellyfinTrack? get currentTrack => _currentTrack;
-  bool get isPlaying => _player.state == PlayerState.playing;
+  bool get isPlaying => _player.state == EngineState.playing;
   Duration get currentPosition => _lastPosition;
-  AudioPlayer get player => _player;
   List<JellyfinTrack> get queue => List.unmodifiable(_queue);
   int get currentIndex => _currentIndex;
   RepeatMode get repeatMode => _repeatMode;
@@ -856,15 +839,7 @@ class AudioPlayerService {
     // Apply ReplayGain normalization if available
     final currentMultiplier = _gainFor(_currentTrack);
     final adjustedVolume = (_volume * currentMultiplier).clamp(0.0, 1.0);
-
-    // Apply ReplayGain to both main and preloaded player
-    final nextTrack = _preloadedTrack;
-    final nextMultiplier = _gainFor(nextTrack);
-    final nextAdjustedVolume = (_volume * nextMultiplier).clamp(0.0, 1.0);
-    await Future.wait([
-      _player.setVolume(adjustedVolume),
-      _nextPlayer.setVolume(nextAdjustedVolume),
-    ]);
+    await _player.setVolume(adjustedVolume);
     unawaited(_stateStore.savePlaybackSnapshot(volume: _volume));
   }
   
@@ -873,7 +848,6 @@ class AudioPlayerService {
     _attachPlayerListeners(_player);
     _initAudioHandler();
     _player.setVolume(_volume);
-    _nextPlayer.setVolume(_volume);
     _volumeController.add(_volume);
     _emitIdleVisualizer();
 
@@ -904,6 +878,14 @@ class AudioPlayerService {
           onSeek: (position) => unawaited(seek(position).catchError(
                 (Object e) => debugPrint('⚠️ Lock screen seek failed: $e'),
               )),
+          onSetShuffle: (on) {
+            if (on != _isShuffleEnabled) toggleShuffle();
+          },
+          onSetRepeat: (mode) => setRepeatMode(switch (mode) {
+            audio_service.AudioServiceRepeatMode.one => RepeatMode.one,
+            audio_service.AudioServiceRepeatMode.none => RepeatMode.off,
+            _ => RepeatMode.all,
+          }),
         ),
         config: const audio_service.AudioServiceConfig(
           // Android notification fields are ignored on iOS; kept for plugin defaults.
@@ -914,6 +896,9 @@ class AudioPlayerService {
         ),
       );
       debugPrint('✅ Audio service initialized for media controls');
+      _publishModes();
+      _shuffleController.stream.listen((_) => _publishModes());
+      _repeatModeController.stream.listen((_) => _publishModes());
       // A session restore may have finished before the handler existed;
       // publish its track now so the lock screen / CarPlay aren't blank.
       final restored = _currentTrack;
@@ -1095,10 +1080,13 @@ class AudioPlayerService {
     final dur = _playerDurSub;
     final state = _playerStateSub;
     final done = _playerCompleteSub;
+    final advance = _advanceSub;
     _playerPosSub = null;
     _playerDurSub = null;
     _playerStateSub = null;
     _playerCompleteSub = null;
+    _advanceSub = null;
+    if (advance != null) futures.add(advance.cancel());
     if (pos != null) futures.add(pos.cancel());
     if (dur != null) futures.add(dur.cancel());
     if (state != null) futures.add(state.cancel());
@@ -1108,7 +1096,7 @@ class AudioPlayerService {
     }
   }
 
-  void _attachPlayerListeners(AudioPlayer player) {
+  void _attachPlayerListeners(EnginePlayer player) {
     // Fire-and-forget detach; null-out happens synchronously so we don't
     // double-attach even while the old subs finish their cancel Future.
     unawaited(_detachListeners());
@@ -1121,7 +1109,7 @@ class AudioPlayerService {
       if (_disposed) return;
       _positionController.add(position);
       _lastPosition = position;
-      final playing = player.state == PlayerState.playing;
+      final playing = player.state == EngineState.playing;
       if (playing && !_batterySaverMode) {
         _emitVisualizerFrame(position);
       }
@@ -1186,7 +1174,7 @@ class AudioPlayerService {
     _playerStateSub = player.onPlayerStateChanged.listen(
       (state) {
         if (_disposed) return;
-        final isPlaying = state == PlayerState.playing;
+        final isPlaying = state == EngineState.playing;
         _playingController.add(isPlaying);
         // Time spent paused/stopped isn't a stall.
         _stallDetector.reset();
@@ -1238,6 +1226,77 @@ class AudioPlayerService {
       },
       onError: (e) => debugPrint('⚠️ Player complete stream error: $e'),
     );
+
+    _bufferedSub?.cancel();
+    _bufferedSub = player.bufferedPosition.listen((buffered) {
+      if (!_disposed) _bufferedController.add(buffered);
+    });
+
+    // Gapless: the queued next track started on this player.
+    _advanceSub = player.onAdvanced.listen((_) {
+      if (_disposed) return;
+      unawaited(_onGaplessAdvance().catchError(
+        (Object e) => debugPrint('❌ Gapless advance bookkeeping failed: $e'),
+      ));
+    });
+  }
+
+  /// The next track, queued on the main player by [_preloadNextTrack], has
+  /// just started playing (no gap). Do the per-track bookkeeping that
+  /// [_gaplessTransition] does for a normal advance.
+  Future<void> _onGaplessAdvance() async {
+    final nextTrack = _preloadedTrack;
+    final preloaded = _preloadedSource;
+    final nextIndex = _preloadedIndex;
+    _preloadedTrack = null;
+    _preloadedSource = null;
+    _preloadedIndex = null;
+    if (nextTrack == null ||
+        preloaded == null ||
+        nextIndex == null ||
+        nextIndex >= _queue.length ||
+        _queue[nextIndex].id != nextTrack.id) {
+      // The queue changed under the queued track; play what the queue says.
+      debugPrint('⚠️ Gapless advance out of sync with the queue - resyncing');
+      final target = _currentIndex + 1;
+      if (target < _queue.length) {
+        await playTrack(_queue[target], queueContext: _queue, fromShuffle: _isShuffleEnabled, queueIndex: target);
+      }
+      return;
+    }
+
+    // Close out the finished track: listening time + Jellyfin "stopped".
+    _recordActualListeningTime();
+    _reportOutgoingStopped();
+
+    // A newer request (tap mid-transition) wins over this bookkeeping.
+    ++_playRequestId;
+
+    if (_isSleepTimerByTracks && _sleepTracksRemaining > 0) {
+      _sleepTracksRemaining--;
+      _sleepTimerController.add(Duration(seconds: -_sleepTracksRemaining));
+    }
+
+    debugPrint('⚡ Gapless: ${nextTrack.name}');
+    _currentIndex = nextIndex;
+    _currentTrack = nextTrack;
+    _currentTrackController.add(_currentTrack);
+    _isCurrentTrackLocal = preloaded.isLocalFile;
+    _setCurrentSource(preloaded.url, isLocal: preloaded.isLocalFile);
+    _analyzeTrackForVisualizer(nextTrack);
+    _playingController.add(true);
+    _lastPlayingState = true;
+    unawaited(_player.setVolume((_volume * _gainFor(nextTrack)).clamp(0.0, 1.0)));
+
+    _onTrackBegan(nextTrack, playMethod: preloaded.playMethod);
+    _afterTrackStarted(nextTrack);
+    unawaited(_audioHandler?.forcePlayingState());
+
+    if (_infiniteRadioEnabled) unawaited(_checkInfiniteRadio());
+    if (!_batterySaverMode) {
+      _imagePrewarmService?.prewarmQueueImages(_queue, _currentIndex);
+    }
+    _saveCurrentPosition();
   }
   
   Future<void> _gaplessTransition() async {
@@ -1308,134 +1367,23 @@ class AudioPlayerService {
     // Move to next track
     if (nextIndex < _queue.length) {
       _isTransitioning = true;
-      // Claim the player: an older in-flight playTrack must not resume over
-      // us, and a newer one (user tap mid-swap) makes us back off.
-      final requestId = ++_playRequestId;
-      bool isStale() => _disposed || requestId != _playRequestId;
-      var usedFallback = false;
-
       try {
+        // Reaching here means the next track wasn't queued on the player
+        // (gapless off, pre-load not ready, offline skip): load it now.
+        // Queued tracks advance by themselves (_onGaplessAdvance).
         final nextTrack = _queue[nextIndex];
-        final preloaded = _preloadedSource;
-
-        // Use the pre-loaded player only if it really holds the next track's
-        // source (a released/stopped player would "resume" into silence and
-        // never complete, stalling the queue).
-        var usePreloaded = _gaplessPlaybackEnabled &&
-            preloaded != null &&
-            _preloadedTrack?.id == nextTrack.id;
-        if (usePreloaded) {
-          usePreloaded = await _nextPlayer.getDuration() != null;
-          if (isStale()) return;
-        }
-
-        if (usePreloaded && preloaded != null) {
-          debugPrint('⚡ Using pre-loaded track for instant playback: ${nextTrack.name}');
-
-          // CRITICAL: Ensure audio session is active before gapless transition (iOS fix)
-          // Without this, resume() can fail silently if iOS deactivated the session
-          await _ensureSessionActiveForPlayback();
-          if (isStale()) return;
-
-          // SWAP PLAYERS for seamless transition
-          // 1. Start playback on the pre-loaded player as early as possible,
-          //    at the user's volume with the new track's ReplayGain applied.
-          await _nextPlayer.setVolume(
-            (_volume * _gainFor(nextTrack)).clamp(0.0, 1.0),
-          );
-          await _nextPlayer.resume();
-
-          // 2. Detach listeners from the old main player (which is ending)
-          // We don't await this to keep the transition instant.
-          unawaited(_detachListeners());
-
-          // 3. IMPORTANT: Update AudioHandler to listen to the NEW player (which is playing)
-          // BEFORE stopping the old one. This prevents the OS from seeing a "Stop" state.
-          _audioHandler?.updatePlayer(_nextPlayer);
-          final offlineArtUri = await _getOfflineArtworkUri(nextTrack.id);
-
-          // 3.5 Wait for media session to process the update before stopping old player.
-          // Uses a Completer that resolves when updateNautuneMediaItem broadcasts,
-          // with a 500ms timeout fallback for safety.
-          final updateFuture = _audioHandler?.awaitMediaSessionUpdate();
-          _audioHandler?.updateNautuneMediaItem(nextTrack, offlineArtUri: offlineArtUri);
-          if (updateFuture != null) await updateFuture;
-
-          if (isStale()) {
-            // A newer playTrack took over the main player while we swapped:
-            // abandon the swap and hand the OS controls back to it.
-            debugPrint('⚡ Gapless swap superseded by a newer request');
-            await _nextPlayer.stop();
-            if (_disposed) return;
-            _audioHandler?.updatePlayer(_player);
-            _attachPlayerListeners(_player);
-            final current = _currentTrack;
-            if (current != null) unawaited(_publishMediaItem(current));
-            return;
-          }
-
-          // 4. Swap the references first (synchronously) so nothing that
-          //    runs during the awaits below can touch the finished player.
-          final oldPlayer = _player;
-          _player = _nextPlayer;
-          _nextPlayer = oldPlayer; // Reuse old player for next pre-load
-
-          // 5. Re-attach listeners to the NEW main player
-          _attachPlayerListeners(_player);
-
-          final nextIsLocal = _preloadedTrackIsLocal;
-          _preloadedTrack = null;
-          _preloadedSource = null;
-          _preloadedTrackIsLocal = false;
-
-          _currentIndex = nextIndex;
-          _currentTrack = nextTrack;
-          _currentTrackController.add(_currentTrack);
-          _isCurrentTrackLocal = nextIsLocal; // Update for A-B loop support
-          _setCurrentSource(preloaded.url, isLocal: preloaded.isLocalFile);
-          _analyzeTrackForVisualizer(nextTrack); // Configure visualizer for track
-
-          // 6. Explicitly emit playing state since the listener may not fire
-          //    if player was already playing when attached
-          _playingController.add(true);
-          _lastPlayingState = true;
-
-          // Per-track bookkeeping (scrobble/history/report/duration/loop...)
-          _onTrackBegan(
-            nextTrack,
-            playMethod: preloaded.playMethod,
-            publishMediaItem: false, // already published above
-          );
-
-          // FFT / waveform / background copy for the new track.
-          _afterTrackStarted(nextTrack);
-
-          // 7. Stop the old player (no longer listened to) and force the OS
-          //    media controls to update (fixes lock screen grayed out button).
-          await oldPlayer.stop();
-          await _audioHandler?.forcePlayingState();
-
-          // Pre-warm album art for upcoming tracks
-          if (!_batterySaverMode) {
-            _imagePrewarmService?.prewarmQueueImages(_queue, _currentIndex);
-          }
-        } else {
-          // No pre-loaded track or gapless disabled, do regular playback
-          debugPrint('🎵 Gapless not available, using regular playback for: ${nextTrack.name}');
-          usedFallback = true;
-          await playTrack(
-            nextTrack,
-            queueContext: _queue,
-            fromShuffle: _isShuffleEnabled,
-            queueIndex: nextIndex,
-          );
-        }
+        debugPrint('🎵 Advancing to: ${nextTrack.name}');
+        await playTrack(
+          nextTrack,
+          queueContext: _queue,
+          fromShuffle: _isShuffleEnabled,
+          queueIndex: nextIndex,
+        );
       } catch (e) {
-        debugPrint('❌ Gapless transition failed: $e');
+        debugPrint('❌ Track advance failed: $e');
         // playTrack returns (rather than throws) when superseded, so an error
-        // from the fallback path is always the latest request's. For the
-        // swap path, a newer request means the user has taken over.
-        if (_disposed || (!usedFallback && isStale())) return;
+        // here is always the latest request's.
+        if (_disposed) return;
         // One recovery attempt: the next track may just be broken (404,
         // unsupported file). Bounded, so a queue that fails entirely (e.g.
         // network gone) doesn't skip through every track.
@@ -1646,7 +1594,6 @@ class AudioPlayerService {
 
     _volume = state.volume.clamp(0.0, 1.0);
     await _player.setVolume(_volume);
-    await _nextPlayer.setVolume(_volume);
     _volumeController.add(_volume);
 
     _repeatMode = RepeatMode.values.firstWhere(
@@ -1822,13 +1769,18 @@ class AudioPlayerService {
     return null;
   }
 
-  /// audioplayers [Source] for a resolved URL/path.
-  Source _sourceFor(String url, {required bool isLocalFile}) {
-    if (url.startsWith('assets/')) {
-      return AssetSource(url.substring('assets/'.length));
-    }
-    if (isLocalFile) return DeviceFileSource(url);
-    return UrlSource(url);
+  /// Engine source for a resolved URL/path. Untranscoded streams of [track]
+  /// are cached while they play (one download, see [_streamCacheFileFor]).
+  Future<EngineSource> _sourceFor(
+    String url, {
+    required bool isLocalFile,
+    JellyfinTrack? track,
+    bool isDirectStream = false,
+  }) async {
+    if (url.startsWith('assets/')) return EngineSource.asset(url);
+    if (isLocalFile) return EngineSource.file(url);
+    final cacheFile = track != null && isDirectStream ? await _streamCacheFileFor(track, url) : null;
+    return EngineSource.url(url, cacheFile: cacheFile);
   }
 
   /// Run [op] (on behalf of request [owner]) after any in-flight player
@@ -1861,7 +1813,7 @@ class AudioPlayerService {
 
   /// setSource on [player] (the main player), bounded by [_sourceLoadTimeout]
   /// and flagged so seeks/pauses arriving meanwhile are deferred.
-  Future<void> _loadMainSource(AudioPlayer player, Source source) async {
+  Future<void> _loadMainSource(EnginePlayer player, EngineSource source) async {
     final token = Object();
     _sourceLoadToken = token;
     try {
@@ -1874,7 +1826,6 @@ class AudioPlayerService {
   void _setCurrentSource(String url, {required bool isLocal}) {
     _currentSourceUrl = url;
     _currentSourceIsLocal = isLocal;
-    _sourceIsLocalController.add(isLocal);
     _positionFromPreviousTrack = false;
   }
 
@@ -1916,6 +1867,7 @@ class AudioPlayerService {
 
     if (resetState) _resetPerTrackState(track);
     _trackStartTime = DateTime.now();
+    unawaited(_adoptFinishedStreamCaches());
     // The player may know the real length better than metadata (and a
     // pre-loaded player's duration event fired before we attached).
     unawaited(_refreshDurationFromPlayer(track));
@@ -1924,6 +1876,7 @@ class AudioPlayerService {
     _playCountPending = countPlay;
 
     unawaited(ListenBrainzService().submitNowPlaying(track));
+    unawaited(LastFmService.instance.updateNowPlaying(track));
 
     final reporting = _reportingService;
     if (reporting != null && track.serverUrl != null) {
@@ -2198,11 +2151,22 @@ class AudioPlayerService {
     // NOW we touch the player (serialised with other requests).
     // We don't explicitly call stop() because setSource will handle it,
     // and we want to minimize the gap.
-    Future<_LoadOutcome> applySourceAndPlay(String url, {required bool isLocalFile}) =>
+    Future<_LoadOutcome> applySourceAndPlay(
+      String url, {
+      required bool isLocalFile,
+      bool directStream = false,
+    }) =>
         _withPlayerLock(requestId, () async {
           if (isStale()) return _LoadOutcome.superseded;
           final player = _player;
-          await _loadMainSource(player, _sourceFor(url, isLocalFile: isLocalFile));
+          final source = await _sourceFor(
+            url,
+            isLocalFile: isLocalFile,
+            track: track,
+            isDirectStream: directStream,
+          );
+          if (isStale()) return _LoadOutcome.superseded;
+          await _loadMainSource(player, source);
           if (isStale()) return _LoadOutcome.superseded;
           _setCurrentSource(url, isLocal: isLocalFile);
           _isCurrentTrackLocal = isLocalFile;
@@ -2237,10 +2201,15 @@ class AudioPlayerService {
     _LoadOutcome outcome;
     try {
       try {
-        outcome = await applySourceAndPlay(resolved.url, isLocalFile: resolved.isLocalFile);
+        outcome = await applySourceAndPlay(
+          resolved.url,
+          isLocalFile: resolved.isLocalFile,
+          directStream: !resolved.isLocalFile && isDirectStream,
+        );
       } on PlatformException {
         if (isStale()) return;
         final String? fallbackUrl;
+        var fallbackIsDirect = false;
         if (resolved.isLocalFile && !resolved.isDownloaded && resolved.streamUrl != null &&
             !_isOffline &&
             !resolved.url.startsWith('assets/') && resolved.url != track.assetPathOverride) {
@@ -2250,6 +2219,7 @@ class AudioPlayerService {
           debugPrint('⚠️ Cached copy failed to load, discarding it and streaming...');
           unawaited(_audioCacheService.removeFromCache(track.id));
           fallbackUrl = resolved.streamUrl;
+          fallbackIsDirect = isDirectStream;
           playMethod = isDirectStream ? 'DirectStream' : 'Transcode';
         } else if (!resolved.isLocalFile && isDirectStream) {
           // The original file was served but AVPlayer couldn't open it:
@@ -2267,7 +2237,11 @@ class AudioPlayerService {
           fallbackUrl = null;
         }
         if (fallbackUrl == null) rethrow;
-        outcome = await applySourceAndPlay(fallbackUrl, isLocalFile: false);
+        outcome = await applySourceAndPlay(
+          fallbackUrl,
+          isLocalFile: false,
+          directStream: fallbackIsDirect,
+        );
       }
     } catch (e) {
       // A superseded request's failure is irrelevant (e.g. its load was cut
@@ -2592,7 +2566,12 @@ class AudioPlayerService {
         final player = _player;
         await _loadMainSource(
           player,
-          _sourceFor(resolved.url, isLocalFile: resolved.isLocalFile),
+          await _sourceFor(
+            resolved.url,
+            isLocalFile: resolved.isLocalFile,
+            track: track,
+            isDirectStream: !resolved.isLocalFile && resolved.isDirectStream,
+          ),
         );
         if (superseded()) return false;
         _setCurrentSource(resolved.url, isLocal: resolved.isLocalFile);
@@ -2726,7 +2705,7 @@ class AudioPlayerService {
     _lastSavedPositionMs = null;
     _positionController.add(clampedPosition);
 
-    if (_sourceLoadToken != null || _restoreSourcePending || _player.source == null) {
+    if (_sourceLoadToken != null || _restoreSourcePending || !_player.hasSource) {
       // The source is still loading (AVPlayerItem throws if asked to seek
       // before it is ready), not loaded yet (deferred track), or already
       // released (finished track). Apply it once loaded instead.
@@ -2910,6 +2889,16 @@ class AudioPlayerService {
   /// cellular it used to be made for every streamed track.
   Future<void> _maybeCacheStreamingCopy(JellyfinTrack track, String streamUrl) async {
     final wantFft = Platform.isIOS && _visualizerWanted;
+    // The stream itself is being saved while it plays: use that file
+    // instead of downloading the track a second time.
+    final streamCache = _streamCacheFiles[track.id];
+    if (streamCache != null) {
+      final file = await _awaitStreamCache(track, streamCache);
+      if (file == null || _disposed || _currentTrack?.id != track.id) return;
+      _isCurrentTrackLocal = true; // A-B loop can use the complete copy
+      if (wantFft) await _startFftFromFile(track, file.path);
+      return;
+    }
     final wanted = wantFft || _preCacheTrackCount > 0;
     if (!wanted) return;
     final connectivity = _connectivityService;
@@ -2936,6 +2925,80 @@ class AudioPlayerService {
     _isCurrentTrackLocal = true;
     if (Platform.isIOS && _visualizerWanted) {
       await _startFftFromFile(track, cachedFile.path);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stream cache: untranscoded streams are saved while they play
+  // (just_audio LockCachingAudioSource), then moved into the audio cache.
+  // ---------------------------------------------------------------------------
+
+  /// Stream-cache file per track id, for tracks loaded in this session.
+  final Map<String, File> _streamCacheFiles = {};
+  Directory? _streamCacheDir;
+
+  Future<Directory> _streamCacheDirectory() async {
+    final existing = _streamCacheDir;
+    if (existing != null) return existing;
+    final dir = Directory('${(await getTemporaryDirectory()).path}/nautune_stream_cache');
+    await dir.create(recursive: true);
+    return _streamCacheDir = dir;
+  }
+
+  /// File to save [track]'s stream from [url] into while it plays, or null
+  /// when caching is off (pre-cache set to 0 and no visualizer showing).
+  Future<File?> _streamCacheFileFor(JellyfinTrack track, String url) async {
+    final wanted = _preCacheTrackCount > 0 || (Platform.isIOS && _visualizerWanted);
+    if (!wanted || _isOffline) return null;
+    try {
+      final dir = await _streamCacheDirectory();
+      final key = audioCacheKey(track.id, cacheVariantForUrl(url));
+      final file = File('${dir.path}/${Uri.encodeComponent(key)}');
+      _streamCacheFiles[track.id] = file;
+      return file;
+    } catch (e) {
+      debugPrint('⚠️ Stream cache unavailable: $e');
+      return null;
+    }
+  }
+
+  /// Wait until [track]'s stream has been saved completely (while it is
+  /// still the current track).
+  Future<File?> _awaitStreamCache(JellyfinTrack track, File file) async {
+    for (var i = 0; i < 900; i++) {
+      if (await file.exists()) return file;
+      if (_disposed || _currentTrack?.id != track.id) return null;
+      await Future<void>.delayed(const Duration(seconds: 2));
+    }
+    return null;
+  }
+
+  /// Move completely saved streams of tracks that are no longer playing or
+  /// queued into the audio cache (counted in its 2 GiB budget, LRU).
+  Future<void> _adoptFinishedStreamCaches() async {
+    final dir = _streamCacheDir;
+    if (dir == null || !await dir.exists()) return;
+    final live = {
+      for (final id in [_currentTrack?.id, _preloadedTrack?.id])
+        if (id != null && _streamCacheFiles[id] != null) _streamCacheFiles[id]!.path,
+    };
+    try {
+      await for (final entity in dir.list()) {
+        if (entity is! File) continue;
+        final path = entity.path;
+        if (path.endsWith('.part') || path.endsWith('.mime') || live.contains(path)) {
+          continue;
+        }
+        final key = Uri.decodeComponent(path.split('/').last);
+        final mimeFile = File('$path.mime');
+        final mime = await mimeFile.exists() ? await mimeFile.readAsString() : '';
+        await _audioCacheService.adoptFile(key, entity, audioExtensionForMime(mime));
+        await entity.delete();
+        if (await mimeFile.exists()) await mimeFile.delete();
+        _streamCacheFiles.removeWhere((_, f) => f.path == path);
+      }
+    } catch (e) {
+      debugPrint('⚠️ Adopting stream cache failed: $e');
     }
   }
 
@@ -3065,7 +3128,7 @@ class AudioPlayerService {
   // Alias methods for compatibility
   Future<void> playPause() async {
     final state = _player.state;
-    if (state == PlayerState.playing) {
+    if (state == EngineState.playing) {
       await pause();
     } else {
       await resume();
@@ -3236,7 +3299,27 @@ class AudioPlayerService {
   }
   
   // Shuffle and Repeat functionality
+  void _publishModes() {
+    _audioHandler?.updateModes(
+      shuffle: _isShuffleEnabled,
+      repeat: switch (_repeatMode) {
+        RepeatMode.off => audio_service.AudioServiceRepeatMode.none,
+        RepeatMode.all => audio_service.AudioServiceRepeatMode.all,
+        RepeatMode.one => audio_service.AudioServiceRepeatMode.one,
+      },
+    );
+  }
+
+  void setRepeatMode(RepeatMode mode) {
+    if (_repeatMode == mode) return;
+    _repeatMode = mode;
+    _clearPreload(); // the queued next track may no longer be next
+    _repeatModeController.add(_repeatMode);
+    unawaited(_stateStore.savePlaybackSnapshot(repeatMode: _repeatMode.name));
+  }
+
   void toggleRepeatMode() {
+    _clearPreload(); // the queued next track may no longer be next
     switch (_repeatMode) {
       case RepeatMode.off:
         _repeatMode = RepeatMode.all;
@@ -3331,6 +3414,36 @@ class AudioPlayerService {
     debugPrint('🔁 Loop: Cleared');
   }
 
+  double _speed = 1.0;
+  double get playbackSpeed => _speed;
+
+  /// Playback speed (0.5-2.0); kept across tracks and applied to the
+  /// crossfade player as well.
+  Future<void> setPlaybackSpeed(double speed) async {
+    _speed = speed.clamp(0.5, 2.0);
+    await _player.setSpeed(_speed);
+  }
+
+  bool _smartShuffle = true;
+  bool get smartShuffleEnabled => _smartShuffle;
+  void setSmartShuffleEnabled(bool enabled) => _smartShuffle = enabled;
+
+  /// Shuffled copy of [tracks], smart (recency + artist spread) when
+  /// enabled. [keepFirst] stays at the front.
+  List<JellyfinTrack> _shuffled(List<JellyfinTrack> tracks, {int keepFirst = -1}) {
+    if (!_smartShuffle) {
+      return shuffleKeepingCurrent<JellyfinTrack>(tracks, keepFirst, Random());
+    }
+    return smartShuffle<JellyfinTrack>(
+      tracks,
+      lastPlayedOf: (t) => _playStats.getStats(t.id)?.lastPlayed,
+      artistOf: (t) => t.displayArtist,
+      random: Random(),
+      now: DateTime.now(),
+      keepFirst: keepFirst,
+    );
+  }
+
   /// Shuffle on/off for the current queue (the player's shuffle button).
   void toggleShuffle() {
     if (_isShuffleEnabled) {
@@ -3381,11 +3494,7 @@ class AudioPlayerService {
     final hasCurrent = _currentTrack != null &&
         _currentIndex >= 0 &&
         _currentIndex < _queue.length;
-    _queue = shuffleKeepingCurrent<JellyfinTrack>(
-      _queue,
-      hasCurrent ? _currentIndex : -1,
-      Random(),
-    );
+    _queue = _shuffled(_queue, keepFirst: hasCurrent ? _currentIndex : -1);
     if (hasCurrent) _currentIndex = 0;
     _onQueueEdited();
     _audioHandler?.updateNautuneQueue(_queue);
@@ -3404,7 +3513,7 @@ class AudioPlayerService {
   Future<void> playShuffled(List<JellyfinTrack> tracks) async {
     if (tracks.isEmpty) return;
     
-    final shuffled = List<JellyfinTrack>.from(tracks)..shuffle(Random());
+    final shuffled = _shuffled(tracks);
     _unshuffledQueue = List<JellyfinTrack>.of(tracks);
     await playTrack(
       shuffled.first,
@@ -3851,9 +3960,13 @@ class AudioPlayerService {
       }
       _crossfadeLoading = true;
       try {
-        await incoming
-            .setSource(_sourceFor(resolved.url, isLocalFile: resolved.isLocalFile))
-            .timeout(_sourceLoadTimeout);
+        final source = await _sourceFor(
+          resolved.url,
+          isLocalFile: resolved.isLocalFile,
+          track: nextTrack,
+          isDirectStream: !resolved.isLocalFile && resolved.isDirectStream,
+        );
+        await incoming.setSource(source).timeout(_sourceLoadTimeout);
       } finally {
         _crossfadeLoading = false;
       }
@@ -3874,7 +3987,7 @@ class AudioPlayerService {
         unawaited(_applyUserVolumeToPlayer());
         // The outgoing player may already have completed while the
         // completion handler was suppressed for the crossfade: advance now.
-        if (_player.state == PlayerState.completed && !_isTransitioning) {
+        if (_player.state == EngineState.completed && !_isTransitioning) {
           unawaited(_gaplessTransition().catchError(
             (Object e) => debugPrint('❌ Track advance after crossfade failure: $e'),
           ));
@@ -3885,7 +3998,7 @@ class AudioPlayerService {
 
   /// Execute the crossfade (Concurrent overlap)
   Future<void> _executeCrossfade(
-    AudioPlayer incoming,
+    EnginePlayer incoming,
     JellyfinTrack nextTrack,
     int nextIndex,
     int requestId,
@@ -3903,6 +4016,7 @@ class AudioPlayerService {
 
     // Start the next track at volume 0.0 immediately
     await incoming.setVolume(0.0);
+    await incoming.setSpeed(_speed);
     if (aborted()) {
       if (!_disposed) await incoming.stop();
       return;
@@ -3943,7 +4057,7 @@ class AudioPlayerService {
   /// The swap and state switch happen synchronously (no await in between)
   /// so a playTrack arriving now can't be overwritten by this transition.
   Future<void> _completeCrossfadeTransition(
-    AudioPlayer incoming,
+    EnginePlayer incoming,
     JellyfinTrack nextTrack,
     int nextIndex,
     _ResolvedSource source,
@@ -4029,6 +4143,9 @@ class AudioPlayerService {
     // Repeat-one restarts the same track via playTrack; pre-loading it would
     // download it a second time for nothing.
     if (_repeatMode == RepeatMode.one) return;
+    // A queued track starts by itself, so a track-count sleep timer ending
+    // with this track must see it finish instead.
+    if (_isSleepTimerByTracks && _sleepTracksRemaining <= 1) return;
     if (_sourceLoadToken != null || _restoreSourcePending) return;
 
     // Use cached duration to avoid async getDuration() call on every position update
@@ -4042,6 +4159,7 @@ class AudioPlayerService {
     // Get next track
     var nextTrack = _getNextTrack();
     if (nextTrack == null) return;
+    var nextIndex = _currentIndex + 1 < _queue.length ? _currentIndex + 1 : 0;
     var skipsAhead = false;
 
     if (_isOffline) {
@@ -4062,6 +4180,7 @@ class AudioPlayerService {
       }
       skipsAhead = target != fromIndex + 1;
       nextTrack = _queue[target];
+      nextIndex = target;
     }
 
     // Don't pre-load if already loaded
@@ -4072,7 +4191,7 @@ class AudioPlayerService {
     if (!skipsAhead && _crossfadeWillHandle(nextTrack)) return;
 
     // Pre-load the next track
-    await _preloadNextTrack(nextTrack);
+    await _preloadNextTrack(nextTrack, nextIndex);
   }
 
   /// Pre-fetch lyrics for the next track at ~50% playback
@@ -4117,31 +4236,41 @@ class AudioPlayerService {
 
     if (_hasScrobbled || _batterySaverMode) return;
     final listenBrainz = ListenBrainzService();
+    final lastFm = LastFmService.instance;
     final startTime = _trackStartTime;
-    if (!listenBrainz.isScrobblingEnabled || startTime == null) return;
+    if (startTime == null ||
+        (!listenBrainz.isScrobblingEnabled && !lastFm.isScrobblingEnabled)) {
+      return;
+    }
     _hasScrobbled = true;
-    debugPrint('🎵 ListenBrainz: Scrobbling "${track.name}" '
+    debugPrint('🎵 Scrobbling "${track.name}" '
         '(${_listenedTime.listened.inSeconds}s heard >= ${thresholdSeconds}s)');
-    unawaited(listenBrainz.submitListen(track, startTime).catchError((Object e) {
-      debugPrint('🎵 ListenBrainz scrobble failed: $e');
-      return false;
-    }));
+    if (listenBrainz.isScrobblingEnabled) {
+      unawaited(listenBrainz.submitListen(track, startTime).catchError((Object e) {
+        debugPrint('🎵 ListenBrainz scrobble failed: $e');
+        return false;
+      }));
+    }
+    if (lastFm.isScrobblingEnabled) {
+      unawaited(lastFm.scrobble(track, startTime));
+    }
   }
 
-  /// Pre-load the next track into _nextPlayer for instant playback
-  Future<void> _preloadNextTrack(JellyfinTrack track) async {
+  /// Queue the next track on the main player (just_audio playlist window)
+  /// so it starts with no gap; [_onGaplessAdvance] runs when it does.
+  Future<void> _preloadNextTrack(JellyfinTrack track, int index) async {
     if (_isPreloading) return;
     _isPreloading = true;
     _preloadingTrackId = track.id;
     final generation = _preloadGeneration;
-    final player = _nextPlayer;
-    // _clearPreload (queue edit, new track, stop) or a player swap
-    // invalidates this pre-load.
+    final player = _player;
+    // _clearPreload (queue edit, new track, stop, repeat/sleep change) or a
+    // crossfade swapping the main player invalidates this pre-load.
     bool stale() =>
-        _disposed || generation != _preloadGeneration || !identical(player, _nextPlayer);
+        _disposed || generation != _preloadGeneration || !identical(player, _player);
 
     try {
-      debugPrint('⏩ Pre-loading next track: ${track.name}');
+      debugPrint('⏩ Queueing next track: ${track.name}');
 
       // Same priority as playback: downloaded file → cache → stream.
       final resolved = await _resolvePlaybackSource(track);
@@ -4150,30 +4279,34 @@ class AudioPlayerService {
         debugPrint('⚠️ Failed to pre-load (no source): ${track.name}');
         return;
       }
-
-      // Silent until we swap.
-      await player.setVolume(0.0);
+      final source = await _sourceFor(
+        resolved.url,
+        isLocalFile: resolved.isLocalFile,
+        track: track,
+        isDirectStream: !resolved.isLocalFile && resolved.isDirectStream,
+      );
       if (stale()) return;
-      await player
-          .setSource(_sourceFor(resolved.url, isLocalFile: resolved.isLocalFile))
-          .timeout(_sourceLoadTimeout);
-      if (stale()) {
-        // Invalidated while loading: _clearPreload left the player alone so
-        // the pending native load wasn't orphaned; release it now.
-        if (!_disposed && identical(player, _nextPlayer)) unawaited(player.stop());
-        return;
-      }
-
+      // Record it before queueing: the advance can fire as soon as the
+      // track is on the player.
       _preloadedTrack = track;
       _preloadedSource = resolved;
-      _preloadedTrackIsLocal = resolved.isLocalFile;
-      debugPrint('✅ Pre-loaded (${resolved.isLocalFile ? 'local' : resolved.playMethod}): ${track.name}');
+      _preloadedIndex = index;
+      await player.appendNext(source).timeout(_sourceLoadTimeout);
+      if (stale()) {
+        // Invalidated while queueing: take it off the player again.
+        if (!_disposed && identical(player, _player) && _preloadedTrack == null) {
+          unawaited(player.removeNext());
+        }
+        return;
+      }
+      debugPrint('✅ Queued (${resolved.isLocalFile ? 'local' : resolved.playMethod}): ${track.name}');
     } catch (e) {
       debugPrint('⚠️ Error pre-loading track: $e');
       if (!stale()) {
         _preloadedTrack = null;
         _preloadedSource = null;
-        _preloadedTrackIsLocal = false;
+        _preloadedIndex = null;
+        unawaited(player.removeNext());
       }
     } finally {
       _isPreloading = false;
@@ -4210,12 +4343,13 @@ class AudioPlayerService {
     _preloadGeneration++;
     _preloadedTrack = null;
     _preloadedSource = null;
-    _preloadedTrackIsLocal = false;
-    // While a pre-load is loading, stopping would reset the item under the
-    // pending native call; the pre-load notices the generation change and
-    // stops the player itself.
+    _preloadedIndex = null;
+    // Take the queued track off the player (a pre-load still in progress
+    // notices the generation change and removes it itself).
     if (!_isPreloading) {
-      unawaited(_nextPlayer.stop());
+      unawaited(_player.removeNext().catchError(
+        (Object e) => debugPrint('⚠️ Removing queued track failed: $e'),
+      ));
     }
   }
 
@@ -4251,7 +4385,7 @@ class AudioPlayerService {
 
   /// The player says "playing" but the position hasn't moved for a while:
   /// typically a stream whose connection died mid-track (AVPlayer stops, and
-  /// audioplayers reports neither an error nor completion). Reload the
+  /// the player reports neither an error nor completion). Reload the
   /// source at the current position — which also switches to a local copy
   /// if one finished caching meanwhile. On failure, show paused with an
   /// error; play retries.
@@ -4298,9 +4432,16 @@ class AudioPlayerService {
       await _withPlayerLock(requestId, () async {
         if (superseded()) return;
         final player = _player;
+        // Loading pauses the player; remember whether it was playing.
+        final wasPlaying = player.state == EngineState.playing;
         await _loadMainSource(
           player,
-          _sourceFor(resolved.url, isLocalFile: resolved.isLocalFile),
+          await _sourceFor(
+            resolved.url,
+            isLocalFile: resolved.isLocalFile,
+            track: track,
+            isDirectStream: !resolved.isLocalFile && resolved.isDirectStream,
+          ),
         );
         if (superseded()) return;
         _setCurrentSource(resolved.url, isLocal: resolved.isLocalFile);
@@ -4310,7 +4451,7 @@ class AudioPlayerService {
         if (seekTo > Duration.zero) await player.seek(seekTo);
         if (superseded()) return;
         // Paused while we were reloading: stay paused.
-        if (_pauseRequestedDuringLoad || player.state != PlayerState.playing) {
+        if (_pauseRequestedDuringLoad || !wasPlaying) {
           _pauseRequestedDuringLoad = false;
           return;
         }
@@ -4352,7 +4493,7 @@ class AudioPlayerService {
 
     _sleepTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       // Pause countdown when playback is paused (saves CPU, prevents inaccurate timing)
-      if (_player.state != PlayerState.playing) return;
+      if (_player.state != EngineState.playing) return;
 
       _sleepTimeRemaining -= const Duration(seconds: 1);
       _sleepTimerController.add(_sleepTimeRemaining);
@@ -4380,6 +4521,8 @@ class AudioPlayerService {
   /// Start sleep timer by track count
   void startSleepTimerByTracks(int trackCount) {
     cancelSleepTimer();
+    // Playback must stop at a track end, which a queued next track skips.
+    if (trackCount <= 1) _clearPreload();
     _isSleepTimerByTracks = true;
     _sleepTracksRemaining = trackCount;
     // Broadcast a sentinel value indicating track-based timer
@@ -4442,13 +4585,13 @@ class AudioPlayerService {
     _connectivitySubscription?.cancel();
     unawaited(_detachListeners());
     _audioHandler?.dispose();
-    _player.dispose();
-    _nextPlayer.dispose();
-    _crossfadePlayer?.dispose();
+    unawaited(_player.dispose());
+    unawaited(_crossfadePlayer?.dispose());
     _currentTrackController.close();
     _playingController.close();
     _positionController.close();
-    _sourceIsLocalController.close();
+    _bufferedSub?.cancel();
+    _bufferedController.close();
     _durationController.close();
     _queueController.close();
     _repeatModeController.close();

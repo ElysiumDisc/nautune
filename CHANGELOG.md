@@ -29,6 +29,47 @@ Nautune now looks and behaves like an iOS app, keeps every theme you had
   and pull to refresh, placeholder grid while loading.
 - Artist page: Play and Shuffle buttons, Radio and Instant Mix under one
   ⋯ menu, and Top Songs / Songs / Albums sections.
+- Search: iOS search field, All / Artists / Albums / Songs filters with
+  counts, a Top Result card for the best name match, See All, and artwork
+  on every row. Long-press a song for its menu.
+- Swipe a song right to play it next, or left to add it to the queue
+  (albums, favorites and search). Main tabs no longer switch on a sideways
+  swipe, so row swipes don't change tabs by accident.
+- Select several songs on an album (checklist button) to play, play next,
+  queue, add to a playlist or download them together.
+- Favorites sort by recently added, title, artist or album, and playlists
+  by name or size. The choice is remembered.
+- iPad and other wide windows get a sidebar instead of the tab bar.
+- VoiceOver: labelled player controls, and a seek bar you can adjust in
+  10-second steps.
+
+**Player**
+- The mini player floats above a translucent iOS tab bar, tinted from the
+  artwork. Tap or swipe up to open the player, swipe sideways to skip. It
+  shows the sleep timer countdown and a thin progress line (or the
+  waveform, when the visualizer sits in the controls bar).
+- The full player slides up like a sheet and closes by dragging it down,
+  with the artwork flying between the mini player and the player.
+- Shuffle button in the player. Turning shuffle off restores the original
+  order, and the current track keeps playing. Stop moved to the ⋯ menu.
+- Shuffle and repeat stay in sync with CarPlay's Now Playing screen and
+  Siri.
+- Sleep timer: "End of this track" option.
+- Smart Shuffle (on by default, Settings → Audio): songs you heard in the
+  last few days come later, and the same artist rarely plays twice in a
+  row. Turn it off for plain random order.
+
+**Audio engine**
+- Music now plays through just_audio. Gapless albums are truly seamless:
+  the next track is queued on the same player instead of being swapped in
+  after the previous one ends.
+- 10-band equalizer (Settings → Audio → Equalizer) with Flat, Bass Boost,
+  Treble Boost, Vocal, Rock, Electronic, Acoustic and Late Night presets.
+  Boosts get a matching volume cut so they never distort.
+- Playback speed from 0.75× to 2× (⋯ menu in the player).
+- Streams are saved while they play and then kept in the cache, so a track
+  is downloaded once. The seek bar shows real buffering progress.
+- The visualizer and the Easter eggs work as before.
 
 **Playback**
 - Volume levelling: ReplayGain Off / Track / Album (album uses Jellyfin's
@@ -38,8 +79,6 @@ Nautune now looks and behaves like an iOS app, keeps every theme you had
 - Plays and ListenBrainz scrobbles count time actually listened (50% or
   4 minutes). Skipped tracks no longer count as plays, and seeking past
   the halfway point no longer scrobbles.
-- The seek bar's buffered track shows downloaded and cached files as fully
-  buffered instead of never moving.
 
 **Streaming and Jellyfin**
 - Progress keeps reporting every 30s while the screen is locked and audio
@@ -50,6 +89,15 @@ Nautune now looks and behaves like an iOS app, keeps every theme you had
 - The audio cache is keyed by track and quality, so raising the streaming
   quality no longer replays a low-bitrate cached copy.
 - Transcode Format setting: MP3 (default) or AAC.
+- Remote control: the Jellyfin dashboard and other clients can play,
+  pause, skip, seek, set volume, shuffle, repeat and send songs or a queue
+  to Nautune. It can be turned off with Settings → Audio → Allow Remote
+  Control.
+
+**Scrobbling**
+- Last.fm scrobbling (Settings → Your Music → Last.fm) using your own free
+  Last.fm API account, with now playing and an offline queue that retries,
+  alongside ListenBrainz.
 
 ### v9.0.0 - iOS Focus: Jellyfin 12.1, Solid Playback, Offline You Can Trust
 

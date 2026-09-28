@@ -20,6 +20,10 @@ class _SearchTabState extends State<_SearchTab> {
   List<JellyfinArtist> _artistResults = const [];
   List<JellyfinTrack> _trackResults = const [];
   Object? _error;
+
+  /// Result filter; null shows every kind (with a Top result).
+  SearchKind? _scope;
+  static const int _previewCount = 5;
   static const int _historyLimit = 10;
   static const String _boxName = 'nautune_search_history';
   static const String _historyKey = 'global_search_history';
@@ -279,33 +283,31 @@ class _SearchTabState extends State<_SearchTab> {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: TextField(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: CupertinoSearchTextField(
             controller: _controller,
+            placeholder: widget.appState.isOfflineMode
+                ? 'Search your downloads'
+                : 'Artists, albums, songs',
+            style: theme.textTheme.body,
+            itemColor: theme.colorScheme.onSurfaceVariant,
+            backgroundColor: theme.colorScheme.onSurface.withValues(alpha: 0.08),
             onChanged: (value) {
+              setState(() {}); // recent searches show only while empty
               _debouncer.run(() => _performSearch(value));
             },
             onSubmitted: (value) {
               _debouncer.cancel();
               _performSearch(value);
             },
-            textInputAction: TextInputAction.search,
-            decoration: InputDecoration(
-              prefixIcon: const Icon(Icons.search),
-              hintText: 'Search albums, artists, tracks...',
-              filled: true,
-              fillColor: theme.colorScheme.surfaceContainerHighest,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide.none,
-              ),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.arrow_forward),
-                onPressed: () => _performSearch(_controller.text),
-              ),
-            ),
+            onSuffixTap: () {
+              _controller.clear();
+              _debouncer.cancel();
+              _performSearch('');
+            },
           ),
         ),
+        if (_lastQuery.isNotEmpty) _buildScopeBar(theme),
         if (_controller.text.trim().isEmpty && _recentQueries.isNotEmpty)
           _buildRecentQueriesSection(theme),
         if (_error != null)
@@ -406,40 +408,156 @@ class _SearchTabState extends State<_SearchTab> {
       );
     }
 
+    final scope = _scope;
+    final top = scope == null
+        ? topSearchResult<Object>(_lastQuery, [
+            for (final a in _artistResults) SearchCandidate(SearchKind.artist, a.name, a),
+            for (final a in _albumResults) SearchCandidate(SearchKind.album, a.name, a),
+            for (final t in _trackResults) SearchCandidate(SearchKind.track, t.name, t),
+          ])
+        : null;
+    List<T> limit<T>(List<T> items) =>
+        scope == null ? items.take(_previewCount).toList() : items;
+    bool show(SearchKind kind) => scope == null || scope == kind;
+
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      padding: const EdgeInsets.only(bottom: 24),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       children: [
-        if (_easterEgg != null) _buildEasterEggCard(theme, _easterEgg!),
-        // Artists section
-        if (_artistResults.isNotEmpty) ...[
-          _buildSectionHeader(theme, 'Artists', Icons.person, _artistResults.length),
-          const SizedBox(height: 8),
-          ...List.generate(
-            _artistResults.length,
-            (index) => _buildArtistTile(theme, _artistResults[index]),
+        if (_easterEgg != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: _buildEasterEggCard(theme, _easterEgg!),
           ),
-          const SizedBox(height: 16),
+        if (top != null) _buildTopResult(theme, top),
+        if (show(SearchKind.artist) && _artistResults.isNotEmpty) ...[
+          _buildSectionHeader(theme, 'Artists', SearchKind.artist, _artistResults.length),
+          for (final artist in limit(_artistResults)) _buildArtistTile(theme, artist),
         ],
-        // Albums section
-        if (_albumResults.isNotEmpty) ...[
-          _buildSectionHeader(theme, 'Albums', Icons.album, _albumResults.length),
-          const SizedBox(height: 8),
-          ...List.generate(
-            _albumResults.length,
-            (index) => _buildAlbumTile(theme, _albumResults[index]),
-          ),
-          const SizedBox(height: 16),
+        if (show(SearchKind.album) && _albumResults.isNotEmpty) ...[
+          _buildSectionHeader(theme, 'Albums', SearchKind.album, _albumResults.length),
+          for (final album in limit(_albumResults)) _buildAlbumTile(theme, album),
         ],
-        // Tracks section
-        if (_trackResults.isNotEmpty) ...[
-          _buildSectionHeader(theme, 'Tracks', Icons.music_note, _trackResults.length),
-          const SizedBox(height: 8),
-          ...List.generate(
-            _trackResults.length,
-            (index) => _buildTrackTile(theme, _trackResults[index]),
-          ),
+        if (show(SearchKind.track) && _trackResults.isNotEmpty) ...[
+          _buildSectionHeader(theme, 'Songs', SearchKind.track, _trackResults.length),
+          for (final track in limit(_trackResults)) _buildTrackTile(theme, track),
         ],
       ],
+    );
+  }
+
+  Widget _buildScopeBar(ThemeData theme) {
+    final scopes = <(SearchKind?, String, int)>[
+      (null, 'All', _artistResults.length + _albumResults.length + _trackResults.length),
+      (SearchKind.artist, 'Artists', _artistResults.length),
+      (SearchKind.album, 'Albums', _albumResults.length),
+      (SearchKind.track, 'Songs', _trackResults.length),
+    ];
+    return SizedBox(
+      height: 44,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        children: [
+          for (final (kind, label, count) in scopes)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(kind == null || count == 0 ? label : '$label $count'),
+                selected: _scope == kind,
+                showCheckmark: false,
+                labelStyle: theme.textTheme.subhead.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: _scope == kind
+                      ? theme.colorScheme.onPrimary
+                      : theme.colorScheme.onSurface,
+                ),
+                onSelected: (_) {
+                  HapticService.selectionClick();
+                  setState(() => _scope = kind);
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Big card for the best name match, as in Apple Music's search.
+  Widget _buildTopResult(ThemeData theme, SearchCandidate<Object> top) {
+    final style = NautuneStyle.of(context);
+    final item = top.item;
+    final (Widget art, String title, String subtitle, VoidCallback onTap) = switch (item) {
+      JellyfinArtist a => (
+          _artistArtwork(a, maxWidth: 200),
+          a.name,
+          'Artist',
+          () => _openArtist(context, a),
+        ),
+      JellyfinAlbum a => (
+          _albumArtwork(a, maxWidth: 200),
+          a.name,
+          'Album · ${a.displayArtist}',
+          () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: a)),
+              ),
+        ),
+      JellyfinTrack t => (
+          _trackArtwork(t),
+          t.name,
+          'Song · ${t.displayArtist}',
+          () => widget.appState.audioPlayerService.playTrack(t, queueContext: _trackResults),
+        ),
+      _ => (const SizedBox(), '', '', () {}),
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Top Result', style: theme.textTheme.title3),
+          const SizedBox(height: 8),
+          Material(
+            color: style.groupedCell,
+            shape: style.shape(NautuneRadius.lg),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onTap,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    SizedBox.square(
+                      dimension: 88,
+                      child: ClipPath(
+                        clipper: ShapeBorderClipper(
+                          shape: top.kind == SearchKind.artist
+                              ? const CircleBorder()
+                              : style.shape(NautuneRadius.md),
+                        ),
+                        child: art,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title, style: theme.textTheme.title3, maxLines: 2, overflow: TextOverflow.ellipsis),
+                          const SizedBox(height: 4),
+                          Text(subtitle, style: theme.textTheme.footnote, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        ],
+                      ),
+                    ),
+                    if (top.kind == SearchKind.track)
+                      Icon(Icons.play_circle_fill_rounded, size: 40, color: theme.colorScheme.primary),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -595,127 +713,90 @@ class _SearchTabState extends State<_SearchTab> {
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 
-  Widget _buildSectionHeader(ThemeData theme, String title, IconData icon, int count) {
-    return Row(
-      children: [
-        Icon(icon, size: 20, color: theme.colorScheme.primary),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-            color: theme.colorScheme.primary,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.primaryContainer,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            '$count',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.primary,
-              fontWeight: FontWeight.w500,
+  Widget _buildSectionHeader(ThemeData theme, String title, SearchKind kind, int count) {
+    final more = _scope == null && count > _previewCount;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 8, 4),
+      child: Row(
+        children: [
+          Expanded(child: Text(title, style: theme.textTheme.title3)),
+          if (more)
+            TextButton(
+              onPressed: () => setState(() => _scope = kind),
+              child: Text('See All $count'),
             ),
-          ),
-        ),
-      ],
+        ],
+      ),
+    );
+  }
+
+  Widget _trackArtwork(JellyfinTrack track) {
+    final albumId = track.albumId;
+    final tag = track.albumPrimaryImageTag ?? track.primaryImageTag;
+    if (tag == null || tag.isEmpty) {
+      return Image.asset('assets/no_album_art.png', fit: BoxFit.cover);
+    }
+    return JellyfinImage(
+      itemId: track.albumPrimaryImageTag != null ? (albumId ?? track.id) : track.id,
+      imageTag: tag,
+      trackId: track.id,
+      maxWidth: 100,
+      boxFit: BoxFit.cover,
+      errorBuilder: (context, url, error) =>
+          Image.asset('assets/no_album_art.png', fit: BoxFit.cover),
     );
   }
 
   Widget _buildArtistTile(ThemeData theme, JellyfinArtist artist) {
-    return Card(
-      child: ListTile(
-        leading: artist.primaryImageTag != null
-            ? ClipOval(
-                child: SizedBox(
-                  width: 40,
-                  height: 40,
-                  child: JellyfinImage(
-                    itemId: artist.id,
-                    imageTag: artist.primaryImageTag!,
-                    artistId: artist.id, // Enable offline artist image support
-                    maxWidth: 100,
-                    boxFit: BoxFit.cover,
-                    errorBuilder: (context, url, error) =>
-                        const CircleAvatar(child: Icon(Icons.person_outline)),
-                  ),
-                ),
-              )
-            : const CircleAvatar(child: Icon(Icons.person_outline)),
-        title: Text(
-          artist.name,
-          style: theme.textTheme.titleMedium?.copyWith(
-            color: theme.colorScheme.tertiary,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        subtitle: artist.songCount != null
-            ? Text('${artist.songCount} songs')
-            : null,
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => ArtistDetailScreen(artist: artist),
-            ),
-          );
-        },
+    return SizedBox(
+      height: LibraryTileMetrics.of(context).listRowExtent,
+      child: LibraryListRow(
+        artwork: _artistArtwork(artist, maxWidth: 100),
+        circular: true,
+        title: artist.name,
+        subtitle: artist.songCount != null ? '${artist.songCount} songs' : 'Artist',
+        onTap: () => _openArtist(context, artist),
       ),
     );
   }
 
   Widget _buildAlbumTile(ThemeData theme, JellyfinAlbum album) {
-    return Card(
-      child: ListTile(
-        leading: const Icon(Icons.album_outlined),
-        title: Text(album.name),
-        subtitle: Text(album.displayArtist),
-        trailing: album.productionYear != null
-            ? Text('${album.productionYear}')
-            : null,
+    return SizedBox(
+      height: LibraryTileMetrics.of(context).listRowExtent,
+      child: LibraryListRow(
+        artwork: _albumArtwork(album, maxWidth: 100),
+        title: album.name,
+        subtitle: [
+          album.displayArtist,
+          if (album.productionYear != null) '${album.productionYear}',
+        ].join(' · '),
         onTap: () {
           Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => AlbumDetailScreen(album: album),
-            ),
+            MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)),
           );
         },
+        onLongPress: () => _showAlbumActions(context, widget.appState, album),
       ),
     );
   }
 
   Widget _buildTrackTile(ThemeData theme, JellyfinTrack track) {
-    return Card(
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: theme.colorScheme.primaryContainer,
-          child: Icon(
-            Icons.music_note,
-            color: theme.colorScheme.primary,
-          ),
-        ),
-        title: Text(
-          track.name,
-          style: theme.textTheme.titleMedium?.copyWith(
-            color: theme.colorScheme.tertiary,
-          ),
-        ),
-        subtitle: Text(
-          '${track.displayArtist}${track.album != null ? ' • ${track.album}' : ''}',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
+    return TrackSwipeActions(
+      track: track,
+      appState: widget.appState,
+      child: _buildTrackRow(theme, track),
+    );
+  }
+
+  Widget _buildTrackRow(ThemeData theme, JellyfinTrack track) {
+    return SizedBox(
+      height: LibraryTileMetrics.of(context).listRowExtent,
+      child: LibraryListRow(
+        artwork: _trackArtwork(track),
+        title: track.name,
+        subtitle: '${track.displayArtist}${track.album != null ? ' · ${track.album}' : ''}',
         trailing: track.duration != null
-            ? Text(
-                _formatDuration(track.duration!),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              )
+            ? Text(_formatDuration(track.duration!), style: theme.textTheme.footnote)
             : null,
         onTap: () {
           widget.appState.audioPlayerService.playTrack(
@@ -723,6 +804,11 @@ class _SearchTabState extends State<_SearchTab> {
             queueContext: _trackResults,
           );
         },
+        onLongPress: () => showTrackContextMenu(
+          context: context,
+          track: track,
+          appState: widget.appState,
+        ),
       ),
     );
   }
