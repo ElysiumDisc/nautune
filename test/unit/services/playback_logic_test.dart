@@ -562,4 +562,32 @@ void main() {
           ['t1@128000-mp3', 't1@orig', 't1']);
     });
   });
+
+  group('restoreQueueOrder', () {
+    test('round-trips a shuffle and follows the current track', () {
+      final original = ['A', 'B', 'C', 'D', 'E'];
+      final shuffled = shuffleKeepingCurrent(original, 2, Random(7));
+      expect(shuffled.first, 'C');
+      final r = restoreQueueOrder(original, shuffled, 0, id);
+      expect(r.queue, original);
+      expect(r.index, 2);
+    });
+
+    test('keeps items added while shuffled, drops removed ones', () {
+      final r = restoreQueueOrder(
+        ['A', 'B', 'C', 'D'],
+        ['C', 'X', 'A', 'D'], // B removed, X added
+        1,
+        id,
+      );
+      expect(r.queue, ['A', 'C', 'D', 'X']);
+      expect(r.index, 3);
+    });
+
+    test('matches duplicates by occurrence', () {
+      final r = restoreQueueOrder(['A', 'B', 'A'], ['A', 'A', 'B'], 1, id);
+      expect(r.queue, ['A', 'B', 'A']);
+      expect(r.index, 2);
+    });
+  });
 }

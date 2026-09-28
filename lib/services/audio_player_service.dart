@@ -128,6 +128,11 @@ class AudioPlayerService {
   StreamSubscription? _playerCompleteSub;
 
   bool _isShuffleEnabled = false;
+
+  /// Queue order before shuffling, so turning shuffle off can restore it.
+  /// Null when the order isn't known (e.g. a shuffled session restored
+  /// after a relaunch).
+  List<JellyfinTrack>? _unshuffledQueue;
   bool _hasRestored = false;
   PlaybackState? _pendingState;
 
@@ -2068,6 +2073,7 @@ class AudioPlayerService {
 
     _isShuffleEnabled = fromShuffle;
     _shuffleController.add(_isShuffleEnabled);
+    if (!fromShuffle) _unshuffledQueue = null;
 
     // Cancel any in-flight waveform extraction from the previous track
     _waveformExtractionSub?.cancel();
@@ -3042,6 +3048,7 @@ class AudioPlayerService {
     _currentIndex = 0;
     _lastPosition = Duration.zero;
     _isShuffleEnabled = false;
+    _unshuffledQueue = null;
     _isCurrentTrackLocal = false;
     _currentSourceUrl = null;
     _shuffleController.add(false);
@@ -3324,8 +3331,50 @@ class AudioPlayerService {
     debugPrint('🔁 Loop: Cleared');
   }
 
+  /// Shuffle on/off for the current queue (the player's shuffle button).
+  void toggleShuffle() {
+    if (_isShuffleEnabled) {
+      unshuffleQueue();
+    } else {
+      shuffleQueue();
+    }
+  }
+
+  /// Turn shuffle off, restoring the pre-shuffle order when it is known.
+  /// The current track keeps playing.
+  void unshuffleQueue() {
+    final original = _unshuffledQueue;
+    if (original != null && _queue.isNotEmpty) {
+      final hasCurrent = _currentIndex >= 0 && _currentIndex < _queue.length;
+      final restored = restoreQueueOrder<JellyfinTrack>(
+        original,
+        _queue,
+        hasCurrent ? _currentIndex : -1,
+        (t) => t.id,
+      );
+      _queue = restored.queue;
+      if (hasCurrent) _currentIndex = restored.index;
+      _onQueueEdited();
+      _audioHandler?.updateNautuneQueue(_queue);
+      _queueController.add(_queue);
+    }
+    _unshuffledQueue = null;
+    _isShuffleEnabled = false;
+    _shuffleController.add(false);
+    debugPrint('🌊 Shuffle off${original != null ? ', order restored' : ''}');
+    unawaited(_stateStore.savePlaybackSnapshot(
+      queue: _queue,
+      currentQueueIndex: _currentIndex,
+      shuffleEnabled: false,
+    ));
+  }
+
   void shuffleQueue() {
     if (_queue.isEmpty) return;
+    // Remember the order to restore (a re-shuffle keeps the first one).
+    if (!_isShuffleEnabled || _unshuffledQueue == null) {
+      _unshuffledQueue = List<JellyfinTrack>.of(_queue);
+    }
     
     // Current track first, the rest shuffled. Only the current *slot* is
     // pulled out, so duplicates of the current track stay in the queue.
@@ -3356,6 +3405,7 @@ class AudioPlayerService {
     if (tracks.isEmpty) return;
     
     final shuffled = List<JellyfinTrack>.from(tracks)..shuffle(Random());
+    _unshuffledQueue = List<JellyfinTrack>.of(tracks);
     await playTrack(
       shuffled.first,
       queueContext: shuffled,

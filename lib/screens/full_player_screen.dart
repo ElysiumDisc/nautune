@@ -136,6 +136,14 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
       // Player-specific controls follow the shared track actions.
       extraActionsBuilder: (sheetContext) => [
         ListTile(
+          leading: Icon(Icons.stop_circle_outlined, color: Theme.of(sheetContext).colorScheme.error),
+          title: const Text('Stop Playback'),
+          onTap: () {
+            Navigator.pop(sheetContext);
+            _audioService.stop();
+          },
+        ),
+        ListTile(
           leading: const Icon(Icons.lyrics),
           title: const Text('Refresh Lyrics'),
           subtitle: Text(
@@ -2058,20 +2066,35 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
 
                           SizedBox(width: isDesktop ? 16 : 4),
 
+                          StreamBuilder<bool>(
+                            stream: _audioService.shuffleStream,
+                            initialData: _audioService.shuffleEnabled,
+                            builder: (context, snapshot) {
+                              final shuffled = snapshot.data ?? false;
+                              return IconButton(
+                                icon: Icon(
+                                  Icons.shuffle_rounded,
+                                  size: isDesktop ? 32 : 26,
+                                  color: shuffled ? theme.colorScheme.primary : null,
+                                ),
+                                tooltip: shuffled ? 'Shuffle on' : 'Shuffle off',
+                                isSelected: shuffled,
+                                onPressed: () {
+                                  HapticService.selectionClick();
+                                  _audioService.toggleShuffle();
+                                },
+                              );
+                            },
+                          ),
+
+                          SizedBox(width: isDesktop ? 16 : 4),
+
                           IconButton(
                             icon: Icon(
                               Icons.skip_previous,
                               size: isDesktop ? 48 : 40,
                             ),
                             onPressed: () => _audioService.previous(),
-                          ),
-
-                          SizedBox(width: isDesktop ? 24 : 8),
-
-                          IconButton(
-                            icon: Icon(Icons.stop, size: isDesktop ? 40 : 32),
-                            onPressed: () => _audioService.stop(),
-                            color: theme.colorScheme.error,
                           ),
 
                           SizedBox(width: isDesktop ? 24 : 8),

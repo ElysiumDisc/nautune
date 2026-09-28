@@ -246,6 +246,36 @@ List<T> shuffleKeepingCurrent<T>(
 }
 
 /// What the "previous" control (in-app, lock screen, CarPlay) should do.
+/// Undo a shuffle: [current] (the shuffled queue, possibly edited since)
+/// back in [original] order. Items added while shuffled keep their relative
+/// order after the restored ones; items removed while shuffled stay gone.
+/// Duplicates are matched by occurrence. Returns the queue and where the
+/// item at [currentIndex] ended up (-1 when [currentIndex] is -1).
+({List<T> queue, int index}) restoreQueueOrder<T>(
+  List<T> original,
+  List<T> current,
+  int currentIndex,
+  String Function(T item) idOf,
+) {
+  final available = <String, List<int>>{};
+  for (var i = 0; i < current.length; i++) {
+    available.putIfAbsent(idOf(current[i]), () => []).add(i);
+  }
+  final order = <int>[];
+  for (final item in original) {
+    final slots = available[idOf(item)];
+    if (slots != null && slots.isNotEmpty) order.add(slots.removeAt(0));
+  }
+  final used = order.toSet();
+  for (var i = 0; i < current.length; i++) {
+    if (!used.contains(i)) order.add(i);
+  }
+  return (
+    queue: [for (final i in order) current[i]],
+    index: currentIndex < 0 ? -1 : order.indexOf(currentIndex),
+  );
+}
+
 enum PreviousAction {
   /// Nothing to do (empty queue).
   none,
