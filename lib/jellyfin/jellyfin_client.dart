@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
-import '../app_version.dart';
+import 'jellyfin_auth_header.dart';
 import 'jellyfin_credentials.dart';
 import 'jellyfin_exceptions.dart';
 import 'jellyfin_album.dart';
@@ -12,7 +12,9 @@ import 'jellyfin_library.dart';
 import 'jellyfin_playlist.dart';
 import 'jellyfin_track.dart';
 import 'jellyfin_user.dart';
+import 'order_by_ids.dart';
 import 'robust_http_client.dart';
+import 'server_uri.dart';
 
 /// Lightweight Jellyfin REST client with robust HTTP handling.
 /// Features: connection pooling, retry with backoff, ETag caching.
@@ -59,8 +61,16 @@ class JellyfinClient {
     }
   }
 
+  /// Builds a URL under [serverUrl], preserving any reverse-proxy base path.
+  /// Null query values are dropped; other values are stringified.
   Uri _buildUri(String path, [Map<String, dynamic>? query]) {
-    return Uri.parse(serverUrl).resolve(path).replace(queryParameters: query);
+    final stringQuery = query == null
+        ? null
+        : <String, String>{
+            for (final e in query.entries)
+              if (e.value != null) e.key: e.value.toString(),
+          };
+    return buildServerUri(serverUrl, path, stringQuery);
   }
 
   /// Check server health before heavy operations
@@ -92,6 +102,24 @@ class JellyfinClient {
         latencyMs: stopwatch.elapsedMilliseconds,
         error: e.toString(),
       );
+    }
+  }
+
+  /// Cheap single-attempt reachability probe (no retries, short timeout)
+  /// against the anonymous `GET /System/Info/Public`.
+  Future<bool> isReachable({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    try {
+      final response = await _robustClient.client
+          .get(
+            _buildUri('/System/Info/Public'),
+            headers: const {'Accept': 'application/json'},
+          )
+          .timeout(timeout);
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -166,14 +194,15 @@ class JellyfinClient {
 
   /// Builds the URL for a user's profile image.
   ///
-  /// Jellyfin API note: `/Users/{id}/Images/Primary` is not documented in
-  /// `jellyfin-openapi-10.11.9.json` but is served by every Jellyfin release
-  /// since 10.8 (and earlier). No documented alternative exists — verified
-  /// against the 10.11.9 spec on 2026-05-20. If this regresses, fall back to
-  /// `/Items/{userId}/Images/Primary`.
+  /// Uses the spec-documented `GET /UserImage?userId=…&tag=…` (present in the
+  /// 10.11.9 and 12.1.0 OpenAPI specs; the old `/Users/{id}/Images/Primary`
+  /// alias is absent from both).
   String? getUserImageUrl(String userId, String? imageTag) {
     if (imageTag == null) return null;
-    return '$serverUrl/Users/$userId/Images/Primary?tag=$imageTag';
+    return buildServerUrl(serverUrl, '/UserImage', {
+      'userId': userId,
+      'tag': imageTag,
+    });
   }
 
   /// Fetches the user's library list (a.k.a. "views"). Uses the
@@ -206,12 +235,9 @@ class JellyfinClient {
         .toList();
   }
 
-  /// Note: this method (and the other ~20 browse methods below) uses the
-  /// undocumented `/Users/{userId}/Items` path. This is a deliberate
-  /// compatibility choice — the path is served reliably by every Jellyfin
-  /// release since 10.8, and the spec-documented `/Items?userId=...`
-  /// alternative has subtle behavior differences around `Recursive` /
-  /// `ParentId` resolution. Verified against 10.11.9 spec on 2026-05-20.
+  /// Browse methods use the spec-documented `GET /Items?userId=…` (the
+  /// legacy `/Users/{userId}/Items` alias is absent from the 10.11.9 and
+  /// 12.1.0 OpenAPI specs).
   Future<List<JellyfinAlbum>> fetchAlbums({
     required JellyfinCredentials credentials,
     required String libraryId,
@@ -222,6 +248,7 @@ class JellyfinClient {
     String sortOrder = 'Ascending',
   }) async {
     final queryParams = {
+      'userId': credentials.userId,
       'ParentId': libraryId,
       'IncludeItemTypes': 'MusicAlbum',
       'Recursive': 'true',
@@ -236,7 +263,7 @@ class JellyfinClient {
       queryParams['GenreIds'] = genreIds;
     }
     
-    final uri = _buildUri('/Users/${credentials.userId}/Items', queryParams);
+    final uri = _buildUri('/Items', queryParams);
 
     final response = await _robustClient.get(
       uri,
@@ -300,7 +327,8 @@ class JellyfinClient {
     required JellyfinCredentials credentials,
     required String artistId,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'ArtistIds': artistId,
       'IncludeItemTypes': 'MusicAlbum',
       'Recursive': 'true',
@@ -334,6 +362,7 @@ class JellyfinClient {
     String? libraryId,
   }) async {
     final queryParams = <String, String>{
+      'userId': credentials.userId,
       'IncludeItemTypes': 'Playlist',
       'Recursive': 'true',
       'SortBy': 'SortName',
@@ -345,7 +374,7 @@ class JellyfinClient {
       queryParams['ParentId'] = libraryId;
     }
     
-    final uri = _buildUri('/Users/${credentials.userId}/Items', queryParams);
+    final uri = _buildUri('/Items', queryParams);
 
     final response = await _robustClient.get(
       uri,
@@ -397,7 +426,8 @@ class JellyfinClient {
       return const [];
     }
 
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'Ids': ids.join(','),
       'Fields': 'RunTimeTicks,Albums,Album,Artists,ImageTags,AlbumPrimaryImageTag,ParentThumbImageTag,IndexNumber,ParentIndexNumber,UserData,MediaStreams,Tags',
       'IncludeItemTypes': 'Audio',
@@ -417,15 +447,17 @@ class JellyfinClient {
     final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
-    return items
+    final tracks = items
         .whereType<Map<String, dynamic>>()
         .map((json) => JellyfinTrack.fromJson(
               json,
               serverUrl: serverUrl,
               token: credentials.accessToken,
               userId: credentials.userId,
-            ))
-        .toList();
+            ));
+    // Jellyfin returns Ids results in its own order; callers (queue restore,
+    // "On This Day") rely on the requested order.
+    return orderByIds(ids, tracks, (t) => t.id);
   }
 
   Future<List<JellyfinTrack>> fetchRecentTracks({
@@ -433,7 +465,8 @@ class JellyfinClient {
     required String libraryId,
     int limit = 20,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'ParentId': libraryId,
       'IncludeItemTypes': 'Audio',
       'Recursive': 'true',
@@ -476,7 +509,8 @@ class JellyfinClient {
     required String libraryId,
     int limit = 20,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'ParentId': libraryId,
       'IncludeItemTypes': 'Audio',
       'Recursive': 'true',
@@ -520,7 +554,8 @@ class JellyfinClient {
     required String libraryId,
     int limit = 20,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'ParentId': libraryId,
       'IncludeItemTypes': 'MusicAlbum',
       'Recursive': 'true',
@@ -556,7 +591,8 @@ class JellyfinClient {
     required String albumId,
     bool recursive = true,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'ParentId': albumId,
       'IncludeItemTypes': 'Audio',
       'Recursive': recursive ? 'true' : 'false',
@@ -597,7 +633,8 @@ class JellyfinClient {
     required JellyfinCredentials credentials,
     required String albumId,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'AlbumIds': albumId,
       'IncludeItemTypes': 'Audio',
       'Recursive': 'true',
@@ -639,7 +676,8 @@ class JellyfinClient {
     required String libraryId,
     required String query,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'ParentId': libraryId,
       'IncludeItemTypes': 'MusicAlbum',
       'Recursive': 'true',
@@ -674,7 +712,8 @@ class JellyfinClient {
     required String libraryId,
     required String query,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'ParentId': libraryId,
       'IncludeItemTypes': 'MusicArtist',
       'Recursive': 'true',
@@ -708,7 +747,8 @@ class JellyfinClient {
     required String libraryId,
     required String query,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'ParentId': libraryId,
       'IncludeItemTypes': 'Audio',
       'Recursive': 'true',
@@ -746,18 +786,14 @@ class JellyfinClient {
   }
 
   Map<String, String> _defaultHeaders([JellyfinCredentials? credentials]) {
-    final headers = <String, String>{
+    return <String, String>{
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-      'X-Emby-Authorization': 'MediaBrowser Client="Nautune", Device="${defaultTargetPlatform.name}", '
-          'DeviceId="$deviceId", Version="${AppVersion.current}"',
+      ...nautuneAuthHeaders(
+        deviceId: deviceId,
+        token: credentials?.accessToken,
+      ),
     };
-
-    if (credentials != null) {
-      headers['X-MediaBrowser-Token'] = credentials.accessToken;
-    }
-
-    return headers;
   }
 
   // Generic HTTP methods for playlist management
@@ -878,7 +914,8 @@ class JellyfinClient {
     required String artistId,
     int limit = 50,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'ArtistIds': artistId,
       'IncludeItemTypes': 'Audio',
       'Recursive': 'true',
@@ -912,6 +949,7 @@ class JellyfinClient {
     final uri = _buildUri('/Items/$itemId/PlaybackInfo');
     final response = await _robustClient.post(
       uri,
+      idempotent: true, // read-only despite being a POST
       headers: _defaultHeaders(credentials),
       body: jsonEncode({
         'UserId': credentials.userId,
@@ -954,7 +992,7 @@ class JellyfinClient {
       'EnableUserData': 'true',
     };
 
-    final uri = _buildUri('/Users/${credentials.userId}/Items', queryParams);
+    final uri = _buildUri('/Items', queryParams);
     final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
@@ -990,7 +1028,7 @@ class JellyfinClient {
       'EnableUserData': 'true',
     };
 
-    final uri = _buildUri('/Users/${credentials.userId}/Items', queryParams);
+    final uri = _buildUri('/Items', queryParams);
     final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
@@ -1022,7 +1060,7 @@ class JellyfinClient {
       'EnableUserData': 'true',
     };
 
-    final uri = _buildUri('/Users/${credentials.userId}/Items', queryParams);
+    final uri = _buildUri('/Items', queryParams);
     final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
@@ -1057,7 +1095,7 @@ class JellyfinClient {
       'EnableUserData': 'true',
     };
 
-    final uri = _buildUri('/Users/${credentials.userId}/Items/$itemId', queryParams);
+    final uri = _buildUri('/Items/$itemId', queryParams);
     final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
@@ -1081,7 +1119,8 @@ class JellyfinClient {
     required String libraryId,
     int limit = 50,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'ParentId': libraryId,
       'IncludeItemTypes': 'Audio',
       'Recursive': 'true',
@@ -1123,7 +1162,8 @@ class JellyfinClient {
     required String libraryId,
     int limit = 50,
   }) async {
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'ParentId': libraryId,
       'IncludeItemTypes': 'Audio',
       'Recursive': 'true',
@@ -1174,7 +1214,8 @@ class JellyfinClient {
 
     while (allTracks.length < limit) {
       final batchLimit = (limit - allTracks.length).clamp(0, pageSize);
-      final uri = _buildUri('/Users/${credentials.userId}/Items', {
+      final uri = _buildUri('/Items', {
+        'userId': credentials.userId,
         'ParentId': libraryId,
         'IncludeItemTypes': 'Audio',
         'Recursive': 'true',
@@ -1346,7 +1387,7 @@ class JellyfinClient {
   }
 
   /// Get user data for multiple items at once (batch)
-  /// Uses: GET /Users/{userId}/Items with EnableUserData=true
+  /// Uses: GET /Items?userId=… with EnableUserData=true
   /// Returns map of itemId -> UserItemData
   Future<Map<String, Map<String, dynamic>>> getBatchUserItemData({
     required JellyfinCredentials credentials,
@@ -1354,7 +1395,8 @@ class JellyfinClient {
   }) async {
     if (itemIds.isEmpty) return {};
 
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'Ids': itemIds.join(','),
       'EnableUserData': 'true',
       'Fields': 'UserData',
@@ -1392,7 +1434,7 @@ class JellyfinClient {
   }
 
   /// Get full item data for multiple items at once (batch) - includes track metadata
-  /// Uses: GET /Users/{userId}/Items with all fields needed for analytics
+  /// Uses: GET /Items?userId=… with all fields needed for analytics
   /// Returns map of itemId -> Full item data (name, artists, genres, duration, userData, etc.)
   Future<Map<String, Map<String, dynamic>>> getBatchItemsWithFullData({
     required JellyfinCredentials credentials,
@@ -1400,7 +1442,8 @@ class JellyfinClient {
   }) async {
     if (itemIds.isEmpty) return {};
 
-    final uri = _buildUri('/Users/${credentials.userId}/Items', {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
       'Ids': itemIds.join(','),
       'EnableUserData': 'true',
       'Fields': 'UserData,Artists,Genres,RunTimeTicks,Album,AlbumId,Tags',

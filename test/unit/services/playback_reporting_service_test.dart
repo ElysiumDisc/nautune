@@ -1,0 +1,179 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:nautune/jellyfin/jellyfin_track.dart';
+import 'package:nautune/services/playback_reporting_service.dart';
+
+class _Req {
+  _Req(this.path, this.body, this.headers);
+  final String path;
+  final Map<String, dynamic> body;
+  final Map<String, String> headers;
+}
+
+JellyfinTrack _track(String id) => JellyfinTrack(
+      id: id,
+      name: 'Track $id',
+      album: null,
+      artists: const [],
+      serverUrl: 'https://host/jf',
+      token: 'tok',
+      userId: 'u',
+    );
+
+void main() {
+  late List<_Req> requests;
+  late Map<String, Completer<void>> gates;
+
+  PlaybackReportingService build() {
+    requests = [];
+    gates = {};
+    final client = MockClient((request) async {
+      final req = _Req(
+        request.url.path,
+        jsonDecode(request.body) as Map<String, dynamic>,
+        request.headers,
+      );
+      requests.add(req);
+      final gate = gates['${req.path}:${req.body['ItemId']}'];
+      if (gate != null) await gate.future;
+      return http.Response('', 204);
+    });
+    return PlaybackReportingService(
+      serverUrl: 'https://host/jf',
+      accessToken: 'tok',
+      deviceId: 'dev',
+      userId: 'u',
+      httpClient: client,
+    );
+  }
+
+  test('uses sub-path URLs and modern Authorization header', () async {
+    final service = build();
+    await service.reportPlaybackStart(_track('a'));
+    expect(requests.single.path, '/jf/Sessions/Playing');
+    expect(requests.single.headers['Authorization'], contains('Token="tok"'));
+    expect(requests.single.headers.keys.map((k) => k.toLowerCase()),
+        isNot(contains('x-emby-token')));
+    service.dispose();
+  });
+
+  test('late stop of previous track does not wipe the new session', () async {
+    final service = build();
+    final a = _track('a');
+    final b = _track('b');
+
+    await service.reportPlaybackStart(a, sessionId: 'sa');
+    gates['/jf/Sessions/Playing/Stopped:a'] = Completer<void>();
+    final stopA = service.reportPlaybackStopped(a, const Duration(seconds: 5));
+    await service.reportPlaybackStart(b, sessionId: 'sb');
+    gates['/jf/Sessions/Playing/Stopped:a']!.complete();
+    await stopA;
+
+    await service.reportPlaybackProgress(b, const Duration(seconds: 1), false);
+    final progress = requests.where((r) => r.path.endsWith('/Progress')).toList();
+    expect(progress, hasLength(1));
+    expect(progress.single.body['PlaySessionId'], 'sb');
+
+    final stops = requests.where((r) => r.path.endsWith('/Stopped')).toList();
+    expect(stops.single.body['PlaySessionId'], 'sa');
+    service.dispose();
+  });
+
+  test('start(new) before stop(previous) still stops the right session', () async {
+    final service = build();
+    final a = _track('a');
+    final b = _track('b');
+
+    await service.reportPlaybackStart(a, sessionId: 'sa');
+    await service.reportPlaybackStart(b, sessionId: 'sb');
+    await service.reportPlaybackStopped(a, const Duration(seconds: 3));
+
+    final stops = requests.where((r) => r.path.endsWith('/Stopped')).toList();
+    expect(stops, hasLength(1));
+    expect(stops.single.body['ItemId'], 'a');
+    expect(stops.single.body['PlaySessionId'], 'sa');
+
+    // b is still the active session.
+    await service.reportPlaybackProgress(b, Duration.zero, false);
+    expect(requests.last.body['PlaySessionId'], 'sb');
+    service.dispose();
+  });
+
+  test('duplicate start and duplicate stop are no-ops', () async {
+    final service = build();
+    final a = _track('a');
+    await service.reportPlaybackStart(a);
+    await service.reportPlaybackStart(a);
+    await service.reportPlaybackStopped(a, Duration.zero);
+    await service.reportPlaybackStopped(a, Duration.zero);
+    expect(requests.where((r) => r.path.endsWith('/Playing')), hasLength(1));
+    expect(requests.where((r) => r.path.endsWith('/Stopped')), hasLength(1));
+    service.dispose();
+  });
+
+  test('progress for a non-active track is ignored', () async {
+    final service = build();
+    await service.reportPlaybackStart(_track('a'));
+    await service.reportPlaybackProgress(_track('zzz'), Duration.zero, false);
+    expect(requests.where((r) => r.path.endsWith('/Progress')), isEmpty);
+    service.dispose();
+  });
+
+  test('offline events are queued, carried over and flushed', () async {
+    final old = build();
+    old.setEnabled(false);
+    await old.reportPlaybackStart(_track('a'), sessionId: 'sa', playMethod: 'Transcode');
+    await old.reportPlaybackStopped(_track('a'), const Duration(seconds: 2));
+    expect(requests, isEmpty);
+
+    final replacementRequests = <String>[];
+    final replacement = PlaybackReportingService(
+      serverUrl: 'https://host/jf',
+      accessToken: 'tok2',
+      deviceId: 'dev',
+      userId: 'u',
+      httpClient: MockClient((request) async {
+        replacementRequests.add(
+          '${request.url.path} ${jsonDecode(request.body)['PlayMethod']}',
+        );
+        return http.Response('', 204);
+      }),
+    );
+    expect(replacement.isSameAccountAs(old), isTrue);
+    replacement.adoptStateFrom(old);
+    old.dispose();
+    await replacement.flushPendingReports();
+    expect(replacementRequests, [
+      '/jf/Sessions/Playing Transcode',
+      '/jf/Sessions/Playing/Stopped Transcode',
+    ]);
+    replacement.dispose();
+  });
+
+  test('retired service still sends the ending stop but nothing new', () async {
+    final service = build();
+    await service.reportPlaybackStart(_track('a'), sessionId: 'sa');
+    service.retire();
+    await service.reportPlaybackStopped(_track('a'), Duration.zero);
+    await service.reportPlaybackStart(_track('b'));
+    await service.reportPlaybackProgress(_track('b'), Duration.zero, false);
+    expect(requests.map((r) => r.path), [
+      '/jf/Sessions/Playing',
+      '/jf/Sessions/Playing/Stopped',
+    ]);
+    expect(service.isRetired, isTrue);
+    service.dispose();
+  });
+
+  test('disposed service makes no requests', () async {
+    final service = build();
+    service.dispose();
+    await service.reportPlaybackStart(_track('a'));
+    await service.reportPlaybackStopped(_track('a'), Duration.zero);
+    expect(requests, isEmpty);
+  });
+}

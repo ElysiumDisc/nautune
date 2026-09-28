@@ -1,5 +1,8 @@
 import 'dart:math' as math;
 
+import 'jellyfin_auth_header.dart';
+import 'server_uri.dart';
+
 class JellyfinTrack {
   JellyfinTrack({
     required this.id,
@@ -390,14 +393,15 @@ class JellyfinTrack {
     if (serverUrl == null || token == null || tag == null || itemId == null) {
       return null;
     }
-    final uri = Uri.parse(serverUrl!).resolve('/Items/$itemId/Images/Primary');
+    final base = serverUrl!;
+    final path = '/Items/$itemId/Images/Primary';
     final query = <String, String>{
       'quality': '90',
       'maxWidth': '$maxWidth',
-      'api_key': token!,
+      kJellyfinApiKeyQueryParam: token!,
       'tag': tag,
     };
-    return uri.replace(queryParameters: query).toString();
+    return buildServerUrl(base, path, query);
   }
 
   /// Builds a waveform preview URL provided by Jellyfin.
@@ -411,13 +415,14 @@ class JellyfinTrack {
     if (serverUrl == null || token == null) {
       return null;
     }
-    final uri = Uri.parse(serverUrl!).resolve('/Audio/$id/Waveform');
+    final base = serverUrl!;
+    final path = '/Audio/$id/Waveform';
     final query = <String, String>{
       'width': '$width',
       'height': '$height',
-      'api_key': token!,
+      kJellyfinApiKeyQueryParam: token!,
     };
-    return uri.replace(queryParameters: query).toString();
+    return buildServerUrl(base, path, query);
   }
 
   String? directDownloadUrl() {
@@ -427,12 +432,13 @@ class JellyfinTrack {
     if (serverUrl == null || token == null) {
       return null;
     }
-    final uri = Uri.parse(serverUrl!).resolve('/Items/$id/Download');
+    final base = serverUrl!;
+    final path = '/Items/$id/Download';
     final query = <String, String>{
-      'api_key': token!,
+      kJellyfinApiKeyQueryParam: token!,
       'static': 'true',
     };
-    return uri.replace(queryParameters: query).toString();
+    return buildServerUrl(base, path, query);
   }
 
   String? universalStreamUrl({
@@ -448,7 +454,8 @@ class JellyfinTrack {
     if (serverUrl == null || token == null || userId == null) {
       return null;
     }
-    final uri = Uri.parse(serverUrl!).resolve('/Audio/$id/universal');
+    final base = serverUrl!;
+    final path = '/Audio/$id/universal';
     final query = <String, String>{
       'UserId': userId!,
       'DeviceId': deviceId,
@@ -460,13 +467,13 @@ class JellyfinTrack {
       'MaxAudioChannels': '2',
       'StartTimeTicks': '0',
       'EnableRedirection': 'true',
-      'api_key': token!,
+      kJellyfinApiKeyQueryParam: token!,
     };
     // Add AudioBitrate to force specific transcoding bitrate
     if (audioBitrate != null) {
       query['AudioBitrate'] = '$audioBitrate';
     }
-    return uri.replace(queryParameters: query).toString();
+    return buildServerUrl(base, path, query);
   }
 
   /// Returns a URL that FORCES transcoding via the /Audio/{Id}/stream.{container} endpoint.
@@ -486,7 +493,8 @@ class JellyfinTrack {
     }
 
     // Use /Audio/{Id}/stream.mp3 with explicit extension
-    final uri = Uri.parse(serverUrl!).resolve('/Audio/$id/stream.$container');
+    final base = serverUrl!;
+    final path = '/Audio/$id/stream.$container';
     
     final query = <String, String>{
       // Force transcoding flags
@@ -495,7 +503,7 @@ class JellyfinTrack {
       'MediaSourceId': id,
       'DeviceId': deviceId,
       'deviceId': deviceId,
-      'api_key': token!,
+      kJellyfinApiKeyQueryParam: token!,
       
       // Format specs
       'Container': container,
@@ -523,7 +531,7 @@ class JellyfinTrack {
       query['PlaySessionId'] = playSessionId;
     }
 
-    return uri.replace(queryParameters: query).toString();
+    return buildServerUrl(base, path, query);
   }
 
   String streamUrl({
@@ -553,11 +561,12 @@ class JellyfinTrack {
     if (url == null || token == null) {
       throw Exception('Missing server URL or token for download');
     }
-    final uri = Uri.parse(url).resolve('/Items/$id/Download');
+    final base = url;
+    final path = '/Items/$id/Download';
     final query = <String, String>{
-      'api_key': token,
+      kJellyfinApiKeyQueryParam: token,
     };
-    return uri.replace(queryParameters: query).toString();
+    return buildServerUrl(base, path, query);
   }
 
   Map<String, dynamic> toStorageJson() {

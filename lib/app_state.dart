@@ -120,6 +120,11 @@ class NautuneAppState extends ChangeNotifier {
   CarPlayService? _carPlayService;
   StreamSubscription<bool>? _connectivitySubscription;
   Timer? _periodicSyncTimer; // Syncs analytics every 10 minutes
+  /// Runs while a bootstrap sync reported a genuine network failure; probes
+  /// the server every 30 s and restores online state when it answers.
+  Timer? _reachabilityTimer;
+  bool _reachabilityProbeInFlight = false;
+  static const Duration _reachabilityProbeInterval = Duration(seconds: 30);
   bool _connectivityMonitorInitialized = false;
   Map<String, double> _libraryScrollOffsets = {};
   int _restoredLibraryTabIndex = 0;
@@ -237,11 +242,7 @@ class NautuneAppState extends ChangeNotifier {
           );
           
           // Initialize reporting service for demo mode to prevent warnings
-          final reportingService = PlaybackReportingService(
-            serverUrl: _session!.serverUrl,
-            accessToken: _session!.credentials.accessToken,
-          );
-          _audioPlayerService.setReportingService(reportingService);
+          _installReportingService(_session!);
         }
         _albums = provider.albums;
         _artists = provider.artists;
@@ -292,12 +293,7 @@ class NautuneAppState extends ChangeNotifier {
                           selectedLibraryName: provider.library!.name,
                           isDemo: true,
                         );
-            final session = _session!;
-            final reportingService = PlaybackReportingService(
-              serverUrl: session.serverUrl,
-              accessToken: session.credentials.accessToken,
-            );
-            _audioPlayerService.setReportingService(reportingService);
+            _installReportingService(_session!);
           }
 
           _albums = provider.albums;
@@ -318,12 +314,10 @@ class NautuneAppState extends ChangeNotifier {
         // Ensure AudioPlayerService has the correct JellyfinService instance
         _audioPlayerService.setJellyfinService(_jellyfinService);
 
-        // Initialize playback reporting if not already done
-        final reportingService = PlaybackReportingService(
-          serverUrl: session.serverUrl,
-          accessToken: session.credentials.accessToken,
-        );
-        _audioPlayerService.setReportingService(reportingService);
+        // Install (or keep) the playback reporter for this session. Reuses
+        // the existing one when nothing relevant changed (e.g. library
+        // switch) so its progress timer and offline queue aren't leaked/lost.
+        _installReportingService(session);
 
         // Start periodic analytics sync for the new session
         _startPeriodicSyncTimer();
@@ -341,6 +335,60 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   // --- End of _onSessionChanged ---
+
+  /// Installs the playback reporter for [session] on the audio service.
+  ///
+  /// - Keeps the current reporter when it already matches (same server,
+  ///   token, device, user) — no leak, no lost state.
+  /// - Otherwise disposes the old reporter (cancelling its progress timer),
+  ///   carrying its queued offline events and active session over when it
+  ///   reported for the same server + user.
+  /// - Never enables reporting while offline.
+  void _installReportingService(JellyfinSession session) {
+    final old = _audioPlayerService.reportingService;
+    final deviceId = session.isDemo ? null : session.deviceId;
+    PlaybackReportingService service;
+    if (old != null &&
+        old.matches(
+          serverUrl: session.serverUrl,
+          accessToken: session.credentials.accessToken,
+          deviceId: deviceId,
+          userId: session.credentials.userId,
+        )) {
+      service = old;
+    } else {
+      service = PlaybackReportingService(
+        serverUrl: session.serverUrl,
+        accessToken: session.credentials.accessToken,
+        deviceId: deviceId,
+        userId: session.credentials.userId,
+      );
+      if (old != null) {
+        if (service.isSameAccountAs(old)) {
+          service.adoptStateFrom(old);
+        }
+        // A retired (logged-out) reporter disposes itself after its final
+        // stop report; disposing it here could drop that report.
+        if (!old.isRetired) old.dispose();
+      }
+    }
+    service.setEnabled(!isOfflineMode);
+    if (!isOfflineMode) {
+      unawaited(service.flushPendingReports());
+    }
+    if (!identical(service, old)) {
+      _audioPlayerService.setReportingService(service);
+    }
+  }
+
+  /// Stop reporting for the current account (logout): drop queued offline
+  /// events so they can't be sent later under another account, cancel the
+  /// progress timer and refuse new sessions. The pending stop report for the
+  /// track that logout just stopped is still delivered (the audio service
+  /// sends it asynchronously), then the reporter disposes itself.
+  void _retireReportingService() {
+    _audioPlayerService.reportingService?.retire();
+  }
 
   JellyfinSession? get session => _session;
   Object? get lastError => _lastError;
@@ -969,6 +1017,9 @@ class NautuneAppState extends ChangeNotifier {
   void _handleConnectivityStatusChange(bool isOnline) {
     final wasOnline = _networkAvailable;
     _networkAvailable = isOnline;
+    // OS connectivity is authoritative once it reports a change; the
+    // bootstrap-triggered reachability probe is no longer needed.
+    _stopReachabilityProbe();
 
     // When network is lost, isOfflineMode getter automatically returns true
     // We don't change _userWantsOffline - that's the user's explicit choice
@@ -1099,7 +1150,7 @@ class NautuneAppState extends ChangeNotifier {
     // Parallelize playback state restoration and session loading
     final initResults = await Future.wait([
       _playbackStateStore.load(),
-      _sessionStore.load(),
+      _loadStoredSessionSafely(),
     ]);
 
     final storedPlaybackState = initResults[0] as PlaybackState?;
@@ -1183,11 +1234,7 @@ class NautuneAppState extends ChangeNotifier {
         _jellyfinService.restoreSession(storedSession);
         _audioPlayerService.setJellyfinService(_jellyfinService);
 
-        final reportingService = PlaybackReportingService(
-          serverUrl: storedSession.serverUrl,
-          accessToken: storedSession.credentials.accessToken,
-        );
-        _audioPlayerService.setReportingService(reportingService);
+        _installReportingService(storedSession);
 
         // Load cached snapshot and start sync in parallel
         final snapshot = await _bootstrapService.loadCachedSnapshot(
@@ -1225,6 +1272,19 @@ class NautuneAppState extends ChangeNotifier {
     _initialized = true;
     notifyListeners();
     debugPrint('NautuneAppState init took: ${initStopwatch.elapsedMilliseconds}ms');
+  }
+
+  /// Loads the persisted session. When the keychain is locked (cold start
+  /// from CarPlay before unlock) this returns null WITHOUT treating it as a
+  /// logout; SessionProvider retries and _onSessionChanged picks the session
+  /// up once it becomes readable.
+  Future<JellyfinSession?> _loadStoredSessionSafely() async {
+    try {
+      return await _sessionStore.load();
+    } on SessionStorageUnavailableException catch (error) {
+      debugPrint('Session storage unavailable at startup; waiting for SessionProvider retry: $error');
+      return null;
+    }
   }
 
   void _startBootstrapSync(
@@ -1362,13 +1422,61 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   void _handleNetworkRecovered() {
+    _stopReachabilityProbe();
     if (!_networkAvailable) {
       _networkAvailable = true;
       notifyListeners();
     }
   }
 
+  /// Start the periodic reachability probe (idempotent).
+  void _startReachabilityProbe() {
+    if (_reachabilityTimer != null) return;
+    debugPrint('📡 Starting server reachability probe (every ${_reachabilityProbeInterval.inSeconds}s)');
+    _reachabilityTimer = Timer.periodic(
+      _reachabilityProbeInterval,
+      (_) => unawaited(_probeServerReachability()),
+    );
+  }
+
+  void _stopReachabilityProbe() {
+    _reachabilityTimer?.cancel();
+    _reachabilityTimer = null;
+  }
+
+  Future<void> _probeServerReachability() async {
+    if (_reachabilityProbeInFlight) return;
+    final session = _session;
+    if (session == null || session.isDemo) {
+      _stopReachabilityProbe();
+      return;
+    }
+    if (_networkAvailable) {
+      _stopReachabilityProbe();
+      return;
+    }
+    if (_userWantsOffline) return; // Don't generate traffic in user-offline mode
+    _reachabilityProbeInFlight = true;
+    try {
+      final reachable = await _jellyfinService.isServerReachable();
+      // Session may have changed (logout) while probing.
+      if (!reachable || !identical(_session, session) || _reachabilityTimer == null) {
+        return;
+      }
+      debugPrint('📶 Server reachable again — restoring online state');
+      _handleNetworkRecovered();
+      unawaited(_refreshAfterReconnect());
+    } catch (e) {
+      debugPrint('Reachability probe failed: $e');
+    } finally {
+      _reachabilityProbeInFlight = false;
+    }
+  }
+
   void _handleNetworkDrop(Object error) {
+    // Bootstrap only reports genuine network failures here (see
+    // BootstrapService.isNetworkFailure); probe until the server answers.
+    _startReachabilityProbe();
     if (_networkAvailable) {
       _networkAvailable = false;
       // Note: isOfflineMode getter automatically returns true when !_networkAvailable
@@ -1409,31 +1517,31 @@ class NautuneAppState extends ChangeNotifier {
 
   Future<void> logout() async {
     final cacheKey = _sessionCacheKey;
-    _jellyfinService.clearSession();
-    _session = null;
-    _libraries = null;
-    _librariesError = null;
-    _isLoadingLibraries = false;
-    _albums = null;
-    _albumsError = null;
-    _isLoadingAlbums = false;
-    _playlists = null;
-    _playlistsError = null;
-    _isLoadingPlaylists = false;
-    _recentTracks = null;
-    _recentError = null;
-    _isLoadingRecent = false;
-    _recentlyAddedAlbums = null;
-    _recentlyAddedError = null;
-    _isLoadingRecentlyAdded = false;
-    _favoriteTracks = null;
-    _favoritesError = null;
-    _isLoadingFavorites = false;
-    if (cacheKey != null) {
-      await _cacheService.clearForSession(cacheKey);
+
+    // 1. Stop playback while the old token is still valid (so the stop is
+    //    reported) and clear the persisted queue snapshot — every track in it
+    //    carries the previous user's server URL + access token.
+    try {
+      await _audioPlayerService.stop();
+    } catch (error) {
+      debugPrint('Logout: failed to stop playback: $error');
     }
-    await _sessionStore.clear();
-    // Also clear the SessionProvider so UI reacts and shows the login screen
+    try {
+      await _playbackStateStore.clearPlaybackData();
+    } catch (error) {
+      debugPrint('Logout: failed to clear saved playback state: $error');
+    }
+
+    // 2. Silence all background work tied to the old account.
+    _retireReportingService();
+    _stopReachabilityProbe();
+    _stopPeriodicSyncTimer();
+    _bootstrapService.cancelSync();
+    _jellyfinService.clearSession();
+
+    // 3. Clear the SessionProvider BEFORE nulling our own session, so
+    //    _onSessionChanged sees the transition (old → null) and runs its
+    //    cleanup, and the UI shows the login screen.
     if (_sessionProvider != null) {
       try {
         await _sessionProvider.logout();
@@ -1441,6 +1549,42 @@ class NautuneAppState extends ChangeNotifier {
         debugPrint('SessionProvider.logout failed: $error');
       }
     }
+
+    // 4. Local cleanup (idempotent with _onSessionChanged's cleanup, and
+    //    needed when there is no SessionProvider).
+    _session = null;
+    _stopPeriodicSyncTimer();
+    _clearLibraryCaches();
+    _isLoadingLibraries = false;
+    _recentlyAddedAlbums = null;
+    _recentlyAddedError = null;
+    _isLoadingRecentlyAdded = false;
+    _recentlyPlayedTracks = null;
+    _mostPlayedTracks = null;
+    _mostPlayedAlbums = null;
+    _longestTracks = null;
+    _discoverTracks = null;
+    _onThisDayTracks = null;
+    _recommendationTracks = null;
+    _recommendationSeedTrackName = null;
+    if (cacheKey != null) {
+      await _cacheService.clearForSession(cacheKey);
+    }
+    try {
+      await _sessionStore.clear();
+    } catch (error) {
+      debugPrint('Logout: failed to clear stored session: $error');
+    }
+
+    // A bootstrap-detected network drop belongs to the old session; re-derive
+    // network state from OS connectivity so the next login isn't stuck
+    // offline.
+    try {
+      _networkAvailable = await _connectivityService.hasNetworkConnection();
+    } catch (_) {
+      // Keep the current value.
+    }
+
     await _teardownDemoMode();
     notifyListeners();
   }
@@ -2835,6 +2979,7 @@ class NautuneAppState extends ChangeNotifier {
     _connectivitySubscription?.cancel();
     _powerModeSub?.cancel();
     _periodicSyncTimer?.cancel();
+    _stopReachabilityProbe();
     _demoModeProvider?.removeListener(_onDemoModeChanged);
     _sessionProvider?.removeListener(_onSessionChanged);
     _libraryDataProvider?.removeListener(notifyListeners);

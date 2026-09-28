@@ -20,6 +20,16 @@ class CarPlayService {
   String? _currentPlayingTrackId;
   StreamSubscription<JellyfinTrack?>? _currentTrackSub;
 
+  /// Root tab rows whose detail text reflects app state. Updated in place on
+  /// app-state changes so the user's selected tab (Library/Recent/Downloads)
+  /// is preserved — calling setRootTemplate would reset CarPlay to tab 0.
+  CPListItem? _albumsRow;
+  CPListItem? _artistsRow;
+  CPListItem? _playlistsRow;
+  CPListItem? _favoritesRow;
+  CPListItem? _downloadsRow;
+  bool _rootTemplateSet = false;
+
   // Pagination limits for CarPlay (prevents performance issues with large libraries)
   static const int _maxItemsPerPage = 100;
 
@@ -94,6 +104,8 @@ class CarPlayService {
   void _onCarPlayConnect() {
     _isConnected = true;
     debugPrint('🚗 CarPlay connected');
+    // A fresh connection has no user tab selection to preserve, so (re)build
+    // the root template here; later app-state changes update rows in place.
     if (_isAtRootLevel) {
       _refreshRootTemplate();
     }
@@ -160,14 +172,38 @@ class CarPlayService {
   }
 
   void _onAppStateChanged() {
-    if (_isConnected && _isAtRootLevel) {
-      _refreshDebounceTimer?.cancel();
-      _refreshDebounceTimer = Timer(const Duration(milliseconds: 500), () {
-        if (_isConnected && _isAtRootLevel) {
-          _refreshRootTemplate();
-        }
-      });
+    if (!_isConnected) return;
+    _refreshDebounceTimer?.cancel();
+    _refreshDebounceTimer = Timer(const Duration(milliseconds: 500), () {
+      if (!_isConnected) return;
+      if (_rootTemplateSet) {
+        // The set of tabs never changes; only row detail texts do. Updating
+        // the existing items in place keeps the user's selected tab and any
+        // pushed templates intact.
+        _updateRootRowsInPlace();
+      } else if (_isAtRootLevel) {
+        _refreshRootTemplate();
+      }
+    });
+  }
+
+  /// Push fresh detail texts into the existing root-tab rows (no-op for rows
+  /// whose text is unchanged, to avoid needless platform-channel traffic).
+  void _updateRootRowsInPlace() {
+    void update(CPListItem? row, String detail) {
+      if (row == null || row.detailText == detail) return;
+      try {
+        row.setDetailText(detail);
+      } catch (e) {
+        debugPrint('⚠️ CarPlay row update failed: $e');
+      }
     }
+
+    update(_albumsRow, _getAlbumCount());
+    update(_artistsRow, _getArtistCount());
+    update(_playlistsRow, _getPlaylistCount());
+    update(_favoritesRow, _getFavoriteCount());
+    update(_downloadsRow, _getDownloadCount());
   }
   
   Future<void> _refreshRootTemplate() async {
@@ -190,6 +226,7 @@ class CarPlayService {
         rootTemplate: rootTemplate,
         animated: false,
       );
+      _rootTemplateSet = true;
       debugPrint('🔄 CarPlay content refreshed');
     } catch (e) {
       debugPrint('⚠️ CarPlay refresh error: $e');
@@ -208,7 +245,8 @@ class CarPlayService {
         rootTemplate: rootTemplate,
         animated: true,
       );
-      
+      _rootTemplateSet = true;
+
       // Force update to ensure CarPlay shows it
       await _carplay.forceUpdateRootTemplate();
       
@@ -224,7 +262,7 @@ class CarPlayService {
       sections: [
         CPListSection(
           items: [
-            CPListItem(
+            _albumsRow = CPListItem(
               text: 'Albums',
               detailText: _getAlbumCount(),
               onPress: (complete, self) async {
@@ -232,7 +270,7 @@ class CarPlayService {
                 await _showAlbums();
               },
             ),
-            CPListItem(
+            _artistsRow = CPListItem(
               text: 'Artists',
               detailText: _getArtistCount(),
               onPress: (complete, self) async {
@@ -240,7 +278,7 @@ class CarPlayService {
                 await _showArtists();
               },
             ),
-            CPListItem(
+            _playlistsRow = CPListItem(
               text: 'Playlists',
               detailText: _getPlaylistCount(),
               onPress: (complete, self) async {
@@ -278,7 +316,7 @@ class CarPlayService {
                 await _showRecentlyPlayed();
               },
             ),
-            CPListItem(
+            _favoritesRow = CPListItem(
               text: 'Favorite Tracks',
               detailText: _getFavoriteCount(),
               onPress: (complete, self) async {
@@ -297,7 +335,7 @@ class CarPlayService {
       sections: [
         CPListSection(
           items: [
-            CPListItem(
+            _downloadsRow = CPListItem(
               text: 'Downloaded Music',
               detailText: _getDownloadCount(),
               onPress: (complete, self) async {

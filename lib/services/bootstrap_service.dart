@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io' show HandshakeException, SocketException;
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_artist.dart';
@@ -10,6 +12,7 @@ import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_service.dart';
 import '../jellyfin/jellyfin_session.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../jellyfin/robust_http_client.dart';
 import 'local_cache_service.dart';
 
 class BootstrapSnapshot {
@@ -241,7 +244,13 @@ class BootstrapService {
           return;
         }
         debugPrint('Bootstrap sync for $label failed: $error');
-        onNetworkLost?.call(error);
+        // Only genuine network failures flip the app offline. HTTP 5xx,
+        // parse errors and slow responses on large libraries mean the server
+        // is reachable — going offline for those would hide the library
+        // until restart.
+        if (isNetworkFailure(error)) {
+          onNetworkLost?.call(error);
+        }
         FlutterError.reportError(
           FlutterErrorDetails(
             exception: error,
@@ -267,6 +276,28 @@ class BootstrapService {
       }
     }
     throw lastError ?? StateError('Unknown bootstrap failure');
+  }
+
+  /// True for errors that mean the server could not be reached at all
+  /// (DNS/connect/TLS failures, dropped connections). Unwraps
+  /// [RobustHttpException]. Timeouts are NOT network failures here: a
+  /// connect timeout surfaces as a [SocketException], while a slow response
+  /// ([TimeoutException], [ServerSlowException]) means the server is up.
+  static bool isNetworkFailure(Object error) {
+    Object? current = error;
+    for (var depth = 0; current != null && depth < 4; depth++) {
+      if (current is SocketException ||
+          current is HandshakeException ||
+          current is http.ClientException) {
+        return true;
+      }
+      if (current is RobustHttpException) {
+        current = current.lastError;
+        continue;
+      }
+      return false;
+    }
+    return false;
   }
 
   bool _isUnauthorized(Object error) {

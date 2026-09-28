@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show HandshakeException, SocketException;
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -7,7 +8,8 @@ import 'package:http/http.dart' as http;
 
 /// A robust HTTP client with:
 /// - Connection pooling (reuses single client instance)
-/// - Automatic retry with exponential backoff
+/// - Automatic retry with exponential backoff (GET always; POST/DELETE only
+///   when the failure proves the request never reached the server)
 /// - Request timeout handling
 /// - ETag/Last-Modified caching support
 class RobustHttpClient {
@@ -62,15 +64,22 @@ class RobustHttpClient {
       ),
       uri: uri,
       useCache: useCache,
+      idempotent: true,
     );
   }
 
-  /// POST request with retry
+  /// POST request.
+  ///
+  /// POST is not idempotent (creating a playlist or adding items twice
+  /// duplicates them), so by default it is only retried when the connection
+  /// could not be established at all. Pass [idempotent] = true for
+  /// read-only POST endpoints (e.g. PlaybackInfo) to allow full retries.
   Future<http.Response> post(
     Uri uri, {
     Map<String, String>? headers,
     Object? body,
     Duration? timeout,
+    bool idempotent = false,
   }) async {
     return _executeWithRetry(
       () => _client.post(
@@ -83,10 +92,12 @@ class RobustHttpClient {
       ),
       uri: uri,
       useCache: false,
+      idempotent: idempotent,
     );
   }
 
-  /// DELETE request with retry
+  /// DELETE request. Only retried when the connection could not be
+  /// established (see [post]).
   Future<http.Response> delete(
     Uri uri, {
     Map<String, String>? headers,
@@ -99,6 +110,7 @@ class RobustHttpClient {
       ),
       uri: uri,
       useCache: false,
+      idempotent: false,
     );
   }
 
@@ -106,6 +118,7 @@ class RobustHttpClient {
     Future<http.Response> Function() request, {
     required Uri uri,
     required bool useCache,
+    required bool idempotent,
   }) async {
     int attempt = 0;
     Object? lastError;
@@ -145,6 +158,12 @@ class RobustHttpClient {
           }
         }
 
+        // The server received a non-idempotent request: never replay it,
+        // whatever the status (a 5xx may still have applied the change).
+        if (!idempotent) {
+          return response;
+        }
+
         // Don't retry on client errors (4xx) except 408, 429
         if (response.statusCode >= 400 && response.statusCode < 500) {
           if (response.statusCode != 408 && response.statusCode != 429) {
@@ -163,13 +182,24 @@ class RobustHttpClient {
         
       } on HttpTimeoutException catch (e) {
         lastError = e;
+        if (!idempotent) {
+          // The request may already have been processed; don't replay it.
+          throw ServerSlowException(
+            'Server is taking too long to respond. Check your connection or try again later.',
+            uri: uri,
+          );
+        }
         debugPrint('⚠️ Timeout retry $attempt/$maxRetries: $uri');
-      } on http.ClientException catch (e) {
-        lastError = e;
-        debugPrint('⚠️ Client error retry $attempt/$maxRetries: $e');
       } catch (e) {
         lastError = e;
-        debugPrint('⚠️ Unknown error retry $attempt/$maxRetries: $e');
+        if (!idempotent && !isConnectionEstablishmentFailure(e)) {
+          throw RobustHttpException(
+            'Request failed (not retried: non-idempotent)',
+            uri: uri,
+            lastError: e,
+          );
+        }
+        debugPrint('⚠️ Error retry $attempt/$maxRetries: $e');
       }
 
       attempt++;
@@ -197,6 +227,31 @@ class RobustHttpClient {
       uri: uri,
       lastError: lastError,
     );
+  }
+
+  /// True when [error] proves the request never reached the server (DNS
+  /// failure, connection refused/unreachable, TLS handshake failure), so a
+  /// non-idempotent request can be safely retried.
+  static bool isConnectionEstablishmentFailure(Object error) {
+    if (error is HandshakeException) return true;
+    String? message;
+    if (error is SocketException) {
+      message = '${error.message} ${error.osError?.message ?? ''}';
+    } else if (error is http.ClientException) {
+      message = error.message;
+    }
+    if (message == null) return false;
+    final m = message.toLowerCase();
+    const preSendMarkers = [
+      'failed host lookup',
+      'connection refused',
+      'network is unreachable',
+      'no route to host',
+      'host is down',
+      'nodename nor servname',
+      'no address associated',
+    ];
+    return preSendMarkers.any(m.contains);
   }
 
   /// Add entry to cache with LRU eviction

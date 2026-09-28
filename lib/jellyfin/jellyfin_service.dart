@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 
 import 'jellyfin_album.dart';
 import 'jellyfin_artist.dart';
+import 'jellyfin_auth_header.dart';
 import 'jellyfin_client.dart';
 import 'jellyfin_genre.dart';
 import 'jellyfin_library.dart';
@@ -10,6 +11,7 @@ import 'jellyfin_playlist.dart';
 import 'jellyfin_session.dart';
 import 'jellyfin_track.dart';
 import 'jellyfin_user.dart';
+import 'server_uri.dart';
 
 /// High-level façade for Nautune to talk to Jellyfin.
 class JellyfinService {
@@ -117,6 +119,14 @@ class JellyfinService {
     return client.checkServerHealth();
   }
 
+  /// Cheap reachability probe for the connected server (single attempt,
+  /// short timeout). Returns false when not connected.
+  Future<bool> isServerReachable() async {
+    final client = _client;
+    if (client == null) return false;
+    return client.isReachable();
+  }
+
   /// Fetches the current user's profile info including profile image.
   Future<JellyfinUser> getCurrentUser() async {
     final client = _client;
@@ -127,18 +137,15 @@ class JellyfinService {
     return client.fetchCurrentUser(session.credentials);
   }
 
-  /// Gets the URL for the current user's profile image.
-  ///
-  /// Jellyfin API note: `/Users/{id}/Images/Primary` is not in the 10.11.9
-  /// OpenAPI spec but remains backwards-compatible across all supported
-  /// Jellyfin versions. See `JellyfinClient.getUserImageUrl` for details.
+  /// Gets the URL for the current user's profile image via the
+  /// spec-documented `GET /UserImage?userId=…`.
   String? getUserProfileImageUrl() {
     final client = _client;
     final session = _session;
     if (client == null || session == null) return null;
-    // We need to fetch the user first to get the image tag
-    // For now, return a URL that might work if user has an image
-    return '${session.serverUrl}/Users/${session.credentials.userId}/Images/Primary';
+    return buildServerUrl(session.serverUrl, '/UserImage', {
+      'userId': session.credentials.userId,
+    });
   }
 
   /// Batch load albums, artists, and genres in parallel
@@ -613,8 +620,6 @@ class JellyfinService {
     if (session == null) {
       throw StateError('Session not initialized');
     }
-    final buffer = StringBuffer()
-      ..write('${session.serverUrl}/Items/$itemId/Images/$imageType');
     final params = <String, String>{
       'quality': '$quality',
       'maxWidth': '$maxWidth',
@@ -626,13 +631,12 @@ class JellyfinService {
     if (tag != null) {
       params['tag'] = tag;
     }
-    // params['api_key'] = session.credentials.accessToken; // REMOVED: Token should be sent via header
-
-    final query = params.entries
-        .map((entry) => '${Uri.encodeQueryComponent(entry.key)}=${Uri.encodeQueryComponent(entry.value)}')
-        .join('&');
-    buffer.write('?$query');
-    return buffer.toString();
+    // Token is sent via imageHeaders(), not the URL.
+    return buildServerUrl(
+      session.serverUrl,
+      '/Items/$itemId/Images/$imageType',
+      params,
+    );
   }
 
   /// Image URL with the access token embedded as a query parameter, so
@@ -650,12 +654,14 @@ class JellyfinService {
     final params = <String, String>{
       'quality': '90',
       'maxWidth': '$maxWidth',
-      'api_key': session.credentials.accessToken,
+      kJellyfinApiKeyQueryParam: session.credentials.accessToken,
     };
     if (tag != null) params['tag'] = tag;
-    final uri = Uri.parse('${session.serverUrl}/Items/$itemId/Images/$imageType')
-        .replace(queryParameters: params);
-    return uri.toString();
+    return buildServerUrl(
+      session.serverUrl,
+      '/Items/$itemId/Images/$imageType',
+      params,
+    );
   }
 
   Map<String, String> imageHeaders() {
@@ -663,15 +669,17 @@ class JellyfinService {
     if (session == null) {
       throw StateError('Session not initialized');
     }
-    return {
-      'X-MediaBrowser-Token': session.credentials.accessToken,
-    };
+    return nautuneAuthHeaders(
+      deviceId: session.deviceId,
+      token: session.credentials.accessToken,
+    );
   }
 
-  /// Validates and normalizes a server URL
-  /// Throws ArgumentError if the URL is invalid
+  /// Validates and normalizes a server URL.
+  /// Keeps any reverse-proxy base path (e.g. `https://host/jellyfin`) and only
+  /// strips trailing slashes. Throws ArgumentError if the URL is invalid.
   String _normalizeServerUrl(String rawUrl) {
-    final trimmed = rawUrl.trim();
+    final trimmed = normalizeServerBaseUrl(rawUrl);
     if (trimmed.isEmpty) {
       throw ArgumentError('Server URL cannot be empty');
     }
@@ -692,10 +700,6 @@ class JellyfinService {
       throw ArgumentError('URL must include a server address');
     }
 
-    // Remove trailing slash if present
-    if (trimmed.endsWith('/')) {
-      return trimmed.substring(0, trimmed.length - 1);
-    }
     return trimmed;
   }
 
@@ -865,9 +869,10 @@ class JellyfinService {
 
     final response = await client.request(
       method: 'GET',
-      path: '/Users/${session.credentials.userId}/Items',
+      path: '/Items',
       credentials: session.credentials,
       queryParams: {
+        'userId': session.credentials.userId,
         'parentId': albumId,
         'sortBy': 'SortName',
         'fields':
@@ -932,11 +937,11 @@ class JellyfinService {
 
         // VERIFY: Fetch the item again to confirm it was unfavorited
         debugPrint('🔍 Verifying item was actually unfavorited...');
-        final verifyPath = '/Users/${session.credentials.userId}/Items/$itemId';
         final verifyResponse = await activeClient.request(
           method: 'GET',
-          path: verifyPath,
+          path: '/Items/$itemId',
           credentials: session.credentials,
+          queryParams: {'userId': session.credentials.userId},
         );
         final actualIsFavorite = verifyResponse['UserData']?['IsFavorite'] ?? false;
         debugPrint('🔍 Server confirms IsFavorite=$actualIsFavorite');
@@ -962,9 +967,10 @@ class JellyfinService {
 
     final response = await activeClient.request(
       method: 'GET',
-      path: '/Users/${session.credentials.userId}/Items',
+      path: '/Items',
       credentials: session.credentials,
       queryParams: {
+        'userId': session.credentials.userId,
         'includeItemTypes': 'MusicAlbum',
         'recursive': 'true',
         'filters': 'IsFavorite',
@@ -985,9 +991,10 @@ class JellyfinService {
 
     final response = await activeClient.request(
       method: 'GET',
-      path: '/Users/${session.credentials.userId}/Items',
+      path: '/Items',
       credentials: session.credentials,
       queryParams: {
+        'userId': session.credentials.userId,
         'includeItemTypes': 'Audio',
         'recursive': 'true',
         'filters': 'IsFavorite',
