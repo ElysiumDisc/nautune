@@ -73,6 +73,15 @@ CarPlay and a migration to the Jellyfin 12.1 API. The test suite grew from
 - Quality and connectivity settings are applied before playback is
   restored.
 - Piano and Healing Frequencies restore the music audio session on exit.
+- Volume levelling: ReplayGain Off / Track / Album (album uses Jellyfin's
+  `AlbumNormalizationGain`) with a preamp from -15 to 0 dB. A negative
+  preamp gives quiet tracks room to be raised, which the old full-scale
+  cap never allowed.
+- Plays and ListenBrainz scrobbles count time actually listened (50% or
+  4 minutes). Skipped tracks no longer count as plays, and seeking past
+  the halfway point no longer scrobbles.
+- The seek bar's buffered track shows downloaded and cached files as fully
+  buffered instead of never moving.
 
 **Streaming and Jellyfin 12.1**
 - The bundled OpenAPI spec moved to `docs/jellyfin-openapi-12.1.json` (was
@@ -107,6 +116,14 @@ CarPlay and a migration to the Jellyfin 12.1 API. The test suite grew from
   now reaches `JellyfinService`, and reporting reuses the API
   `http.Client`.
 - Stream tokens are no longer written to logs.
+- Progress keeps reporting every 30s while the screen is locked and audio
+  plays, so the server's resume position stays current. Paused in the
+  background, it sends nothing.
+- Offline start and stop reports are saved per account (up to 500) and
+  survive the app being killed before it reconnects.
+- The audio cache is keyed by track and quality, so raising the streaming
+  quality no longer replays a low-bitrate cached copy.
+- Transcode Format setting: MP3 (default) or AAC.
 
 **Downloads and Offline**
 - Resilient queue. Queued and in-flight downloads are re-queued on launch.
