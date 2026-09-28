@@ -143,6 +143,51 @@ class PlaybackReportingService {
 
   Uri _uri(String path) => buildServerUri(serverUrl, path);
 
+  /// Per-request timeout. Reports are fire-and-forget but awaited (e.g. the
+  /// sequential offline flush); without a timeout a stalled server would
+  /// block them indefinitely.
+  static const Duration _requestTimeout = Duration(seconds: 15);
+
+  Future<http.Response> _post(String path, Map<String, dynamic> body) {
+    return httpClient
+        .post(_uri(path), headers: _headers(), body: jsonEncode(body))
+        .timeout(_requestTimeout);
+  }
+
+  /// `PlaybackStartInfo` / `PlaybackProgressInfo` body. For audio items the
+  /// media source id is the item id.
+  static Map<String, dynamic> startBody({
+    required String itemId,
+    required String playSessionId,
+    required String playMethod,
+  }) =>
+      {
+        'ItemId': itemId,
+        'MediaSourceId': itemId,
+        // Matches the PlaySessionId on transcoded stream URLs so the server
+        // can kill the ffmpeg job on stop.
+        'PlaySessionId': playSessionId,
+        'PlayMethod': playMethod,
+        'CanSeek': true,
+        'IsPaused': false,
+        'IsMuted': false,
+        'PositionTicks': 0,
+        'RepeatMode': 'RepeatNone',
+      };
+
+  /// `PlaybackStopInfo` body (has no PlayMethod/IsPaused fields).
+  static Map<String, dynamic> stopBody({
+    required String itemId,
+    required String playSessionId,
+    required int positionTicks,
+  }) =>
+      {
+        'ItemId': itemId,
+        'MediaSourceId': itemId,
+        'PlaySessionId': playSessionId,
+        'PositionTicks': positionTicks,
+      };
+
   /// Enable or disable reporting. When disabled, start/stop events are queued.
   void setEnabled(bool enabled) {
     _enabled = enabled;
@@ -214,20 +259,13 @@ class PlaybackReportingService {
     debugPrint('📡 Reporting playback start: ${track.name} (${track.id}) [$playMethod]');
 
     try {
-      final response = await httpClient.post(
-        _uri('/Sessions/Playing'),
-        headers: _headers(),
-        body: jsonEncode({
-          'ItemId': track.id,
-          // Use PlaySessionId to match the transcoding session we started
-          'PlaySessionId': session.sessionId,
-          'PlayMethod': playMethod,
-          'CanSeek': true,
-          'IsPaused': false,
-          'IsMuted': false,
-          'PositionTicks': 0,
-          'RepeatMode': 'RepeatNone',
-        }),
+      final response = await _post(
+        '/Sessions/Playing',
+        startBody(
+          itemId: track.id,
+          playSessionId: session.sessionId,
+          playMethod: playMethod,
+        ),
       );
 
       if (response.statusCode == 200 || response.statusCode == 204) {
@@ -311,19 +349,15 @@ class PlaybackReportingService {
     final positionTicks = position.inMicroseconds * 10;
 
     try {
-      final response = await httpClient.post(
-        _uri('/Sessions/Playing/Progress'),
-        headers: _headers(),
-        body: jsonEncode({
-          'ItemId': track.id,
-          'PlaySessionId': session.sessionId,
-          'PositionTicks': positionTicks,
-          'IsPaused': isPaused,
-          'PlayMethod': session.playMethod,
-          'CanSeek': true,
-          'RepeatMode': 'RepeatNone',
-        }),
-      );
+      final response = await _post('/Sessions/Playing/Progress', {
+        ...startBody(
+          itemId: track.id,
+          playSessionId: session.sessionId,
+          playMethod: session.playMethod,
+        ),
+        'PositionTicks': positionTicks,
+        'IsPaused': isPaused,
+      });
 
       if (response.statusCode == 200 || response.statusCode == 204) {
         debugPrint('✅ Progress reported: ${position.inSeconds}s, paused: $isPaused');
@@ -374,15 +408,13 @@ class PlaybackReportingService {
     }
 
     try {
-      await httpClient.post(
-        _uri('/Sessions/Playing/Stopped'),
-        headers: _headers(),
-        body: jsonEncode({
-          'ItemId': track.id,
-          'PlaySessionId': session.sessionId,
-          'PositionTicks': positionTicks,
-          'PlayMethod': session.playMethod,
-        }),
+      await _post(
+        '/Sessions/Playing/Stopped',
+        stopBody(
+          itemId: track.id,
+          playSessionId: session.sessionId,
+          positionTicks: positionTicks,
+        ),
       );
     } catch (e) {
       debugPrint('Failed to report playback stopped: $e');
@@ -400,30 +432,22 @@ class PlaybackReportingService {
     for (final event in events) {
       try {
         if (event['type'] == 'start') {
-          await httpClient.post(
-            _uri('/Sessions/Playing'),
-            headers: _headers(),
-            body: jsonEncode({
-              'ItemId': event['trackId'],
-              'PlaySessionId': event['sessionId'],
-              'PlayMethod': event['playMethod'],
-              'CanSeek': true,
-              'IsPaused': false,
-              'IsMuted': false,
-              'PositionTicks': 0,
-              'RepeatMode': 'RepeatNone',
-            }),
+          await _post(
+            '/Sessions/Playing',
+            startBody(
+              itemId: event['trackId'] as String,
+              playSessionId: event['sessionId'] as String,
+              playMethod: event['playMethod'] as String? ?? 'DirectPlay',
+            ),
           );
         } else if (event['type'] == 'stop') {
-          await httpClient.post(
-            _uri('/Sessions/Playing/Stopped'),
-            headers: _headers(),
-            body: jsonEncode({
-              'ItemId': event['trackId'],
-              'PlaySessionId': event['sessionId'],
-              'PositionTicks': event['positionTicks'],
-              'PlayMethod': event['playMethod'] ?? 'DirectPlay',
-            }),
+          await _post(
+            '/Sessions/Playing/Stopped',
+            stopBody(
+              itemId: event['trackId'] as String,
+              playSessionId: event['sessionId'] as String,
+              positionTicks: event['positionTicks'] as int,
+            ),
           );
         }
       } catch (e) {

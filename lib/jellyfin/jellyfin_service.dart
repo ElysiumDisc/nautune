@@ -11,6 +11,7 @@ import 'jellyfin_playlist.dart';
 import 'jellyfin_session.dart';
 import 'jellyfin_track.dart';
 import 'jellyfin_user.dart';
+import 'paged_fetch.dart';
 import 'server_uri.dart';
 
 /// High-level façade for Nautune to talk to Jellyfin.
@@ -23,6 +24,11 @@ class JellyfinService {
 
   /// Maximum number of entries per cache map to prevent memory bloat
   static const int _maxCacheSize = 500;
+
+  /// Timeout for unpaged bulk GETs (whole playlists, all favorites). The
+  /// default 15 s covers the full response body, which large payloads on a
+  /// slow link can exceed.
+  static const Duration _bulkTimeout = Duration(seconds: 45);
 
   JellyfinClient? _client;
   JellyfinSession? _session;
@@ -45,6 +51,7 @@ class JellyfinService {
   final Map<String, Future<List<JellyfinPlaylist>>> _playlistRequests = {};
   final Map<String, Future<List<JellyfinLibrary>>> _libraryRequests = {};
   final Map<String, Future<List<JellyfinGenre>>> _genreRequests = {};
+  final Map<String, Future<List<JellyfinTrack>>> _allTracksRequests = {};
 
   JellyfinSession? get session => _session;
   JellyfinClient? get jellyfinClient => _client;
@@ -86,6 +93,7 @@ class JellyfinService {
     _client = client;
     _session = session;
     _clearCaches();
+    _clearInFlight();
 
     return session;
   }
@@ -98,12 +106,14 @@ class JellyfinService {
     );
     _session = session;
     _clearCaches();
+    _clearInFlight();
   }
 
   void clearSession() {
     _client = null;
     _session = null;
     _clearCaches();
+    _clearInFlight();
   }
 
   /// Check server health - useful before heavy operations
@@ -620,13 +630,16 @@ class JellyfinService {
     if (session == null) {
       throw StateError('Session not initialized');
     }
+    // Bucket the requested size so the same artwork shown at slightly
+    // different sizes/DPRs maps to one URL (one server resize, one
+    // cached_network_image disk entry) instead of one per pixel width.
     final params = <String, String>{
       'quality': '$quality',
-      'maxWidth': '$maxWidth',
+      'maxWidth': '${bucketImageDimension(maxWidth)}',
       'format': format,
     };
     if (maxHeight != null) {
-      params['maxHeight'] = '$maxHeight';
+      params['maxHeight'] = '${bucketImageDimension(maxHeight)}';
     }
     if (tag != null) {
       params['tag'] = tag;
@@ -725,7 +738,7 @@ class JellyfinService {
       },
     );
 
-    _playlistCache.clear();
+    _clearPlaylistCache();
     return JellyfinPlaylist.fromJson(response);
   }
 
@@ -738,16 +751,19 @@ class JellyfinService {
     final session = _session;
     if (session == null) throw StateError('No session');
     
+    // `POST /Playlists/{playlistId}` (UpdatePlaylistDto): null/omitted
+    // fields keep their value. The old `POST /Items/{id}` (UpdateItem) takes
+    // a full BaseItemDto and would reset other metadata to defaults.
     await client.request(
       method: 'POST',
-      path: '/Items/$playlistId',
+      path: '/Playlists/$playlistId',
       credentials: session.credentials,
       body: {
         'Name': newName,
       },
     );
 
-    _playlistCache.clear();
+    _clearPlaylistCache();
   }
 
   Future<void> deletePlaylist(String playlistId) async {
@@ -762,12 +778,15 @@ class JellyfinService {
       credentials: session.credentials,
     );
     
-    _playlistCache.clear();
+    _clearPlaylistCache();
   }
 
+  /// `POST /Playlists/{playlistId}/Items`. [position] (0-based insert
+  /// index; omitted = append) exists since 12.0; 10.11 ignores it and appends.
   Future<void> addItemsToPlaylist({
     required String playlistId,
     required List<String> itemIds,
+    int? position,
   }) async {
     final client = _client;
     if (client == null) throw StateError('Not connected');
@@ -781,12 +800,17 @@ class JellyfinService {
       queryParams: {
         'ids': itemIds.join(','),
         'userId': session.credentials.userId,
+        'position': ?position,
       },
     );
 
-    _playlistCache.clear();
+    _clearPlaylistCache();
   }
 
+  /// `DELETE /Playlists/{playlistId}/Items?entryIds=…`. Entry ids are the
+  /// items' `PlaylistItemId`s; on 10.11 and 12.1 that equals the item id
+  /// (`N` format), so passing track ids works — every entry of that item
+  /// is removed.
   Future<void> removeItemsFromPlaylist({
     required String playlistId,
     required List<String> entryIds,
@@ -805,7 +829,7 @@ class JellyfinService {
       },
     );
 
-    _playlistCache.clear();
+    _clearPlaylistCache();
   }
 
   Future<void> movePlaylistItem({
@@ -825,7 +849,7 @@ class JellyfinService {
       newIndex: newIndex,
     );
 
-    _playlistCache.clear();
+    _clearPlaylistCache();
   }
 
   Future<List<JellyfinTrack>> getPlaylistItems(String playlistId) async {
@@ -838,6 +862,7 @@ class JellyfinService {
       method: 'GET',
       path: '/Playlists/$playlistId/Items',
       credentials: session.credentials,
+      timeout: _bulkTimeout,
       queryParams: {
         'userId': session.credentials.userId,
         'fields':
@@ -969,6 +994,7 @@ class JellyfinService {
       method: 'GET',
       path: '/Items',
       credentials: session.credentials,
+      timeout: _bulkTimeout,
       queryParams: {
         'userId': session.credentials.userId,
         'includeItemTypes': 'MusicAlbum',
@@ -993,6 +1019,7 @@ class JellyfinService {
       method: 'GET',
       path: '/Items',
       credentials: session.credentials,
+      timeout: _bulkTimeout,
       queryParams: {
         'userId': session.credentials.userId,
         'includeItemTypes': 'Audio',
@@ -1111,19 +1138,6 @@ class JellyfinService {
     )).toList();
   }
 
-  /// Get playback info for an item (formats, bitrates, codecs)
-  Future<Map<String, dynamic>> getPlaybackInfo(String itemId) async {
-    final client = _client;
-    if (client == null) throw StateError('Not connected');
-    final session = _session;
-    if (session == null) throw StateError('No session');
-
-    return await client.fetchPlaybackInfo(
-      session.credentials,
-      itemId: itemId,
-    );
-  }
-
   /// Get most played tracks for a library
   Future<List<JellyfinTrack>> getMostPlayedTracks({
     required String libraryId,
@@ -1151,6 +1165,9 @@ class JellyfinService {
 
   /// Fetches ALL played tracks by paginating through the API.
   /// Used for accurate stats (top artists, genres, etc.) that need the full picture.
+  ///
+  /// Pages a stable order (PlayCount desc, SortName asc), stops at
+  /// `TotalRecordCount` or on a short page, and drops duplicates.
   Future<List<JellyfinTrack>> getAllPlayedTracks({
     required String libraryId,
   }) async {
@@ -1159,38 +1176,44 @@ class JellyfinService {
     final session = _session;
     if (session == null) throw StateError('No session');
 
-    // First get the total count so we know how many pages to fetch
-    final totalCount = await client.fetchPlayedItemCount(
-      session.credentials,
-      libraryId: libraryId,
+    final allTracks = await collectStablePages<JellyfinTrack>(
+      idOf: (t) => t.id,
+      pageSize: 500,
+      fetchPage: ({required int startIndex, required int limit}) async {
+        final page = await client.fetchItemsPage(
+          session.credentials,
+          query: {
+            'userId': session.credentials.userId,
+            'ParentId': libraryId,
+            'IncludeItemTypes': 'Audio',
+            'Recursive': 'true',
+            'Filters': 'IsPlayed',
+            'SortBy': 'PlayCount,SortName',
+            'SortOrder': 'Descending,Ascending',
+            'StartIndex': '$startIndex',
+            'Limit': '$limit',
+            'Fields': 'MediaStreams,Genres,Tags',
+            'EnableImageTypes': 'Primary,Thumb',
+            'EnableUserData': 'true',
+          },
+          timeout: const Duration(seconds: 45),
+          errorLabel: 'played tracks',
+        );
+        return (
+          items: page.items
+              .map((json) => JellyfinTrack.fromJson(
+                    json,
+                    serverUrl: session.serverUrl,
+                    token: session.credentials.accessToken,
+                    userId: session.credentials.userId,
+                  ))
+              .toList(),
+          totalRecordCount: page.totalRecordCount,
+        );
+      },
     );
 
-    if (totalCount == 0) return [];
-
-    const pageSize = 500;
-    final allTracks = <JellyfinTrack>[];
-
-    for (int offset = 0; offset < totalCount; offset += pageSize) {
-      final tracksJson = await client.fetchMostPlayed(
-        session.credentials,
-        libraryId: libraryId,
-        itemType: 'Audio',
-        limit: pageSize,
-        startIndex: offset,
-        filterPlayed: true,
-      );
-
-      if (tracksJson.isEmpty) break; // No more results
-
-      allTracks.addAll(tracksJson.map((json) => JellyfinTrack.fromJson(
-        json,
-        serverUrl: session.serverUrl,
-        token: session.credentials.accessToken,
-        userId: session.credentials.userId,
-      )));
-    }
-
-    debugPrint('Stats: Fetched ${allTracks.length} played tracks (total on server: $totalCount)');
+    debugPrint('Stats: Fetched ${allTracks.length} played tracks');
     return allTracks;
   }
 
@@ -1366,22 +1389,50 @@ class JellyfinService {
     );
   }
 
-  /// Get all tracks from the library with genre information for smart playlists
-  /// Returns a shuffled list of tracks with their genres
+  /// Get up to [limit] tracks from the library (random sample, with genres
+  /// and tags) for smart playlists.
+  ///
+  /// This is ~10 requests / several MB for a large library, and every smart
+  /// playlist action calls it, so the result is cached for the library cache
+  /// TTL and concurrent calls share one in-flight fetch.
   Future<List<JellyfinTrack>> getAllTracks({
     required String libraryId,
     int limit = 5000,
+    bool forceRefresh = false,
   }) async {
     final client = _client;
     if (client == null) throw StateError('Not connected');
     final session = _session;
     if (session == null) throw StateError('No session');
 
-    return await client.fetchAllTracks(
+    final cacheKey = 'all_tracks_$libraryId#$limit';
+    if (!forceRefresh) {
+      final cached = _recentCache[cacheKey];
+      if (cached != null && !cached.isExpired(_cacheTtl)) {
+        return List<JellyfinTrack>.of(cached.value);
+      }
+      final inFlight = _allTracksRequests[cacheKey];
+      if (inFlight != null) return List<JellyfinTrack>.of(await inFlight);
+    }
+
+    final request = client.fetchAllTracks(
       credentials: session.credentials,
       libraryId: libraryId,
       limit: limit,
     );
+    _allTracksRequests[cacheKey] = request;
+    try {
+      final tracks = await request;
+      // Don't cache into a session that was replaced mid-fetch.
+      if (identical(_session, session)) {
+        _addToCacheWithEviction(_recentCache, _recentCacheOrder, cacheKey, tracks);
+      }
+      return List<JellyfinTrack>.of(tracks);
+    } finally {
+      if (identical(_allTracksRequests[cacheKey], request)) {
+        _allTracksRequests.remove(cacheKey);
+      }
+    }
   }
 
   /// Fetch lyrics for a track
@@ -1398,10 +1449,26 @@ class JellyfinService {
     );
   }
 
+  void _clearPlaylistCache() {
+    _playlistCache.clear();
+    _playlistCacheOrder.clear();
+  }
+
+  /// Forget in-flight request futures so a new session never reuses a
+  /// request issued with the previous session's server/token.
+  void _clearInFlight() {
+    _albumRequests.clear();
+    _artistRequests.clear();
+    _playlistRequests.clear();
+    _libraryRequests.clear();
+    _genreRequests.clear();
+    _allTracksRequests.clear();
+  }
+
   void _clearCaches() {
     _albumCache.clear();
     _artistCache.clear();
-    _playlistCache.clear();
+    _clearPlaylistCache();
     _recentCache.clear();
     _genreCache.clear();
     _albumCacheOrder.clear();
@@ -1437,6 +1504,22 @@ class JellyfinService {
     cache[key] = _CacheEntry(value);
     cacheOrder.add(key);
   }
+}
+
+/// Size buckets for image requests (px). Steps of ~1.25–1.5x keep the
+/// over-fetch small while collapsing near-identical sizes to one URL.
+const List<int> kImageSizeBuckets = [
+  64, 96, 128, 160, 200, 256, 320, 400, 480, 600, 720, 800, 960, 1200,
+  1440, 1600, 2000,
+];
+
+/// Rounds [px] up to the next [kImageSizeBuckets] entry (clamped to the
+/// largest). Non-positive values map to the smallest bucket.
+int bucketImageDimension(int px) {
+  for (final bucket in kImageSizeBuckets) {
+    if (px <= bucket) return bucket;
+  }
+  return kImageSizeBuckets.last;
 }
 
 class _CacheEntry<T> {

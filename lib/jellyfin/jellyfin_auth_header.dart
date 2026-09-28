@@ -16,6 +16,11 @@ const String kJellyfinClientName = 'Nautune';
 
 /// Query parameter carrying the access token for URLs that cannot send
 /// headers (AVPlayer streams, system image loaders, CarPlay artwork).
+///
+/// Not described in the OpenAPI spec (its only security scheme is the
+/// `Authorization` header), but read unconditionally by the server's
+/// `AuthorizationContext` (10.9 → 12.1), unlike `api_key`, which is only
+/// honoured when `EnableLegacyAuthorization` is on (off by default in 12.0).
 const String kJellyfinApiKeyQueryParam = 'ApiKey';
 
 /// Header name for the modern Jellyfin authorization scheme.
@@ -24,9 +29,14 @@ const String kJellyfinAuthorizationHeader = 'Authorization';
 /// Builds the value of the `Authorization` header.
 ///
 /// Values are percent-encoded (like the official Jellyfin SDKs) so quotes,
-/// commas and non-ASCII characters can't break the header grammar; Jellyfin
-/// URL-decodes each value server-side. Empty fields are omitted, so [token]
-/// is left out when null/empty (e.g. before login).
+/// commas and non-ASCII characters can't break the header grammar. The
+/// server (`AuthorizationContext.GetParts`, 10.7 → 12.1) splits on `"`/`,`
+/// with no backslash escaping and runs every value through
+/// `WebUtility.UrlDecode`, which also turns a literal `+` into a space — so
+/// encoding is required for correctness, not just safety: an unencoded
+/// version `8.9.7+1` would be recorded as `8.9.7 1`, while `8.9.7%2B1`
+/// round-trips. Empty fields are omitted, so [token] is left out when
+/// null/empty (e.g. before login).
 String buildJellyfinAuthorization({
   required String client,
   required String device,

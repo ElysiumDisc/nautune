@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -59,6 +60,53 @@ void main() {
     expect(requests.single.headers.keys.map((k) => k.toLowerCase()),
         isNot(contains('x-emby-token')));
     service.dispose();
+  });
+
+  test('bodies use only PlaybackStart/Progress/StopInfo fields', () async {
+    final service = build();
+    final t = _track('a');
+    await service.reportPlaybackStart(t, sessionId: 's1', playMethod: 'Transcode');
+    await service.reportPlaybackProgress(t, const Duration(seconds: 3), true);
+    await service.reportPlaybackStopped(t, const Duration(seconds: 4));
+    final start = requests[0].body;
+    final progress = requests[1].body;
+    final stop = requests[2].body;
+    const startInfo = {
+      'ItemId', 'MediaSourceId', 'PlaySessionId', 'PlayMethod', 'CanSeek',
+      'IsPaused', 'IsMuted', 'PositionTicks', 'RepeatMode',
+    };
+    expect(start.keys.toSet(), startInfo);
+    expect(progress.keys.toSet(), startInfo);
+    expect(stop.keys.toSet(),
+        {'ItemId', 'MediaSourceId', 'PlaySessionId', 'PositionTicks'});
+    expect(start['PlaySessionId'], 's1');
+    expect(start['MediaSourceId'], 'a');
+    expect(progress['PositionTicks'], 30000000);
+    expect(progress['IsPaused'], isTrue);
+    expect(progress['PlayMethod'], 'Transcode');
+    expect(stop['PositionTicks'], 40000000);
+    expect(stop['PlaySessionId'], 's1');
+    service.dispose();
+  });
+
+  test('a stalled server does not block reporting forever', () async {
+    final service = PlaybackReportingService(
+      serverUrl: 'https://host/jf',
+      accessToken: 'tok',
+      deviceId: 'dev',
+      userId: 'u',
+      httpClient: MockClient((_) => Completer<http.Response>().future),
+    );
+    fakeAsync((async) {
+      var done = false;
+      service.reportPlaybackStart(_track('a')).then((_) => done = true);
+      async.elapse(const Duration(seconds: 14));
+      expect(done, isFalse);
+      // The 15 s request timeout fires; the error is swallowed.
+      async.elapse(const Duration(seconds: 2));
+      expect(done, isTrue);
+      service.dispose();
+    });
   });
 
   test('late stop of previous track does not wipe the new session', () async {
@@ -147,9 +195,10 @@ void main() {
     replacement.adoptStateFrom(old);
     old.dispose();
     await replacement.flushPendingReports();
+    // PlaybackStopInfo has no PlayMethod field, so stop bodies omit it.
     expect(replacementRequests, [
       '/jf/Sessions/Playing Transcode',
-      '/jf/Sessions/Playing/Stopped Transcode',
+      '/jf/Sessions/Playing/Stopped null',
     ]);
     replacement.dispose();
   });

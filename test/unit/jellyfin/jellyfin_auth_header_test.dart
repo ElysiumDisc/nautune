@@ -44,6 +44,38 @@ void main() {
       expect(header.codeUnits.every((c) => c < 128), isTrue);
     });
 
+    test('values round-trip through the server\'s WebUtility.UrlDecode', () {
+      // AuthorizationContext.GetParts splits on quotes/commas (no backslash
+      // escapes) and UrlDecodes each value, turning a raw '+' into a space.
+      // Uri.decodeQueryComponent has the same '+' semantics.
+      Map<String, String> serverParse(String header) {
+        final parts = <String, String>{};
+        final body = header.substring(header.indexOf(' ') + 1);
+        for (final m in RegExp(r'(\w+)="([^"]*)"').allMatches(body)) {
+          parts[m.group(1)!] = Uri.decodeQueryComponent(m.group(2)!);
+        }
+        return parts;
+      }
+
+      const values = {
+        'Client': 'Nautune',
+        'Device': 'Ben\'s "iPhone", 15 + Pro ✓',
+        'DeviceId': 'a+b/c=d',
+        'Version': '8.9.7+1',
+        'Token': 'tok+en',
+      };
+      final parsed = serverParse(buildJellyfinAuthorization(
+        client: values['Client']!,
+        device: values['Device']!,
+        deviceId: values['DeviceId']!,
+        version: values['Version']!,
+        token: values['Token'],
+      ));
+      expect(parsed, values);
+      // A raw '+' would have been decoded as a space.
+      expect(Uri.decodeQueryComponent('8.9.7+1'), '8.9.7 1');
+    });
+
     test('app-level helper uses Nautune client and ApiKey constant', () {
       final headers = nautuneAuthHeaders(deviceId: 'dev', token: 'tok');
       expect(headers.keys, [kJellyfinAuthorizationHeader]);

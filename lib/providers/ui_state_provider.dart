@@ -2,14 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../jellyfin/jellyfin_service.dart';
 import '../services/playback_state_store.dart';
 
 /// Manages UI-only state that doesn't affect data or business logic.
 ///
 /// Responsibilities:
-/// - Volume bar visibility
-/// - Crossfade settings
-/// - Infinite Radio mode
 /// - Cache TTL settings
 /// - Library tab index
 /// - Scroll positions
@@ -20,19 +18,24 @@ import '../services/playback_state_store.dart';
 /// - Library data (LibraryDataProvider)
 /// - Audio playback state (AudioPlayerService)
 ///
-/// By isolating UI state, we ensure that toggling the volume bar
-/// only rebuilds UI-dependent widgets, not the entire app.
+/// Volume bar, crossfade and Infinite Radio are owned by NautuneAppState
+/// (it both persists them and applies them to the audio service); they were
+/// removed here to avoid a second, disconnected source of truth.
 class UIStateProvider extends ChangeNotifier {
   UIStateProvider({
     required PlaybackStateStore playbackStateStore,
-  }) : _playbackStateStore = playbackStateStore;
+    JellyfinService? jellyfinService,
+  })  : _playbackStateStore = playbackStateStore,
+        _jellyfinService = jellyfinService;
 
   final PlaybackStateStore _playbackStateStore;
 
-  bool _showVolumeBar = true;
-  bool _crossfadeEnabled = false;
-  int _crossfadeDurationSeconds = 3;
-  bool _infiniteRadioEnabled = false;
+  /// Service whose in-memory library cache honours [cacheTtlMinutes]. When
+  /// provided, the TTL is applied on [initialize] and on every
+  /// [setCacheTtl], so this provider alone keeps the service in sync (no
+  /// need for callers to also go through NautuneAppState).
+  final JellyfinService? _jellyfinService;
+
   int _cacheTtlMinutes = 2;
   int _libraryTabIndex = 0;
   Map<String, double> _scrollOffsets = {};
@@ -55,10 +58,6 @@ class UIStateProvider extends ChangeNotifier {
   bool _useListMode = false;
 
   // Getters
-  bool get showVolumeBar => _showVolumeBar;
-  bool get crossfadeEnabled => _crossfadeEnabled;
-  int get crossfadeDurationSeconds => _crossfadeDurationSeconds;
-  bool get infiniteRadioEnabled => _infiniteRadioEnabled;
   int get cacheTtlMinutes => _cacheTtlMinutes;
   int get libraryTabIndex => _libraryTabIndex;
   double? getScrollOffset(String key) => _scrollOffsets[key];
@@ -89,11 +88,8 @@ class UIStateProvider extends ChangeNotifier {
     try {
       final storedPlaybackState = await _playbackStateStore.load();
       if (storedPlaybackState != null) {
-        _showVolumeBar = storedPlaybackState.showVolumeBar;
-        _crossfadeEnabled = storedPlaybackState.crossfadeEnabled;
-        _crossfadeDurationSeconds = storedPlaybackState.crossfadeDurationSeconds;
-        _infiniteRadioEnabled = storedPlaybackState.infiniteRadioEnabled;
-        _cacheTtlMinutes = storedPlaybackState.cacheTtlMinutes;
+        _cacheTtlMinutes = storedPlaybackState.cacheTtlMinutes.clamp(1, 10080);
+        _applyCacheTtl();
         _libraryTabIndex = storedPlaybackState.libraryTabIndex;
         _scrollOffsets = Map<String, double>.from(storedPlaybackState.scrollOffsets);
 
@@ -122,59 +118,19 @@ class UIStateProvider extends ChangeNotifier {
     }
   }
 
-  /// Toggle volume bar visibility.
-  void toggleVolumeBar() {
-    _showVolumeBar = !_showVolumeBar;
-    unawaited(_playbackStateStore.saveUiState(showVolumeBar: _showVolumeBar));
-    notifyListeners();
-  }
-
-  /// Set volume bar visibility.
-  void setVolumeBarVisibility(bool visible) {
-    if (_showVolumeBar == visible) return;
-    _showVolumeBar = visible;
-    unawaited(_playbackStateStore.saveUiState(showVolumeBar: _showVolumeBar));
-    notifyListeners();
-  }
-
-  /// Toggle crossfade on/off.
-  void toggleCrossfade(bool enabled) {
-    _crossfadeEnabled = enabled;
-    unawaited(_playbackStateStore.saveUiState(
-      crossfadeEnabled: enabled,
-      crossfadeDurationSeconds: _crossfadeDurationSeconds,
-    ));
-    notifyListeners();
-  }
-
-  /// Set crossfade duration in seconds (clamped to 0-10).
-  void setCrossfadeDuration(int seconds) {
-    _crossfadeDurationSeconds = seconds.clamp(0, 10);
-    unawaited(_playbackStateStore.saveUiState(
-      crossfadeEnabled: _crossfadeEnabled,
-      crossfadeDurationSeconds: _crossfadeDurationSeconds,
-    ));
-    notifyListeners();
-  }
-
-  /// Toggle infinite radio mode on/off.
-  /// When enabled, new tracks are auto-generated when queue runs low.
-  void toggleInfiniteRadio(bool enabled) {
-    _infiniteRadioEnabled = enabled;
-    unawaited(_playbackStateStore.saveUiState(
-      infiniteRadioEnabled: enabled,
-    ));
-    notifyListeners();
-  }
-
   /// Set cache TTL in minutes (1-10080).
   /// Higher = faster browsing, Lower = fresher data.
   void setCacheTtl(int minutes) {
     _cacheTtlMinutes = minutes.clamp(1, 10080);
+    _applyCacheTtl();
     unawaited(_playbackStateStore.saveUiState(
       cacheTtlMinutes: _cacheTtlMinutes,
     ));
     notifyListeners();
+  }
+
+  void _applyCacheTtl() {
+    _jellyfinService?.setCacheTtl(Duration(minutes: _cacheTtlMinutes));
   }
 
   /// Set pre-cache track count (0 = off, 3, 5, or 10).

@@ -13,6 +13,7 @@ import 'jellyfin_playlist.dart';
 import 'jellyfin_track.dart';
 import 'jellyfin_user.dart';
 import 'order_by_ids.dart';
+import 'paged_fetch.dart';
 import 'robust_http_client.dart';
 import 'server_uri.dart';
 
@@ -293,9 +294,16 @@ class JellyfinClient {
     String sortBy = 'SortName',
     String sortOrder = 'Ascending',
   }) async {
+    // `GET /Artists` is marked deprecated in 12.x ("Use GetPersons"), but it
+    // still works for the whole 12.x cycle (deprecations last a full major
+    // cycle) and there is no drop-in replacement that also works on 10.11:
+    // `/Persons` has no sortBy/sortOrder (the Artists tab sorts) and on
+    // 10.11 queries the People table (actors, composers…), not MusicArtist
+    // items. Revisit once 10.11 support is dropped.
+    // `userId` makes the server attach UserData (IsFavorite, PlayCount).
     final uri = _buildUri('/Artists', {
+      'userId': credentials.userId,
       'ParentId': libraryId,
-      'Recursive': 'true',
       'SortBy': sortBy,
       'SortOrder': sortOrder,
       'Fields': 'PrimaryImageAspectRatio,ImageTags,Overview,Genres,ChildCount,SongCount,ProviderIds',
@@ -396,15 +404,17 @@ class JellyfinClient {
         .toList();
   }
 
+  /// `POST /Playlists/{playlistId}/Items/{itemId}/Move/{newIndex}`.
+  /// [itemId] is the entry's `PlaylistItemId` (on 10.11 and 12.1 that is the
+  /// item id in `N` format). The endpoint takes no query parameters; the
+  /// calling user comes from the token.
   Future<void> movePlaylistItem({
     required JellyfinCredentials credentials,
     required String playlistId,
     required String itemId,
     required int newIndex,
   }) async {
-    final uri = _buildUri('/Playlists/$playlistId/Items/$itemId/Move/$newIndex', {
-      'UserId': credentials.userId,
-    });
+    final uri = _buildUri('/Playlists/$playlistId/Items/$itemId/Move/$newIndex');
 
     final response = await _robustClient.post(
       uri,
@@ -803,6 +813,7 @@ class JellyfinClient {
     required JellyfinCredentials credentials,
     Map<String, dynamic>? queryParams,
     Map<String, dynamic>? body,
+    Duration? timeout,
   }) async {
     final uri = _buildUri(path, queryParams?.map((k, v) => MapEntry(k, v.toString())));
     
@@ -811,17 +822,23 @@ class JellyfinClient {
     
     switch (method.toUpperCase()) {
       case 'GET':
-        response = await _robustClient.get(uri, headers: headers);
+        response =
+            await _robustClient.get(uri, headers: headers, timeout: timeout);
         break;
       case 'POST':
         response = await _robustClient.post(
           uri,
           headers: headers,
           body: body != null ? jsonEncode(body) : null,
+          timeout: timeout,
         );
         break;
       case 'DELETE':
-        response = await _robustClient.delete(uri, headers: headers);
+        response = await _robustClient.delete(
+          uri,
+          headers: headers,
+          timeout: timeout,
+        );
         break;
       default:
         throw ArgumentError('Unsupported HTTP method: $method');
@@ -857,7 +874,6 @@ class JellyfinClient {
       'ParentId': ?parentId,
       'SearchTerm': ?searchTerm,
       if (limit != null) 'Limit': limit.toString(),
-      'Recursive': 'true',
     };
 
     final uri = _buildUri('/Genres', queryParams);
@@ -941,33 +957,6 @@ class JellyfinClient {
     return items.whereType<Map<String, dynamic>>().toList();
   }
 
-  /// Fetches playback info for an item
-  Future<Map<String, dynamic>> fetchPlaybackInfo(
-    JellyfinCredentials credentials, {
-    required String itemId,
-  }) async {
-    final uri = _buildUri('/Items/$itemId/PlaybackInfo');
-    final response = await _robustClient.post(
-      uri,
-      idempotent: true, // read-only despite being a POST
-      headers: _defaultHeaders(credentials),
-      body: jsonEncode({
-        'UserId': credentials.userId,
-        'DeviceProfile': {
-          'MaxStreamingBitrate': 140000000,
-        },
-      }),
-    );
-
-    if (response.statusCode != 200) {
-      throw JellyfinRequestException(
-        'Unable to fetch playback info: ${response.statusCode}',
-      );
-    }
-
-    return _decodeJsonMap(response);
-  }
-
   /// Fetches most played items (tracks, albums, or artists)
   Future<List<Map<String, dynamic>>> fetchMostPlayed(
     JellyfinCredentials credentials, {
@@ -981,8 +970,10 @@ class JellyfinClient {
       'UserId': credentials.userId,
       'ParentId': libraryId,
       'IncludeItemTypes': itemType,
-      'SortBy': 'PlayCount',
-      'SortOrder': 'Descending',
+      // SortName tie-breaker keeps StartIndex pages from overlapping when
+      // many items share a play count.
+      'SortBy': 'PlayCount,SortName',
+      'SortOrder': 'Descending,Ascending',
       'Recursive': 'true',
       'StartIndex': startIndex.toString(),
       'Limit': limit.toString(),
@@ -1008,36 +999,6 @@ class JellyfinClient {
     final items = data?['Items'] as List<dynamic>? ?? const [];
 
     return items.whereType<Map<String, dynamic>>().toList();
-  }
-
-  /// Returns the total number of played items in the library.
-  Future<int> fetchPlayedItemCount(
-    JellyfinCredentials credentials, {
-    required String libraryId,
-    String itemType = 'Audio',
-  }) async {
-    final queryParams = <String, String>{
-      'UserId': credentials.userId,
-      'ParentId': libraryId,
-      'IncludeItemTypes': itemType,
-      'SortBy': 'PlayCount',
-      'SortOrder': 'Descending',
-      'Recursive': 'true',
-      'Limit': '0',
-      'Filters': 'IsPlayed',
-      'EnableUserData': 'true',
-    };
-
-    final uri = _buildUri('/Items', queryParams);
-    final response = await _robustClient.get(
-      uri,
-      headers: _defaultHeaders(credentials),
-    );
-
-    if (response.statusCode != 200) return 0;
-
-    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
-    return (data?['TotalRecordCount'] as int?) ?? 0;
   }
 
   /// Fetch least played (discovery) items from Jellyfin
@@ -1088,14 +1049,9 @@ class JellyfinClient {
     JellyfinCredentials credentials, {
     required String itemId,
   }) async {
-    final queryParams = <String, String>{
-      'UserId': credentials.userId,
-      'Fields': 'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,UserData,Genres,Tags',
-      'EnableImageTypes': 'Primary,Thumb',
-      'EnableUserData': 'true',
-    };
-
-    final uri = _buildUri('/Items/$itemId', queryParams);
+    // `GET /Items/{itemId}` only takes `userId`; it always returns every
+    // field (incl. MediaStreams, Genres, ItemCounts) plus UserData.
+    final uri = _buildUri('/Items/$itemId', {'userId': credentials.userId});
     final response = await _robustClient.get(
       uri,
       headers: _defaultHeaders(credentials),
@@ -1201,67 +1157,91 @@ class JellyfinClient {
         .toList();
   }
 
-  /// Fetch all tracks from a library with genre information for smart playlists.
-  /// Uses pagination to avoid loading thousands of items in a single request.
+  /// Fetch up to [limit] tracks from a library, in random order, with genre
+  /// and tag information for smart playlists.
+  ///
+  /// `SortBy=Random` is re-shuffled on every request, so it can't be paged
+  /// with `StartIndex` (pages overlap and items get skipped); see
+  /// [collectRandomSample] for how pages are combined.
   Future<List<JellyfinTrack>> fetchAllTracks({
     required JellyfinCredentials credentials,
     required String libraryId,
     int limit = 5000,
-  }) async {
-    const pageSize = 500;
-    final allTracks = <JellyfinTrack>[];
-    var startIndex = 0;
-
-    while (allTracks.length < limit) {
-      final batchLimit = (limit - allTracks.length).clamp(0, pageSize);
-      final uri = _buildUri('/Items', {
-        'userId': credentials.userId,
-        'ParentId': libraryId,
-        'IncludeItemTypes': 'Audio',
-        'Recursive': 'true',
-        'SortBy': 'Random',
-        'Limit': '$batchLimit',
-        'StartIndex': '$startIndex',
-        'Fields':
-            'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Genres,Tags',
-        'EnableImageTypes': 'Primary,Thumb',
-        'EnableUserData': 'true',
-      });
-
-      final response = await _robustClient.get(
-        uri,
-        headers: _defaultHeaders(credentials),
-      );
-
-      if (response.statusCode != 200) {
-        throw JellyfinRequestException(
-          'Unable to fetch all tracks: ${response.statusCode}',
+  }) {
+    return collectRandomSample<JellyfinTrack>(
+      limit: limit,
+      idOf: (t) => t.id,
+      fetchPage: ({
+        required int startIndex,
+        required int limit,
+        required bool random,
+      }) async {
+        final page = await fetchItemsPage(
+          credentials,
+          query: {
+            'userId': credentials.userId,
+            'ParentId': libraryId,
+            'IncludeItemTypes': 'Audio',
+            'Recursive': 'true',
+            // Stable order: SortName with DateCreated as tie-breaker.
+            'SortBy': random ? 'Random' : 'SortName,DateCreated',
+            'SortOrder': 'Ascending',
+            'Limit': '$limit',
+            'StartIndex': '$startIndex',
+            'Fields': 'MediaStreams,Genres,Tags',
+            'EnableImageTypes': 'Primary,Thumb',
+            'EnableUserData': 'true',
+          },
+          timeout: _bulkTimeout,
+          errorLabel: 'all tracks',
         );
-      }
+        return (
+          items: page.items.map(_trackFromJson(credentials)).toList(),
+          totalRecordCount: page.totalRecordCount,
+        );
+      },
+    );
+  }
 
-      final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
-      final items = data?['Items'] as List<dynamic>? ?? const [];
+  /// Timeout for bulk pages (up to 500 items with MediaStreams). The default
+  /// 15 s covers the whole response body, which a slow server or cellular
+  /// link can exceed for large pages.
+  static const Duration _bulkTimeout = Duration(seconds: 45);
 
-      if (items.isEmpty) break; // No more items on the server
+  JellyfinTrack Function(Map<String, dynamic>) _trackFromJson(
+    JellyfinCredentials credentials,
+  ) {
+    return (json) => JellyfinTrack.fromJson(
+          json,
+          serverUrl: serverUrl,
+          token: credentials.accessToken,
+          userId: credentials.userId,
+        );
+  }
 
-      final tracks = items
-          .whereType<Map<String, dynamic>>()
-          .map((json) => JellyfinTrack.fromJson(
-                json,
-                serverUrl: serverUrl,
-                token: credentials.accessToken,
-                userId: credentials.userId,
-              ))
-          .toList();
-
-      allTracks.addAll(tracks);
-      startIndex += items.length;
-
-      // If we got fewer items than requested, we've reached the end
-      if (items.length < batchLimit) break;
+  /// `GET /Items` returning one page plus `TotalRecordCount`.
+  Future<JellyfinPage<Map<String, dynamic>>> fetchItemsPage(
+    JellyfinCredentials credentials, {
+    required Map<String, String> query,
+    Duration? timeout,
+    String errorLabel = 'items',
+  }) async {
+    final response = await _robustClient.get(
+      _buildUri('/Items', query),
+      headers: _defaultHeaders(credentials),
+      timeout: timeout,
+    );
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch $errorLabel: ${response.statusCode}',
+      );
     }
-
-    return allTracks;
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
+    final items = (data?['Items'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+    final total = data?['TotalRecordCount'];
+    return (items: items, totalRecordCount: total is int ? total : null);
   }
 
   /// Fetch lyrics for a track

@@ -3,6 +3,67 @@ import 'dart:math' as math;
 import 'jellyfin_auth_header.dart';
 import 'server_uri.dart';
 
+/// Containers (optionally `container|codec[|codec]`) that AVPlayer on iOS
+/// decodes natively, in the format `/Audio/{id}/universal` expects for its
+/// `container` parameter. Jellyfin reports MP4-family files with the
+/// container string `mov,mp4,m4a,3gp,3g2,mj2`, which matches the `m4a`
+/// entries. Ogg/WebM/Matroska (Opus, Vorbis, FLAC-in-Ogg), ASF (WMA), APE,
+/// WavPack, DSD, … are deliberately absent so the server transcodes them.
+const List<String> kAvPlayerDirectPlayContainers = [
+  'mp3',
+  'aac',
+  'm4a|aac|alac',
+  'm4b|aac|alac',
+  'mp4|aac|alac',
+  'flac',
+  'alac',
+  'wav',
+  'aiff',
+];
+
+/// Lossy subset of [kAvPlayerDirectPlayContainers], used for bitrate-capped
+/// quality levels (lossless files always exceed those caps anyway).
+const List<String> kAvPlayerLossyContainers = [
+  'mp3',
+  'aac',
+  'm4a|aac',
+  'm4b|aac',
+  'mp4|aac',
+];
+
+/// `maxStreamingBitrate` for "original" quality: high enough for 24/192
+/// FLAC; the server still applies the user's remote bitrate limit.
+const int kOriginalQualityMaxStreamingBitrate = 140000000;
+
+const Set<String> _avPlayerUnsupportedContainers = {
+  'ogg', 'oga', 'ogx', 'opus', 'webm', 'mkv', 'mka', 'matroska', 'asf',
+  'wma', 'ape', 'wv', 'wavpack', 'dsf', 'dff', 'tta', 'mpc', 'spx', 'ra',
+  'rm', 'amr', 'dts', 'mod', 'xm', 's3m', 'it',
+};
+
+const Set<String> _avPlayerUnsupportedCodecs = {
+  'opus', 'vorbis', 'wmav1', 'wmav2', 'wmapro', 'wmalossless', 'wmavoice',
+  'ape', 'wavpack', 'tta', 'musepack7', 'musepack8', 'speex', 'dts',
+  'truehd', 'cook', 'ra_144', 'ra_288', 'dsd_lsbf', 'dsd_msbf',
+  'dsd_lsbf_planar', 'dsd_msbf_planar',
+};
+
+/// Whether AVPlayer can decode a file with this Jellyfin `Container`
+/// (possibly a comma list such as `mov,mp4,m4a,3gp,3g2,mj2`) and audio
+/// `Codec`. Case-insensitive. Unknown/missing metadata returns true.
+bool isAvPlayerNativeAudio({String? container, String? codec}) {
+  final c = codec?.trim().toLowerCase();
+  if (c != null && c.isNotEmpty && _avPlayerUnsupportedCodecs.contains(c)) {
+    return false;
+  }
+  final containers = (container ?? '')
+      .toLowerCase()
+      .split(',')
+      .map((s) => s.trim())
+      .where((s) => s.isNotEmpty);
+  return !containers.any(_avPlayerUnsupportedContainers.contains);
+}
+
 class JellyfinTrack {
   JellyfinTrack({
     required this.id,
@@ -425,6 +486,14 @@ class JellyfinTrack {
     return buildServerUrl(base, path, query);
   }
 
+  /// Raw-file URL (`GET /Items/{id}/Download`).
+  ///
+  /// Suitable for *downloads* only. Not recommended for playback: the
+  /// endpoint requires the user's "Allow media downloading" permission (403
+  /// otherwise), writes a "user downloaded …" entry to the server activity
+  /// log on every request, and hands AVPlayer formats it can't decode
+  /// (Opus/Vorbis/WMA/APE…). Use [originalQualityStreamUrl] for lossless
+  /// streaming instead.
   String? directDownloadUrl() {
     if (streamUrlOverride != null) {
       return streamUrlOverride;
@@ -434,19 +503,33 @@ class JellyfinTrack {
     }
     final base = serverUrl!;
     final path = '/Items/$id/Download';
+    // `/Items/{id}/Download` takes no query parameters besides the token.
     final query = <String, String>{
       kJellyfinApiKeyQueryParam: token!,
-      'static': 'true',
     };
     return buildServerUrl(base, path, query);
   }
 
+  /// `GET /Audio/{id}/universal` — the server compares the file against the
+  /// [containers] the client can play natively (`container` or
+  /// `container|codec[|codec]` entries) and [maxBitrate]; it serves the
+  /// original file when it fits and otherwise transcodes to
+  /// [transcodingContainer]/[audioCodec] as a single progressive HTTP
+  /// response. `transcodingProtocol` is always `http`: `hls` would return an
+  /// m3u8 playlist and `progressive` is not a valid `MediaStreamProtocol`
+  /// value (the server rejects the request with 400).
+  ///
+  /// [container] is kept for backwards compatibility: when [containers] is
+  /// null, `[container]` is used as the direct-play list, and it is also the
+  /// default [transcodingContainer].
   String? universalStreamUrl({
     required String deviceId,
     int maxBitrate = 192000,
     int? audioBitrate,
     String audioCodec = 'mp3',
     String container = 'mp3',
+    List<String>? containers,
+    String? transcodingContainer,
   }) {
     if (streamUrlOverride != null) {
       return streamUrlOverride;
@@ -457,27 +540,83 @@ class JellyfinTrack {
     final base = serverUrl!;
     final path = '/Audio/$id/universal';
     final query = <String, String>{
-      'UserId': userId!,
-      'DeviceId': deviceId,
-      'AudioCodec': audioCodec,
-      'Container': container,
-      'TranscodingProtocol': 'progressive',
-      'TranscodingContainer': container,
-      'MaxStreamingBitrate': '$maxBitrate',
-      'MaxAudioChannels': '2',
-      'StartTimeTicks': '0',
-      'EnableRedirection': 'true',
+      'userId': userId!,
+      'deviceId': deviceId,
+      'container': (containers ?? [container]).join(','),
+      'audioCodec': audioCodec,
+      'transcodingContainer': transcodingContainer ?? container,
+      'transcodingProtocol': 'http',
+      'maxStreamingBitrate': '$maxBitrate',
+      'maxAudioChannels': '2',
+      'startTimeTicks': '0',
+      'enableRedirection': 'true',
       kJellyfinApiKeyQueryParam: token!,
     };
-    // Add AudioBitrate to force specific transcoding bitrate
+    // Explicit encoder bitrate when transcoding (defaults to maxBitrate).
     if (audioBitrate != null) {
-      query['AudioBitrate'] = '$audioBitrate';
+      query['audioBitRate'] = '$audioBitrate';
     }
     return buildServerUrl(base, path, query);
   }
 
-  /// Returns a URL that FORCES transcoding via the /Audio/{Id}/stream.{container} endpoint.
-  /// This includes a "kitchen sink" of parameters to ensure strict bitrate limiting across Jellyfin versions.
+  /// Lossless-first stream URL for iOS/AVPlayer.
+  ///
+  /// Uses `/Audio/{id}/universal` with every container/codec AVPlayer
+  /// decodes natively ([kAvPlayerDirectPlayContainers]) and a very high
+  /// bitrate cap, so FLAC/ALAC/MP3/AAC/WAV files are streamed untouched
+  /// (static, Range-seekable) while formats AVPlayer can't open
+  /// (Opus, Vorbis, FLAC-in-Ogg, WMA, APE, …) are transcoded server-side to
+  /// MP3 instead of silently failing. Unlike [directDownloadUrl] it needs
+  /// no download permission and doesn't spam the server activity log.
+  String? originalQualityStreamUrl({
+    required String deviceId,
+    int transcodeBitrate = 320000,
+  }) {
+    return universalStreamUrl(
+      deviceId: deviceId,
+      maxBitrate: kOriginalQualityMaxStreamingBitrate,
+      audioBitrate: transcodeBitrate,
+      audioCodec: 'mp3',
+      containers: kAvPlayerDirectPlayContainers,
+      transcodingContainer: 'mp3',
+    );
+  }
+
+  /// Bitrate-capped stream URL: the file is served as-is when it is already
+  /// in a lossy format AVPlayer plays and at or below [maxBitrate] (e.g. a
+  /// 256 kbps AAC under a 320 kbps cap — no pointless re-encode), otherwise
+  /// transcoded to MP3 at [maxBitrate].
+  String? cappedStreamUrl({
+    required String deviceId,
+    required int maxBitrate,
+  }) {
+    return universalStreamUrl(
+      deviceId: deviceId,
+      maxBitrate: maxBitrate,
+      audioBitrate: maxBitrate,
+      audioCodec: 'mp3',
+      containers: kAvPlayerLossyContainers,
+      transcodingContainer: 'mp3',
+    );
+  }
+
+  /// Whether AVPlayer can decode this track's original file, judged from
+  /// the `Container`/`Codec` metadata Jellyfin returned. Unknown metadata
+  /// returns true (let the server/AVPlayer decide; the universal endpoint
+  /// still guards against unsupported formats).
+  bool get isAvPlayerNativeFormat =>
+      isAvPlayerNativeAudio(container: container, codec: codec);
+
+  /// Returns a URL that FORCES transcoding via
+  /// `/Audio/{id}/stream.{container}` (`static=false`), linked to
+  /// [playSessionId] so the server kills the ffmpeg job when the matching
+  /// `/Sessions/Playing/Stopped` report arrives.
+  ///
+  /// Only spec parameters are sent (ASP.NET binds query keys
+  /// case-insensitively, so duplicate spellings only produced multi-valued
+  /// parameters). `maxStreamingBitrate`, `transcodingProtocol` and
+  /// `transcodingContainer` are not parameters of this endpoint; the output
+  /// format comes from the `.{container}` path segment and [audioCodec].
   String? transcodedStreamUrl({
     required String deviceId,
     required int audioBitrate,
@@ -492,43 +631,22 @@ class JellyfinTrack {
       return null;
     }
 
-    // Use /Audio/{Id}/stream.mp3 with explicit extension
     final base = serverUrl!;
     final path = '/Audio/$id/stream.$container';
-    
+
     final query = <String, String>{
-      // Force transcoding flags
-      'Static': 'false', 
       'static': 'false',
-      'MediaSourceId': id,
-      'DeviceId': deviceId,
+      'mediaSourceId': id,
       'deviceId': deviceId,
-      kJellyfinApiKeyQueryParam: token!,
-      
-      // Format specs
-      'Container': container,
-      'AudioCodec': audioCodec,
       'audioCodec': audioCodec,
-      
-      // Bitrate limits (providing all variations to ensure one hits)
-      'AudioBitRate': '$audioBitrate',
-      'audioBitrate': '$audioBitrate',
-      'MaxStreamingBitrate': '$audioBitrate',
-      'maxStreamingBitrate': '$audioBitrate',
-      'bitrate': '$audioBitrate',
-      
-      // Channels
-      'MaxAudioChannels': '2',
+      'audioBitRate': '$audioBitrate',
       'maxAudioChannels': '2',
-      
-      // Protocol
-      'TranscodingProtocol': 'http',
-      'TranscodingContainer': container,
+      kJellyfinApiKeyQueryParam: token!,
     };
 
     // Link stream to playback session if provided
     if (playSessionId != null) {
-      query['PlaySessionId'] = playSessionId;
+      query['playSessionId'] = playSessionId;
     }
 
     return buildServerUrl(base, path, query);
@@ -538,7 +656,7 @@ class JellyfinTrack {
     required String deviceId,
     int maxBitrate = 192000,
   }) {
-    final universal = universalStreamUrl(
+    final universal = cappedStreamUrl(
       deviceId: deviceId,
       maxBitrate: maxBitrate,
     );
