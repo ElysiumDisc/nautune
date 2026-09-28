@@ -422,37 +422,3 @@ class FretsOnFireStats {
     return totalNotesHit.toString();
   }
 }
-
-/// Storage stats for a single chart
-class ChartStorageStats {
-  final String trackId;
-  final String trackName;
-  final String artistName;
-  final int noteCount;
-  final int highScore;
-  final int maxMultiplier;
-  final int playCount;
-  final DateTime generatedAt;
-  final int fileSizeBytes;
-
-  const ChartStorageStats({
-    required this.trackId,
-    required this.trackName,
-    required this.artistName,
-    required this.noteCount,
-    required this.highScore,
-    required this.maxMultiplier,
-    required this.playCount,
-    required this.generatedAt,
-    required this.fileSizeBytes,
-  });
-
-  String get formattedSize {
-    if (fileSizeBytes < 1024) return '$fileSizeBytes B';
-    return '${(fileSizeBytes / 1024).toStringAsFixed(1)} KB';
-  }
-
-  String get formattedDate {
-    return '${generatedAt.month}/${generatedAt.day}/${generatedAt.year}';
-  }
-}

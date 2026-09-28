@@ -81,7 +81,7 @@ class JustWaveformBackend {
       if (absMax > maxAbsValue) maxAbsValue = absMax;
     }
 
-    // Use fixed normalizers to match Linux FFmpeg backend behavior
+    // Use fixed normalizers (16-bit vs 8-bit) so waveforms are comparable
     // Check flag first, validate against actual data for robustness
     final flagSays16Bit = (waveform.flags & 1) != 0;
     final actuallyLooksLike16Bit = maxAbsValue > 128;

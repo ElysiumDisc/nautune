@@ -133,7 +133,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
           content: Text(started > 0
             ? 'Queued $started new downloads'
             : 'All tracks already downloaded or queued'),
-          backgroundColor: Colors.green,
         ),
       );
     }
@@ -150,7 +149,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Track removed from playlist'),
-            backgroundColor: Colors.green,
           ),
         );
       }
@@ -159,7 +157,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to remove track: $e'),
-            backgroundColor: Colors.red,
+            backgroundColor: Theme.of(context).colorScheme.error,
           ),
         );
       }
@@ -199,9 +197,9 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                 onTap: () => Future.delayed(Duration.zero, _showRenameDialog),
               ),
               PopupMenuItem(
-                child: const ListTile(
-                  leading: Icon(Icons.delete, color: Colors.red),
-                  title: Text('Delete', style: TextStyle(color: Colors.red)),
+                child: ListTile(
+                  leading: Icon(Icons.delete, color: Theme.of(context).colorScheme.error),
+                  title: Text('Delete', style: TextStyle(color: Theme.of(context).colorScheme.error)),
                   contentPadding: EdgeInsets.zero,
                 ),
                 onTap: () => Future.delayed(Duration.zero, _showDeleteDialog),
@@ -305,7 +303,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                 onPressed: () => _removeTrack(track.id),
                               ),
                               const SizedBox(width: 8),
-                              const Icon(Icons.drag_handle, color: Colors.grey),
+                              Icon(Icons.drag_handle, color: theme.colorScheme.onSurfaceVariant),
                             ],
                           ),
                           onTap: () async {
@@ -377,7 +375,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text('Renamed to "${nameController.text}"'),
-                backgroundColor: Colors.green,
               ),
             );
           }
@@ -386,7 +383,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text('Failed to rename: $e'),
-                backgroundColor: Colors.red,
+                backgroundColor: Theme.of(context).colorScheme.error,
               ),
             );
           }
@@ -411,7 +408,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(
-              backgroundColor: Colors.red,
+              backgroundColor: Theme.of(context).colorScheme.error,
             ),
             child: const Text('Delete'),
           ),
@@ -427,7 +424,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Deleted "${widget.playlist.name}"'),
-              backgroundColor: Colors.green,
             ),
           );
         }
@@ -436,7 +432,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Failed to delete: $e'),
-              backgroundColor: Colors.red,
+              backgroundColor: Theme.of(context).colorScheme.error,
             ),
           );
         }

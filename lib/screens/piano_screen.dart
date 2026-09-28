@@ -7,7 +7,7 @@ import '../services/listening_analytics_service.dart';
 import '../services/piano_synth_service.dart';
 
 /// A playable piano keyboard easter egg.
-/// Supports touch/click on mobile and desktop keyboard mapping (upiano-style).
+/// Supports touch plus hardware-keyboard mapping (upiano-style) on iPad.
 class PianoScreen extends StatefulWidget {
   const PianoScreen({super.key});
 
@@ -29,7 +29,7 @@ class _PianoScreenState extends State<PianoScreen> {
 
   bool _initialized = false;
 
-  // Desktop keyboard → MIDI note offset mapping (upiano-style)
+  // Hardware keyboard → MIDI note offset mapping (upiano-style)
   // Lower octave: a w s e d f t g y h u j
   // Upper octave: k o l p ; ' ] \
   static final Map<LogicalKeyboardKey, int> _keyMap = {

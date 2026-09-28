@@ -120,7 +120,7 @@ Future<void> main() async {
   // Set global image cache limits to prevent OOM on large libraries.
   // Tuned for music-app workload (1000-5000 album grid scrolling) — at 500/50MB
   // we saw eviction thrashing on libraries >2000 albums; 1500/100MB stays safe
-  // on phones and removes the thrashing on desktop/tablet.
+  // on phones and removes the thrashing on iPad.
   PaintingBinding.instance.imageCache.maximumSize = 1500;
   PaintingBinding.instance.imageCache.maximumSizeBytes = 100 * 1024 * 1024; // 100MB
 

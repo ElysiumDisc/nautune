@@ -413,7 +413,7 @@ class _WaveformDisplayState extends State<_WaveformDisplay> {
                       duration: const Duration(milliseconds: 200),
                       child: Container(
                         width: 2,
-                        color: Colors.white.withValues(alpha: 0.7),
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
                       ),
                     ),
                   ),

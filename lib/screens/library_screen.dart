@@ -20,15 +20,16 @@ import '../models/download_item.dart';
 import '../repositories/music_repository.dart';
 import '../services/haptic_service.dart';
 import '../services/listenbrainz_service.dart';
-import '../services/share_service.dart';
 import '../services/smart_playlist_service.dart';
 import '../models/listenbrainz_config.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/jellyfin_image.dart';
 import '../utils/debouncer.dart';
+import '../utils/easter_egg_keywords.dart';
 import '../widgets/now_playing_bar.dart';
 import '../widgets/skeleton_loader.dart';
 import '../widgets/sync_status_indicator.dart';
+import '../widgets/track_context_menu.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
 import 'genre_detail_screen.dart';
@@ -53,6 +54,9 @@ part 'tabs/home_tab.dart';
 part 'tabs/playlists_tab.dart';
 part 'tabs/search_tab.dart';
 part '../widgets/alphabet_scrollbar.dart';
+
+/// Overflow actions in the library app bar.
+enum _LibraryMenuAction { toggleOffline, offlineLibrary, switchLibrary, logOut }
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key});
@@ -502,60 +506,47 @@ class _LibraryScreenState extends State<LibraryScreen>
               children: [
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onTap: () {
-                    appState.toggleOfflineMode();
-                  },
                   onLongPressStart: (details) {
-                    // Show downloads management on long press (iOS/Android)
+                    // Long-press the logo to manage downloads.
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (context) =>
-                            OfflineLibraryScreen(),
+                        builder: (context) => OfflineLibraryScreen(),
                       ),
                     );
                   },
-                  onSecondaryTap: () {
-                    // Show downloads management on right click (Linux/Desktop)
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (context) =>
-                            OfflineLibraryScreen(),
-                      ),
-                    );
-                  },
-                  child: Tooltip(
-                    message: appState.isOfflineMode ? 'Offline library' : 'Go to offline library',
-                    child: Container(
-                      padding: const EdgeInsets.all(8.0),
-                      decoration: BoxDecoration(
-                        color: Colors.transparent,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Icon(
-                        Icons.waves,
-                        color: appState.isOfflineMode
-                            ? theme.colorScheme.primary
-                            : theme.colorScheme.primary.withValues(alpha: 0.7),
-                        size: 28,
-                      ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(NautuneSpacing.sm),
+                    child: Icon(
+                      Icons.waves,
+                      color: appState.isOfflineMode
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.primary.withValues(alpha: 0.7),
+                      size: 28,
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                InkWell(
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (context) => const SettingsScreen(),
+                const SizedBox(width: NautuneSpacing.xs),
+                Flexible(
+                  child: InkWell(
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => const SettingsScreen(),
+                        ),
+                      );
+                    },
+                    borderRadius: NautuneRadius.allSm,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: NautuneSpacing.sm,
+                        vertical: NautuneSpacing.xs,
                       ),
-                    );
-                  },
-                  borderRadius: BorderRadius.circular(8),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-                    child: Row(
-                      children: [
-                        Text(
+                      // Scale down rather than overflow when the offline
+                      // action button is also in the app bar.
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
                           'Nautune',
                           style: GoogleFonts.pacifico(
                             fontSize: 24,
@@ -563,15 +554,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                             fontWeight: FontWeight.w600,
                           ),
                         ),
-                        if (appState.isOfflineMode) ...[
-                          const SizedBox(width: 8),
-                          Icon(
-                            Icons.offline_bolt,
-                            size: 20,
-                            color: theme.colorScheme.primary,
-                          ),
-                        ],
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -580,21 +563,11 @@ class _LibraryScreenState extends State<LibraryScreen>
             actions: [
               const SyncStatusIndicator(),
               if (appState.isOfflineMode)
-                Tooltip(
-                  message: 'Offline Mode',
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Icon(
-                      Icons.cloud_off,
-                      color: theme.colorScheme.primary,
-                      size: 20,
-                    ),
-                  ),
-                ),
-              if (selectedId != null)
                 IconButton(
-                  icon: const Icon(Icons.library_books_outlined),
-                  onPressed: () => appState.clearLibrarySelection(),
+                  icon: const Icon(Icons.cloud_off, size: 20),
+                  color: theme.colorScheme.primary,
+                  tooltip: 'Offline mode (tap to go online)',
+                  onPressed: () => appState.toggleOfflineMode(),
                 ),
               IconButton(
                 icon: const Icon(Icons.person_outline),
@@ -608,29 +581,88 @@ class _LibraryScreenState extends State<LibraryScreen>
                 },
               ),
               IconButton(
-                icon: const Icon(Icons.logout),
-                onPressed: () async {
-                  final confirm = await showDialog<bool>(
-                    context: context,
-                    builder: (dialogContext) => AlertDialog(
-                      title: const Text('Log Out'),
-                      content: const Text('Are you sure you want to log out?'),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(dialogContext, false),
-                          child: const Text('Cancel'),
-                        ),
-                        FilledButton(
-                          onPressed: () => Navigator.pop(dialogContext, true),
-                          child: const Text('Log Out'),
-                        ),
-                      ],
+                icon: const Icon(Icons.settings_outlined),
+                tooltip: 'Settings',
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const SettingsScreen(),
                     ),
                   );
-                  if (confirm == true) {
-                    appState.disconnect();
+                },
+              ),
+              PopupMenuButton<_LibraryMenuAction>(
+                tooltip: 'More',
+                onSelected: (action) async {
+                  switch (action) {
+                    case _LibraryMenuAction.toggleOffline:
+                      appState.toggleOfflineMode();
+                    case _LibraryMenuAction.offlineLibrary:
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => OfflineLibraryScreen(),
+                        ),
+                      );
+                    case _LibraryMenuAction.switchLibrary:
+                      appState.clearLibrarySelection();
+                    case _LibraryMenuAction.logOut:
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (dialogContext) => AlertDialog(
+                          title: const Text('Log Out'),
+                          content: const Text('Are you sure you want to log out?'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(dialogContext, false),
+                              child: const Text('Cancel'),
+                            ),
+                            FilledButton(
+                              onPressed: () => Navigator.pop(dialogContext, true),
+                              child: const Text('Log Out'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirm == true) {
+                        appState.disconnect();
+                      }
                   }
                 },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: _LibraryMenuAction.toggleOffline,
+                    child: ListTile(
+                      leading: Icon(appState.isOfflineMode ? Icons.cloud_queue : Icons.cloud_off),
+                      title: Text(appState.isOfflineMode ? 'Go online' : 'Go offline'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: _LibraryMenuAction.offlineLibrary,
+                    child: ListTile(
+                      leading: Icon(Icons.download_done),
+                      title: Text('Downloads'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  if (selectedId != null)
+                    const PopupMenuItem(
+                      value: _LibraryMenuAction.switchLibrary,
+                      child: ListTile(
+                        leading: Icon(Icons.library_books_outlined),
+                        title: Text('Switch library'),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                  const PopupMenuItem(
+                    value: _LibraryMenuAction.logOut,
+                    child: ListTile(
+                      leading: Icon(Icons.logout),
+                      title: Text('Log out'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -1137,7 +1169,6 @@ class _LibraryTabState extends State<_LibraryTab> {
   }
 }
 
-// ignore: unused_element
 class _DownloadsTab extends StatelessWidget {
   const _DownloadsTab({required this.appState});
 
@@ -1423,27 +1454,6 @@ class _DownloadsTab extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-}
-
-// ignore: unused_element
-class _PlaceholderTab extends StatelessWidget {
-  const _PlaceholderTab({required this.icon, required this.message});
-  final IconData icon;
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 64, color: Theme.of(context).colorScheme.onSurfaceVariant),
-          const SizedBox(height: NautuneSpacing.lg),
-          Text(message, textAlign: TextAlign.center, style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
-        ],
-      ),
     );
   }
 }

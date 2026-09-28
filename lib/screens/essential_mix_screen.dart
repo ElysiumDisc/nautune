@@ -104,8 +104,6 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     // Listen to download service changes
     _service.addListener(_onServiceChanged);
 
-    // Mark Essential Mix as discovered for the milestone
-
     // Load waveform if downloaded
     _loadWaveform();
 

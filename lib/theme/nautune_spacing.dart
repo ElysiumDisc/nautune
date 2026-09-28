@@ -19,7 +19,7 @@ class NautuneSpacing {
 /// Border-radius constants. Use the `.allXxx` variants when constructing a
 /// `Container` decoration so the BorderRadius itself can be `const`.
 ///
-/// Signature radii (14 in the hero ring, 20 in the Essential Mix badge) are
+/// Signature radii (e.g. 14 in the Profile hero ring) are
 /// intentionally not represented here — those shapes are part of the visual
 /// identity and should be left as one-offs at their call sites.
 class NautuneRadius {

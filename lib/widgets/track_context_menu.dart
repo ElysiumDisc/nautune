@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../services/haptic_service.dart';
+import '../services/share_service.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/track_info_sheet.dart';
 import '../screens/album_detail_screen.dart';
@@ -10,217 +11,399 @@ import '../screens/artist_detail_screen.dart';
 
 /// Shows a modal bottom sheet with common track actions.
 ///
-/// Used across library_screen, album_detail_screen, artist_detail_screen,
-/// and recently_played_screen to avoid duplicating context menu code.
+/// The single track menu for the app: album, artist, favorites,
+/// recently-played and the full player all go through here so the actions
+/// (and their snackbars/error handling) stay identical everywhere.
+///
+/// [extraActionsBuilder] appends screen-specific tiles (e.g. the full
+/// player's lyrics / Infinite Radio / A-B loop toggles) after the shared
+/// track actions. Tiles it returns should pop `sheetContext` themselves.
 void showTrackContextMenu({
   required BuildContext context,
   required JellyfinTrack track,
   required NautuneAppState appState,
   bool showGoToArtist = true,
   bool showGoToAlbum = true,
+  bool showDownload = true,
+  bool showShare = true,
+  bool showTrackInfo = true,
+  List<Widget> Function(BuildContext sheetContext)? extraActionsBuilder,
 }) {
   HapticService.mediumTap();
   final parentContext = context;
 
   showModalBottomSheet(
     context: parentContext,
+    isScrollControlled: true,
     builder: (sheetContext) {
       return SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Track header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          track.name,
-                          style: Theme.of(sheetContext).textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        if (track.artists.isNotEmpty)
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Track header
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
                           Text(
-                            track.displayArtist,
-                            style: Theme.of(sheetContext).textTheme.bodySmall?.copyWith(
-                              color: Theme.of(sheetContext).colorScheme.onSurfaceVariant,
-                            ),
+                            track.name,
+                            style: Theme.of(sheetContext).textTheme.titleSmall
+                                ?.copyWith(fontWeight: FontWeight.bold),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.play_arrow),
-              title: const Text('Play Next'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                appState.audioPlayerService.playNext([track]);
-                ScaffoldMessenger.of(parentContext).showSnackBar(
-                  SnackBar(
-                    content: Text('${track.name} will play next'),
-                    duration: const Duration(seconds: 2),
-                  ),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.queue_music),
-              title: const Text('Add to Queue'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                appState.audioPlayerService.addToQueue([track]);
-                ScaffoldMessenger.of(parentContext).showSnackBar(
-                  SnackBar(
-                    content: Text('${track.name} added to queue'),
-                    duration: const Duration(seconds: 2),
-                  ),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.playlist_add),
-              title: const Text('Add to Playlist'),
-              onTap: () async {
-                Navigator.pop(sheetContext);
-                await showAddToPlaylistDialog(
-                  context: parentContext,
-                  appState: appState,
-                  tracks: [track],
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.auto_awesome),
-              title: const Text('Instant Mix'),
-              onTap: () async {
-                Navigator.pop(sheetContext);
-                try {
-                  ScaffoldMessenger.of(parentContext).showSnackBar(
-                    const SnackBar(
-                      content: Text('Creating instant mix...'),
-                      duration: Duration(seconds: 1),
-                    ),
-                  );
-                  final mixTracks = await appState.jellyfinService.getInstantMix(
-                    itemId: track.id,
-                    limit: 50,
-                  );
-                  if (!parentContext.mounted) return;
-                  if (mixTracks.isEmpty) {
-                    ScaffoldMessenger.of(parentContext).showSnackBar(
-                      const SnackBar(
-                        content: Text('No similar tracks found'),
-                        duration: Duration(seconds: 2),
+                          if (track.artists.isNotEmpty)
+                            Text(
+                              track.displayArtist,
+                              style: Theme.of(sheetContext).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: Theme.of(
+                                      sheetContext,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                        ],
                       ),
-                    );
-                    return;
-                  }
-                  await appState.audioPlayerService.playTrack(
-                    mixTracks.first,
-                    queueContext: mixTracks,
-                  );
-                  if (!parentContext.mounted) return;
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.play_arrow),
+                title: const Text('Play Next'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  appState.audioPlayerService.playNext([track]);
                   ScaffoldMessenger.of(parentContext).showSnackBar(
                     SnackBar(
-                      content: Text('Playing instant mix (${mixTracks.length} tracks)'),
+                      content: Text('${track.name} will play next'),
                       duration: const Duration(seconds: 2),
                     ),
                   );
-                } catch (e) {
-                  if (!parentContext.mounted) return;
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.queue_music),
+                title: const Text('Add to Queue'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  appState.audioPlayerService.addToQueue([track]);
                   ScaffoldMessenger.of(parentContext).showSnackBar(
                     SnackBar(
-                      content: Text('Failed to create mix: $e'),
-                      backgroundColor: Theme.of(parentContext).colorScheme.error,
+                      content: Text('${track.name} added to queue'),
+                      duration: const Duration(seconds: 2),
                     ),
                   );
-                }
-              },
-            ),
-            if (showGoToArtist && track.artistIds.isNotEmpty)
+                },
+              ),
               ListTile(
-                leading: const Icon(Icons.person),
-                title: const Text('Go to Artist'),
+                leading: const Icon(Icons.playlist_add),
+                title: const Text('Add to Playlist'),
                 onTap: () async {
                   Navigator.pop(sheetContext);
-                  if (track.artistIds.isEmpty) return;
-                  final artistId = track.artistIds.first;
+                  await showAddToPlaylistDialog(
+                    context: parentContext,
+                    appState: appState,
+                    tracks: [track],
+                  );
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.auto_awesome),
+                title: const Text('Instant Mix'),
+                onTap: () async {
+                  Navigator.pop(sheetContext);
                   try {
-                    // Try cache first for offline support
-                    final cachedArtist = appState.artists
-                        ?.where((a) => a.id == artistId)
-                        .firstOrNull;
-                    final artist = cachedArtist ??
-                        await appState.jellyfinService.getArtist(artistId);
+                    ScaffoldMessenger.of(parentContext).showSnackBar(
+                      const SnackBar(
+                        content: Text('Creating instant mix...'),
+                        duration: Duration(seconds: 1),
+                      ),
+                    );
+                    final mixTracks = await appState.jellyfinService
+                        .getInstantMix(itemId: track.id, limit: 50);
                     if (!parentContext.mounted) return;
-                    Navigator.of(parentContext).push(
-                      MaterialPageRoute(
-                        builder: (_) => ArtistDetailScreen(artist: artist),
+                    if (mixTracks.isEmpty) {
+                      ScaffoldMessenger.of(parentContext).showSnackBar(
+                        const SnackBar(
+                          content: Text('No similar tracks found'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                      return;
+                    }
+                    await appState.audioPlayerService.playTrack(
+                      mixTracks.first,
+                      queueContext: mixTracks,
+                    );
+                    if (!parentContext.mounted) return;
+                    ScaffoldMessenger.of(parentContext).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Playing instant mix (${mixTracks.length} tracks)',
+                        ),
+                        duration: const Duration(seconds: 2),
                       ),
                     );
                   } catch (e) {
                     if (!parentContext.mounted) return;
                     ScaffoldMessenger.of(parentContext).showSnackBar(
-                      SnackBar(content: Text('Could not load artist: $e')),
-                    );
-                  }
-                },
-              ),
-            if (showGoToAlbum && track.albumId != null)
-              ListTile(
-                leading: const Icon(Icons.album),
-                title: const Text('Go to Album'),
-                onTap: () async {
-                  Navigator.pop(sheetContext);
-                  try {
-                    // Try cache first for offline support
-                    final cachedAlbum = appState.albums
-                        ?.where((a) => a.id == track.albumId)
-                        .firstOrNull;
-                    final album = cachedAlbum ??
-                        await appState.jellyfinService.getAlbum(track.albumId!);
-                    if (!parentContext.mounted) return;
-                    Navigator.of(parentContext).push(
-                      MaterialPageRoute(
-                        builder: (_) => AlbumDetailScreen(album: album),
+                      SnackBar(
+                        content: Text('Failed to create mix: $e'),
+                        backgroundColor: Theme.of(
+                          parentContext,
+                        ).colorScheme.error,
                       ),
                     );
-                  } catch (e) {
-                    if (!parentContext.mounted) return;
-                    ScaffoldMessenger.of(parentContext).showSnackBar(
-                      SnackBar(content: Text('Could not load album: $e')),
-                    );
                   }
                 },
               ),
-            ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('Track Info'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                showModalBottomSheet(
-                  context: parentContext,
-                  isScrollControlled: true,
-                  builder: (_) => TrackInfoSheet(track: track),
-                );
-              },
-            ),
-          ],
+              if (showDownload)
+                ListTile(
+                  leading: const Icon(Icons.download),
+                  title: const Text('Download Track'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _downloadTrack(parentContext, appState, track);
+                  },
+                ),
+              if (showShare)
+                ListTile(
+                  leading: const Icon(Icons.share),
+                  title: const Text('Share'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _shareTrack(parentContext, appState, track);
+                  },
+                ),
+              if (showGoToArtist && track.artistIds.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.person),
+                  title: const Text('Go to Artist'),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+                    if (track.artistIds.isEmpty) return;
+                    final artistId = track.artistIds.first;
+                    try {
+                      // Try cache first for offline support
+                      final cachedArtist = appState.artists
+                          ?.where((a) => a.id == artistId)
+                          .firstOrNull;
+                      final artist =
+                          cachedArtist ??
+                          await appState.jellyfinService.getArtist(artistId);
+                      if (!parentContext.mounted) return;
+                      Navigator.of(parentContext).push(
+                        MaterialPageRoute(
+                          builder: (_) => ArtistDetailScreen(artist: artist),
+                        ),
+                      );
+                    } catch (e) {
+                      if (!parentContext.mounted) return;
+                      ScaffoldMessenger.of(parentContext).showSnackBar(
+                        SnackBar(content: Text('Could not load artist: $e')),
+                      );
+                    }
+                  },
+                ),
+              if (showGoToAlbum && track.albumId != null)
+                ListTile(
+                  leading: const Icon(Icons.album),
+                  title: const Text('Go to Album'),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+                    try {
+                      // Try cache first for offline support
+                      final cachedAlbum = appState.albums
+                          ?.where((a) => a.id == track.albumId)
+                          .firstOrNull;
+                      final album =
+                          cachedAlbum ??
+                          await appState.jellyfinService.getAlbum(
+                            track.albumId!,
+                          );
+                      if (!parentContext.mounted) return;
+                      Navigator.of(parentContext).push(
+                        MaterialPageRoute(
+                          builder: (_) => AlbumDetailScreen(album: album),
+                        ),
+                      );
+                    } catch (e) {
+                      if (!parentContext.mounted) return;
+                      ScaffoldMessenger.of(parentContext).showSnackBar(
+                        SnackBar(content: Text('Could not load album: $e')),
+                      );
+                    }
+                  },
+                ),
+              if (showTrackInfo)
+                ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: const Text('Track Info'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    showModalBottomSheet(
+                      context: parentContext,
+                      isScrollControlled: true,
+                      builder: (_) => TrackInfoSheet(track: track),
+                    );
+                  },
+                ),
+              if (extraActionsBuilder != null)
+                ...extraActionsBuilder(sheetContext),
+            ],
+          ),
         ),
       );
     },
   );
+}
+
+Future<void> _downloadTrack(
+  BuildContext parentContext,
+  NautuneAppState appState,
+  JellyfinTrack track,
+) async {
+  final messenger = ScaffoldMessenger.of(parentContext);
+  final theme = Theme.of(parentContext);
+  final downloadService = appState.downloadService;
+  try {
+    final existing = downloadService.getDownload(track.id);
+    if (existing != null) {
+      if (existing.isCompleted) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text('"${track.name}" is already downloaded'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        return;
+      }
+      if (existing.isFailed) {
+        await downloadService.retryDownload(track.id);
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text('Retrying download for ${track.name}'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        return;
+      }
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('"${track.name}" is already in the download queue'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    await downloadService.downloadTrack(track);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('Downloading ${track.name}'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  } catch (e) {
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('Failed to download ${track.name}: $e'),
+        backgroundColor: theme.colorScheme.error,
+      ),
+    );
+  }
+}
+
+Future<void> _shareTrack(
+  BuildContext parentContext,
+  NautuneAppState appState,
+  JellyfinTrack track,
+) async {
+  final messenger = ScaffoldMessenger.of(parentContext);
+  final theme = Theme.of(parentContext);
+  final downloadService = appState.downloadService;
+  final shareService = ShareService.instance;
+
+  if (!shareService.isAvailable) {
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('Sharing not available on this platform'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+    return;
+  }
+
+  final result = await shareService.shareTrack(
+    track: track,
+    downloadService: downloadService,
+  );
+
+  if (!parentContext.mounted) return;
+
+  switch (result) {
+    case ShareResult.success:
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Shared "${track.name}"'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    case ShareResult.cancelled:
+      break;
+    case ShareResult.notDownloaded:
+      final shouldDownload = await showDialog<bool>(
+        context: parentContext,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Track Not Downloaded'),
+          content: Text(
+            'To share "${track.name}", it needs to be downloaded first. '
+            'Would you like to download it now?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Download'),
+            ),
+          ],
+        ),
+      );
+      if (shouldDownload == true && parentContext.mounted) {
+        await downloadService.downloadTrack(track);
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text('Downloading "${track.name}"...'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    case ShareResult.fileNotFound:
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('File for "${track.name}" not found'),
+          backgroundColor: theme.colorScheme.error,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    case ShareResult.error:
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Failed to share "${track.name}"'),
+          backgroundColor: theme.colorScheme.error,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+  }
 }

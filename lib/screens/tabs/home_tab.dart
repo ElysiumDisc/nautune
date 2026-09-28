@@ -63,63 +63,6 @@ class _ShelfHeader extends StatelessWidget {
   }
 }
 
-class _ContinueListeningShelf extends StatelessWidget {
-  const _ContinueListeningShelf({
-    required this.tracks,
-    required this.isLoading,
-    required this.onPlay,
-    required this.onRefresh,
-  });
-
-  final List<JellyfinTrack>? tracks;
-  final bool isLoading;
-  final void Function(JellyfinTrack) onPlay;
-  final VoidCallback onRefresh;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final hasData = tracks != null && tracks!.isNotEmpty;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _ShelfHeader(
-          title: 'Continue Listening',
-          onRefresh: onRefresh,
-          isLoading: isLoading,
-        ),
-        SizedBox(
-          height: 140,
-          child: !hasData && isLoading
-              ? const SkeletonTrackShelf()
-              : hasData
-                  ? ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
-                      itemCount: tracks!.length,
-                      separatorBuilder: (context, _) => const SizedBox(width: NautuneSpacing.md),
-                      itemBuilder: (context, index) {
-                        final track = tracks![index];
-                        return _TrackChip(
-                          track: track,
-                          onTap: () => onPlay(track),
-                        );
-                      },
-                    )
-                  : Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
-                      child: Text(
-                        'Nothing waiting for you yet.',
-                        style: theme.textTheme.bodySmall,
-                      ),
-                    ),
-        ),
-      ],
-    );
-  }
-}
-
 class _TrackChip extends StatelessWidget {
   const _TrackChip({required this.track, required this.onTap});
 
@@ -607,83 +550,64 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
       return const SizedBox.shrink();
     }
 
-    final inLibraryCount = _recommendations?.where((r) => r.isInLibrary).length ?? 0;
-    final totalCount = _recommendations?.length ?? 0;
+    final matched = _matchedTracks ?? const <JellyfinTrack>[];
+    final subtitleParts = <String>[
+      if (matched.isNotEmpty) '${matched.length} in your library',
+      if (notInLibraryRecs.isNotEmpty) '${notInLibraryRecs.length} to discover',
+    ];
 
+    // One shelf: playable library matches first, then new-to-you discoveries.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ListenBrainz Mix - tracks in your library
-        if (hasMatchedData || _isLoading) ...[
-          _ShelfHeader(
-            title: 'ListenBrainz Mix',
-            subtitle: '$inLibraryCount of $totalCount in your library',
-            onRefresh: _loadRecommendations,
-            isLoading: _isLoading,
-          ),
-          SizedBox(
-            height: 140,
-            child: !hasMatchedData && _isLoading
-                ? const SkeletonTrackShelf()
-                : hasMatchedData
-                    ? ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
-                        itemCount: _matchedTracks!.length,
-                        separatorBuilder: (context, _) => const SizedBox(width: NautuneSpacing.md),
-                        itemBuilder: (context, index) {
-                          final track = _matchedTracks![index];
+        _ShelfHeader(
+          title: 'ListenBrainz Picks',
+          subtitle: subtitleParts.isEmpty ? null : subtitleParts.join(' · '),
+          onRefresh: _loadRecommendations,
+          isLoading: _isLoading,
+        ),
+        SizedBox(
+          height: 140,
+          child: !hasMatchedData && !hasDiscoveryData && _isLoading
+              ? const SkeletonTrackShelf()
+              : (hasMatchedData || hasDiscoveryData)
+                  ? ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
+                      itemCount: matched.length + notInLibraryRecs.length,
+                      separatorBuilder: (context, _) => const SizedBox(width: NautuneSpacing.md),
+                      itemBuilder: (context, index) {
+                        if (index < matched.length) {
+                          final track = matched[index];
                           return _TrackChip(
                             track: track,
                             onTap: () {
                               widget.appState.audioPlayerService.playTrack(
                                 track,
-                                queueContext: _matchedTracks!,
+                                queueContext: matched,
                               );
                             },
                           );
-                        },
-                      )
-                    : Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
-                        child: Text(
-                          'Getting recommendations from ListenBrainz...',
-                          style: theme.textTheme.bodySmall,
-                        ),
+                        }
+                        final rec = notInLibraryRecs[index - matched.length];
+                        return _DiscoveryChip(
+                          trackName: rec.trackName,
+                          artistName: rec.artistName!,
+                          albumName: rec.albumName,
+                          coverArtUrl: rec.coverArtUrl,
+                          source: rec.source,
+                        );
+                      },
+                    )
+                  : Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
+                      child: Text(
+                        'Getting recommendations from ListenBrainz...',
+                        style: theme.textTheme.bodySmall,
                       ),
-          ),
-          const SizedBox(height: 20),
-        ],
-
-        // Discover New Music - tracks NOT in your library
-        if (hasDiscoveryData) ...[
-          _ShelfHeader(
-            title: 'Discover New Music',
-            subtitle: 'Based on your ListenBrainz history',
-            onRefresh: _loadRecommendations,
-            isLoading: _isLoading,
-          ),
-          SizedBox(
-            height: 100,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: NautuneSpacing.lg),
-              itemCount: notInLibraryRecs.length,
-              separatorBuilder: (context, _) => const SizedBox(width: NautuneSpacing.md),
-              itemBuilder: (context, index) {
-                final rec = notInLibraryRecs[index];
-                return _DiscoveryChip(
-                  trackName: rec.trackName,
-                  artistName: rec.artistName!,
-                  albumName: rec.albumName,
-                  coverArtUrl: rec.coverArtUrl,
-                  source: rec.source,
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 20),
-        ],
+                    ),
+        ),
+        const SizedBox(height: 20),
       ],
     );
   }
@@ -724,7 +648,7 @@ class _DiscoveryChip extends StatelessWidget {
             if (coverArtUrl != null)
               SizedBox(
                 width: 80,
-                height: 100,
+                height: double.infinity,
                 child: CachedNetworkImage(
                   imageUrl: coverArtUrl!,
                   fit: BoxFit.cover,
@@ -741,7 +665,7 @@ class _DiscoveryChip extends StatelessWidget {
             else
               Container(
                 width: 80,
-                height: 100,
+                height: double.infinity,
                 color: theme.colorScheme.surfaceContainerHigh,
                 child: Icon(
                   Icons.album,
@@ -964,8 +888,6 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
       return null;
     }
 
-    final continueTracks = widget.appState.recentTracks;
-    final continueLoading = widget.appState.isLoadingRecent;
     final recentlyPlayed = widget.appState.recentlyPlayedTracks;
     final recentlyPlayedLoading = widget.appState.isLoadingRecentlyPlayed;
     final recentlyAdded = widget.appState.recentlyAddedAlbums;
@@ -978,14 +900,13 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
     final recommendationLoading = widget.appState.isLoadingRecommendations;
     final recommendationSeedName = widget.appState.recommendationSeedTrackName;
 
-    final showContinue = continueLoading || (continueTracks != null && continueTracks.isNotEmpty);
     final showRecentlyPlayed = recentlyPlayedLoading || (recentlyPlayed != null && recentlyPlayed.isNotEmpty);
     final showRecentlyAdded = recentlyAddedLoading || (recentlyAdded != null && recentlyAdded.isNotEmpty);
     final showDiscover = discoverLoading || (discoverTracks != null && discoverTracks.isNotEmpty);
     final showOnThisDay = onThisDayLoading || (onThisDayTracks != null && onThisDayTracks.isNotEmpty);
     final showRecommendations = recommendationLoading || (recommendationTracks != null && recommendationTracks.isNotEmpty);
 
-    if (!showContinue && !showRecentlyPlayed && !showRecentlyAdded && !showDiscover && !showOnThisDay && !showRecommendations) {
+    if (!showRecentlyPlayed && !showRecentlyAdded && !showDiscover && !showOnThisDay && !showRecommendations) {
       return null;
     }
 
@@ -993,21 +914,6 @@ class _MostPlayedTabState extends State<_MostPlayedTab> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: NautuneSpacing.lg),
-        if (showContinue) ...[
-          _ContinueListeningShelf(
-            tracks: continueTracks,
-            isLoading: continueLoading,
-            onPlay: (track) {
-              final queue = continueTracks ?? const <JellyfinTrack>[];
-              widget.appState.audioPlayerService.playTrack(
-                track,
-                queueContext: queue,
-              );
-            },
-            onRefresh: () => widget.appState.refreshRecent(),
-          ),
-          const SizedBox(height: 20),
-        ],
         if (showRecentlyPlayed) ...[
           _RecentlyPlayedShelf(
             tracks: recentlyPlayed,

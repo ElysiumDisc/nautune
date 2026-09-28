@@ -71,6 +71,21 @@ class NautuneColorPalette {
     return _buildDarkTheme();
   }
 
+  /// The single app-wide type scale. Every style gets the platform font and a
+  /// palette colour, so `theme.textTheme.<role>` is never missing a colour.
+  /// Secondary roles (titleSmall / labelMedium / labelSmall) use the muted
+  /// palette colour. Decorative fonts (Pacifico) are reserved for the app
+  /// wordmark and easter-egg screens; don't add them here.
+  TextTheme _buildTextTheme(TextTheme base, Color onSurface) {
+    final themed = base.apply(bodyColor: onSurface, displayColor: onSurface);
+    return themed.copyWith(
+      titleLarge: themed.titleLarge?.copyWith(fontSize: 22, fontWeight: FontWeight.bold),
+      titleSmall: themed.titleSmall?.copyWith(color: textSecondary),
+      labelMedium: themed.labelMedium?.copyWith(color: textSecondary),
+      labelSmall: themed.labelSmall?.copyWith(color: textSecondary),
+    );
+  }
+
   ThemeData _buildLightTheme() {
     final onSurface = Color(0xFF1A1A1A);
     return ThemeData.light().copyWith(
@@ -84,17 +99,7 @@ class NautuneColorPalette {
         onPrimary: Colors.white,
         onSecondary: onSurface,
       ),
-      textTheme: TextTheme(
-        bodyMedium: TextStyle(color: onSurface),
-        bodySmall: TextStyle(color: onSurface),
-        bodyLarge: TextStyle(color: onSurface),
-        titleLarge: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: onSurface),
-        titleMedium: TextStyle(color: onSurface),
-        titleSmall: TextStyle(color: textSecondary),
-        labelLarge: TextStyle(color: onSurface),
-        labelMedium: TextStyle(color: textSecondary),
-        labelSmall: TextStyle(color: textSecondary),
-      ),
+      textTheme: _buildTextTheme(ThemeData.light().textTheme, onSurface),
       appBarTheme: AppBarTheme(
         backgroundColor: surface,
         foregroundColor: onSurface,
@@ -182,17 +187,7 @@ class NautuneColorPalette {
         onPrimary: textPrimary,
         onSecondary: textSecondary,
       ),
-      textTheme: TextTheme(
-        bodyMedium: TextStyle(color: textPrimary),
-        bodySmall: TextStyle(color: textPrimary),
-        bodyLarge: TextStyle(color: textPrimary),
-        titleLarge: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: textPrimary),
-        titleMedium: TextStyle(color: textPrimary),
-        titleSmall: TextStyle(color: textSecondary),
-        labelLarge: TextStyle(color: textPrimary),
-        labelMedium: TextStyle(color: textSecondary),
-        labelSmall: TextStyle(color: textSecondary),
-      ),
+      textTheme: _buildTextTheme(ThemeData.dark().textTheme, textPrimary),
       appBarTheme: AppBarTheme(
         backgroundColor: surface,
         foregroundColor: textPrimary,
@@ -379,36 +374,20 @@ class NautunePalettes {
   }
 }
 
-/// Legacy theme class for backwards compatibility
-class NautuneTheme {
-  static const Color deepPurple = Color(0xFF4B1D77);
-  static const Color violetAccent = Color(0xFF7A3DF1);
-  static const Color surface = Color(0xFF1E102D);
-  static const Color oceanBlue = Color(0xFF409CFF);
-
-  /// Build the default theme (Purple Ocean)
-  static ThemeData build() {
-    return NautunePalettes.purpleOcean.buildTheme();
-  }
-}
-
 /// Cross-screen accent colours that recur in feature/easter-egg screens
 /// (Profile shelves, Frets on Fire, ListenBrainz badges). Centralised so the
 /// values stop drifting and so a future palette tweak only edits one place.
 ///
-/// Signature colours that are intentionally local to one site (e.g. the
-/// Pacifico username `0xFFB39DDB`, the hero ring's bespoke gradient palette)
-/// are NOT mirrored here — they are part of a single visual landmark.
+/// Core screens should prefer `Theme.of(context).colorScheme` roles; these are
+/// only for fixed semantic/brand/categorical accents that have no scheme role
+/// (positive-trend green, ListenBrainz orange, game colours).
 class NautuneFeatureColors {
   const NautuneFeatureColors._();
 
-  /// Hero/profile ocean blue accent (also surfaces in Frets on Fire highlights).
-  static const Color oceanBlueAccent = Color(0xFF409CFF);
-
-  /// "Emerald sea" — used for treasure/achievement chips on Profile.
+  /// "Emerald sea" — positive/growth accents on Profile stat cards.
   static const Color verdantGreen = Color(0xFF10B981);
 
-  /// "Gold treasure" — Frets on Fire fire colour, achievement medals.
+  /// "Gold treasure" — Frets on Fire fire colour, Profile highlight accents.
   static const Color treasureGold = Color(0xFFFFD700);
 
   /// Lightning-blue cyan — visualizers, Frets on Fire arcs.

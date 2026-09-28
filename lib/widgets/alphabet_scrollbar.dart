@@ -96,61 +96,6 @@ class AlphabetSectionBuilder {
   }
 }
 
-/// Helper class to map letters to their positions in a list with section headers
-class LetterPositions {
-  LetterPositions._();
-
-  /// Build a map of letter -> flat index accounting for section headers
-  /// Returns (letterToFlatIndex, totalItemCount including headers)
-  static (Map<String, int>, int) buildWithHeaders(
-    List items,
-    String Function(dynamic) getItemName,
-    SortOrder sortOrder,
-  ) {
-    if (items.isEmpty) return ({}, 0);
-
-    final Map<String, int> letterToIndex = {};
-    final isAscending = sortOrder == SortOrder.ascending;
-
-    // Group items by first letter
-    final Map<String, List<int>> letterGroups = {};
-    for (int i = 0; i < items.length; i++) {
-      final name = getItemName(items[i]).toUpperCase();
-      if (name.isEmpty) continue;
-      final firstChar = name[0];
-      final letter = RegExp(r'[0-9]').hasMatch(firstChar) ? '#' : firstChar;
-      letterGroups.putIfAbsent(letter, () => []).add(i);
-    }
-
-    // Sort letters appropriately
-    final sortedLetters = letterGroups.keys.toList()
-      ..sort((a, b) {
-        // # comes first in ascending, last in descending
-        if (a == '#') return isAscending ? -1 : 1;
-        if (b == '#') return isAscending ? 1 : -1;
-        return isAscending ? a.compareTo(b) : b.compareTo(a);
-      });
-
-    // Calculate flat positions (each letter group adds 1 header)
-    int flatIndex = 0;
-    for (final letter in sortedLetters) {
-      letterToIndex[letter] = flatIndex;
-      flatIndex++; // The header
-      flatIndex += letterGroups[letter]!.length; // The items
-    }
-
-    return (letterToIndex, flatIndex);
-  }
-
-  /// Get the letter for an item at a given index
-  static String getLetterForItem(dynamic item, String Function(dynamic) getItemName) {
-    final name = getItemName(item).toUpperCase();
-    if (name.isEmpty) return '#';
-    final firstChar = name[0];
-    return RegExp(r'[0-9]').hasMatch(firstChar) ? '#' : firstChar;
-  }
-}
-
 // Alphabet scrollbar for quick navigation
 class AlphabetScrollbar extends StatefulWidget {
   const AlphabetScrollbar({

@@ -110,7 +110,6 @@ class _QueueScreenState extends State<QueueScreen> {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text('Saved as "${nameController.text}"'),
-                                    backgroundColor: Colors.green,
                                     behavior: SnackBarBehavior.floating,
                                   ),
                                 );
@@ -208,7 +207,7 @@ class _QueueScreenState extends State<QueueScreen> {
                       color: theme.colorScheme.error,
                       alignment: Alignment.centerRight,
                       padding: const EdgeInsets.only(right: 16),
-                      child: const Icon(Icons.delete, color: Colors.white),
+                      child: Icon(Icons.delete, color: theme.colorScheme.onError),
                     ),
                     confirmDismiss: (direction) async {
                       if (isCurrentTrack && queue.length == 1) {

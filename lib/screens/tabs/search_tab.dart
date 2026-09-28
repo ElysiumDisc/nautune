@@ -15,12 +15,7 @@ class _SearchTabState extends State<_SearchTab> {
   List<String> _recentQueries = [];
   String _lastQuery = '';
   bool _isLoading = false;
-  bool _showRelaxEasterEgg = false;
-  bool _showNetworkEasterEgg = false;
-  bool _showEssentialEasterEgg = false;
-  bool _showFireEasterEgg = false;
-  bool _showPianoEasterEgg = false;
-  bool _showHealingEasterEgg = false;
+  EasterEgg? _easterEgg;
   List<JellyfinAlbum> _albumResults = const [];
   List<JellyfinArtist> _artistResults = const [];
   List<JellyfinTrack> _trackResults = const [];
@@ -105,29 +100,15 @@ class _SearchTabState extends State<_SearchTab> {
         _artistResults = const [];
         _trackResults = const [];
         _isLoading = false;
-        _showRelaxEasterEgg = false;
-        _showNetworkEasterEgg = false;
-        _showEssentialEasterEgg = false;
-        _showFireEasterEgg = false;
-        _showPianoEasterEgg = false;
-        _showHealingEasterEgg = false;
+        _easterEgg = null;
       });
       return;
     }
 
     setState(() {
       _isLoading = true;
-      // Easter eggs: show special cards when searching certain keywords
-      _showRelaxEasterEgg = lowerQuery.contains('relax');
-      _showNetworkEasterEgg = lowerQuery.contains('network');
-      _showEssentialEasterEgg = lowerQuery.contains('essential');
-      _showFireEasterEgg = lowerQuery.contains('fire') || lowerQuery.contains('frets');
-      _showPianoEasterEgg = lowerQuery.contains('piano');
-      _showHealingEasterEgg = lowerQuery.contains('solfeggio') ||
-          lowerQuery.contains('healing') ||
-          lowerQuery.contains('frequency') ||
-          lowerQuery.contains('frequencies') ||
-          lowerQuery.contains('hz');
+      // Easter eggs: show a special card when the whole query is a keyword
+      _easterEgg = matchEasterEgg(trimmed);
     });
     unawaited(_rememberQuery(trimmed));
 
@@ -413,12 +394,7 @@ class _SearchTabState extends State<_SearchTab> {
     final hasResults = _albumResults.isNotEmpty ||
                       _artistResults.isNotEmpty ||
                       _trackResults.isNotEmpty ||
-                      _showRelaxEasterEgg ||
-                      _showNetworkEasterEgg ||
-                      _showEssentialEasterEgg ||
-                      _showFireEasterEgg ||
-                      _showPianoEasterEgg ||
-                      _showHealingEasterEgg;
+                      _easterEgg != null;
 
     if (!hasResults) {
       return Center(
@@ -433,24 +409,7 @@ class _SearchTabState extends State<_SearchTab> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
       children: [
-        // Easter egg: Relax Mode card
-        if (_showRelaxEasterEgg)
-          _buildRelaxModeCard(theme),
-        // Easter egg: Network radio card
-        if (_showNetworkEasterEgg)
-          _buildNetworkModeCard(theme),
-        // Easter egg: Essential Mix card
-        if (_showEssentialEasterEgg)
-          _buildEssentialMixCard(theme),
-        // Easter egg: Frets on Fire card
-        if (_showFireEasterEgg)
-          _buildFretsOnFireCard(theme),
-        // Easter egg: Piano card
-        if (_showPianoEasterEgg)
-          _buildPianoCard(theme),
-        // Easter egg: Healing Frequencies card
-        if (_showHealingEasterEgg)
-          _buildHealingFrequenciesCard(theme),
+        if (_easterEgg != null) _buildEasterEggCard(theme, _easterEgg!),
         // Artists section
         if (_artistResults.isNotEmpty) ...[
           _buildSectionHeader(theme, 'Artists', Icons.person, _artistResults.length),
@@ -482,6 +441,23 @@ class _SearchTabState extends State<_SearchTab> {
         ],
       ],
     );
+  }
+
+  Widget _buildEasterEggCard(ThemeData theme, EasterEgg egg) {
+    switch (egg) {
+      case EasterEgg.relaxMode:
+        return _buildRelaxModeCard(theme);
+      case EasterEgg.network:
+        return _buildNetworkModeCard(theme);
+      case EasterEgg.essentialMix:
+        return _buildEssentialMixCard(theme);
+      case EasterEgg.fretsOnFire:
+        return _buildFretsOnFireCard(theme);
+      case EasterEgg.piano:
+        return _buildPianoCard(theme);
+      case EasterEgg.healingFrequencies:
+        return _buildHealingFrequenciesCard(theme);
+    }
   }
 
   Widget _buildRelaxModeCard(ThemeData theme) {
@@ -673,7 +649,7 @@ class _SearchTabState extends State<_SearchTab> {
         title: Text(
           artist.name,
           style: theme.textTheme.titleMedium?.copyWith(
-            color: const Color(0xFF8CB1D9),
+            color: theme.colorScheme.tertiary,
             fontWeight: FontWeight.w600,
           ),
         ),

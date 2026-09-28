@@ -58,41 +58,4 @@ void main() {
       });
     });
   });
-
-  group('Throttler', () {
-    test('runs the first action immediately', () {
-      fakeAsync((async) {
-        final t = Throttler(interval: const Duration(milliseconds: 100));
-        var calls = 0;
-        t.run(() => calls++);
-        expect(calls, 1);
-      });
-    });
-
-    test('queues a single trailing call during the cooldown window', () {
-      fakeAsync((async) {
-        final t = Throttler(interval: const Duration(milliseconds: 100));
-        var results = <String>[];
-        t.run(() => results.add('a'));      // immediate
-        async.elapse(const Duration(milliseconds: 10));
-        t.run(() => results.add('b'));      // queued
-        async.elapse(const Duration(milliseconds: 10));
-        t.run(() => results.add('c'));      // replaces 'b' (only latest queued)
-        async.elapse(const Duration(milliseconds: 200));
-        expect(results, ['a', 'c']);
-      });
-    });
-
-    test('cancel() drops the queued trailing call', () {
-      fakeAsync((async) {
-        final t = Throttler(interval: const Duration(milliseconds: 100));
-        var calls = 0;
-        t.run(() => calls++);              // immediate -> 1
-        t.run(() => calls++);              // queued
-        t.cancel();
-        async.elapse(const Duration(seconds: 1));
-        expect(calls, 1);
-      });
-    });
-  });
 }

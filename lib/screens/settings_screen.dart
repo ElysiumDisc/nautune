@@ -72,9 +72,9 @@ const List<_SettingsCategory> _settingsCategories = [
   _SettingsCategory(
     id: 'music',
     title: 'Your Music',
-    subtitle: 'ListenBrainz & easter eggs',
+    subtitle: 'ListenBrainz scrobbling & discovery',
     icon: Icons.auto_awesome,
-    keywords: ['listenbrainz', 'stats', 'easter', 'frets', 'piano', 'essential mix', 'healing'],
+    keywords: ['listenbrainz', 'scrobble', 'recommendations', 'discover'],
   ),
   _SettingsCategory(
     id: 'server',
@@ -88,7 +88,7 @@ const List<_SettingsCategory> _settingsCategories = [
     title: 'Appearance',
     subtitle: 'Theme, icon, grid, layout',
     icon: Icons.palette,
-    keywords: ['theme', 'color', 'icon', 'grid', 'font', 'visualizer', 'now playing layout', 'position'],
+    keywords: ['theme', 'color', 'icon', 'grid', 'list', 'visualizer', 'now playing layout', 'position'],
   ),
   _SettingsCategory(
     id: 'audio',
@@ -100,9 +100,9 @@ const List<_SettingsCategory> _settingsCategories = [
   _SettingsCategory(
     id: 'performance',
     title: 'Performance',
-    subtitle: 'Cache, smooth scroll, battery',
+    subtitle: 'Cache duration & pre-cache',
     icon: Icons.speed,
-    keywords: ['cache', 'ttl', 'smooth', 'scroll', 'battery', 'submarine', 'auto-pause', 'prewarm'],
+    keywords: ['cache', 'ttl', 'pre-cache', 'precache', 'wifi'],
   ),
   _SettingsCategory(
     id: 'downloads',
@@ -121,9 +121,9 @@ const List<_SettingsCategory> _settingsCategories = [
   _SettingsCategory(
     id: 'about',
     title: 'About',
-    subtitle: 'Version, licenses, credits',
+    subtitle: 'Version, licenses, easter eggs',
     icon: Icons.info_outline,
-    keywords: ['version', 'about', 'license', 'credits', 'nautune'],
+    keywords: ['version', 'about', 'license', 'credits', 'nautune', 'easter', 'frets', 'piano', 'essential mix', 'healing', 'relax', 'network'],
   ),
 ];
 
@@ -347,8 +347,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         margin: const EdgeInsets.only(right: 8),
                         decoration: BoxDecoration(
                           color: listenBrainz.isScrobblingEnabled
-                              ? Colors.green
-                              : Colors.orange,
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.onSurfaceVariant,
                           shape: BoxShape.circle,
                         ),
                       ),
@@ -360,37 +360,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     context,
                     MaterialPageRoute(
                       builder: (context) => const ListenBrainzSettingsScreen(),
-                    ),
-                  );
-                },
-              ),
-              const Divider(height: 1),
-              // Easter Eggs hub
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF8E2DE2), Color(0xFF4A00E0)],
-                    ),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(
-                    Icons.celebration,
-                    color: Colors.white,
-                    size: 20,
-                  ),
-                ),
-                title: const Text('Easter Eggs'),
-                subtitle: const Text(
-                  'Hidden features — ambient, radio, synth, frequencies',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const EasterEggsScreen(),
                     ),
                   );
                 },
@@ -451,7 +420,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             duration: const Duration(seconds: 5),
             action: SnackBarAction(
               label: 'Copy Path',
-              textColor: Colors.white,
+              textColor: Theme.of(context).colorScheme.onPrimary,
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: backupFile.path));
               },
@@ -1104,13 +1073,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _NautuneToggleTile(
                   icon: Icons.all_inclusive,
                   title: 'Infinite Radio',
-                  subtitle: uiStateProvider.infiniteRadioEnabled
+                  subtitle: appState.infiniteRadioEnabled
                     ? 'Auto-generates similar tracks when queue is low'
                     : 'Endless playback based on current track',
-                  value: uiStateProvider.infiniteRadioEnabled,
-                  onChanged: uiStateProvider.toggleInfiniteRadio,
+                  // Same source of truth as the full-player menu: NautuneAppState
+                  // persists AND applies the setting to the audio service.
+                  value: appState.infiniteRadioEnabled,
+                  onChanged: appState.toggleInfiniteRadio,
                 ),
-                if (uiStateProvider.infiniteRadioEnabled)
+                if (appState.infiniteRadioEnabled)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                     child: Text(
@@ -1346,6 +1317,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () {
                     showLicensePage(context: context);
+                  },
+                ),
+                ListTile(
+                  leading: Icon(Icons.celebration, color: theme.colorScheme.primary),
+                  title: const Text('Easter Eggs'),
+                  subtitle: const Text('Hidden features — ambient, radio, synth, frequencies'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const EasterEggsScreen(),
+                      ),
+                    );
                   },
                 ),
               ],
@@ -3119,7 +3104,7 @@ class _ColorCircle extends StatelessWidget {
         color: color,
         shape: BoxShape.circle,
         border: Border.all(
-          color: Colors.white.withValues(alpha: 0.2),
+          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.2),
           width: 1,
         ),
       ),

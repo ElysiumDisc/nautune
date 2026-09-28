@@ -191,7 +191,3 @@ class _WaveformDataPainter extends CustomPainter {
         oldDelegate.unplayedColor != unplayedColor;
   }
 }
-
-// Keep the old class name as an alias for backward compatibility
-@Deprecated('Use TrackWaveform instead')
-typedef JellyfinWaveform = TrackWaveform;

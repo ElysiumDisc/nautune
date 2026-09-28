@@ -82,8 +82,6 @@ class _NetworkScreenState extends State<NetworkScreen>
 
     // Listen to download service changes
     _downloadService.addListener(_onDownloadServiceChanged);
-
-    // Mark Network easter egg as discovered for the milestone
   }
 
   void _onDownloadServiceChanged() {

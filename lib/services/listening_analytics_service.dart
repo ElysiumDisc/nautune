@@ -384,8 +384,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
     }
   }
 
-  // Piano stats tracking (notes played, session time). The milestone-era
-  // `_pianoDiscovered` boolean was retired in v8.9.5.
+  // Piano stats tracking (notes played, session time).
   Future<void> _loadPianoStats() async {
     final raw = _box?.get(_pianoStatsKey);
     if (raw != null) {
@@ -475,8 +474,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
     if (_box == null) return;
 
     // Keep last 365 days of events for streak / period-comparison / top-content
-    // stats on the Profile dashboard. Two-year retention was previously kept
-    // for the retired "Your Rewind" yearly report; trimmed in v8.9.5.
+    // stats on the Profile dashboard.
     final cutoff = DateTime.now().subtract(const Duration(days: 365));
     _events.removeWhere((e) => e.timestamp.isBefore(cutoff));
 
