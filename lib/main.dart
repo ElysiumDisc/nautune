@@ -7,9 +7,11 @@ import 'package:provider/provider.dart';
 import 'app_state.dart';
 import 'jellyfin/jellyfin_service.dart';
 import 'jellyfin/jellyfin_session_store.dart';
+import 'models/appearance.dart';
 import 'providers/connectivity_provider.dart';
 import 'providers/demo_mode_provider.dart';
 import 'providers/library_data_provider.dart';
+import 'providers/now_playing_colors_provider.dart';
 import 'providers/session_provider.dart';
 import 'providers/sync_status_provider.dart';
 import 'providers/theme_provider.dart';
@@ -195,6 +197,12 @@ Future<void> main() async {
     libraryDataProvider: libraryDataProvider,
     );
 
+  final nowPlayingColorsProvider = NowPlayingColorsProvider(
+    audioService: appState.audioPlayerService,
+    jellyfinService: jellyfinService,
+    downloadService: downloadService,
+  );
+
   // Initialize providers/services in parallel
   await Future.wait<void>([
     sessionProvider.initialize(),
@@ -219,6 +227,7 @@ Future<void> main() async {
       demoModeProvider: demoModeProvider,
       syncStatusProvider: syncStatusProvider,
       themeProvider: themeProvider,
+      nowPlayingColorsProvider: nowPlayingColorsProvider,
     ),
   );
 }
@@ -234,6 +243,7 @@ class NautuneApp extends StatefulWidget {
     required this.demoModeProvider,
     required this.syncStatusProvider,
     required this.themeProvider,
+    required this.nowPlayingColorsProvider,
   });
 
   final NautuneAppState appState;
@@ -244,6 +254,7 @@ class NautuneApp extends StatefulWidget {
   final DemoModeProvider demoModeProvider;
   final SyncStatusProvider syncStatusProvider;
   final ThemeProvider themeProvider;
+  final NowPlayingColorsProvider nowPlayingColorsProvider;
 
   @override
   State<NautuneApp> createState() => _NautuneAppState();
@@ -381,14 +392,23 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver {
         ChangeNotifierProvider.value(value: widget.demoModeProvider),
         ChangeNotifierProvider.value(value: widget.syncStatusProvider),
         ChangeNotifierProvider.value(value: widget.themeProvider),
+        ChangeNotifierProvider.value(value: widget.nowPlayingColorsProvider),
 
         // Legacy app state (will be phased out)
         ChangeNotifierProvider.value(value: widget.appState),
       ],
       child: Consumer<ThemeProvider>(
-        builder: (context, themeProvider, _) => MaterialApp(
+        builder: (context, themeProvider, _) {
+          // Only rebuild the app theme on artwork changes when the user
+          // chose the Now Playing accent.
+          final accent = themeProvider.accentSource == AccentSource.nowPlaying
+              ? context.select<NowPlayingColorsProvider, Color?>((c) => c.accent)
+              : null;
+          return MaterialApp(
           title: 'Nautune - Poseidon Music Player',
-          theme: themeProvider.themeData,
+          theme: themeProvider.themeFor(Brightness.light, accent: accent),
+          darkTheme: themeProvider.themeFor(Brightness.dark, accent: accent),
+          themeMode: themeProvider.themeMode,
           debugShowCheckedModeBanner: false,
           routes: {
             '/queue': (context) => const QueueScreen(),
@@ -415,7 +435,8 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver {
             return const LibraryScreen();
           },
         ),
-        ),
+        );
+        },
       ),
     );
   }

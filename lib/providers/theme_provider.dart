@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../models/appearance.dart';
 import '../services/playback_state_store.dart';
 import '../theme/nautune_theme.dart';
 
@@ -52,8 +53,79 @@ class ThemeProvider extends ChangeNotifier {
   /// Whether custom theme is light mode
   bool get customIsLight => _customIsLight;
 
-  /// Build ThemeData from the current palette
-  ThemeData get themeData => _currentPalette.buildTheme();
+  // Appearance preferences
+  AppearanceMode _appearanceMode = AppearanceMode.palette;
+  CornerStyle _cornerStyle = CornerStyle.squircle;
+  AccentSource _accentSource = AccentSource.palette;
+  bool _frostedBlur = true;
+  bool _artworkTint = true;
+
+  AppearanceMode get appearanceMode => _appearanceMode;
+  CornerStyle get cornerStyle => _cornerStyle;
+  AccentSource get accentSource => _accentSource;
+  bool get frostedBlur => _frostedBlur;
+  bool get artworkTint => _artworkTint;
+
+  NautuneStyle get _style => NautuneStyle(
+        frostedBlur: _frostedBlur,
+        cornerStyle: _cornerStyle,
+        artworkTint: _artworkTint,
+      );
+
+  /// Theme for [brightness]: the current palette rendered at that brightness,
+  /// optionally with [accent] (Now Playing colour) as primary.
+  ThemeData themeFor(Brightness brightness, {Color? accent}) => _currentPalette
+      .variant(brightness)
+      .withAccent(_accentSource == AccentSource.nowPlaying ? accent : null)
+      .buildTheme(style: _style);
+
+  /// [ThemeMode] for MaterialApp. "Palette" follows the palette's own
+  /// brightness, as before appearance modes existed.
+  ThemeMode get themeMode => switch (_appearanceMode) {
+        AppearanceMode.palette =>
+          _currentPalette.isLight ? ThemeMode.light : ThemeMode.dark,
+        AppearanceMode.system => ThemeMode.system,
+        AppearanceMode.light => ThemeMode.light,
+        AppearanceMode.dark => ThemeMode.dark,
+      };
+
+  /// Build ThemeData from the current palette at its own brightness
+  ThemeData get themeData => themeFor(_currentPalette.brightness);
+
+  void setAppearanceMode(AppearanceMode mode) {
+    if (_appearanceMode == mode) return;
+    _appearanceMode = mode;
+    unawaited(_playbackStateStore.saveUiState(appearanceMode: mode));
+    notifyListeners();
+  }
+
+  void setCornerStyle(CornerStyle style) {
+    if (_cornerStyle == style) return;
+    _cornerStyle = style;
+    unawaited(_playbackStateStore.saveUiState(cornerStyle: style));
+    notifyListeners();
+  }
+
+  void setAccentSource(AccentSource source) {
+    if (_accentSource == source) return;
+    _accentSource = source;
+    unawaited(_playbackStateStore.saveUiState(accentSource: source));
+    notifyListeners();
+  }
+
+  void setFrostedBlur(bool enabled) {
+    if (_frostedBlur == enabled) return;
+    _frostedBlur = enabled;
+    unawaited(_playbackStateStore.saveUiState(frostedBlurEnabled: enabled));
+    notifyListeners();
+  }
+
+  void setArtworkTint(bool enabled) {
+    if (_artworkTint == enabled) return;
+    _artworkTint = enabled;
+    unawaited(_playbackStateStore.saveUiState(artworkTintEnabled: enabled));
+    notifyListeners();
+  }
 
   /// Initialize by loading persisted theme preference.
   ///
@@ -75,6 +147,11 @@ class ThemeProvider extends ChangeNotifier {
           _customAccentColor = Color(storedState.customAccentColor!);
         }
         _customIsLight = storedState.customThemeIsLight;
+        _appearanceMode = storedState.appearanceMode;
+        _cornerStyle = storedState.cornerStyle;
+        _accentSource = storedState.accentSource;
+        _frostedBlur = storedState.frostedBlurEnabled;
+        _artworkTint = storedState.artworkTintEnabled;
 
         // If using custom theme, rebuild it with stored colors
         if (storedState.themePaletteId == 'custom' &&

@@ -1,17 +1,14 @@
 import 'dart:async';
-import 'dart:typed_data';
-import 'dart:ui' as ui show Image, ImageFilter;
+import 'dart:ui' as ui show ImageFilter;
 
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
-import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart' hide RepeatMode;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:material_color_utilities/material_color_utilities.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../providers/now_playing_colors_provider.dart';
 import '../services/lyrics_service.dart';
 import '../models/now_playing_layout.dart';
 import '../services/playback_state_store.dart' show StreamingQuality, VisualizerPosition;
@@ -20,7 +17,6 @@ import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../services/audio_player_service.dart';
 import '../services/haptic_service.dart';
-import '../services/palette_cache_service.dart';
 import '../services/saved_loops_service.dart';
 import '../widgets/track_context_menu.dart';
 import '../widgets/visualizers/visualizer_factory.dart';
@@ -28,64 +24,6 @@ import '../widgets/jellyfin_image.dart';
 import '../widgets/jellyfin_waveform.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
-
-/// Top-level function for compute() - extracts vibrant colors from image pixels in isolate
-Future<List<int>> _extractColorsInIsolate(Uint32List pixels) async {
-  // Run the quantization to find the dominant color clusters
-  final result = await QuantizerCelebi().quantize(pixels, 128);
-  final colorToCount = result.colorToCount;
-
-  // RAW VIBRANCY SCORING
-  // Score = Population * (Chroma^2)
-  final sortedEntries = colorToCount.entries.toList()
-    ..sort((a, b) {
-      final hctA = Hct.fromInt(a.key);
-      final hctB = Hct.fromInt(b.key);
-      final scoreA = a.value * (hctA.chroma * hctA.chroma);
-      final scoreB = b.value * (hctB.chroma * hctB.chroma);
-      return scoreB.compareTo(scoreA);
-    });
-
-  final selectedColors = <int>[];
-
-  for (final entry in sortedEntries) {
-    if (selectedColors.length >= 4) break;
-
-    final colorInt = entry.key;
-    final hct = Hct.fromInt(colorInt);
-
-    // Skip absolute greys
-    if (hct.chroma < 5) continue;
-
-    // Distinctness check
-    bool isDistinct = true;
-    for (final existing in selectedColors) {
-      final existingHct = Hct.fromInt(existing);
-      final hueDiff = (hct.hue - existingHct.hue).abs();
-      final normalizedHueDiff = hueDiff > 180 ? 360 - hueDiff : hueDiff;
-      if (normalizedHueDiff < 15) {
-        isDistinct = false;
-        break;
-      }
-    }
-
-    if (isDistinct) {
-      // Add with full alpha
-      selectedColors.add(colorInt | 0xFF000000);
-    }
-  }
-
-  // Fallback if we found nothing (e.g. B&W image)
-  if (selectedColors.isEmpty) {
-    final populationSorted = colorToCount.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    for (final entry in populationSorted.take(4)) {
-      selectedColors.add(entry.key | 0xFF000000);
-    }
-  }
-
-  return selectedColors;
-}
 
 class FullPlayerScreen extends StatefulWidget {
   const FullPlayerScreen({super.key});
@@ -96,9 +34,6 @@ class FullPlayerScreen extends StatefulWidget {
 
 class _FullPlayerScreenState extends State<FullPlayerScreen>
     with SingleTickerProviderStateMixin {
-  // Shared palette cache - avoids redundant color extraction across screens
-  static final _paletteCache = PaletteCacheService.instance;
-
   StreamSubscription? _trackSub;
   late TabController _tabController;
   List<_LyricLine>? _lyrics;
@@ -107,8 +42,10 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   late AudioPlayerService _audioService;
   late NautuneAppState _appState;
   LyricsService? _lyricsService;
-  List<Color>? _paletteColors;
-  double? _cachedAvgLuminance; // Cached luminance from _paletteColors
+  // Artwork colours come from the app-wide NowPlayingColorsProvider.
+  NowPlayingColorsProvider? _colorsProvider;
+  List<Color>? get _paletteColors => _colorsProvider?.colors;
+  double? get _cachedAvgLuminance => _colorsProvider?.avgLuminance;
 
   // Lyrics scrolling state
   final ScrollController _lyricsScrollController = ScrollController();
@@ -145,6 +82,10 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
 
     // Get services from Provider
     _appState = Provider.of<NautuneAppState>(context, listen: false);
+    if (_colorsProvider == null) {
+      _colorsProvider = context.read<NowPlayingColorsProvider>();
+      _colorsProvider!.addListener(_onColorsChanged);
+    }
     _audioService = _appState.audioService;
     _lyricsService ??= LyricsService(jellyfinService: _appState.jellyfinService);
     _trackPlayingStream ??= _audioService.trackPlayingStream;
@@ -164,7 +105,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
           });
           if (track != null) {
             _fetchLyrics(track);
-            _extractColors(track);
           }
         }
       });
@@ -180,151 +120,8 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
       final currentTrack = _audioService.currentTrack;
       if (currentTrack != null) {
         _fetchLyrics(currentTrack);
-        _extractColors(currentTrack);
       }
     }
-  }
-
-  Future<void> _extractColors(JellyfinTrack track) async {
-    // Use same fallback logic as _buildArtwork to ensure consistency
-    String? imageTag = track.primaryImageTag;
-    String? itemId = track.id;
-
-    // Fallback to album art if track doesn't have its own image
-    if (imageTag == null || imageTag.isEmpty) {
-      imageTag = track.albumPrimaryImageTag;
-      itemId = track.albumId ?? track.id;
-    }
-
-    // Further fallback to parent thumb
-    if (imageTag == null || imageTag.isEmpty) {
-      imageTag = track.parentThumbImageTag;
-      itemId = track.albumId ?? track.id;
-    }
-
-    if (imageTag == null || imageTag.isEmpty) {
-      setState(() {
-        _paletteColors = null;
-        _cachedAvgLuminance = null;
-      });
-      return;
-    }
-
-    // Check cache first - avoids expensive color extraction for repeat plays
-    final cacheKey = '$itemId-$imageTag';
-    final cached = _paletteCache.get(cacheKey);
-    if (cached != null) {
-      if (mounted) {
-        setState(() {
-          _paletteColors = cached;
-          _cachedAvgLuminance = _computeAvgLuminance(cached);
-        });
-      }
-      return;
-    }
-
-    // Clear old colors immediately to prevent showing stale gradient
-    setState(() {
-      _paletteColors = null;
-      _cachedAvgLuminance = null;
-    });
-
-    try {
-      // Try to load from downloaded artwork first (for offline support)
-      ImageProvider imageProvider;
-      final artworkFile = await _appState.downloadService.getArtworkFile(
-        track.id,
-      );
-
-      if (artworkFile != null && await artworkFile.exists()) {
-        // Use offline artwork
-        imageProvider = FileImage(artworkFile);
-        debugPrint(
-          'Using offline artwork for gradient extraction: ${track.name}',
-        );
-      } else {
-        // Fall back to network image
-        final imageUrl = _appState.jellyfinService.buildImageUrl(
-          itemId: itemId,
-          tag: imageTag,
-          maxWidth: 100,
-        );
-        imageProvider = CachedNetworkImageProvider(
-          imageUrl,
-          headers: _appState.jellyfinService.imageHeaders(),
-        );
-      }
-
-      final imageStream = imageProvider.resolve(const ImageConfiguration());
-      final completer = Completer<ui.Image>();
-
-      late ImageStreamListener listener;
-      listener = ImageStreamListener(
-        (info, _) {
-          if (!completer.isCompleted) {
-            completer.complete(info.image);
-          }
-        },
-        onError: (error, stackTrace) {
-          if (!completer.isCompleted) {
-            completer.completeError(error, stackTrace);
-          }
-        },
-      );
-
-      imageStream.addListener(listener);
-      ui.Image image;
-      try {
-        image = await completer.future.timeout(const Duration(seconds: 10));
-      } finally {
-        imageStream.removeListener(listener);
-      }
-
-      final ByteData? byteData = await image.toByteData();
-      if (byteData == null) return;
-
-      final pixels = byteData.buffer.asUint32List();
-
-      // Process colors in isolate to avoid UI jank
-      final colorInts = await compute(_extractColorsInIsolate, pixels);
-
-      // Convert int colors back to Color objects
-      List<Color> selectedColors = colorInts.map((c) => Color(c)).toList();
-
-      // Fallback if still empty
-      if (selectedColors.isEmpty) {
-        if (!mounted) return;
-        final theme = Theme.of(context);
-        selectedColors = [
-          theme.colorScheme.primaryContainer,
-          theme.colorScheme.surface,
-        ];
-      }
-
-      // Cache the extracted colors in shared cache for reuse across screens
-      if (selectedColors.isNotEmpty) {
-        _paletteCache.put(cacheKey, selectedColors);
-      }
-
-      if (mounted) {
-        setState(() {
-          _paletteColors = selectedColors;
-          _cachedAvgLuminance = _computeAvgLuminance(selectedColors);
-        });
-      }
-    } catch (e) {
-      debugPrint('Failed to extract colors: $e');
-    }
-  }
-
-  static double? _computeAvgLuminance(List<Color>? colors) {
-    if (colors == null || colors.isEmpty) return null;
-    final colorsToCheck = colors.take(2).toList();
-    double total = 0;
-    for (final c in colorsToCheck) {
-      total += c.computeLuminance();
-    }
-    return total / colorsToCheck.length;
   }
 
   void _showTrackMenu(BuildContext ctx, JellyfinTrack track) {
@@ -654,8 +451,13 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     }
   }
 
+  void _onColorsChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    _colorsProvider?.removeListener(_onColorsChanged);
     _tabController.dispose();
     _trackSub?.cancel();
     _loopSub?.cancel();

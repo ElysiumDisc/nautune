@@ -1,4 +1,5 @@
 import '../jellyfin/jellyfin_track.dart';
+import 'appearance.dart';
 import 'now_playing_layout.dart';
 import 'replay_gain_mode.dart';
 import 'transcode_codec.dart';
@@ -106,6 +107,11 @@ class PlaybackState {
     // Smart caching
     this.preCacheTrackCount = 3,  // 0 = off, 3, 5, or 10
     this.wifiOnlyCaching = false,
+    this.artworkTintEnabled = true,
+    this.frostedBlurEnabled = true,
+    this.accentSource = AccentSource.palette,
+    this.cornerStyle = CornerStyle.squircle,
+    this.appearanceMode = AppearanceMode.palette,
     this.transcodeCodec = TranscodeCodec.mp3,
     this.replayGainPreampDb = 0.0,
     this.replayGainMode = ReplayGainMode.track,
@@ -165,6 +171,11 @@ class PlaybackState {
   // Smart caching
   final int preCacheTrackCount;  // 0 = off, 3, 5, or 10
   final bool wifiOnlyCaching;
+  final bool artworkTintEnabled;
+  final bool frostedBlurEnabled;
+  final AccentSource accentSource;
+  final CornerStyle cornerStyle;
+  final AppearanceMode appearanceMode;
   final TranscodeCodec transcodeCodec;
   final double replayGainPreampDb;
   final ReplayGainMode replayGainMode;
@@ -221,6 +232,11 @@ class PlaybackState {
     VisualizerPosition? visualizerPosition,
     int? preCacheTrackCount,
     bool? wifiOnlyCaching,
+    bool? artworkTintEnabled,
+    bool? frostedBlurEnabled,
+    AccentSource? accentSource,
+    CornerStyle? cornerStyle,
+    AppearanceMode? appearanceMode,
     TranscodeCodec? transcodeCodec,
     double? replayGainPreampDb,
     ReplayGainMode? replayGainMode,
@@ -269,6 +285,11 @@ class PlaybackState {
       visualizerPosition: visualizerPosition ?? this.visualizerPosition,
       preCacheTrackCount: preCacheTrackCount ?? this.preCacheTrackCount,
       wifiOnlyCaching: wifiOnlyCaching ?? this.wifiOnlyCaching,
+      artworkTintEnabled: artworkTintEnabled ?? this.artworkTintEnabled,
+      frostedBlurEnabled: frostedBlurEnabled ?? this.frostedBlurEnabled,
+      accentSource: accentSource ?? this.accentSource,
+      cornerStyle: cornerStyle ?? this.cornerStyle,
+      appearanceMode: appearanceMode ?? this.appearanceMode,
       transcodeCodec: transcodeCodec ?? this.transcodeCodec,
       replayGainPreampDb: replayGainPreampDb ?? this.replayGainPreampDb,
       replayGainMode: replayGainMode ?? this.replayGainMode,
@@ -320,6 +341,11 @@ class PlaybackState {
       'visualizerPosition': visualizerPosition.name,
       'preCacheTrackCount': preCacheTrackCount,
       'wifiOnlyCaching': wifiOnlyCaching,
+      'artworkTintEnabled': artworkTintEnabled,
+      'frostedBlurEnabled': frostedBlurEnabled,
+      'accentSource': accentSource.name,
+      'cornerStyle': cornerStyle.name,
+      'appearanceMode': appearanceMode.name,
       'transcodeCodec': transcodeCodec.name,
       'replayGainPreampDb': replayGainPreampDb,
       'replayGainMode': replayGainMode.name,
@@ -383,6 +409,11 @@ class PlaybackState {
       visualizerPosition: VisualizerPositionExtension.fromString(json['visualizerPosition'] as String?),
       preCacheTrackCount: (json['preCacheTrackCount'] as num?)?.toInt() ?? 3,
       wifiOnlyCaching: json['wifiOnlyCaching'] as bool? ?? false,
+      artworkTintEnabled: json['artworkTintEnabled'] as bool? ?? true,
+      frostedBlurEnabled: json['frostedBlurEnabled'] as bool? ?? true,
+      accentSource: AccentSource.fromName(json['accentSource'] as String?),
+      cornerStyle: CornerStyle.fromName(json['cornerStyle'] as String?),
+      appearanceMode: AppearanceMode.fromName(json['appearanceMode'] as String?),
       transcodeCodec: TranscodeCodec.fromName(json['transcodeCodec'] as String?),
       replayGainPreampDb: (json['replayGainPreampDb'] as num?)?.toDouble() ?? 0.0,
       replayGainMode: ReplayGainMode.fromName(json['replayGainMode'] as String?),
@@ -440,6 +471,11 @@ class PlaybackState {
       visualizerPosition: visualizerPosition, // Preserve visualizer position
       preCacheTrackCount: preCacheTrackCount, // Preserve smart cache settings
       wifiOnlyCaching: wifiOnlyCaching,
+      artworkTintEnabled: artworkTintEnabled,
+      frostedBlurEnabled: frostedBlurEnabled,
+      accentSource: accentSource,
+      cornerStyle: cornerStyle,
+      appearanceMode: appearanceMode,
       transcodeCodec: transcodeCodec,
       replayGainPreampDb: replayGainPreampDb,
       replayGainMode: replayGainMode,

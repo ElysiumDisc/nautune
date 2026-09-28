@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../services/listening_analytics_service.dart';
 import '../services/network_download_service.dart';
+import '../models/appearance.dart';
 import '../models/now_playing_layout.dart';
 import '../models/replay_gain_mode.dart';
 import '../models/transcode_codec.dart';
@@ -32,6 +33,7 @@ import '../services/waveform_service.dart';
 import '../widgets/jellyfin_waveform.dart';
 import '../theme/nautune_spacing.dart';
 import '../theme/nautune_theme.dart';
+import '../widgets/ios/action_sheet.dart';
 import '../widgets/visualizer_picker.dart';
 import 'easter_eggs_screen.dart';
 import 'offline_library_screen.dart';
@@ -92,7 +94,7 @@ const List<_SettingsCategory> _settingsCategories = [
     title: 'Appearance',
     subtitle: 'Theme, icon, grid, layout',
     icon: Icons.palette,
-    keywords: ['theme', 'color', 'icon', 'grid', 'list', 'visualizer', 'now playing layout', 'position'],
+    keywords: ['theme', 'color', 'icon', 'grid', 'list', 'visualizer', 'now playing layout', 'position', 'dark', 'light', 'appearance', 'accent', 'corners', 'blur', 'frosted', 'tint'],
   ),
   _SettingsCategory(
     id: 'audio',
@@ -189,6 +191,83 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: Text(themeProvider.palette.name),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _showThemePicker(context),
+              ),
+              ListTile(
+                leading: Icon(Icons.brightness_6, color: theme.colorScheme.primary),
+                title: const Text('Light / Dark'),
+                subtitle: Text(switch (themeProvider.appearanceMode) {
+                  AppearanceMode.palette => 'Follow the palette',
+                  AppearanceMode.system => 'Follow iOS appearance',
+                  AppearanceMode.light => 'Always light',
+                  AppearanceMode.dark => 'Always dark',
+                }),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () async {
+                  final mode = await showNautuneActionSheet<AppearanceMode>(
+                    context,
+                    title: 'Light / Dark',
+                    message: 'Every palette has a light and a dark version.',
+                    actions: [
+                      for (final mode in AppearanceMode.values)
+                        NautuneSheetAction(
+                          label: mode.label,
+                          value: mode,
+                          isDefault: mode == themeProvider.appearanceMode,
+                        ),
+                    ],
+                  );
+                  if (mode != null) themeProvider.setAppearanceMode(mode);
+                },
+              ),
+              _NautuneSettingsTile(
+                icon: Icons.format_color_fill,
+                title: 'Accent Colour',
+                subtitle: themeProvider.accentSource == AccentSource.nowPlaying
+                    ? 'Follows the playing artwork'
+                    : 'From your palette',
+                trailing: SegmentedButton<AccentSource>(
+                  showSelectedIcon: false,
+                  style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                  segments: const [
+                    ButtonSegment(value: AccentSource.palette, label: Text('Palette')),
+                    ButtonSegment(value: AccentSource.nowPlaying, label: Text('Artwork')),
+                  ],
+                  selected: {themeProvider.accentSource},
+                  onSelectionChanged: (s) => themeProvider.setAccentSource(s.first),
+                ),
+              ),
+              _NautuneSettingsTile(
+                icon: Icons.rounded_corner,
+                title: 'Corners',
+                subtitle: themeProvider.cornerStyle == CornerStyle.squircle
+                    ? 'Continuous, like iOS'
+                    : 'Circular',
+                trailing: SegmentedButton<CornerStyle>(
+                  showSelectedIcon: false,
+                  style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                  segments: [
+                    for (final style in CornerStyle.values)
+                      ButtonSegment(value: style, label: Text(style.label)),
+                  ],
+                  selected: {themeProvider.cornerStyle},
+                  onSelectionChanged: (s) => themeProvider.setCornerStyle(s.first),
+                ),
+              ),
+              _NautuneToggleTile(
+                icon: Icons.blur_on,
+                title: 'Frosted Glass',
+                subtitle: themeProvider.frostedBlur
+                    ? 'Translucent bars and player'
+                    : 'Solid bars (saves battery)',
+                value: themeProvider.frostedBlur,
+                onChanged: themeProvider.setFrostedBlur,
+              ),
+              _NautuneToggleTile(
+                icon: Icons.gradient,
+                title: 'Tint From Artwork',
+                subtitle: 'Colour the mini player and queue from album art',
+                value: themeProvider.artworkTint,
+                onChanged: themeProvider.setArtworkTint,
               ),
               ListenableBuilder(
                 listenable: AppIconService(),

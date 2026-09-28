@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import '../jellyfin/jellyfin_track.dart';
+import '../models/appearance.dart';
 import '../models/now_playing_layout.dart';
 import '../models/replay_gain_mode.dart';
 import '../models/transcode_codec.dart';
@@ -168,6 +169,11 @@ class PlaybackStateStore {
     VisualizerPosition? visualizerPosition,
     int? preCacheTrackCount,
     bool? wifiOnlyCaching,
+    bool? artworkTintEnabled,
+    bool? frostedBlurEnabled,
+    AccentSource? accentSource,
+    CornerStyle? cornerStyle,
+    AppearanceMode? appearanceMode,
     TranscodeCodec? transcodeCodec,
     double? replayGainPreampDb,
     ReplayGainMode? replayGainMode,
@@ -209,6 +215,11 @@ class PlaybackStateStore {
         visualizerPosition: visualizerPosition ?? state.visualizerPosition,
         preCacheTrackCount: preCacheTrackCount ?? state.preCacheTrackCount,
         wifiOnlyCaching: wifiOnlyCaching ?? state.wifiOnlyCaching,
+        artworkTintEnabled: artworkTintEnabled ?? state.artworkTintEnabled,
+        frostedBlurEnabled: frostedBlurEnabled ?? state.frostedBlurEnabled,
+        accentSource: accentSource ?? state.accentSource,
+        cornerStyle: cornerStyle ?? state.cornerStyle,
+        appearanceMode: appearanceMode ?? state.appearanceMode,
         transcodeCodec: transcodeCodec ?? state.transcodeCodec,
         replayGainPreampDb: replayGainPreampDb ?? state.replayGainPreampDb,
         replayGainMode: replayGainMode ?? state.replayGainMode,

@@ -1,4 +1,10 @@
+import 'dart:math' as math;
+
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+
+import '../models/appearance.dart';
+import 'nautune_spacing.dart';
 
 /// Represents a color palette for the Nautune app theme
 class NautuneColorPalette {
@@ -63,13 +69,99 @@ class NautuneColorPalette {
     }
   }
 
-  /// Build a ThemeData from this palette
-  ThemeData buildTheme() {
-    if (isLight) {
-      return _buildLightTheme();
+  Brightness get brightness => isLight ? Brightness.light : Brightness.dark;
+
+  /// This palette rendered at [target] brightness. A palette designed for the
+  /// other brightness keeps its hues but gets a generated surface and text
+  /// colours with readable contrast, so every preset (and custom palette)
+  /// works in light and dark mode.
+  NautuneColorPalette variant(Brightness target) {
+    if (target == brightness) return this;
+    if (target == Brightness.light) {
+      final surface = Color.lerp(Colors.white, primary, 0.04)!;
+      return NautuneColorPalette(
+        id: id,
+        name: name,
+        primary: _withContrast(primary, surface, 3),
+        secondary: _withContrast(secondary, surface, 3),
+        surface: surface,
+        textPrimary: _withContrast(textPrimary, surface, 4.5),
+        textSecondary: Colors.grey.shade600,
+        isLight: true,
+      );
     }
-    return _buildDarkTheme();
+    final hsl = HSLColor.fromColor(primary);
+    final surface = hsl
+        .withLightness(0.08)
+        .withSaturation(hsl.saturation * 0.3)
+        .toColor();
+    return NautuneColorPalette(
+      id: id,
+      name: name,
+      primary: _withContrast(primary, surface, 3),
+      secondary: _withContrast(secondary, surface, 3),
+      surface: surface,
+      textPrimary: _withContrast(textPrimary, surface, 4.5),
+      textSecondary: Color.lerp(Colors.grey, secondary, 0.2)!,
+      isLight: false,
+    );
   }
+
+  /// This palette with [accent] as its primary colour (Now Playing accent),
+  /// adjusted for contrast against the surface.
+  NautuneColorPalette withAccent(Color? accent) {
+    if (accent == null) return this;
+    final primary = _withContrast(accent, surface, 3);
+    return NautuneColorPalette(
+      id: id,
+      name: name,
+      primary: primary,
+      secondary: _withContrast(
+        Color.lerp(accent, isLight ? Colors.black : Colors.white, 0.15)!,
+        surface,
+        3,
+      ),
+      surface: surface,
+      textPrimary: textPrimary,
+      textSecondary: textSecondary,
+      isLight: isLight,
+    );
+  }
+
+  static double _contrast(Color a, Color b) {
+    final la = a.computeLuminance();
+    final lb = b.computeLuminance();
+    return (math.max(la, lb) + 0.05) / (math.min(la, lb) + 0.05);
+  }
+
+  /// [c] with its HSL lightness moved away from [background] (darker on a
+  /// light background, lighter on a dark one) until the WCAG contrast ratio
+  /// reaches [min]. Hue and saturation are kept.
+  static Color _withContrast(Color c, Color background, double min) {
+    if (_contrast(c, background) >= min) return c;
+    final towardDark =
+        ThemeData.estimateBrightnessForColor(background) == Brightness.light;
+    var hsl = HSLColor.fromColor(c);
+    for (var i = 0; i < 50; i++) {
+      final l = (hsl.lightness + (towardDark ? -0.02 : 0.02)).clamp(0.0, 1.0);
+      hsl = hsl.withLightness(l);
+      final candidate = hsl.toColor();
+      if (_contrast(candidate, background) >= min || l == 0 || l == 1) {
+        return candidate;
+      }
+    }
+    return hsl.toColor();
+  }
+
+  /// Black or white, whichever reads better on [background].
+  static Color _onColor(Color background) =>
+      ThemeData.estimateBrightnessForColor(background) == Brightness.dark
+          ? Colors.white
+          : Colors.black;
+
+  /// Build a ThemeData from this palette at its own brightness.
+  ThemeData buildTheme({NautuneStyle style = const NautuneStyle()}) =>
+      _build(style);
 
   /// The single app-wide type scale. Every style gets the platform font and a
   /// palette colour, so `theme.textTheme.<role>` is never missing a colour.
@@ -86,182 +178,322 @@ class NautuneColorPalette {
     );
   }
 
-  ThemeData _buildLightTheme() {
-    final onSurface = Color(0xFF1A1A1A);
-    return ThemeData.light().copyWith(
+  /// iOS-flavoured Material 3 theme. Palette colours keep their roles
+  /// (primary/secondary accents, textPrimary as body text on dark palettes);
+  /// the container and surface tiers are derived from them so grouped lists,
+  /// sheets and bars layer like iOS system backgrounds.
+  ThemeData _build(NautuneStyle style) {
+    final brightness = this.brightness;
+    final onSurface = isLight ? const Color(0xFF1A1A1A) : textPrimary;
+    Color tier(double amount) => isLight
+        ? Color.alphaBlend(primary.withValues(alpha: amount * 0.6), Colors.white)
+        : Color.alphaBlend(
+            Colors.white.withValues(alpha: amount),
+            Color.alphaBlend(primary.withValues(alpha: 0.05), surface),
+          );
+    // iOS "secondarySystemGroupedBackground": the cell colour in grouped lists.
+    final groupedCell = isLight ? Colors.white : tier(0.07);
+    final separator = onSurface.withValues(alpha: isLight ? 0.12 : 0.14);
+
+    final scheme = ColorScheme.fromSeed(
+      seedColor: primary,
+      brightness: brightness,
+    ).copyWith(
+      primary: primary,
+      onPrimary: _onColor(primary),
+      secondary: secondary,
+      onSecondary: _onColor(secondary),
+      tertiary: textPrimary,
+      onTertiary: _onColor(textPrimary),
+      surface: surface,
+      onSurface: onSurface,
+      onSurfaceVariant: textSecondary,
+      surfaceContainerLowest: isLight ? Colors.white : tier(0.02),
+      surfaceContainerLow: tier(0.04),
+      surfaceContainer: tier(0.06),
+      surfaceContainerHigh: tier(0.09),
+      surfaceContainerHighest: tier(0.12),
+      outline: textSecondary.withValues(alpha: 0.6),
+      outlineVariant: separator,
+      surfaceTint: Colors.transparent,
+    );
+
+    final style0 = style.copyWith(
+      groupedBackground: surface,
+      groupedCell: groupedCell,
+      separator: separator,
+      barColor: surface.withValues(alpha: style.frostedBlur ? 0.72 : 1.0),
+    );
+
+    final base = ThemeData(
+      useMaterial3: true,
+      brightness: brightness,
+      colorScheme: scheme,
+      platform: TargetPlatform.iOS,
+    );
+    final cornerShape = style0.shape(NautuneRadius.md);
+
+    return base.copyWith(
       scaffoldBackgroundColor: surface,
-      colorScheme: ColorScheme.light(
-        primary: primary,
-        secondary: secondary,
-        tertiary: textPrimary,
-        surface: surface,
-        onSurface: onSurface,
-        onPrimary: Colors.white,
-        onSecondary: onSurface,
+      canvasColor: surface,
+      // iOS has no ink ripples; keep a soft highlight for touch feedback.
+      splashFactory: NoSplash.splashFactory,
+      highlightColor: onSurface.withValues(alpha: 0.06),
+      textTheme: _buildTextTheme(base.textTheme, onSurface),
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+        },
       ),
-      textTheme: _buildTextTheme(ThemeData.light().textTheme, onSurface),
+      cupertinoOverrideTheme: CupertinoThemeData(
+        brightness: brightness,
+        primaryColor: primary,
+        scaffoldBackgroundColor: surface,
+        barBackgroundColor: style0.barColor,
+        textTheme: CupertinoTextThemeData(
+          primaryColor: primary,
+          textStyle: TextStyle(
+            inherit: false,
+            fontFamily: 'CupertinoSystemText',
+            fontSize: 17,
+            letterSpacing: -0.41,
+            color: onSurface,
+          ),
+          navTitleTextStyle: TextStyle(
+            inherit: false,
+            fontFamily: 'CupertinoSystemText',
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -0.41,
+            color: onSurface,
+          ),
+          navLargeTitleTextStyle: TextStyle(
+            inherit: false,
+            fontFamily: 'CupertinoSystemDisplay',
+            fontSize: 34,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.38,
+            color: onSurface,
+          ),
+        ),
+      ),
       appBarTheme: AppBarTheme(
         backgroundColor: surface,
         foregroundColor: onSurface,
         elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
+        centerTitle: true,
       ),
       cardTheme: CardThemeData(
-        color: Colors.white,
-        elevation: 2,
-        shadowColor: primary.withValues(alpha: 0.1),
+        color: groupedCell,
+        elevation: 0,
+        margin: EdgeInsets.zero,
+        shape: cornerShape,
+        clipBehavior: Clip.antiAlias,
       ),
       listTileTheme: ListTileThemeData(
         textColor: onSurface,
         iconColor: primary,
       ),
-      iconTheme: IconThemeData(
-        color: primary,
-      ),
+      iconTheme: IconThemeData(color: primary),
+      dividerTheme: DividerThemeData(color: separator, thickness: 0.5, space: 0.5),
       sliderTheme: SliderThemeData(
         activeTrackColor: primary,
-        thumbColor: primary,
-        inactiveTrackColor: primary.withValues(alpha: 0.3),
+        thumbColor: isLight ? Colors.white : onSurface,
+        inactiveTrackColor: onSurface.withValues(alpha: 0.15),
+        trackHeight: 4,
       ),
       switchTheme: SwitchThemeData(
-        thumbColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) return primary;
-          return textSecondary;
-        }),
         trackColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) return primary.withValues(alpha: 0.5);
-          return textSecondary.withValues(alpha: 0.3);
+          if (states.contains(WidgetState.selected)) return primary;
+          return onSurface.withValues(alpha: 0.16);
         }),
+        thumbColor: const WidgetStatePropertyAll(Colors.white),
       ),
-      progressIndicatorTheme: ProgressIndicatorThemeData(
-        color: primary,
-      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(color: primary),
       floatingActionButtonTheme: FloatingActionButtonThemeData(
         backgroundColor: primary,
-        foregroundColor: Colors.white,
+        foregroundColor: scheme.onPrimary,
+        shape: style0.shape(NautuneRadius.lg),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(shape: style0.shape(NautuneRadius.md)),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(shape: style0.shape(NautuneRadius.md)),
       ),
       snackBarTheme: SnackBarThemeData(
-        backgroundColor: Color.alphaBlend(primary.withValues(alpha: 0.9), surface),
-        contentTextStyle: const TextStyle(color: Colors.white),
-      ),
-      dividerTheme: DividerThemeData(
-        color: onSurface.withValues(alpha: 0.1),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: isLight ? const Color(0xFF2C2C2E) : tier(0.16),
+        contentTextStyle: TextStyle(color: isLight ? Colors.white : onSurface),
+        actionTextColor: isLight ? _withContrast(primary, const Color(0xFF2C2C2E), 4.5) : primary,
+        shape: style0.shape(NautuneRadius.md),
       ),
       tabBarTheme: TabBarThemeData(
-        labelColor: primary,
+        labelColor: isLight ? primary : onSurface,
         unselectedLabelColor: textSecondary,
         indicatorColor: primary,
+        dividerColor: Colors.transparent,
+      ),
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: SegmentedButton.styleFrom(
+          selectedBackgroundColor: primary,
+          selectedForegroundColor: scheme.onPrimary,
+          side: BorderSide(color: separator),
+        ),
       ),
       chipTheme: ChipThemeData(
-        backgroundColor: primary.withValues(alpha: 0.1),
+        backgroundColor: tier(0.08),
         labelStyle: TextStyle(color: onSurface),
         selectedColor: primary,
+        secondarySelectedColor: primary,
+        side: BorderSide.none,
+        shape: const StadiumBorder(),
       ),
       dialogTheme: DialogThemeData(
-        backgroundColor: surface,
+        backgroundColor: groupedCell,
+        shape: style0.shape(NautuneRadius.lg),
         titleTextStyle: TextStyle(color: onSurface, fontSize: 20, fontWeight: FontWeight.bold),
         contentTextStyle: TextStyle(color: textSecondary),
       ),
       popupMenuTheme: PopupMenuThemeData(
-        color: Colors.white,
+        color: groupedCell,
         textStyle: TextStyle(color: onSurface),
-      ),
-      bottomSheetTheme: const BottomSheetThemeData(
-        backgroundColor: Colors.white,
-      ),
-      navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: surface,
-        indicatorColor: primary.withValues(alpha: 0.2),
-      ),
-    );
-  }
-
-  ThemeData _buildDarkTheme() {
-    return ThemeData.dark().copyWith(
-      scaffoldBackgroundColor: surface,
-      colorScheme: ColorScheme.dark(
-        primary: primary,
-        secondary: secondary,
-        tertiary: textPrimary,
-        surface: surface,
-        onSurface: textPrimary,
-        onPrimary: textPrimary,
-        onSecondary: textSecondary,
-      ),
-      textTheme: _buildTextTheme(ThemeData.dark().textTheme, textPrimary),
-      appBarTheme: AppBarTheme(
-        backgroundColor: surface,
-        foregroundColor: textPrimary,
-        elevation: 0,
-      ),
-      cardTheme: CardThemeData(
-        color: Color.alphaBlend(primary.withValues(alpha: 0.1), surface),
-        elevation: 0,
-      ),
-      listTileTheme: ListTileThemeData(
-        textColor: textPrimary,
-        iconColor: primary,
-      ),
-      iconTheme: IconThemeData(
-        color: primary,
-      ),
-      sliderTheme: SliderThemeData(
-        activeTrackColor: primary,
-        thumbColor: primary,
-        inactiveTrackColor: primary.withValues(alpha: 0.3),
-      ),
-      switchTheme: SwitchThemeData(
-        thumbColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) return primary;
-          return textSecondary;
-        }),
-        trackColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) return primary.withValues(alpha: 0.5);
-          return textSecondary.withValues(alpha: 0.3);
-        }),
-      ),
-      progressIndicatorTheme: ProgressIndicatorThemeData(
-        color: primary,
-      ),
-      floatingActionButtonTheme: FloatingActionButtonThemeData(
-        backgroundColor: primary,
-        foregroundColor: surface,
-      ),
-      snackBarTheme: SnackBarThemeData(
-        backgroundColor: Color.alphaBlend(primary.withValues(alpha: 0.2), surface),
-        contentTextStyle: TextStyle(color: textPrimary),
-      ),
-      dividerTheme: DividerThemeData(
-        color: textSecondary.withValues(alpha: 0.2),
-      ),
-      tabBarTheme: TabBarThemeData(
-        labelColor: textPrimary,
-        unselectedLabelColor: textSecondary,
-        indicatorColor: primary,
-      ),
-      chipTheme: ChipThemeData(
-        backgroundColor: primary.withValues(alpha: 0.2),
-        labelStyle: TextStyle(color: textPrimary),
-        selectedColor: primary,
-      ),
-      dialogTheme: DialogThemeData(
-        backgroundColor: surface,
-        titleTextStyle: TextStyle(color: textPrimary, fontSize: 20, fontWeight: FontWeight.bold),
-        contentTextStyle: TextStyle(color: textSecondary),
-      ),
-      popupMenuTheme: PopupMenuThemeData(
-        color: Color.alphaBlend(primary.withValues(alpha: 0.1), surface),
-        textStyle: TextStyle(color: textPrimary),
+        shape: style0.shape(NautuneRadius.md),
       ),
       bottomSheetTheme: BottomSheetThemeData(
-        backgroundColor: surface,
+        backgroundColor: isLight ? surface : tier(0.05),
+        showDragHandle: true,
+        dragHandleColor: onSurface.withValues(alpha: 0.25),
+        shape: style0.shape(
+          NautuneRadius.xl,
+          corners: const BorderRadius.vertical(
+            top: Radius.circular(NautuneRadius.xl),
+          ),
+        ),
       ),
       navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: surface,
-        indicatorColor: primary.withValues(alpha: 0.3),
+        backgroundColor: style0.barColor,
+        indicatorColor: primary.withValues(alpha: 0.18),
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
       ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: onSurface.withValues(alpha: 0.08),
+        border: OutlineInputBorder(
+          borderRadius: NautuneRadius.allMd,
+          borderSide: BorderSide.none,
+        ),
+      ),
+      extensions: [style0],
     );
   }
 }
+
+/// App-wide style knobs the user can customise that Material's ThemeData
+/// has no slot for. Read with `NautuneStyle.of(context)`.
+@immutable
+class NautuneStyle extends ThemeExtension<NautuneStyle> {
+  const NautuneStyle({
+    this.frostedBlur = true,
+    this.cornerStyle = CornerStyle.squircle,
+    this.artworkTint = true,
+    this.groupedBackground = Colors.black,
+    this.groupedCell = const Color(0xFF1C1C1E),
+    this.separator = const Color(0x24FFFFFF),
+    this.barColor = const Color(0xB8000000),
+  });
+
+  /// Translucent, blurred bars and sheets (off = opaque, cheaper).
+  final bool frostedBlur;
+  final CornerStyle cornerStyle;
+
+  /// Tint the mini player, queue and player chrome from the artwork.
+  final bool artworkTint;
+
+  /// iOS systemGroupedBackground / secondarySystemGroupedBackground.
+  final Color groupedBackground;
+  final Color groupedCell;
+  final Color separator;
+
+  /// Background for tab bar, mini player and navigation bars.
+  final Color barColor;
+
+  static NautuneStyle of(BuildContext context) =>
+      Theme.of(context).extension<NautuneStyle>() ?? const NautuneStyle();
+
+  /// Border for a card/sheet/button of corner [radius] in the user's corner
+  /// style.
+  /// Pass [corners] to round only some corners (e.g. a sheet's top edge).
+  OutlinedBorder shape(double radius, {BorderRadius? corners}) {
+    final borderRadius = corners ?? BorderRadius.circular(radius);
+    return cornerStyle == CornerStyle.squircle
+        ? RoundedSuperellipseBorder(borderRadius: borderRadius)
+        : RoundedRectangleBorder(borderRadius: borderRadius);
+  }
+
+  @override
+  NautuneStyle copyWith({
+    bool? frostedBlur,
+    CornerStyle? cornerStyle,
+    bool? artworkTint,
+    Color? groupedBackground,
+    Color? groupedCell,
+    Color? separator,
+    Color? barColor,
+  }) {
+    return NautuneStyle(
+      frostedBlur: frostedBlur ?? this.frostedBlur,
+      cornerStyle: cornerStyle ?? this.cornerStyle,
+      artworkTint: artworkTint ?? this.artworkTint,
+      groupedBackground: groupedBackground ?? this.groupedBackground,
+      groupedCell: groupedCell ?? this.groupedCell,
+      separator: separator ?? this.separator,
+      barColor: barColor ?? this.barColor,
+    );
+  }
+
+  @override
+  NautuneStyle lerp(covariant NautuneStyle? other, double t) {
+    if (other == null) return this;
+    return NautuneStyle(
+      frostedBlur: t < 0.5 ? frostedBlur : other.frostedBlur,
+      cornerStyle: t < 0.5 ? cornerStyle : other.cornerStyle,
+      artworkTint: t < 0.5 ? artworkTint : other.artworkTint,
+      groupedBackground: Color.lerp(groupedBackground, other.groupedBackground, t)!,
+      groupedCell: Color.lerp(groupedCell, other.groupedCell, t)!,
+      separator: Color.lerp(separator, other.separator, t)!,
+      barColor: Color.lerp(barColor, other.barColor, t)!,
+    );
+  }
+}
+
+/// iOS Human Interface type roles over the app's [TextTheme], so new UI can
+/// say `textTheme.headline` instead of hard-coding font sizes. Colours come
+/// from the theme (bodyMedium for primary text, labelMedium for secondary).
+extension NautuneTypography on TextTheme {
+  TextStyle _role(double size, FontWeight weight, {bool secondary = false}) =>
+      (secondary ? labelMedium : bodyMedium)!.copyWith(
+        fontSize: size,
+        fontWeight: weight,
+        height: 1.2,
+      );
+
+  TextStyle get largeTitle => _role(34, FontWeight.w700);
+  TextStyle get title1 => _role(28, FontWeight.w700);
+  TextStyle get title2 => _role(22, FontWeight.w700);
+  TextStyle get title3 => _role(20, FontWeight.w600);
+  TextStyle get headline => _role(17, FontWeight.w600);
+  TextStyle get body => _role(17, FontWeight.w400);
+  TextStyle get callout => _role(16, FontWeight.w400);
+  TextStyle get subhead => _role(15, FontWeight.w400);
+  TextStyle get footnote => _role(13, FontWeight.w400, secondary: true);
+  TextStyle get caption => _role(12, FontWeight.w400, secondary: true);
+}
+
 
 /// All available color palettes
 class NautunePalettes {
