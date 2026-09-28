@@ -16,8 +16,10 @@ class DownloadPaths {
   /// Normalize separators to `/`.
   static String _normalize(String path) => path.replaceAll('\\', '/');
 
+  static final RegExp _windowsDrive = RegExp(r'^[A-Za-z]:/');
+
   static bool _isAbsolute(String path) =>
-      path.startsWith('/') || RegExp(r'^[A-Za-z]:/').hasMatch(path);
+      path.startsWith('/') || _windowsDrive.hasMatch(path);
 
   static String _trimTrailingSlash(String path) =>
       path.length > 1 && path.endsWith('/')

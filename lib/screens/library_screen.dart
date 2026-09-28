@@ -23,8 +23,10 @@ import '../services/listenbrainz_service.dart';
 import '../services/smart_playlist_service.dart';
 import '../models/listenbrainz_config.dart';
 import '../widgets/add_to_playlist_dialog.dart';
+import '../widgets/download_indicators.dart';
 import '../widgets/jellyfin_image.dart';
 import '../utils/debouncer.dart';
+import '../utils/download_library.dart';
 import '../utils/easter_egg_keywords.dart';
 import '../widgets/now_playing_bar.dart';
 import '../widgets/skeleton_loader.dart';
@@ -684,7 +686,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                       const SizedBox(width: NautuneSpacing.md),
                       Expanded(
                         child: Text(
-                          'No internet connection. Showing downloaded content only.',
+                          'You\'re offline. Showing downloaded music only.',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             color: theme.colorScheme.onTertiaryContainer,
                           ),
@@ -1078,23 +1080,18 @@ class _LibraryTabState extends State<_LibraryTab> {
     if (_selectedView == 'albums') {
       var offlineAlbums = _cachedOfflineAlbums;
       if (offlineAlbums == null) {
-        final Map<String, List<dynamic>> albumsMap = {};
-        for (final download in downloads) {
-          final albumName = download.track.album ?? 'Unknown Album';
-          albumsMap.putIfAbsent(albumName, () => []).add(download);
-        }
-
-        offlineAlbums = albumsMap.entries.map((entry) {
-          final firstTrack = entry.value.first.track;
-          return JellyfinAlbum(
-            id: firstTrack.albumId ?? firstTrack.id, // Fallback to track ID if album ID missing
-            name: entry.key,
-            artists: [firstTrack.displayArtist],
-            artistIds: const [], // IDs might not be available offline
-            primaryImageTag: firstTrack.albumPrimaryImageTag,
-          );
-        }).toList()
-          ..sort((a, b) => a.name.compareTo(b.name));
+        // Group by album id (not name) so same-name albums stay apart.
+        offlineAlbums = [
+          for (final group in groupOfflineAlbums(downloads))
+            JellyfinAlbum(
+              id: group.albumId ?? group.items.first.track.id,
+              name: group.name,
+              artists: [group.artist],
+              artistIds: group.items.first.track.artistIds,
+              productionYear: group.year,
+              primaryImageTag: group.imageTag,
+            ),
+        ];
         _cachedOfflineAlbums = offlineAlbums;
       }
 
@@ -1169,291 +1166,57 @@ class _LibraryTabState extends State<_LibraryTab> {
   }
 }
 
+/// Home tab while offline: the downloaded library (search, Shuffle all,
+/// albums/artists) with the download queue status on top.
 class _DownloadsTab extends StatelessWidget {
   const _DownloadsTab({required this.appState});
 
   final NautuneAppState appState;
 
-  String _formatFileSize(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    if (bytes < 1024 * 1024 * 1024) {
-      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-    }
-    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
-  }
-
-  String _formatDuration(Duration d) {
-    final hours = d.inHours;
-    final minutes = d.inMinutes.remainder(60);
-    final seconds = d.inSeconds % 60;
-    if (hours > 0) {
-      return '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-    }
-    return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  void _openManager(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const OfflineLibraryScreen(initialTab: 1),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
-    return ListenableBuilder(
-      listenable: appState.downloadService,
-      builder: (context, _) {
-        final downloads = appState.downloadService.downloads;
-        final completedCount = appState.downloadService.completedCount;
-        final activeCount = appState.downloadService.activeCount;
-
-        if (downloads.isEmpty) {
-          return RefreshIndicator(
-            onRefresh: () async {
-              // Trigger a refresh check
-              await Future.delayed(const Duration(milliseconds: 100));
-            },
-            child: ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              children: [
-                SizedBox(
-                  height: MediaQuery.of(context).size.height - 200,
-                  child: Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.download_outlined,
-                            size: 64, color: theme.colorScheme.secondary),
-                        const SizedBox(height: NautuneSpacing.lg),
-                        Text(
-                          'No Downloads',
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            color: theme.colorScheme.onSurface,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 32),
-                          child: Text(
-                            'Download albums and tracks for offline listening',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+    final service = appState.downloadService;
+    return Column(
+      children: [
+        const DownloadQueueBanner(),
+        ListenableBuilder(
+          listenable: service,
+          builder: (context, _) {
+            final active = service.activeCount;
+            if (active == 0) return const SizedBox.shrink();
+            return Material(
+              color: theme.colorScheme.surfaceContainerHighest,
+              child: ListTile(
+                dense: true,
+                leading: const SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
                 ),
-              ],
-            ),
-          );
-        }
-
-        return RefreshIndicator(
-          onRefresh: () async {
-            final totalSize =
-                await appState.downloadService.getTotalDownloadSize();
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                      'Total: $completedCount downloaded (${_formatFileSize(totalSize)})'),
-                  duration: const Duration(seconds: 2),
+                title: Text(
+                  '$active ${active == 1 ? 'download' : 'downloads'} in progress',
                 ),
-              );
-            }
-          },
-          child: Column(
-            children: [
-              if (activeCount > 0 || completedCount > 0)
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  color: theme.colorScheme.surfaceContainerHighest,
-                  child: Row(
-                    children: [
-                      Icon(Icons.info_outline,
-                          size: 20, color: theme.colorScheme.primary),
-                      const SizedBox(width: NautuneSpacing.md),
-                      Expanded(
-                        child: Text(
-                          '$completedCount completed • $activeCount active',
-                          style: theme.textTheme.bodyMedium,
-                        ),
-                      ),
-                      if (completedCount > 0)
-                        TextButton.icon(
-                          onPressed: () async {
-                            final confirm = await showDialog<bool>(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                title: const Text('Clear All Downloads'),
-                                content: Text(
-                                    'Delete all $completedCount downloaded tracks?'),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () =>
-                                        Navigator.of(context).pop(false),
-                                    child: const Text('Cancel'),
-                                  ),
-                                  FilledButton(
-                                    onPressed: () =>
-                                        Navigator.of(context).pop(true),
-                                    child: const Text('Delete All'),
-                                  ),
-                                ],
-                              ),
-                            );
-                            if (confirm == true) {
-                              await appState.downloadService
-                                  .clearAllDownloads();
-                            }
-                          },
-                          icon: const Icon(Icons.delete_outline, size: 18),
-                          label: const Text('Clear All'),
-                        ),
-                    ],
-                  ),
-                ),
-              Expanded(
-                child: ListView.builder(
-                  scrollCacheExtent: ScrollCacheExtent.pixels(500), // Pre-render items above/below viewport for smoother scrolling
-                  itemCount: downloads.length,
-                  itemBuilder: (context, index) {
-                    final download = downloads[index];
-                    final track = download.track;
-
-                    return ListTile(
-                      leading: Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          color: theme.colorScheme.primaryContainer,
-                        ),
-                        child: Center(
-                          child: download.isCompleted
-                              ? Icon(Icons.check_circle,
-                                  color: theme.colorScheme.primary)
-                              : download.isDownloading
-                                  ? SizedBox(
-                                      width: 28,
-                                      height: 28,
-                                      child: CircularProgressIndicator(
-                                        value: download.progress,
-                                        strokeWidth: 3,
-                                        color: theme.colorScheme.primary,
-                                      ),
-                                    )
-                                  : download.isFailed
-                                      ? Icon(Icons.error,
-                                          color: theme.colorScheme.error)
-                                      : Icon(Icons.schedule,
-                                          color: theme.colorScheme.onPrimaryContainer),
-                        ),
-                      ),
-                      title: Text(
-                        track.name,
-                        style: TextStyle(color: theme.colorScheme.tertiary),  // Ocean blue
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            track.displayArtist,
-                            style: TextStyle(color: theme.colorScheme.tertiary.withValues(alpha: 0.7)),  // Ocean blue
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          if (download.isDownloading)
-                            Text(
-                              '${(download.progress * 100).toStringAsFixed(0)}% • ${_formatFileSize(download.downloadedBytes ?? 0)} / ${_formatFileSize(download.totalBytes ?? 0)}',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.primary,
-                              ),
-                            )
-                          else if (download.isCompleted && download.totalBytes != null)
-                            Text(
-                              _formatFileSize(download.totalBytes!),
-                              style: theme.textTheme.bodySmall,
-                            )
-                          else if (download.isFailed)
-                            Text(
-                              'Download failed',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.error,
-                              ),
-                            )
-                          else if (download.isQueued)
-                            Text(
-                              'Queued...',
-                              style: theme.textTheme.bodySmall,
-                            ),
-                        ],
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (track.duration != null)
-                            Text(
-                              _formatDuration(track.duration!),
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          const SizedBox(width: 8),
-                          if (download.isFailed)
-                            IconButton(
-                              icon: const Icon(Icons.refresh),
-                              onPressed: () => appState.downloadService
-                                  .retryDownload(track.id),
-                            )
-                          else
-                            IconButton(
-                              icon: const Icon(Icons.delete_outline),
-                              onPressed: () async {
-                                final confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (context) => AlertDialog(
-                                    title: const Text('Delete Download'),
-                                    content: Text(
-                                        'Delete "${track.name}"?'),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(context).pop(false),
-                                        child: const Text('Cancel'),
-                                      ),
-                                      FilledButton(
-                                        onPressed: () =>
-                                            Navigator.of(context).pop(true),
-                                        child: const Text('Delete'),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                                if (confirm == true) {
-                                  await appState.downloadService
-                                      .deleteDownloadReference(track.id, 'user_initiated_from_downloads_list');
-                                }
-                              },
-                            ),
-                        ],
-                      ),
-                      onTap: download.isCompleted
-                          ? () {
-                              appState.audioPlayerService.playTrack(
-                                track,
-                                queueContext: [track],
-                              );
-                            }
-                          : null,
-                    );
-                  },
-                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _openManager(context),
               ),
-            ],
+            );
+          },
+        ),
+        Expanded(
+          child: OfflineLibraryView(
+            appState: appState,
+            onManage: () => _openManager(context),
           ),
-        );
-      },
+        ),
+      ],
     );
   }
 }

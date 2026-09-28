@@ -43,6 +43,23 @@ class ConnectivityService {
     }
   }
 
+  /// Whether any network interface (Wi-Fi, cellular, ethernet) is up,
+  /// without probing the internet. Cheap, and correct for LAN-only servers
+  /// where the public DNS probe in [hasNetworkConnection] fails. False in
+  /// airplane mode.
+  Future<bool> hasNetworkTransport() async {
+    try {
+      final results = await _connectivity.checkConnectivity().timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => [ConnectivityResult.none],
+      );
+      return _extractPrimaryResult(results) != ConnectivityResult.none;
+    } catch (e) {
+      // Unknown: let the caller try the network rather than stall.
+      return true;
+    }
+  }
+
   /// Check if currently connected via WiFi (not mobile data).
   Future<bool> isOnWifi() async {
     try {

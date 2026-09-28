@@ -12,8 +12,10 @@ import '../app_state.dart';
 import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../repositories/offline_repository.dart';
 import '../services/listenbrainz_service.dart';
 import '../services/palette_cache_service.dart';
+import '../widgets/download_indicators.dart';
 import '../widgets/jellyfin_image.dart';
 import '../widgets/now_playing_bar.dart';
 import '../utils/color_utils.dart';
@@ -100,17 +102,43 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     }
   }
 
+  /// Downloaded tracks of this artist (offline fallback). Offline artists
+  /// may carry the artist name as their id, so match both.
+  List<JellyfinTrack> _downloadedArtistTracks() {
+    final id = widget.artist.id;
+    final name = widget.artist.name;
+    return [
+      for (final d in _appState.downloadService.completedDownloads)
+        if (d.track.artistIds.contains(id) ||
+            d.track.artists.contains(name) ||
+            d.track.displayArtist == name)
+          d.track,
+    ];
+  }
+
   Future<void> _loadLibraryTracks() async {
     setState(() {
       _isLoadingLibraryTracks = true;
     });
 
     try {
-      // Use artist ID to fetch tracks directly (much more reliable than search)
-      final tracks = await _appState.jellyfinService.getArtistMix(
-        artistId: widget.artist.id,
-        limit: 500, // Get up to 500 tracks
-      );
+      List<JellyfinTrack> tracks;
+      if (_appState.isOfflineMode) {
+        tracks = _downloadedArtistTracks();
+      } else {
+        try {
+          // Use artist ID to fetch tracks directly (much more reliable than search)
+          tracks = await _appState.jellyfinService.getArtistMix(
+            artistId: widget.artist.id,
+            limit: 500, // Get up to 500 tracks
+          );
+        } catch (e) {
+          final local = _downloadedArtistTracks();
+          if (local.isEmpty) rethrow;
+          debugPrint('ArtistDetailScreen: server unreachable, showing downloads: $e');
+          tracks = local;
+        }
+      }
 
       if (mounted) {
         setState(() {
@@ -299,11 +327,31 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
       _error = null;
     });
 
+    Future<List<JellyfinAlbum>> downloadedAlbums() async {
+      final offline =
+          OfflineRepository(downloadService: _appState.downloadService);
+      final byId = await offline.getArtistAlbums(widget.artist.id);
+      if (byId.isNotEmpty) return byId;
+      return offline.getArtistAlbums(widget.artist.name);
+    }
+
     try {
-      // Use efficient API to get albums directly by artist ID
-      final artistAlbums = await _appState.jellyfinService.loadAlbumsByArtist(
-        artistId: widget.artist.id,
-      );
+      List<JellyfinAlbum> artistAlbums;
+      if (_appState.isOfflineMode) {
+        artistAlbums = await downloadedAlbums();
+      } else {
+        try {
+          // Use efficient API to get albums directly by artist ID
+          artistAlbums = await _appState.jellyfinService.loadAlbumsByArtist(
+            artistId: widget.artist.id,
+          );
+        } catch (e) {
+          final local = await downloadedAlbums();
+          if (local.isEmpty) rethrow;
+          debugPrint('ArtistDetailScreen: server unreachable, showing downloads: $e');
+          artistAlbums = local;
+        }
+      }
 
       if (mounted) {
         setState(() {
@@ -460,6 +508,18 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
               onPressed: () => Navigator.of(context).pop(),
             ),
             actions: [
+              // Download every library track of the artist.
+              if (_libraryTracks != null && _libraryTracks!.isNotEmpty)
+                CollectionDownloadButton(
+                  style: CollectionDownloadButtonStyle.icon,
+                  tracks: _libraryTracks!,
+                  ownerId: widget.artist.id,
+                  collectionName: widget.artist.name,
+                  circleBackground:
+                      theme.colorScheme.surface.withValues(alpha: 0.7),
+                ),
+              // Radio and Instant Mix need the server.
+              if (!_appState.isOfflineMode) ...[
               // Artist Radio button
               Padding(
                 padding: const EdgeInsets.only(right: 4),
@@ -538,6 +598,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                     child: const Icon(Icons.auto_awesome, size: 20),
                   ),
                   tooltip: 'Instant Mix',
+                  // (offline: hidden, see above)
                   onPressed: () async {
                     try {
                       if (!context.mounted) return;
@@ -589,6 +650,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                   },
                 ),
               ),
+              ],
             ],
             flexibleSpace: FlexibleSpaceBar(
               stretchModes: const [
@@ -1366,6 +1428,8 @@ class _TopTrackTile extends StatelessWidget {
                     ],
                   ),
                 ),
+                TrackDownloadIndicator(trackId: track.id),
+                const SizedBox(width: 4),
                 // Duration
                 Text(
                   durationText,
@@ -1512,6 +1576,8 @@ class _LibraryTrackTile extends StatelessWidget {
                     ],
                   ),
                 ),
+                TrackDownloadIndicator(trackId: track.id),
+                const SizedBox(width: 4),
                 // Duration
                 Text(
                   durationText,

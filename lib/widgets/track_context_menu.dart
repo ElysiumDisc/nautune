@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../jellyfin/jellyfin_album.dart';
+import '../jellyfin/jellyfin_artist.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../models/download_item.dart';
 import '../services/haptic_service.dart';
 import '../services/share_service.dart';
 import '../widgets/add_to_playlist_dialog.dart';
@@ -31,6 +34,8 @@ void showTrackContextMenu({
 }) {
   HapticService.mediumTap();
   final parentContext = context;
+  final isOffline = appState.isOfflineMode;
+  final download = appState.downloadService.getDownload(track.id);
 
   showModalBottomSheet(
     context: parentContext,
@@ -116,6 +121,8 @@ void showTrackContextMenu({
                   );
                 },
               ),
+              // Instant Mix needs the server.
+              if (!isOffline)
               ListTile(
                 leading: const Icon(Icons.auto_awesome),
                 title: const Text('Instant Mix'),
@@ -167,13 +174,12 @@ void showTrackContextMenu({
                 },
               ),
               if (showDownload)
-                ListTile(
-                  leading: const Icon(Icons.download),
-                  title: const Text('Download Track'),
-                  onTap: () {
-                    Navigator.pop(sheetContext);
-                    _downloadTrack(parentContext, appState, track);
-                  },
+                _downloadTile(
+                  sheetContext: sheetContext,
+                  parentContext: parentContext,
+                  appState: appState,
+                  track: track,
+                  download: download,
                 ),
               if (showShare)
                 ListTile(
@@ -197,9 +203,19 @@ void showTrackContextMenu({
                       final cachedArtist = appState.artists
                           ?.where((a) => a.id == artistId)
                           .firstOrNull;
+                      // Offline: the artist screen builds itself from
+                      // downloads, so id + name are enough.
                       final artist =
                           cachedArtist ??
-                          await appState.jellyfinService.getArtist(artistId);
+                          (isOffline
+                              ? JellyfinArtist(
+                                  id: artistId,
+                                  name: track.artists.isNotEmpty
+                                      ? track.artists.first
+                                      : track.displayArtist,
+                                )
+                              : await appState.jellyfinService
+                                  .getArtist(artistId));
                       if (!parentContext.mounted) return;
                       Navigator.of(parentContext).push(
                         MaterialPageRoute(
@@ -225,11 +241,21 @@ void showTrackContextMenu({
                       final cachedAlbum = appState.albums
                           ?.where((a) => a.id == track.albumId)
                           .firstOrNull;
+                      // Offline: the album screen lists the downloaded tracks.
                       final album =
                           cachedAlbum ??
-                          await appState.jellyfinService.getAlbum(
-                            track.albumId!,
-                          );
+                          (isOffline
+                              ? JellyfinAlbum(
+                                  id: track.albumId!,
+                                  name: track.album ?? 'Unknown Album',
+                                  artists: [track.displayArtist],
+                                  artistIds: track.artistIds,
+                                  productionYear: track.productionYear,
+                                  primaryImageTag: track.albumPrimaryImageTag,
+                                )
+                              : await appState.jellyfinService.getAlbum(
+                                  track.albumId!,
+                                ));
                       if (!parentContext.mounted) return;
                       Navigator.of(parentContext).push(
                         MaterialPageRoute(
@@ -267,58 +293,95 @@ void showTrackContextMenu({
   );
 }
 
-Future<void> _downloadTrack(
-  BuildContext parentContext,
-  NautuneAppState appState,
-  JellyfinTrack track,
-) async {
+/// The download entry of the track menu, reflecting the current state:
+/// Download / Cancel download / Retry download / Remove download.
+Widget _downloadTile({
+  required BuildContext sheetContext,
+  required BuildContext parentContext,
+  required NautuneAppState appState,
+  required JellyfinTrack track,
+  required DownloadItem? download,
+}) {
+  final service = appState.downloadService;
   final messenger = ScaffoldMessenger.of(parentContext);
-  final theme = Theme.of(parentContext);
-  final downloadService = appState.downloadService;
-  try {
-    final existing = downloadService.getDownload(track.id);
-    if (existing != null) {
-      if (existing.isCompleted) {
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text('"${track.name}" is already downloaded'),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-        return;
-      }
-      if (existing.isFailed) {
-        await downloadService.retryDownload(track.id);
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text('Retrying download for ${track.name}'),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-        return;
-      }
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('"${track.name}" is already in the download queue'),
-          duration: const Duration(seconds: 2),
-        ),
+  final colors = Theme.of(sheetContext).colorScheme;
+
+  void showMessage(String text) => messenger.showSnackBar(
+        SnackBar(content: Text(text), duration: const Duration(seconds: 2)),
       );
-      return;
-    }
-    await downloadService.downloadTrack(track);
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text('Downloading ${track.name}'),
-        duration: const Duration(seconds: 2),
-      ),
-    );
-  } catch (e) {
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text('Failed to download ${track.name}: $e'),
-        backgroundColor: theme.colorScheme.error,
-      ),
-    );
+
+  switch (download?.status) {
+    case DownloadStatus.completed:
+      return ListTile(
+        leading: Icon(Icons.download_done, color: colors.primary),
+        title: const Text('Remove Download'),
+        subtitle: const Text('Downloaded for offline listening'),
+        onTap: () async {
+          Navigator.pop(sheetContext);
+          await service.deleteDownload(track.id);
+          showMessage('Removed "${track.name}" from downloads');
+        },
+      );
+    case DownloadStatus.queued:
+    case DownloadStatus.downloading:
+    case DownloadStatus.paused:
+      final progress = download!.isDownloading && download.progress > 0
+          ? ' (${(download.progress * 100).toStringAsFixed(0)}%)'
+          : '';
+      return ListTile(
+        leading: const Icon(Icons.cancel_outlined),
+        title: const Text('Cancel Download'),
+        subtitle: Text(download.isDownloading
+            ? 'Downloading$progress'
+            : 'Queued for download'),
+        onTap: () async {
+          Navigator.pop(sheetContext);
+          await service.cancelDownload(track.id);
+          showMessage('Download cancelled');
+        },
+      );
+    case DownloadStatus.failed:
+      return ListTile(
+        leading: Icon(Icons.refresh, color: colors.error),
+        title: const Text('Retry Download'),
+        subtitle: const Text('The last download attempt failed'),
+        onTap: () async {
+          Navigator.pop(sheetContext);
+          if (appState.isOfflineMode) {
+            showMessage('You are offline. Connect to the internet to download.');
+            return;
+          }
+          await service.retryDownload(track.id);
+          showMessage('Retrying download of "${track.name}"');
+        },
+      );
+    case null:
+      return ListTile(
+        leading: const Icon(Icons.download_outlined),
+        title: const Text('Download'),
+        onTap: () async {
+          Navigator.pop(sheetContext);
+          if (appState.isOfflineMode) {
+            showMessage('You are offline. Connect to the internet to download.');
+            return;
+          }
+          try {
+            await service.downloadTrack(track);
+            final waitsForWifi =
+                service.wifiOnlyDownloads && await service.isOnCellular();
+            showMessage(waitsForWifi
+                ? 'Queued "${track.name}". Downloads start on Wi-Fi'
+                : 'Downloading "${track.name}"');
+          } catch (e) {
+            messenger.showSnackBar(
+              SnackBar(
+                content: Text('Could not download "${track.name}"'),
+                backgroundColor: colors.error,
+              ),
+            );
+          }
+        },
+      );
   }
 }
 

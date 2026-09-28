@@ -21,6 +21,7 @@ import '../providers/ui_state_provider.dart';
 import '../services/app_icon_service.dart';
 import '../services/audio_cache_service.dart';
 import '../services/download_service.dart';
+import '../utils/download_status.dart';
 import '../utils/debouncer.dart';
 import '../services/listenbrainz_service.dart';
 import '../services/saved_loops_service.dart';
@@ -31,6 +32,7 @@ import '../theme/nautune_spacing.dart';
 import '../theme/nautune_theme.dart';
 import '../widgets/visualizer_picker.dart';
 import 'easter_eggs_screen.dart';
+import 'offline_library_screen.dart';
 import 'listenbrainz_settings_screen.dart';
 
 /// Modern categorized Settings.
@@ -1238,8 +1240,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     _NautuneToggleTile(
                       icon: Icons.wifi,
-                      title: 'WiFi-Only Downloads',
-                      subtitle: 'Only download when connected to WiFi',
+                      title: 'Wi-Fi-Only Downloads',
+                      subtitle: downloadService.isPausedForMobileData
+                          ? 'Paused on cellular. Resumes on Wi-Fi'
+                          : 'Pause downloads on cellular data',
                       value: downloadService.wifiOnlyDownloads,
                       onChanged: (value) {
                         downloadService.setWifiOnlyDownloads(value);
@@ -1247,18 +1251,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       },
                     ),
                     ListTile(
+                      leading: Icon(Icons.download_for_offline_outlined, color: theme.colorScheme.primary),
+                      title: const Text('Downloads & Queue'),
+                      subtitle: Text(_downloadQueueSummary(downloadService)),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const OfflineLibraryScreen(initialTab: 1),
+                          ),
+                        );
+                      },
+                    ),
+                    ListTile(
                       leading: Icon(Icons.folder_open, color: theme.colorScheme.primary),
                       title: const Text('Manage Storage'),
-                      subtitle: FutureBuilder<StorageStats>(
-                        future: downloadService.getStorageStats(),
-                        builder: (context, snapshot) {
-                          if (snapshot.hasData) {
-                            final stats = snapshot.data!;
-                            final totalItems = stats.trackCount + stats.cacheFileCount;
-                            return Text('$totalItems items using ${stats.formattedCombined}');
-                          }
-                          return const Text('Calculating...');
-                        },
+                      // Computed from cached sizes: no file I/O on each
+                      // (2 Hz) download progress rebuild.
+                      subtitle: Text(
+                        '${downloadService.completedCount} downloaded tracks • '
+                        '${formatDownloadBytes(downloadService.completedBytes)}',
                       ),
                       trailing: const Icon(Icons.chevron_right),
                       onTap: () {
@@ -1561,6 +1574,22 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
   _StorageView _currentView = _StorageView.downloads;
   bool _showByAlbum = true;
 
+  // Storage stats scan cache/waveform/chart directories; recompute only when
+  // downloads change structurally (not on every progress tick) or after an
+  // action on this screen.
+  Future<StorageStats>? _statsFuture;
+  int _statsRevision = -1;
+
+  Future<StorageStats> _statsFor(DownloadService service) {
+    if (_statsFuture == null || _statsRevision != service.revision) {
+      _statsRevision = service.revision;
+      _statsFuture = service.getStorageStats();
+    }
+    return _statsFuture!;
+  }
+
+  void _refreshStats() => setState(() => _statsFuture = null);
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1609,7 +1638,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
         listenable: downloadService,
         builder: (context, _) {
           return FutureBuilder(
-            future: downloadService.getStorageStats(),
+            future: _statsFor(downloadService),
             builder: (context, snapshot) {
               if (!snapshot.hasData) {
                 return const Center(child: CircularProgressIndicator());
@@ -1681,12 +1710,13 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                           if (downloadService.storageLimitMB > 0) ...[
                             const SizedBox(height: 16),
                             LinearProgressIndicator(
-                              value: (stats.totalBytes + stats.cacheBytes) / (downloadService.storageLimitMB * 1024 * 1024),
+                              value: (stats.totalBytes / (downloadService.storageLimitMB * 1024 * 1024)).clamp(0.0, 1.0),
                               backgroundColor: theme.colorScheme.surfaceContainerHighest,
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              '${stats.formattedCombined} of ${_formatBytes(downloadService.storageLimitMB * 1024 * 1024)}',
+                              'Downloads: ${stats.formattedTotal} of ${_formatBytes(downloadService.storageLimitMB * 1024 * 1024)}'
+                              '${downloadService.queuePause == DownloadQueuePause.storageLimit ? ' • limit reached, downloads paused' : ''}',
                               style: theme.textTheme.bodySmall,
                             ),
                           ],
@@ -1726,7 +1756,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                           icon: Icons.auto_delete,
                           title: 'Auto-Cleanup',
                           subtitle: downloadService.autoCleanupEnabled
-                              ? 'Remove downloads older than ${downloadService.autoCleanupDays} days'
+                              ? 'At launch, remove single-track downloads older than ${downloadService.autoCleanupDays} days (albums and playlists are kept)'
                               : 'Keep all downloads',
                           value: downloadService.autoCleanupEnabled,
                           onChanged: (value) {
@@ -1801,9 +1831,9 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                                 final deleted = await downloadService.cleanupByAge(const Duration(days: 30));
                                 if (context.mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Removed $deleted old downloads')),
+                                    SnackBar(content: Text('Removed $deleted single-track downloads older than 30 days (albums and playlists are kept)')),
                                   );
-                                  setState(() {});
+                                  _refreshStats();
                                 }
                               },
                               icon: const Icon(Icons.history),
@@ -1817,9 +1847,9 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                                 final deleted = await downloadService.cleanupToFreeSpace(500);
                                 if (context.mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Removed $deleted downloads to free 500MB')),
+                                    SnackBar(content: Text('Removed $deleted single-track downloads (albums and playlists are kept)')),
                                   );
-                                  setState(() {});
+                                  _refreshStats();
                                 }
                               },
                               icon: const Icon(Icons.cleaning_services),
@@ -1889,7 +1919,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(content: Text('All cache cleared')),
                                     );
-                                    setState(() {});
+                                    _refreshStats();
                                   }
                                 }
                               },
@@ -1992,9 +2022,9 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                     ),
                   );
                   if (confirm == true) {
-                    await downloadService.cleanupAlbum(albumId);
+                    await downloadService.deleteAlbumDownloads(albumId);
                     if (context.mounted) {
-                      setState(() {});
+                      _refreshStats();
                     }
                   }
                 },
@@ -2051,9 +2081,9 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                     ),
                   );
                   if (confirm == true) {
-                    await downloadService.cleanupArtist(artistName);
+                    await downloadService.deleteArtistDownloads(artistName);
                     if (context.mounted) {
-                      setState(() {});
+                      _refreshStats();
                     }
                   }
                 },
@@ -2115,7 +2145,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
             onPressed: () async {
               await AudioCacheService.instance.removeFromCache(trackId);
               if (context.mounted) {
-                setState(() {});
+                _refreshStats();
               }
             },
           ),
@@ -2171,7 +2201,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(content: Text('All saved loops deleted')),
                                   );
-                                  setState(() {});
+                                  _refreshStats();
                                 }
                               }
                             },
@@ -2265,7 +2295,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                             if (confirm == true) {
                               await savedLoopsService.deleteLoop(loop.trackId, loop.id);
                               if (context.mounted) {
-                                setState(() {});
+                                _refreshStats();
                               }
                             }
                           },
@@ -2351,7 +2381,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(content: Text('All waveforms cleared')),
                                   );
-                                  setState(() {});
+                                  _refreshStats();
                                 }
                               }
                             },
@@ -2457,7 +2487,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(content: Text('All charts cleared')),
                                   );
-                                  setState(() {});
+                                  _refreshStats();
                                 }
                               }
                             },
@@ -2527,7 +2557,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                             onPressed: () async {
                               await chartService.deleteChart(chart.trackId);
                               if (context.mounted) {
-                                setState(() {});
+                                _refreshStats();
                               }
                             },
                           ),
@@ -3413,4 +3443,17 @@ class _IconOption extends StatelessWidget {
       ),
     );
   }
+}
+
+/// One-line status of the download queue for the Settings tile.
+String _downloadQueueSummary(DownloadService service) {
+  final active = service.activeCount;
+  final failed = service.failedCount;
+  final parts = <String>[
+    if (active > 0) '$active in progress',
+    if (failed > 0) '$failed failed',
+  ];
+  if (parts.isEmpty) return 'Browse, play and manage downloaded music';
+  final pause = describeQueuePause(service.queuePause);
+  return [parts.join(' • '), if (active > 0) ?pause].join('. ');
 }

@@ -47,14 +47,18 @@ class NotificationService {
     }
   }
 
-  /// Show or update progress notification
+  /// Show or update progress notification.
+  ///
+  /// No-op on iOS: iOS has no progress notifications, and re-posting a
+  /// notification per progress tick would present a new banner (and sound)
+  /// each time once notification permission is granted.
   Future<void> showProgress({
     required String title,
     required String body,
     int? progress, // 0-100, null for indeterminate
     int maxProgress = 100,
   }) async {
-    if (!_initialized) return;
+    if (!_initialized || Platform.isIOS) return;
 
     const NotificationDetails platformChannelSpecifics = NotificationDetails();
 

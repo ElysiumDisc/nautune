@@ -15,6 +15,7 @@ import '../models/listenbrainz_config.dart' show PopularTrack;
 import '../services/listenbrainz_service.dart';
 import '../services/palette_cache_service.dart';
 import '../widgets/add_to_playlist_dialog.dart';
+import '../widgets/download_indicators.dart';
 import '../widgets/jellyfin_image.dart';
 import '../utils/color_utils.dart';
 import '../widgets/now_playing_bar.dart';
@@ -43,6 +44,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   bool _isLoading = false;
   Object? _error;
   List<JellyfinTrack>? _tracks;
+  // Offline and nothing of this album is downloaded.
+  bool _notAvailableOffline = false;
   List<Color>? _paletteColors;
   NautuneAppState? _appState;
   bool? _previousOfflineMode;
@@ -124,14 +127,24 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       final imageStream = imageProvider.resolve(const ImageConfiguration());
       final completer = Completer<ui.Image>();
 
-      late ImageStreamListener listener;
-      listener = ImageStreamListener((info, _) {
-        completer.complete(info.image);
-        imageStream.removeListener(listener);
-      });
+      // onError + timeout: offline, an uncached image never loads and the
+      // listener would otherwise wait (and stay registered) forever.
+      final listener = ImageStreamListener(
+        (info, _) {
+          if (!completer.isCompleted) completer.complete(info.image);
+        },
+        onError: (e, st) {
+          if (!completer.isCompleted) completer.completeError(e, st);
+        },
+      );
 
       imageStream.addListener(listener);
-      final image = await completer.future;
+      final ui.Image image;
+      try {
+        image = await completer.future.timeout(const Duration(seconds: 10));
+      } finally {
+        imageStream.removeListener(listener);
+      }
 
       final ByteData? byteData = await image.toByteData();
       if (byteData == null) return;
@@ -165,7 +178,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     setState(() {
       _isLoading = true;
       _error = null;
+      _notAvailableOffline = false;
     });
+
+    List<JellyfinTrack> downloadedTracks() => _appState!
+        .downloadService.completedDownloads
+        .where((d) => d.track.albumId == widget.album.id)
+        .map((d) => d.track)
+        .toList();
 
     try {
       List<JellyfinTrack> tracks;
@@ -177,21 +197,31 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         }
       } else if (_appState!.isOfflineMode ||
           !_appState!.networkAvailable) {
-        // Get all downloaded tracks for this album
-        final downloads = _appState!.downloadService.completedDownloads;
-        tracks = downloads
-            .where((d) => d.track.albumId == widget.album.id)
-            .map((d) => d.track)
-            .toList();
-        
+        // Offline: the downloaded tracks of this album.
+        tracks = downloadedTracks();
         if (tracks.isEmpty) {
-          throw Exception('No downloaded tracks found for this album');
+          if (mounted) {
+            setState(() {
+              _tracks = const [];
+              _notAvailableOffline = true;
+              _isLoading = false;
+            });
+          }
+          return;
         }
       } else {
-        // Online mode - fetch from Jellyfin
-        tracks = await _appState!.jellyfinService.loadAlbumTracks(
-          albumId: widget.album.id,
-        );
+        // Online mode - fetch from Jellyfin, falling back to downloads when
+        // the server can't be reached (before the app notices it's offline).
+        try {
+          tracks = await _appState!.jellyfinService.loadAlbumTracks(
+            albumId: widget.album.id,
+          );
+        } catch (e) {
+          final local = downloadedTracks();
+          if (local.isEmpty) rethrow;
+          debugPrint('AlbumDetail: server unreachable, showing downloads: $e');
+          tracks = local;
+        }
       }
       
       final sorted = List<JellyfinTrack>.from(tracks)
@@ -381,7 +411,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               onPressed: () => Navigator.of(context).pop(),
             ),
             actions: [
-              // Instant Mix button
+              // Instant Mix needs the server.
+              if (!(_appState?.isOfflineMode ?? false))
               IconButton(
                 icon: const Icon(Icons.auto_awesome),
                 tooltip: 'Instant Mix',
@@ -541,87 +572,15 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                           label: const Text('Play Album'),
                         ),
                         const SizedBox(width: 12),
-                        ListenableBuilder(
-                          listenable: _appState!.downloadService,
-                          builder: (context, _) {
-                            final allDownloaded = _tracks!.every(
-                              (track) => _appState!.downloadService
-                                  .isDownloaded(track.id),
-                            );
-                            final anyDownloading = _tracks!.any(
-                              (track) {
-                                final download = _appState!.downloadService
-                                    .getDownload(track.id);
-                                return download != null &&
-                                    (download.isDownloading || download.isQueued);
-                              },
-                            );
-
-                            if (allDownloaded) {
-                              return OutlinedButton.icon(
-                                onPressed: () async {
-                                  final confirm = await showDialog<bool>(
-                                    context: context,
-                                    builder: (context) => AlertDialog(
-                                      title: const Text('Delete Downloads'),
-                                      content: Text(
-                                          'Delete all ${_tracks!.length} downloaded tracks from this album?'),
-                                      actions: [
-                                        TextButton(
-                                          onPressed: () =>
-                                              Navigator.of(context).pop(false),
-                                          child: const Text('Cancel'),
-                                        ),
-                                        FilledButton(
-                                          onPressed: () =>
-                                              Navigator.of(context).pop(true),
-                                          child: const Text('Delete'),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                  if (!context.mounted) return;
-                                  if (confirm == true) {
-                                    for (final track in _tracks!) {
-                                      await _appState!.downloadService
-                                          .deleteDownloadReference(track.id, album.id); // Use new method
-                                    }
-                                    if (!context.mounted) return;
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('Album downloads deleted'),
-                                        duration: Duration(seconds: 2),
-                                      ),
-                                    );
-                                  }
-                                },
-                                icon: const Icon(Icons.download_done),
-                                label: const Text('Downloaded'),
-                              );
+                        CollectionDownloadButton(
+                          tracks: _tracks!,
+                          ownerId: album.id,
+                          collectionName: album.name,
+                          // Offline the list only holds downloaded tracks.
+                          onRemoved: () {
+                            if (mounted && (_appState?.isOfflineMode ?? false)) {
+                              _loadTracks();
                             }
-
-                            return OutlinedButton.icon(
-                              onPressed: anyDownloading
-                                  ? null
-                                  : () async {
-                                      await _appState!.downloadService
-                                          .downloadAlbum(album);
-                                      if (!context.mounted) return;
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                              'Downloading ${_tracks!.length} tracks from ${album.name}'),
-                                          duration: const Duration(seconds: 2),
-                                        ),
-                                      );
-                                    },
-                              icon: Icon(anyDownloading
-                                  ? Icons.downloading
-                                  : Icons.download),
-                              label: Text(anyDownloading
-                                  ? 'Downloading...'
-                                  : 'Download Album'),
-                            );
                           },
                         ),
                       ],
@@ -644,6 +603,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                   onRetry: _loadTracks,
                 ),
               ),
+            )
+          else if (_notAvailableOffline)
+            const SliverPadding(
+              padding: EdgeInsets.all(16),
+              sliver: SliverToBoxAdapter(child: _NotAvailableOfflineWidget()),
             )
           else if (_tracks == null || _tracks!.isEmpty)
             SliverPadding(
@@ -856,6 +820,8 @@ class _TrackTile extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
+                TrackDownloadIndicator(trackId: track.id),
+                const SizedBox(width: 4),
                 Text(
                   durationText,
                   style: theme.textTheme.bodySmall?.copyWith(
@@ -970,6 +936,38 @@ class _EmptyWidget extends StatelessWidget {
           FilledButton.tonal(
             onPressed: onRetry,
             child: const Text('Refresh'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NotAvailableOfflineWidget extends StatelessWidget {
+  const _NotAvailableOfflineWidget();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.cloud_off,
+            size: 48,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(height: 12),
+          Text('Not available offline', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Text(
+            'This album isn\'t downloaded. Connect to the internet to play '
+            'it, or download it next time you\'re online.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            textAlign: TextAlign.center,
           ),
         ],
       ),

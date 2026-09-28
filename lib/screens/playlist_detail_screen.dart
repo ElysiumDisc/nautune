@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../widgets/download_indicators.dart';
 import '../widgets/jellyfin_image.dart';
 import '../widgets/now_playing_bar.dart';
 
@@ -112,32 +113,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     }
   }
 
-  Future<void> _downloadPlaylist() async {
-    if (_tracks == null || _tracks!.isEmpty) return;
-
-    final count = _tracks!.length;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Checking $count tracks for download...')),
-    );
-
-    // Centralized in DownloadService so a rapid double-tap can't kick off two
-    // concurrent passes — _playlistBatchInFlight guards the batch.
-    final started = await _appState!.downloadService.downloadPlaylist(
-      playlistId: widget.playlist.id,
-      tracks: List<JellyfinTrack>.from(_tracks!),
-    );
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(started > 0
-            ? 'Queued $started new downloads'
-            : 'All tracks already downloaded or queued'),
-        ),
-      );
-    }
-  }
-
   Future<void> _removeTrack(String trackId) async {
     try {
       await _appState!.jellyfinService.removeItemsFromPlaylist(
@@ -167,15 +142,23 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // Editing the track list needs the server (rename/delete go through the
+    // offline sync queue in app state).
+    final isOffline = _appState!.isOfflineMode;
 
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.playlist.name),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.download),
-            tooltip: 'Download Playlist',
-            onPressed: _downloadPlaylist,
+          CollectionDownloadButton(
+            style: CollectionDownloadButtonStyle.icon,
+            tracks: _tracks ?? const <JellyfinTrack>[],
+            ownerId: widget.playlist.id,
+            collectionName: widget.playlist.name,
+            // Offline the list only holds downloaded tracks.
+            onRemoved: () {
+              if (isOffline && mounted) _loadTracks();
+            },
           ),
           IconButton(
             icon: const Icon(Icons.shuffle),
@@ -234,17 +217,30 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.music_note, size: 64, color: theme.colorScheme.secondary.withValues(alpha: 0.3)),
+                          Icon(isOffline ? Icons.cloud_off : Icons.music_note, size: 64, color: theme.colorScheme.secondary.withValues(alpha: 0.3)),
                           const SizedBox(height: 16),
-                          Text('No tracks in this playlist', style: theme.textTheme.titleLarge),
+                          Text(
+                            isOffline ? 'Not available offline' : 'No tracks in this playlist',
+                            style: theme.textTheme.titleLarge,
+                          ),
                           const SizedBox(height: 8),
-                          Text('Add tracks from albums or search', style: theme.textTheme.bodyMedium),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 32),
+                            child: Text(
+                              isOffline
+                                  ? 'None of this playlist\'s tracks are downloaded. Download the playlist next time you\'re online.'
+                                  : 'Add tracks from albums or search',
+                              style: theme.textTheme.bodyMedium,
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
                         ],
                       ),
                     )
                   : ReorderableListView.builder(
                       padding: const EdgeInsets.all(16),
                       itemCount: _tracks!.length,
+                      buildDefaultDragHandles: !isOffline,
                       onReorderItem: _onReorder,
                       itemBuilder: (context, index) {
                         final track = _tracks![index];
@@ -294,16 +290,21 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
+                              TrackDownloadIndicator(trackId: track.id),
+                              const SizedBox(width: 4),
                               Text(
                                 durationText,
                                 style: theme.textTheme.bodySmall,
                               ),
-                              IconButton(
-                                icon: const Icon(Icons.remove_circle_outline),
-                                onPressed: () => _removeTrack(track.id),
-                              ),
-                              const SizedBox(width: 8),
-                              Icon(Icons.drag_handle, color: theme.colorScheme.onSurfaceVariant),
+                              if (!isOffline) ...[
+                                IconButton(
+                                  icon: const Icon(Icons.remove_circle_outline),
+                                  tooltip: 'Remove from playlist',
+                                  onPressed: () => _removeTrack(track.id),
+                                ),
+                                const SizedBox(width: 8),
+                                Icon(Icons.drag_handle, color: theme.colorScheme.onSurfaceVariant),
+                              ],
                             ],
                           ),
                           onTap: () async {
