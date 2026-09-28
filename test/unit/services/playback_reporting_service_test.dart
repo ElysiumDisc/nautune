@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:nautune/jellyfin/jellyfin_track.dart';
+import 'package:nautune/services/pending_report_store.dart';
 import 'package:nautune/services/playback_reporting_service.dart';
 
 class _Req {
@@ -24,6 +25,16 @@ JellyfinTrack _track(String id) => JellyfinTrack(
       token: 'tok',
       userId: 'u',
     );
+
+class _MemoryStore implements PendingReportStore {
+  final Map<String, List<Map<String, dynamic>>> data = {};
+  @override
+  Future<List<Map<String, dynamic>>> load(String key) async =>
+      [...?data[key]];
+  @override
+  Future<void> save(String key, List<Map<String, dynamic>> events) async =>
+      data[key] = [...events];
+}
 
 void main() {
   late List<_Req> requests;
@@ -271,5 +282,62 @@ void main() {
     await service.reportPlaybackStart(_track('a'));
     await service.reportPlaybackStopped(_track('a'), Duration.zero);
     expect(requests, isEmpty);
+  });
+
+  group('persisted offline queue', () {
+    PlaybackReportingService withStore(
+      _MemoryStore store,
+      List<String> sent,
+    ) =>
+        PlaybackReportingService(
+          serverUrl: 'https://host/jf',
+          accessToken: 'tok',
+          deviceId: 'dev',
+          userId: 'u',
+          pendingStore: store,
+          httpClient: MockClient((request) async {
+            sent.add(request.url.path);
+            return http.Response('', 204);
+          }),
+        );
+
+    test('events survive a restart and flush once', () async {
+      final store = _MemoryStore();
+      final sent = <String>[];
+      final before = withStore(store, sent)..setEnabled(false);
+      await before.reportPlaybackStart(_track('a'), sessionId: 'sa');
+      await before.reportPlaybackStopped(_track('a'), Duration.zero);
+      before.dispose(); // app killed
+
+      final after = withStore(store, sent);
+      await after.flushPendingReports();
+      expect(sent, ['/jf/Sessions/Playing', '/jf/Sessions/Playing/Stopped']);
+      expect(store.data.values.expand((e) => e), isEmpty);
+      await after.flushPendingReports();
+      expect(sent, hasLength(2));
+      after.dispose();
+    });
+
+    test('queue is capped, dropping the oldest', () async {
+      final store = _MemoryStore();
+      final service = withStore(store, [])..setEnabled(false);
+      for (var i = 0; i < PlaybackReportingService.maxPendingEvents + 10; i++) {
+        await service.reportPlaybackStart(_track('t$i'), sessionId: 's$i');
+      }
+      final saved = store.data.values.single;
+      expect(saved, hasLength(PlaybackReportingService.maxPendingEvents));
+      expect(saved.first['sessionId'], 's10');
+      service.dispose();
+    });
+
+    test('logout clears the persisted queue', () async {
+      final store = _MemoryStore();
+      final service = withStore(store, [])..setEnabled(false);
+      await service.reportPlaybackStart(_track('a'), sessionId: 'sa');
+      service.retire();
+      await Future<void>.delayed(Duration.zero);
+      expect(store.data.values.expand((e) => e), isEmpty);
+      service.dispose();
+    });
   });
 }

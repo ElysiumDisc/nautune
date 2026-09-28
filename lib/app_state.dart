@@ -24,6 +24,7 @@ import 'services/carplay_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/download_service.dart';
 import 'services/local_cache_service.dart';
+import 'services/pending_report_store.dart';
 import 'services/playback_reporting_service.dart';
 import 'services/playback_state_store.dart';
 import 'services/playlist_membership_store.dart';
@@ -369,6 +370,7 @@ class NautuneAppState extends ChangeNotifier {
         userId: session.credentials.userId,
         // Reuse the API client's keep-alive connections.
         httpClient: _jellyfinService.jellyfinClient?.httpClient,
+        pendingStore: HivePendingReportStore(),
       );
       if (old != null) {
         if (service.isSameAccountAs(old)) {

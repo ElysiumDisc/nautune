@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import '../jellyfin/jellyfin_auth_header.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../jellyfin/server_uri.dart';
+import 'pending_report_store.dart';
 
 /// One started (and not yet stopped) Jellyfin playback session.
 class _ReportSession {
@@ -42,13 +43,19 @@ class PlaybackReportingService {
   final String? userId;
   final http.Client httpClient;
 
+  /// Persists queued offline events; null keeps them in memory only.
+  final PendingReportStore? pendingStore;
+
   PlaybackReportingService({
     required this.serverUrl,
     required this.accessToken,
     this.deviceId,
     this.userId,
     http.Client? httpClient,
-  }) : httpClient = httpClient ?? http.Client();
+    this.pendingStore,
+  }) : httpClient = httpClient ?? http.Client() {
+    _pendingLoaded = _loadPersistedEvents();
+  }
 
   _ReportSession? _current;
 
@@ -97,6 +104,49 @@ class PlaybackReportingService {
   /// Progress events are skipped (redundant — start/stop capture endpoints).
   final List<Map<String, dynamic>> _pendingEvents = [];
 
+  /// Oldest events are dropped beyond this many (a long offline stretch).
+  static const int maxPendingEvents = 500;
+
+  late final Future<void> _pendingLoaded;
+
+  String get _accountKey => '$serverUrl|${userId ?? ''}';
+
+  Future<void> _loadPersistedEvents() async {
+    final store = pendingStore;
+    if (store == null || _isDemo) return;
+    final stored = await store.load(_accountKey);
+    if (stored.isEmpty || _disposed || _retired) return;
+    final merged = [...stored];
+    for (final event in _pendingEvents) {
+      if (!merged.any((e) => _sameEvent(e, event))) merged.add(event);
+    }
+    _pendingEvents
+      ..clear()
+      ..addAll(merged);
+    _trimPending();
+  }
+
+  static bool _sameEvent(Map<String, dynamic> a, Map<String, dynamic> b) =>
+      a['type'] == b['type'] && a['sessionId'] == b['sessionId'];
+
+  void _trimPending() {
+    final excess = _pendingEvents.length - maxPendingEvents;
+    if (excess > 0) _pendingEvents.removeRange(0, excess);
+  }
+
+  void _queueEvent(Map<String, dynamic> event) {
+    if (_pendingEvents.any((e) => _sameEvent(e, event))) return;
+    _pendingEvents.add(event);
+    _trimPending();
+    _persistPending();
+  }
+
+  void _persistPending() {
+    final store = pendingStore;
+    if (store == null || _isDemo) return;
+    unawaited(store.save(_accountKey, List.of(_pendingEvents)));
+  }
+
   bool get _isDemo => serverUrl.startsWith('demo://');
 
   /// Whether this service reports for the same server + user as [other]
@@ -129,8 +179,14 @@ class PlaybackReportingService {
     if (identical(previous, this) || previous._retired || previous._disposed) {
       return;
     }
-    _pendingEvents.addAll(previous._pendingEvents);
+    for (final event in previous._pendingEvents) {
+      if (!_pendingEvents.any((e) => _sameEvent(e, event))) {
+        _pendingEvents.add(event);
+      }
+    }
+    _trimPending();
     previous._pendingEvents.clear();
+    _persistPending();
     _unstopped.addAll(previous._unstopped);
     previous._unstopped.clear();
     _current ??= previous._current;
@@ -270,7 +326,7 @@ class PlaybackReportingService {
     _progressTimer = null;
 
     if (!_enabled) {
-      _pendingEvents.add({
+      _queueEvent({
         'type': 'start',
         'trackId': track.id,
         'playMethod': playMethod,
@@ -425,7 +481,7 @@ class PlaybackReportingService {
 
     if (!_enabled) {
       if (_retired) return; // Logged out: don't queue for later.
-      _pendingEvents.add({
+      _queueEvent({
         'type': 'stop',
         'trackId': track.id,
         'positionTicks': positionTicks,
@@ -452,11 +508,13 @@ class PlaybackReportingService {
 
   /// Flush queued start/stop events when coming back online.
   Future<void> flushPendingReports() async {
-    if (_pendingEvents.isEmpty || _disposed) return;
+    await _pendingLoaded;
+    if (_pendingEvents.isEmpty || _disposed || _retired) return;
 
     debugPrint('📡 Flushing ${_pendingEvents.length} pending playback reports...');
     final events = List<Map<String, dynamic>>.from(_pendingEvents);
     _pendingEvents.clear();
+    _persistPending();
 
     for (final event in events) {
       try {
@@ -490,6 +548,7 @@ class PlaybackReportingService {
   /// under another account).
   void clearPendingEvents() {
     _pendingEvents.clear();
+    _persistPending();
   }
 
   /// Logout: stop accepting new sessions/progress and drop queued offline
@@ -500,6 +559,7 @@ class PlaybackReportingService {
     if (_disposed || _retired) return;
     _retired = true;
     _pendingEvents.clear();
+    _persistPending();
     _progressTimer?.cancel();
     _progressTimer = null;
     _retireTimer = Timer(grace, dispose);
