@@ -4,6 +4,8 @@
 /// without an audio backend.
 library;
 
+import 'dart:math' show Random;
+
 /// Resolves which queue slot a track should play from.
 ///
 /// Queues may contain the same track more than once (e.g. `[A, B, A, C]`),
@@ -71,4 +73,163 @@ int scrobbleThresholdSeconds(Duration trackDuration) {
   final half = trackDuration.inSeconds ~/ 2;
   const fourMinutes = 240;
   return half < fourMinutes ? half : fourMinutes;
+}
+
+// ---------------------------------------------------------------------------
+// Queue index bookkeeping
+// ---------------------------------------------------------------------------
+
+/// Current-track index after removing the item at [removedIndex] from a
+/// queue that had [lengthBefore] items.
+///
+/// Removing an earlier item shifts the current track down by one. Removing
+/// the current item makes whatever slides into its slot current (the next
+/// track), or the new last track when the current one was last. Returns 0
+/// when the queue becomes empty.
+int currentIndexAfterRemoval({
+  required int currentIndex,
+  required int removedIndex,
+  required int lengthBefore,
+}) {
+  final lengthAfter = lengthBefore - 1;
+  if (lengthAfter <= 0) return 0;
+  if (removedIndex < currentIndex) return currentIndex - 1;
+  if (removedIndex == currentIndex && currentIndex >= lengthAfter) {
+    return lengthAfter - 1;
+  }
+  return currentIndex;
+}
+
+/// Current-track index after moving the item at [from] to [to] (final
+/// position, i.e. `removeAt(from)` followed by `insert(to, item)`).
+int currentIndexAfterMove({
+  required int currentIndex,
+  required int from,
+  required int to,
+}) {
+  if (from == currentIndex) return to;
+  if (from < currentIndex && to >= currentIndex) return currentIndex - 1;
+  if (from > currentIndex && to <= currentIndex) return currentIndex + 1;
+  return currentIndex;
+}
+
+/// Current-track index after inserting an item at [insertIndex].
+int currentIndexAfterInsert({
+  required int currentIndex,
+  required int insertIndex,
+}) {
+  return insertIndex <= currentIndex ? currentIndex + 1 : currentIndex;
+}
+
+/// Shuffles [queue] keeping the item at [currentIndex] first.
+///
+/// Only that one slot is pulled out, so other occurrences of the same track
+/// (duplicates) stay in the queue.
+List<T> shuffleKeepingCurrent<T>(
+  List<T> queue,
+  int currentIndex,
+  Random random,
+) {
+  if (queue.isEmpty) return <T>[];
+  if (currentIndex < 0 || currentIndex >= queue.length) {
+    return List<T>.of(queue)..shuffle(random);
+  }
+  final rest = List<T>.of(queue)..removeAt(currentIndex);
+  rest.shuffle(random);
+  return <T>[queue[currentIndex], ...rest];
+}
+
+// ---------------------------------------------------------------------------
+// Streaming / caching policy
+// ---------------------------------------------------------------------------
+
+/// Whether a second, full background copy of a *streaming* track may be
+/// downloaded (used for the iOS FFT shadow player, waveform extraction, A-B
+/// loop and offline replay).
+///
+/// The player is already downloading the same audio to play it, so the copy
+/// doubles the bandwidth for that track. Only allow it when something wants
+/// it, on Wi-Fi, and outside iOS Low Power Mode / battery saver.
+bool shouldCacheStreamingCopy({
+  required bool wanted,
+  required bool onWifi,
+  required bool lowPowerMode,
+  required bool batterySaver,
+}) {
+  return wanted && onWifi && !lowPowerMode && !batterySaver;
+}
+
+/// A cached file as seen by the size-budget eviction.
+class CacheEntryInfo {
+  const CacheEntryInfo({
+    required this.key,
+    required this.bytes,
+    required this.lastUsed,
+  });
+
+  final String key;
+  final int bytes;
+  final DateTime lastUsed;
+}
+
+/// Keys to evict (least recently used first) so the cache fits in
+/// [maxBytes]. Keys in [protectedKeys] (e.g. the playing track) are never
+/// evicted.
+List<String> cacheKeysToEvict(
+  List<CacheEntryInfo> entries, {
+  required int maxBytes,
+  Set<String> protectedKeys = const {},
+}) {
+  var total = 0;
+  for (final e in entries) {
+    total += e.bytes;
+  }
+  if (total <= maxBytes) return const [];
+  final byAge = List<CacheEntryInfo>.of(entries)
+    ..sort((a, b) => a.lastUsed.compareTo(b.lastUsed));
+  final evict = <String>[];
+  for (final e in byAge) {
+    if (total <= maxBytes) break;
+    if (protectedKeys.contains(e.key)) continue;
+    evict.add(e.key);
+    total -= e.bytes;
+  }
+  return evict;
+}
+
+// ---------------------------------------------------------------------------
+// Stall detection
+// ---------------------------------------------------------------------------
+
+/// Detects a "playing" player whose position has stopped advancing (e.g. a
+/// stream that died mid-track: AVPlayer stops, but no error or completion
+/// event reaches Dart).
+class PlaybackStallDetector {
+  PlaybackStallDetector({
+    this.threshold = const Duration(seconds: 12),
+    this.minProgress = const Duration(milliseconds: 50),
+  });
+
+  final Duration threshold;
+  final Duration minProgress;
+
+  Duration? _lastPosition;
+  DateTime? _lastProgressAt;
+
+  void reset() {
+    _lastPosition = null;
+    _lastProgressAt = null;
+  }
+
+  /// Feed a position tick taken while the player reports "playing". Returns
+  /// true while the position has not moved for at least [threshold].
+  bool onTick(Duration position, DateTime now) {
+    final last = _lastPosition;
+    if (last == null || (position - last).abs() >= minProgress) {
+      _lastPosition = position;
+      _lastProgressAt = now;
+      return false;
+    }
+    return now.difference(_lastProgressAt!) >= threshold;
+  }
 }

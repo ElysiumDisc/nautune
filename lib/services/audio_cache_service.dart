@@ -7,6 +7,7 @@ import 'package:path/path.dart' as path;
 
 import '../jellyfin/jellyfin_track.dart';
 import 'connectivity_service.dart';
+import 'playback_logic.dart';
 import 'waveform_service.dart';
 
 /// Service for pre-caching audio tracks for smoother playback.
@@ -18,65 +19,51 @@ class AudioCacheService {
   AudioCacheService._();
   
   CacheManager? _cacheManager;
+  JsonCacheInfoRepository? _repo;
+  Future<void>? _initFuture;
   final Set<String> _cachingInProgress = {};
   final Map<String, Completer<File?>> _cacheCompleters = {};
-  // In-memory index for O(1) cache lookups (avoids directory scans)
-  final Map<String, String> _pathIndex = {};
-  
+
   // Cache configuration
   static const int _maxCacheSize = 500; // Max number of cached files
   static const Duration _stalePeriod = Duration(days: 7);
   static const String _cacheKey = 'nautune_audio_cache';
-  
-  /// Initialize the cache manager
-  Future<void> initialize() async {
-    if (_cacheManager != null) return;
 
-    final cacheDir = await _getCacheDirectory();
+  /// Upper bound on the audio cache's size on disk. flutter_cache_manager
+  /// only bounds the *number* of files (500), which for lossless audio can
+  /// reach many GB; least-recently-used files are evicted past this.
+  static const int _maxCacheBytes = 2 * 1024 * 1024 * 1024; // 2 GiB
+  bool _trimming = false;
+  DateTime? _lastTrim;
+
+  /// Initialize the cache manager (idempotent; concurrent callers share one
+  /// initialisation so two CacheManagers never open the same repository).
+  Future<void> initialize() => _initFuture ??= _initialize();
+
+  Future<void> _initialize() async {
+    final repo = JsonCacheInfoRepository(databaseName: _cacheKey);
+    _repo = repo;
     _cacheManager = CacheManager(
       Config(
         _cacheKey,
         stalePeriod: _stalePeriod,
         maxNrOfCacheObjects: _maxCacheSize,
-        repo: JsonCacheInfoRepository(databaseName: _cacheKey),
+        repo: repo,
         fileService: HttpFileService(),
       ),
     );
-    debugPrint('🎵 AudioCacheService initialized at: $cacheDir');
-    // Build in-memory path index for O(1) cache lookups
-    await _rebuildPathIndex();
+    debugPrint('🎵 AudioCacheService initialized');
   }
 
-  /// Build in-memory index of cached files (runs once at startup)
-  Future<void> _rebuildPathIndex() async {
-    try {
-      final tempDir = await getTemporaryDirectory();
-      final cacheDir = Directory(path.join(tempDir.path, _cacheKey));
-      if (await cacheDir.exists()) {
-        await for (final entity in cacheDir.list(recursive: true)) {
-          if (entity is File) {
-            final fileName = path.basename(entity.path);
-            _pathIndex[fileName] = entity.path;
-          }
-        }
-      }
-      debugPrint('🗂️ Cache path index built: ${_pathIndex.length} files');
-    } catch (e) {
-      debugPrint('⚠️ Failed to build cache index: $e');
-    }
+  /// Directory flutter_cache_manager stores this cache's files in.
+  Future<String> _cacheDirPath() async {
+    final tempDir = await getTemporaryDirectory();
+    return path.join(tempDir.path, _cacheKey);
   }
-  
-  Future<String> _getCacheDirectory() async {
-    final dir = await getTemporaryDirectory();
-    return path.join(dir.path, 'audio_cache');
-  }
-  
+
   /// Get cached file path for a track, or null if not cached
   Future<File?> getCachedFile(String trackId) async {
-    // Auto-initialize if needed
-    if (_cacheManager == null) {
-      await initialize();
-    }
+    await initialize();
     if (_cacheManager == null) return null;
 
     try {
@@ -100,12 +87,15 @@ class AudioCacheService {
   
   /// Pre-cache a single track in the background
   /// Returns the cached file, or null if caching failed
-  /// If [streamUrl] is provided, uses that URL instead of direct download URL
-  /// (useful for caching transcoded streams to match playback quality)
+  /// [streamUrl] is the URL to cache from — callers pass the URL playback
+  /// would stream (universal endpoint at the user's quality), so the copy is
+  /// something AVPlayer can open (non-native formats arrive as MP3, stored
+  /// as .mp3 from the audio/mpeg Content-Type). Without it only a track's
+  /// own `streamUrlOverride` is used: the raw-file endpoint
+  /// (`/Items/{id}/Download`) needs the download permission, logs a
+  /// "downloaded" activity entry, and may be a format AVPlayer can't decode.
   Future<File?> cacheTrack(JellyfinTrack track, {String? streamUrl}) async {
-    if (_cacheManager == null) {
-      await initialize();
-    }
+    await initialize();
 
     // Always use track.id as cache key for consistent lookup
     // This ensures getCachedFile(track.id) will find the file regardless of stream URL
@@ -124,7 +114,7 @@ class AudioCacheService {
     }
 
     // Get the streaming URL
-    final url = streamUrl ?? track.directDownloadUrl();
+    final url = streamUrl ?? track.streamUrlOverride;
     if (url == null) {
       debugPrint('⚠️ No URL available for track: ${track.name}');
       return null;
@@ -138,9 +128,8 @@ class AudioCacheService {
     try {
       debugPrint('📥 Caching track: ${track.name}');
       final file = await _cacheManager!.getSingleFile(url, key: trackId);
-      // Update in-memory path index
-      _pathIndex[path.basename(file.path)] = file.path;
       debugPrint('✅ Cached track: ${track.name}');
+      unawaited(_trimToBudget(protect: {trackId}));
 
       // Extract waveform in background if not already exists
       if (WaveformService.instance.isAvailable) {
@@ -172,6 +161,7 @@ class AudioCacheService {
     List<JellyfinTrack> tracks, {
     int startIndex = 0,
     int? maxTracks,
+    String? Function(JellyfinTrack track)? urlFor,
   }) async {
     if (tracks.isEmpty) return;
 
@@ -192,7 +182,8 @@ class AudioCacheService {
       while (activeCount < maxConcurrent && nextIndex < endIndex) {
         final trackIndex = nextIndex++;
         activeCount++;
-        _cacheTrackSilently(tracks[trackIndex]).whenComplete(() {
+        final track = tracks[trackIndex];
+        _cacheTrackSilently(track, streamUrl: urlFor?.call(track)).whenComplete(() {
           activeCount--;
           if (nextIndex < endIndex) {
             startNext();
@@ -211,57 +202,53 @@ class AudioCacheService {
     await allDone.future;
   }
 
-  /// Smart pre-cache upcoming tracks based on user settings.
+  /// Smart pre-cache of upcoming tracks, honouring the user's settings.
   ///
-  /// [queue] - The current playback queue
-  /// [currentIndex] - Index of currently playing track
-  /// [preCacheCount] - Number of tracks to pre-cache (0 = disabled, 3, 5, or 10)
-  /// [wifiOnly] - If true, only cache when on WiFi
-  /// [connectivityService] - Service to check WiFi status
+  /// [tracks] - the upcoming tracks to cache, already limited to the user's
+  ///   pre-cache count (the caller skips downloaded tracks).
+  /// [urlFor] - URL to cache each track from. Pass the URL playback would
+  ///   stream (i.e. the user's streaming quality) so a pre-cached track costs
+  ///   the same bandwidth as streaming it, instead of always pulling the
+  ///   original (often lossless) file. Falls back to the original file.
+  /// [wifiOnly] - if true, only cache when on Wi-Fi.
+  /// At most [maxConcurrent] downloads run at once so pre-caching doesn't
+  /// starve the stream that is playing.
   Future<void> smartPreCacheQueue({
-    required List<JellyfinTrack> queue,
-    required int currentIndex,
-    required int preCacheCount,
+    required List<JellyfinTrack> tracks,
+    String? Function(JellyfinTrack track)? urlFor,
     required bool wifiOnly,
     ConnectivityService? connectivityService,
+    int maxConcurrent = 2,
   }) async {
-    // Check if caching is disabled
-    if (preCacheCount <= 0) {
-      debugPrint('📦 Smart cache: Disabled (count = 0)');
-      return;
-    }
+    if (tracks.isEmpty) return;
 
     // Check WiFi-only restriction
-    if (wifiOnly && connectivityService != null) {
-      final isWifi = await connectivityService.isOnWifi();
+    if (wifiOnly) {
+      final isWifi = await connectivityService?.isOnWifi() ?? false;
       if (!isWifi) {
         debugPrint('📦 Smart cache: Skipped (WiFi-only enabled, not on WiFi)');
         return;
       }
     }
 
-    // Calculate tracks to cache
-    final startIdx = currentIndex + 1;
-    if (startIdx >= queue.length) {
-      debugPrint('📦 Smart cache: No upcoming tracks to cache');
-      return;
+    debugPrint('📦 Smart cache: Pre-caching ${tracks.length} upcoming tracks');
+
+    var next = 0;
+    Future<void> worker() async {
+      while (next < tracks.length) {
+        final track = tracks[next++];
+        await _cacheTrackSilently(track, streamUrl: urlFor?.call(track));
+      }
     }
 
-    final endIdx = (startIdx + preCacheCount).clamp(0, queue.length);
-    final tracksToCache = queue.sublist(startIdx, endIdx);
-
-    debugPrint('📦 Smart cache: Pre-caching ${tracksToCache.length} upcoming tracks');
-
-    // Cache tracks sequentially in background
-    for (final track in tracksToCache) {
-      unawaited(_cacheTrackSilently(track));
-      await Future.delayed(const Duration(milliseconds: 100));
-    }
+    await Future.wait([
+      for (var i = 0; i < maxConcurrent.clamp(1, tracks.length); i++) worker(),
+    ]);
   }
-  
-  Future<void> _cacheTrackSilently(JellyfinTrack track) async {
+
+  Future<void> _cacheTrackSilently(JellyfinTrack track, {String? streamUrl}) async {
     try {
-      await cacheTrack(track);
+      await cacheTrack(track, streamUrl: streamUrl);
     } catch (e) {
       // Silently ignore errors during background caching
     }
@@ -273,9 +260,6 @@ class AudioCacheService {
 
     try {
       await _cacheManager!.removeFile(trackId);
-      // Remove from in-memory path index
-      _pathIndex.removeWhere((key, value) =>
-          key.contains(trackId) || value.contains(trackId));
       debugPrint('🗑️ Removed from cache: $trackId');
     } catch (e) {
       debugPrint('⚠️ Error removing from cache: $e');
@@ -292,9 +276,6 @@ class AudioCacheService {
       if (_cacheManager != null) {
         await _cacheManager!.emptyCache();
       }
-      // Clear in-memory path index
-      _pathIndex.clear();
-
       // Also manually delete files from all cache directories
       final tempDir = await getTemporaryDirectory();
       final possibleDirs = [
@@ -386,53 +367,81 @@ class AudioCacheService {
     }
   }
 
-  /// Get list of cached track IDs
+  /// Get list of cached track IDs.
+  ///
+  /// Files on disk are named by flutter_cache_manager (random UUIDs), so the
+  /// IDs come from the cache database, whose keys are track IDs.
   Future<List<String>> getCachedTrackIds() async {
     if (_cacheManager == null) {
       return [];
     }
 
     try {
-      final tempDir = await getTemporaryDirectory();
-      final List<String> trackIds = [];
-
-      // Search in flutter_cache_manager's cache locations
-      final possibleDirs = [
-        Directory(path.join(tempDir.path, _cacheKey)),
-        Directory(path.join(tempDir.path, 'libCachedImageData')),
-        Directory(path.join(tempDir.path, 'flutter_cache')),
-      ];
-
-      for (final dir in possibleDirs) {
-        if (await dir.exists()) {
-          await for (final entity in dir.list(recursive: true)) {
-            if (entity is File) {
-              final fileName = path.basenameWithoutExtension(entity.path);
-              // Skip database/metadata files
-              if (fileName.endsWith('.json') || fileName.contains('cache')) {
-                continue;
-              }
-              // Extract track ID (before any underscore for hash variants)
-              final trackId = fileName.split('_').first;
-              if (trackId.isNotEmpty && !trackIds.contains(trackId)) {
-                trackIds.add(trackId);
-              }
-            }
-          }
-        }
-      }
-
-      return trackIds;
+      final objects = await _allCacheObjects();
+      return {for (final o in objects) o.key}.toList();
     } catch (e) {
       debugPrint('⚠️ Error getting cached track IDs: $e');
       return [];
     }
   }
-  
+
+  Future<List<CacheObject>> _allCacheObjects() async {
+    final repo = _repo;
+    if (repo == null) return const [];
+    // Idempotent: shares the connection CacheManager's store already opened.
+    await repo.open();
+    return repo.getAllObjects();
+  }
+
+  /// Evict least-recently-used files once the cache exceeds
+  /// [_maxCacheBytes]. Throttled; never evicts keys in [protect].
+  Future<void> _trimToBudget({Set<String> protect = const {}}) async {
+    if (_trimming || _cacheManager == null) return;
+    final last = _lastTrim;
+    if (last != null && DateTime.now().difference(last) < const Duration(minutes: 1)) {
+      return;
+    }
+    _trimming = true;
+    _lastTrim = DateTime.now();
+    try {
+      final dir = await _cacheDirPath();
+      final entries = <CacheEntryInfo>[];
+      for (final o in await _allCacheObjects()) {
+        var bytes = o.length;
+        if (bytes == null) {
+          final file = File(path.join(dir, o.relativePath));
+          bytes = await file.exists() ? await file.length() : 0;
+        }
+        entries.add(CacheEntryInfo(
+          key: o.key,
+          bytes: bytes,
+          lastUsed: o.touched ?? DateTime.fromMillisecondsSinceEpoch(0),
+        ));
+      }
+      final evict = cacheKeysToEvict(
+        entries,
+        maxBytes: _maxCacheBytes,
+        protectedKeys: {...protect, ..._cachingInProgress},
+      );
+      for (final key in evict) {
+        await _cacheManager?.removeFile(key);
+      }
+      if (evict.isNotEmpty) {
+        debugPrint('🗑️ Audio cache over budget: evicted ${evict.length} files');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Audio cache trim failed: $e');
+    } finally {
+      _trimming = false;
+    }
+  }
+
   /// Dispose the cache manager
   Future<void> dispose() async {
     await _cacheManager?.dispose();
     _cacheManager = null;
+    _repo = null;
+    _initFuture = null;
     _cachingInProgress.clear();
     _cacheCompleters.clear();
   }

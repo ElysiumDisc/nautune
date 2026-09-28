@@ -49,6 +49,11 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
     _durationSubscription?.cancel();
     _stateSubscription?.cancel();
     _player = newPlayer;
+    // The last known position belonged to the outgoing track (typically its
+    // very end). Don't let the immediate re-broadcast below show that on the
+    // lock screen for the incoming track; the new player's first tick (or
+    // forcePlayingState) supplies the real position.
+    _lastKnownPosition = Duration.zero;
     _listenToPlayerState();
   }
 

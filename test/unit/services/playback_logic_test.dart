@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nautune/services/playback_logic.dart';
 
@@ -92,6 +94,195 @@ void main() {
 
     test('caps at four minutes', () {
       expect(scrobbleThresholdSeconds(const Duration(minutes: 20)), 240);
+    });
+  });
+
+  group('queue index bookkeeping', () {
+    // Simulate the queue operation on a list and check the current item
+    // stays current.
+    int trackRemoval(List<String> q, int current, int remove) {
+      final expected = remove == current
+          ? null
+          : q[current];
+      final after = List.of(q)..removeAt(remove);
+      final idx = currentIndexAfterRemoval(
+        currentIndex: current,
+        removedIndex: remove,
+        lengthBefore: q.length,
+      );
+      if (expected != null) expect(after[idx], expected);
+      return idx;
+    }
+
+    test('removing before/after current keeps the current track', () {
+      final q = ['A', 'B', 'C', 'D'];
+      expect(trackRemoval(q, 2, 0), 1);
+      expect(trackRemoval(q, 2, 3), 2);
+    });
+
+    test('removing the current track makes the next one current', () {
+      expect(trackRemoval(['A', 'B', 'C'], 1, 1), 1); // C slid into slot 1
+    });
+
+    test('removing the current last track falls back to the new last', () {
+      expect(trackRemoval(['A', 'B', 'C'], 2, 2), 1);
+    });
+
+    test('removing the only track yields 0', () {
+      expect(
+        currentIndexAfterRemoval(currentIndex: 0, removedIndex: 0, lengthBefore: 1),
+        0,
+      );
+    });
+
+    test('moves keep the current track (exhaustive, with duplicates)', () {
+      final q = ['A', 'B', 'A', 'C', 'D'];
+      for (var current = 0; current < q.length; current++) {
+        for (var from = 0; from < q.length; from++) {
+          for (var to = 0; to < q.length; to++) {
+            // Tag slots so duplicates are distinguishable.
+            final tagged = [for (var i = 0; i < q.length; i++) '${q[i]}$i'];
+            final item = tagged.removeAt(from);
+            tagged.insert(to, item);
+            final idx = currentIndexAfterMove(
+              currentIndex: current,
+              from: from,
+              to: to,
+            );
+            expect(tagged[idx], '${q[current]}$current',
+                reason: 'current=$current from=$from to=$to');
+          }
+        }
+      }
+    });
+
+    test('inserts keep the current track', () {
+      final q = ['A', 'B', 'C'];
+      for (var current = 0; current < q.length; current++) {
+        for (var at = 0; at <= q.length; at++) {
+          final after = List.of(q)..insert(at, 'X');
+          final idx = currentIndexAfterInsert(currentIndex: current, insertIndex: at);
+          expect(after[idx], q[current], reason: 'current=$current at=$at');
+        }
+      }
+    });
+  });
+
+  group('shuffleKeepingCurrent', () {
+    test('current slot first, nothing lost, duplicates kept', () {
+      final q = ['A', 'B', 'A', 'C', 'A'];
+      final out = shuffleKeepingCurrent(q, 2, Random(1));
+      expect(out.first, 'A');
+      expect(out.length, q.length);
+      expect(out.where((t) => t == 'A').length, 3);
+      expect([...out]..sort(), [...q]..sort());
+    });
+
+    test('no current index shuffles everything', () {
+      final out = shuffleKeepingCurrent(['A', 'B', 'C'], -1, Random(2));
+      expect([...out]..sort(), ['A', 'B', 'C']);
+    });
+
+    test('empty queue', () {
+      expect(shuffleKeepingCurrent(<String>[], 0, Random()), isEmpty);
+    });
+  });
+
+  group('shouldCacheStreamingCopy', () {
+    test('only on Wi-Fi, when wanted, outside power saving', () {
+      expect(
+        shouldCacheStreamingCopy(
+            wanted: true, onWifi: true, lowPowerMode: false, batterySaver: false),
+        isTrue,
+      );
+      expect(
+        shouldCacheStreamingCopy(
+            wanted: true, onWifi: false, lowPowerMode: false, batterySaver: false),
+        isFalse,
+        reason: 'cellular: the stream already downloads it once',
+      );
+      expect(
+        shouldCacheStreamingCopy(
+            wanted: true, onWifi: true, lowPowerMode: true, batterySaver: false),
+        isFalse,
+      );
+      expect(
+        shouldCacheStreamingCopy(
+            wanted: true, onWifi: true, lowPowerMode: false, batterySaver: true),
+        isFalse,
+      );
+      expect(
+        shouldCacheStreamingCopy(
+            wanted: false, onWifi: true, lowPowerMode: false, batterySaver: false),
+        isFalse,
+      );
+    });
+  });
+
+  group('cacheKeysToEvict', () {
+    final t0 = DateTime(2026, 1, 1);
+    CacheEntryInfo e(String key, int bytes, int minutes) => CacheEntryInfo(
+          key: key,
+          bytes: bytes,
+          lastUsed: t0.add(Duration(minutes: minutes)),
+        );
+
+    test('nothing to do under budget', () {
+      expect(cacheKeysToEvict([e('a', 10, 0), e('b', 10, 1)], maxBytes: 20), isEmpty);
+    });
+
+    test('evicts least recently used first until under budget', () {
+      final entries = [e('new', 40, 30), e('old', 40, 0), e('mid', 40, 10)];
+      expect(cacheKeysToEvict(entries, maxBytes: 80), ['old']);
+      expect(cacheKeysToEvict(entries, maxBytes: 40), ['old', 'mid']);
+    });
+
+    test('never evicts protected keys', () {
+      final entries = [e('playing', 50, 0), e('b', 50, 5)];
+      expect(
+        cacheKeysToEvict(entries, maxBytes: 50, protectedKeys: {'playing'}),
+        ['b'],
+      );
+    });
+  });
+
+  group('PlaybackStallDetector', () {
+    final t0 = DateTime(2026, 1, 1);
+
+    test('advancing position is never a stall', () {
+      final d = PlaybackStallDetector(threshold: const Duration(seconds: 12));
+      for (var i = 0; i < 200; i++) {
+        expect(
+          d.onTick(Duration(milliseconds: i * 200), t0.add(Duration(milliseconds: i * 200))),
+          isFalse,
+        );
+      }
+    });
+
+    test('frozen position is reported after the threshold', () {
+      final d = PlaybackStallDetector(threshold: const Duration(seconds: 12));
+      const pos = Duration(seconds: 42);
+      expect(d.onTick(pos, t0), isFalse);
+      expect(d.onTick(pos, t0.add(const Duration(seconds: 11))), isFalse);
+      expect(d.onTick(pos, t0.add(const Duration(seconds: 12))), isTrue);
+    });
+
+    test('reset forgets the frozen period (e.g. after a pause)', () {
+      final d = PlaybackStallDetector(threshold: const Duration(seconds: 12));
+      const pos = Duration(seconds: 42);
+      d.onTick(pos, t0);
+      d.reset();
+      // Resuming minutes later at the same position isn't a stall.
+      expect(d.onTick(pos, t0.add(const Duration(minutes: 5))), isFalse);
+    });
+
+    test('a backward jump (seek / A-B loop) counts as progress', () {
+      final d = PlaybackStallDetector(threshold: const Duration(seconds: 12));
+      d.onTick(const Duration(seconds: 60), t0);
+      expect(
+        d.onTick(const Duration(seconds: 10), t0.add(const Duration(seconds: 13))),
+        isFalse,
+      );
     });
   });
 }
