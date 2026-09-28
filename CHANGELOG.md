@@ -149,6 +149,14 @@ CarPlay and a migration to the Jellyfin 12.1 API. The test suite grew from
 - Offline mode: the toggle lives in the Library ⋮ menu (Go offline / Go
   online) and persists. Only real network failures switch the app offline,
   and it comes back online automatically once the server answers again.
+- Offline, playback never tries to stream: next, previous, gapless and
+  auto-advance skip to the nearest downloaded or cached track with a short
+  message, and a queue with nothing playable parks paused with a reason.
+  Crossfade, Infinite Radio and pre-caching stand down while offline.
+- Pending playlist edits and favorites sync automatically on reconnect
+  (one sync at a time, so "Go online" no longer sends duplicate creates).
+- Offline playlists list every downloaded member in playlist order, not
+  just tracks downloaded through that playlist.
 
 **CarPlay**
 - The root is built once and forced on screen. Foreground events only
