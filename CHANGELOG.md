@@ -17,6 +17,19 @@ Nautune now looks and behaves like an iOS app, keeps every theme you had
 - Artwork colours are extracted once per album for the whole app, not
   separately by the full player.
 
+**Library**
+- The A-Z index lands exactly on the letter you pick, in grid and list
+  view, for albums, artists and genres. Letters beyond what's loaded load
+  the rest of the library first (it used to jump to the wrong place or
+  the end of the first 50 items).
+- Smoother scrolling: fixed-height rows and cells, sticky letter headers,
+  and no per-row section search. Rows and cells grow with your text size.
+- Apple Music-style tiles: artwork with the title and artist underneath,
+  round artist photos, action sheet on long press, iOS segmented control
+  and pull to refresh, placeholder grid while loading.
+- Artist page: Play and Shuffle buttons, Radio and Instant Mix under one
+  ⋯ menu, and Top Songs / Songs / Albums sections.
+
 **Playback**
 - Volume levelling: ReplayGain Off / Track / Album (album uses Jellyfin's
   `AlbumNormalizationGain`) with a preamp from -15 to 0 dB. A negative
