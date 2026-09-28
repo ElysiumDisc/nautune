@@ -529,4 +529,37 @@ void main() {
       expect(tracker.listened, s(30)); // first tick after reset is a baseline
     });
   });
+
+  group('audio cache variants', () {
+    const base = 'https://h/Audio/t1/universal?userId=u';
+
+    test('original-quality and uncapped URLs are the original variant', () {
+      expect(cacheVariantForUrl(null), kOriginalCacheVariant);
+      expect(cacheVariantForUrl('https://h/Items/t1/Download?api_key=k'),
+          kOriginalCacheVariant);
+      expect(cacheVariantForUrl('$base&maxStreamingBitrate=140000000'),
+          kOriginalCacheVariant);
+    });
+
+    test('capped URLs carry bitrate and codec', () {
+      expect(
+        cacheVariantForUrl('$base&maxStreamingBitrate=128000&audioCodec=aac'),
+        '128000-aac',
+      );
+    });
+
+    test('keys round-trip to the track id, including legacy keys', () {
+      expect(trackIdFromCacheKey(audioCacheKey('t1', '128000-mp3')), 't1');
+      expect(trackIdFromCacheKey('t1'), 't1');
+    });
+
+    test('a low-bitrate copy never satisfies an original request', () {
+      expect(cacheKeysForRequest('t1', kOriginalCacheVariant), ['t1@orig']);
+    });
+
+    test('an original or legacy copy satisfies a lossy request', () {
+      expect(cacheKeysForRequest('t1', '128000-mp3'),
+          ['t1@128000-mp3', 't1@orig', 't1']);
+    });
+  });
 }

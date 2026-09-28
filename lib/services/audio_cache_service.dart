@@ -61,25 +61,44 @@ class AudioCacheService {
     return path.join(tempDir.path, _cacheKey);
   }
 
-  /// Get cached file path for a track, or null if not cached
-  Future<File?> getCachedFile(String trackId) async {
+  /// Cached copy of a track, or null if not cached.
+  ///
+  /// With [variant] (see [cacheVariantForUrl]) only a copy at that quality or
+  /// better is returned, so a low-bitrate copy isn't replayed after the user
+  /// raises streaming quality. Without it any copy is returned (offline
+  /// playback, waveform and visualizer analysis), best quality first.
+  Future<File?> getCachedFile(String trackId, {String? variant}) async {
     await initialize();
     if (_cacheManager == null) return null;
 
     try {
-      // Try direct lookup first via CacheManager index
-      final fileInfo = await _cacheManager!.getFileFromCache(trackId);
-      if (fileInfo != null && await fileInfo.file.exists()) {
-        return fileInfo.file;
+      final keys = variant != null
+          ? cacheKeysForRequest(trackId, variant)
+          : await _keysForTrack(trackId);
+      for (final key in keys) {
+        final fileInfo = await _cacheManager!.getFileFromCache(key);
+        if (fileInfo != null && await fileInfo.file.exists()) {
+          return fileInfo.file;
+        }
       }
-
     } catch (e) {
       debugPrint('⚠️ Error checking cache for $trackId: $e');
     }
     return null;
   }
-  
-  /// Check if a track is cached
+
+  /// Every cache key held for [trackId], original quality first.
+  Future<List<String>> _keysForTrack(String trackId) async {
+    final original = audioCacheKey(trackId, kOriginalCacheVariant);
+    final keys = <String>[
+      for (final o in await _allCacheObjects())
+        if (trackIdFromCacheKey(o.key) == trackId) o.key,
+    ];
+    keys.sort((a, b) => (a == original ? 0 : 1) - (b == original ? 0 : 1));
+    return keys;
+  }
+
+  /// Check if a track is cached (at any quality)
   Future<bool> isCached(String trackId) async {
     final file = await getCachedFile(trackId);
     return file != null;
@@ -97,22 +116,6 @@ class AudioCacheService {
   Future<File?> cacheTrack(JellyfinTrack track, {String? streamUrl}) async {
     await initialize();
 
-    // Always use track.id as cache key for consistent lookup
-    // This ensures getCachedFile(track.id) will find the file regardless of stream URL
-    final trackId = track.id;
-
-    // Already caching this track - wait for it
-    if (_cachingInProgress.contains(trackId)) {
-      return _cacheCompleters[trackId]?.future;
-    }
-
-    // Check if already cached
-    final existing = await getCachedFile(trackId);
-    if (existing != null) {
-      debugPrint('✅ Track already cached: ${track.name}');
-      return existing;
-    }
-
     // Get the streaming URL
     final url = streamUrl ?? track.streamUrlOverride;
     if (url == null) {
@@ -120,16 +123,33 @@ class AudioCacheService {
       return null;
     }
 
+    // Keyed by track id + quality, so getCachedFile(id, variant: …) only
+    // finds copies good enough for the quality the user streams at.
+    final variant = cacheVariantForUrl(url);
+    final key = audioCacheKey(track.id, variant);
+
+    // Already caching this track - wait for it
+    if (_cachingInProgress.contains(key)) {
+      return _cacheCompleters[key]?.future;
+    }
+
+    // Check if already cached at this quality (or better)
+    final existing = await getCachedFile(track.id, variant: variant);
+    if (existing != null) {
+      debugPrint('✅ Track already cached: ${track.name}');
+      return existing;
+    }
+
     // Start caching
-    _cachingInProgress.add(trackId);
+    _cachingInProgress.add(key);
     final completer = Completer<File?>();
-    _cacheCompleters[trackId] = completer;
+    _cacheCompleters[key] = completer;
 
     try {
-      debugPrint('📥 Caching track: ${track.name}');
-      final file = await _cacheManager!.getSingleFile(url, key: trackId);
+      debugPrint('📥 Caching track: ${track.name} [$variant]');
+      final file = await _cacheManager!.getSingleFile(url, key: key);
       debugPrint('✅ Cached track: ${track.name}');
-      unawaited(_trimToBudget(protect: {trackId}));
+      unawaited(_trimToBudget(protect: {key}));
 
       // Extract waveform in background if not already exists
       if (WaveformService.instance.isAvailable) {
@@ -149,8 +169,8 @@ class AudioCacheService {
       completer.complete(null);
       return null;
     } finally {
-      _cachingInProgress.remove(trackId);
-      _cacheCompleters.remove(trackId);
+      _cachingInProgress.remove(key);
+      _cacheCompleters.remove(key);
     }
   }
   
@@ -254,12 +274,14 @@ class AudioCacheService {
     }
   }
   
-  /// Remove a specific track from cache
+  /// Remove every cached copy of a track
   Future<void> removeFromCache(String trackId) async {
     if (_cacheManager == null) return;
 
     try {
-      await _cacheManager!.removeFile(trackId);
+      for (final key in await _keysForTrack(trackId)) {
+        await _cacheManager!.removeFile(key);
+      }
       debugPrint('🗑️ Removed from cache: $trackId');
     } catch (e) {
       debugPrint('⚠️ Error removing from cache: $e');
@@ -370,7 +392,7 @@ class AudioCacheService {
   /// Get list of cached track IDs.
   ///
   /// Files on disk are named by flutter_cache_manager (random UUIDs), so the
-  /// IDs come from the cache database, whose keys are track IDs.
+  /// IDs come from the cache database, whose keys are `trackId@variant`.
   Future<List<String>> getCachedTrackIds() async {
     if (_cacheManager == null) {
       return [];
@@ -378,7 +400,7 @@ class AudioCacheService {
 
     try {
       final objects = await _allCacheObjects();
-      return {for (final o in objects) o.key}.toList();
+      return {for (final o in objects) trackIdFromCacheKey(o.key)}.toList();
     } catch (e) {
       debugPrint('⚠️ Error getting cached track IDs: $e');
       return [];

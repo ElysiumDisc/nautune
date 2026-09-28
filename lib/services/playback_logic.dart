@@ -303,6 +303,52 @@ bool shouldCacheStreamingCopy({
 }
 
 /// A cached file as seen by the size-budget eviction.
+// ---------------------------------------------------------------------------
+// Audio cache variants
+// ---------------------------------------------------------------------------
+
+/// Cache variant for the best available copy (original file, or the
+/// original-quality stream that only transcodes formats AVPlayer can't play).
+const String kOriginalCacheVariant = 'orig';
+
+/// Streams at or above this cap are original quality (the app requests
+/// original quality with a 140 Mbps cap).
+const int _originalVariantMinBitrate = 100000000;
+
+/// Which quality a stream [url] delivers, used to key the audio cache so a
+/// copy cached at a low bitrate is never replayed after switching to a
+/// higher quality. URLs without a bitrate cap (download/override URLs) are
+/// original quality.
+String cacheVariantForUrl(String? url) {
+  if (url == null) return kOriginalCacheVariant;
+  final query = Uri.tryParse(url)?.queryParameters ?? const {};
+  final bitrate = int.tryParse(query['maxStreamingBitrate'] ?? '');
+  if (bitrate == null || bitrate >= _originalVariantMinBitrate) {
+    return kOriginalCacheVariant;
+  }
+  final codec = query['audioCodec'] ?? 'mp3';
+  return '$bitrate-$codec';
+}
+
+/// Cache key for [trackId] cached at [variant] (`id@variant`).
+String audioCacheKey(String trackId, String variant) => '$trackId@$variant';
+
+/// Track id a cache key belongs to. Keys written before variants existed are
+/// the bare track id.
+String trackIdFromCacheKey(String key) {
+  final at = key.indexOf('@');
+  return at < 0 ? key : key.substring(0, at);
+}
+
+/// Cache keys that satisfy a request for [trackId] at [variant], best first.
+/// An original-quality copy satisfies any request; a lower-bitrate or legacy
+/// (unknown quality) copy only satisfies a request for a lossy variant.
+List<String> cacheKeysForRequest(String trackId, String variant) {
+  final original = audioCacheKey(trackId, kOriginalCacheVariant);
+  if (variant == kOriginalCacheVariant) return [original];
+  return [audioCacheKey(trackId, variant), original, trackId];
+}
+
 class CacheEntryInfo {
   const CacheEntryInfo({
     required this.key,

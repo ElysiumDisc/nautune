@@ -1728,8 +1728,12 @@ class AudioPlayerService {
     final (streamUrl, isDirectStream) = _getStreamUrl(track, sessionId: sessionId);
 
     // Both lookups are independent: start them together (time-to-first-audio).
+    // Online, only a copy at the streaming quality (or better) is used;
+    // offline, any cached copy beats nothing.
+    final cacheVariant =
+        _isOffline || streamUrl == null ? null : cacheVariantForUrl(streamUrl);
     final cachedFileFuture = _audioCacheService
-        .getCachedFile(track.id)
+        .getCachedFile(track.id, variant: cacheVariant)
         .catchError((Object _) => null);
 
     // 1) Downloaded file (works in airplane mode!)
