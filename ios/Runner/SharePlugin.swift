@@ -62,9 +62,14 @@ public class SharePlugin: NSObject, FlutterPlugin {
                 .addToReadingList
             ]
 
-            // Get the root view controller
-            guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                  let rootVC = windowScene.windows.first?.rootViewController else {
+            // Get the root view controller of the phone UI. connectedScenes also
+            // contains the CarPlay template scene, so match on the app role.
+            let phoneScenes = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .filter { $0.session.role == .windowApplication }
+            let windowScene = phoneScenes.first { $0.activationState == .foregroundActive } ?? phoneScenes.first
+            guard let windowScene = windowScene,
+                  let rootVC = (windowScene.windows.first { $0.isKeyWindow } ?? windowScene.windows.first)?.rootViewController else {
                 result(FlutterError(code: "NO_VIEW_CONTROLLER", message: "Could not find root view controller", details: nil))
                 return
             }

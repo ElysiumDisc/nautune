@@ -14,7 +14,8 @@ workflows:
           flutter clean
           flutter pub get
           flutter analyze
-          cd ios && pod repo update && pod install && cd ..
+          flutter test
+          cd ios && pod install && cd ..
 
       - name: Build iOS (release)
         script: |

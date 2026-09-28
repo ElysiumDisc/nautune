@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-set -e
+# Local release build on a Mac with Xcode (CI uses codemagic.yaml).
+set -euo pipefail
 
-flutter clean
+cd "$(dirname "$0")/.."
+
 flutter pub get
-cd ios
-pod repo update
-pod install
-cd ..
-flutter build ios --release
+flutter analyze
+flutter test
+(cd ios && pod install)
+flutter build ipa --release --export-options-plist=ios/ExportOptions.plist

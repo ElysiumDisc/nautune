@@ -11,6 +11,7 @@ import UIKit
 @available(iOS 13.0, *)
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   var window: UIWindow?
+  private var backgroundTaskIdentifier: UIBackgroundTaskIdentifier = .invalid
 
   func scene(
     _ scene: UIScene,
@@ -25,54 +26,27 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     controller.loadDefaultSplashScreenView()
     window?.rootViewController = controller
     window?.makeKeyAndVisible()
+  }
 
-    // Handle deep link from cold start (QR code scan when app is closed)
-    if let urlContext = connectionOptions.urlContexts.first {
-      print("🔗 SceneDelegate: Cold start URL: \(urlContext.url)")
-      // Forward to AppDelegate which Flutter/app_links hooks into
-      _ = (UIApplication.shared.delegate as? FlutterAppDelegate)?.application(
-        UIApplication.shared,
-        open: urlContext.url,
-        options: [:]
-      )
+  // With a scene manifest UIKit never calls applicationDidEnterBackground,
+  // so the background-time request for saving playback state lives here.
+  func sceneDidEnterBackground(_ scene: UIScene) {
+    endBackgroundTask()
+    backgroundTaskIdentifier = UIApplication.shared.beginBackgroundTask(
+      withName: "SavePlaybackState"
+    ) { [weak self] in
+      self?.endBackgroundTask()
     }
 
-    // Handle universal links from cold start
-    if let userActivity = connectionOptions.userActivities.first,
-       userActivity.activityType == NSUserActivityTypeBrowsingWeb,
-       let url = userActivity.webpageURL {
-      print("🔗 SceneDelegate: Cold start universal link: \(url)")
-      _ = (UIApplication.shared.delegate as? FlutterAppDelegate)?.application(
-        UIApplication.shared,
-        open: url,
-        options: [:]
-      )
+    // Allow 3 seconds for Flutter to save state
+    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+      self?.endBackgroundTask()
     }
   }
 
-  // Handle deep link when app is already running (QR code scan when app is in background)
-  func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
-    guard let url = URLContexts.first?.url else { return }
-    print("🔗 SceneDelegate: openURLContexts received URL: \(url)")
-    // Forward to AppDelegate which Flutter/app_links hooks into
-    _ = (UIApplication.shared.delegate as? FlutterAppDelegate)?.application(
-      UIApplication.shared,
-      open: url,
-      options: [:]
-    )
-  }
-
-  // Handle universal links (https:// URLs) when app is already running
-  func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
-    if userActivity.activityType == NSUserActivityTypeBrowsingWeb,
-       let url = userActivity.webpageURL {
-      print("🔗 SceneDelegate: Universal link received: \(url)")
-      // Forward to AppDelegate which Flutter/app_links hooks into
-      _ = (UIApplication.shared.delegate as? FlutterAppDelegate)?.application(
-        UIApplication.shared,
-        open: url,
-        options: [:]
-      )
-    }
+  private func endBackgroundTask() {
+    guard backgroundTaskIdentifier != .invalid else { return }
+    UIApplication.shared.endBackgroundTask(backgroundTaskIdentifier)
+    backgroundTaskIdentifier = .invalid
   }
 }
