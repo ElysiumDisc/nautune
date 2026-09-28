@@ -60,17 +60,38 @@ class PlaybackReportingService {
 
   Timer? _progressTimer;
   Duration Function()? _positionProvider;
-  Duration _progressInterval = const Duration(seconds: 10);
+  /// Base cadence while playing in the foreground (60 s in battery saver).
+  Duration _baseInterval = _activeInterval;
   bool _enabled = true;
   bool _disposed = false;
   bool _retired = false;
   Timer? _retireTimer;
   JellyfinTrack? _activeTrack;
   bool _isPaused = false;
-  bool _backgroundSuspended = false;
+  bool _inBackground = false;
 
   static const Duration _activeInterval = Duration(seconds: 10);
   static const Duration _pausedInterval = Duration(seconds: 60);
+  static const Duration _backgroundInterval = Duration(seconds: 30);
+
+  /// Progress-report cadence for the given state, or null when no progress
+  /// should be sent. Locked-screen listening keeps reporting (throttled) so the
+  /// server's resume position stays current; a paused, backgrounded app is
+  /// silent because the server already has the paused position.
+  @visibleForTesting
+  static Duration? progressIntervalFor({
+    required Duration base,
+    required bool paused,
+    required bool backgrounded,
+  }) {
+    if (backgrounded && paused) return null;
+    var interval = base;
+    if (paused && interval < _pausedInterval) interval = _pausedInterval;
+    if (backgrounded && interval < _backgroundInterval) {
+      interval = _backgroundInterval;
+    }
+    return interval;
+  }
 
   /// Queued start/stop events recorded while disabled (offline).
   /// Progress events are skipped (redundant — start/stop capture endpoints).
@@ -116,8 +137,8 @@ class PlaybackReportingService {
     previous._current = null;
     _activeTrack ??= previous._activeTrack;
     _isPaused = previous._isPaused;
-    _progressInterval = previous._progressInterval;
-    _backgroundSuspended = previous._backgroundSuspended;
+    _baseInterval = previous._baseInterval;
+    _inBackground = previous._inBackground;
     _positionProvider ??= previous._positionProvider;
     if (_activeTrack != null && _current != null && _enabled) {
       _restartProgressTimer();
@@ -202,7 +223,10 @@ class PlaybackReportingService {
   bool get isEnabled => _enabled;
 
   void setProgressInterval(Duration interval) {
-    _progressInterval = interval;
+    _baseInterval = interval;
+    if (_activeTrack != null && _current != null && _enabled) {
+      _restartProgressTimer();
+    }
   }
 
   void attachPositionProvider(Duration Function() provider) {
@@ -289,14 +313,19 @@ class PlaybackReportingService {
     _progressTimer = null;
     final track = _activeTrack;
     final session = _current;
+    final interval = progressIntervalFor(
+      base: _baseInterval,
+      paused: _isPaused,
+      backgrounded: _inBackground,
+    );
     if (track == null ||
         session == null ||
-        _backgroundSuspended ||
+        interval == null ||
         _disposed ||
         _retired) {
       return;
     }
-    _progressTimer = Timer.periodic(_progressInterval, (timer) {
+    _progressTimer = Timer.periodic(interval, (timer) {
       if (!identical(_current, session) || _disposed) {
         timer.cancel();
         return;
@@ -308,29 +337,30 @@ class PlaybackReportingService {
   }
 
   /// Notify the reporter that playback paused/resumed. Downshifts the
-  /// progress cadence to 60 s while paused, restores 10 s on resume.
+  /// progress cadence while paused (see [progressIntervalFor]).
   void notifyPaused(bool isPaused) {
     if (_isPaused == isPaused) return;
     _isPaused = isPaused;
-    _progressInterval = isPaused ? _pausedInterval : _activeInterval;
     if (_activeTrack != null && _enabled) {
       _restartProgressTimer();
     }
   }
 
-  /// Cancel the progress timer while the app is backgrounded. Server already
-  /// has the most recent progress; resume rearms when the app returns.
+  /// The app went to the background. Progress keeps flowing at a throttled
+  /// cadence while audio plays (locked-screen listening is the common case),
+  /// and stops entirely while paused.
   void suspendForBackground() {
-    if (_backgroundSuspended) return;
-    _backgroundSuspended = true;
-    _progressTimer?.cancel();
-    _progressTimer = null;
+    if (_inBackground) return;
+    _inBackground = true;
+    if (_activeTrack != null && _enabled) {
+      _restartProgressTimer();
+    }
   }
 
-  /// Re-arm the progress timer if a track is still active.
+  /// Restore the foreground cadence if a track is still active.
   void resumeFromBackground() {
-    if (!_backgroundSuspended) return;
-    _backgroundSuspended = false;
+    if (!_inBackground) return;
+    _inBackground = false;
     if (_activeTrack != null && _enabled) {
       _restartProgressTimer();
     }
@@ -384,7 +414,6 @@ class PlaybackReportingService {
       _progressTimer = null;
       _activeTrack = null;
       _isPaused = false;
-      _progressInterval = _activeInterval;
     } else {
       // Either a late stop for a session already replaced by a newer start
       // (don't touch the new session's state), or a duplicate stop.

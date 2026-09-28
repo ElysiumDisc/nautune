@@ -109,6 +109,53 @@ void main() {
     });
   });
 
+  group('progress cadence', () {
+    Duration? cadence({bool paused = false, bool bg = false, int base = 10}) =>
+        PlaybackReportingService.progressIntervalFor(
+          base: Duration(seconds: base),
+          paused: paused,
+          backgrounded: bg,
+        );
+
+    test('foreground playing uses the base interval', () {
+      expect(cadence(), const Duration(seconds: 10));
+      expect(cadence(base: 60), const Duration(seconds: 60));
+    });
+
+    test('paused downshifts to 60 s', () {
+      expect(cadence(paused: true), const Duration(seconds: 60));
+    });
+
+    test('backgrounded playback keeps reporting, throttled to 30 s', () {
+      expect(cadence(bg: true), const Duration(seconds: 30));
+      expect(cadence(bg: true, base: 60), const Duration(seconds: 60));
+    });
+
+    test('backgrounded and paused sends nothing', () {
+      expect(cadence(paused: true, bg: true), isNull);
+    });
+  });
+
+  test('progress keeps flowing while backgrounded and playing', () {
+    fakeAsync((async) {
+      final service = build();
+      service.attachPositionProvider(() => const Duration(seconds: 5));
+      service.reportPlaybackStart(_track('a'), sessionId: 'sa');
+      async.flushMicrotasks();
+      service.suspendForBackground();
+      async.elapse(const Duration(seconds: 61));
+      final progress =
+          requests.where((r) => r.path.endsWith('/Progress')).length;
+      expect(progress, 2); // at 30 s and 60 s
+
+      service.notifyPaused(true);
+      async.elapse(const Duration(minutes: 5));
+      expect(requests.where((r) => r.path.endsWith('/Progress')).length,
+          progress);
+      service.dispose();
+    });
+  });
+
   test('late stop of previous track does not wipe the new session', () async {
     final service = build();
     final a = _track('a');
