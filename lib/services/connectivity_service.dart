@@ -37,7 +37,7 @@ class ConnectivityService {
         const Duration(seconds: 2),
         onTimeout: () => [ConnectivityResult.none],
       );
-      return _probeConnection(_extractPrimaryResult(results));
+      return await _probeConnection(_extractPrimaryResult(results));
     } catch (e) {
       return false;
     }

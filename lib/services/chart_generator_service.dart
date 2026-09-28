@@ -204,9 +204,9 @@ class ChartGeneratorService {
       }
 
       if (Platform.isIOS) {
-        return _readAudioFileIOS(path);
+        return await _readAudioFileIOS(path);
       } else {
-        return _readAudioFileFFmpeg(path);
+        return await _readAudioFileFFmpeg(path);
       }
     } catch (e) {
       debugPrint('🎮 ChartGenerator: Error reading audio: $e');
