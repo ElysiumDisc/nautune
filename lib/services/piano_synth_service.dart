@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:audio_session/audio_session.dart'
+    show AudioSession, AudioSessionConfiguration;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
@@ -61,6 +63,19 @@ class PianoSynthService {
       for (final player in _players) {
         await player.setAudioContext(context);
       }
+    }
+  }
+
+  /// Our players switched the shared iOS AVAudioSession to
+  /// `playback + mixWithOthers`, which makes the music player lose Now
+  /// Playing / remote-command eligibility. Put the music configuration back.
+  Future<void> _restoreMusicSession() async {
+    if (!Platform.isIOS) return;
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+    } catch (e) {
+      debugPrint('PianoSynthService: failed to restore audio session: $e');
     }
   }
 
@@ -154,12 +169,14 @@ class PianoSynthService {
 
   /// Release all resources.
   Future<void> dispose() async {
+    if (_disposed) return;
     _disposed = true;
     for (final player in _players) {
       await player.stop();
       await player.dispose();
     }
     _players.clear();
+    await _restoreMusicSession();
     _noteCache.clear();
     _fileCache.clear();
     if (_tempDir != null) {

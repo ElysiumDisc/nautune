@@ -274,8 +274,18 @@ class _NautuneAppState extends State<NautuneApp> with WidgetsBindingObserver {
     super.didChangeAppLifecycleState(state);
     
     switch (state) {
-      case AppLifecycleState.paused:
       case AppLifecycleState.inactive:
+        // Transient (Control Center, notification shade, call banner, app
+        // switcher): the app is still visible and audio keeps playing, so
+        // don't suspend reporting/FFT or reconfigure the audio session here.
+        // Persist state cheaply though - the app can be killed straight from
+        // the app switcher without ever reaching `paused`.
+        debugPrint('📱 App lifecycle: $state - saving playback state');
+        unawaited(_savePlaybackState());
+        unawaited(ListeningAnalyticsService().saveAnalytics());
+        break;
+
+      case AppLifecycleState.paused:
         // App going to background - ensure playback state is saved
         // Use unawaited but the save is synchronous enough for iOS
         debugPrint('📱 App lifecycle: $state - saving playback state');

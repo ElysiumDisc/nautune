@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' show Random, sin;
+import 'dart:ui' show AppLifecycleState;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:audio_service/audio_service.dart' as audio_service;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter/services.dart';
 import 'package:rxdart/rxdart.dart';
 
@@ -18,6 +20,7 @@ import 'image_prewarm_service.dart';
 import 'listening_analytics_service.dart';
 import 'listenbrainz_service.dart';
 import 'lyrics_service.dart';
+import 'playback_logic.dart';
 import 'playback_reporting_service.dart';
 import 'playback_state_store.dart';
 import '../models/playback_state.dart';
@@ -144,7 +147,35 @@ class AudioPlayerService {
   int _sleepTracksRemaining = 0;
   bool _isSleepTimerByTracks = false;
   final _sleepTimerController = BehaviorSubject<Duration>.seeded(Duration.zero);
-  double _preSleepVolume = 1.0; // Store volume before fade
+  // True once the time-based sleep timer has started lowering the player
+  // volume. The fade is derived from [_volume] (the user's volume, which the
+  // fade never modifies), so cancelling only has to re-apply [_volume] when
+  // this is set.
+  bool _sleepFadeApplied = false;
+
+  // Monotonic token for playTrack/gapless/crossfade. Each new request bumps
+  // it; older requests bail after every await so the last *request* wins
+  // rather than the last to finish.
+  int _playRequestId = 0;
+  // Serialises player source/resume operations across overlapping requests.
+  Future<void> _playerOpLock = Future<void>.value();
+  // Serialises playback start/stop reports so a slow "stopped" for the old
+  // track can't null the session id of the track that started after it.
+  Future<void> _reportChain = Future<void>.value();
+  // Track whose playback start was last reported to Jellyfin (null once its
+  // stop has been reported).
+  JellyfinTrack? _reportedTrack;
+
+  // Session restore: track loaded in paused state, begin-track bookkeeping
+  // deferred until the user first resumes.
+  bool _restoreBeginPending = false;
+  // Session restore: source could not be prepared in time; set it lazily on
+  // first resume.
+  bool _restoreSourcePending = false;
+
+  // Audio interruptions (phone calls, Siri, other apps)
+  bool _wasPlayingBeforeInterruption = false;
+  bool _isDucked = false;
 
   // Crossfade support
   AudioPlayer? _crossfadePlayer;
@@ -152,6 +183,7 @@ class AudioPlayerService {
   int _crossfadeDurationSeconds = 3;
   Timer? _crossfadeTimer;
   bool _isCrossfading = false;
+  bool _crossfadeTrackIsLocal = false;
   
   // Infinite Radio support
   bool _infiniteRadioEnabled = false;
@@ -654,6 +686,14 @@ class AudioPlayerService {
         ),
       );
       debugPrint('✅ Audio service initialized for media controls');
+      // A session restore may have finished before the handler existed;
+      // publish its track now so the lock screen / CarPlay aren't blank.
+      final restored = _currentTrack;
+      if (restored != null) {
+        await _publishMediaItem(restored);
+        _audioHandler?.updateNautuneQueue(_queue);
+        await _audioHandler?.forceBroadcastCurrentState();
+      }
     } catch (e) {
       debugPrint('⚠️ Audio service initialization failed: $e');
     }
@@ -672,22 +712,7 @@ class AudioPlayerService {
       // Handle audio interruptions (phone calls, other media apps)
       await _interruptionSubscription?.cancel();
       _interruptionSubscription = session.interruptionEventStream.listen(
-        (event) {
-          if (event.begin) {
-            debugPrint('🔊 Audio interruption began: ${event.type}');
-            if (event.type == AudioInterruptionType.pause ||
-                event.type == AudioInterruptionType.duck ||
-                event.type == AudioInterruptionType.unknown) {
-              unawaited(pause());
-            }
-          } else {
-            debugPrint('🔊 Audio interruption ended: ${event.type}');
-            // After interruption ends, reactivate session then resume
-            if (event.type == AudioInterruptionType.pause && !isPlaying) {
-              unawaited(_reactivateAndResume());
-            }
-          }
-        },
+        _handleInterruption,
         onError: (e) => debugPrint('⚠️ Audio interruption stream error: $e'),
       );
 
@@ -708,10 +733,105 @@ class AudioPlayerService {
     try {
       final session = await AudioSession.instance;
       await session.configure(const AudioSessionConfiguration.music());
+      // Configuring alone does not re-activate the session after iOS
+      // deactivated it for the interruption.
+      await session.setActive(true);
       debugPrint('🔊 Audio session reactivated after interruption');
       await resume();
     } catch (e) {
       debugPrint('⚠️ Failed to reactivate audio session: $e');
+    }
+  }
+
+  /// Handles OS audio interruptions.
+  ///
+  /// iOS reports `begin` as [AudioInterruptionType.unknown] and `end` as
+  /// [AudioInterruptionType.pause] only when the system says playback should
+  /// resume. We only auto-resume if *we* were playing when it began, so music
+  /// the user had paused before a call stays paused.
+  void _handleInterruption(AudioInterruptionEvent event) {
+    if (_disposed) return;
+    if (event.begin) {
+      debugPrint('🔊 Audio interruption began: ${event.type}');
+      if (event.type == AudioInterruptionType.duck) {
+        if (isPlaying && !_isDucked) {
+          _isDucked = true;
+          final multiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
+          unawaited(_player.setVolume((_volume * multiplier * 0.3).clamp(0.0, 1.0)));
+        }
+        return;
+      }
+      // pause / unknown: remember whether we were audible, then pause.
+      final wasPlaying = isPlaying || _lastPlayingState;
+      _wasPlayingBeforeInterruption = _wasPlayingBeforeInterruption || wasPlaying;
+      if (wasPlaying) {
+        unawaited(pause());
+      }
+    } else {
+      debugPrint('🔊 Audio interruption ended: ${event.type}');
+      if (_isDucked) {
+        _isDucked = false;
+        unawaited(_applyUserVolumeToPlayer());
+      }
+      if (event.type == AudioInterruptionType.duck) return;
+      final shouldResume = event.type == AudioInterruptionType.pause &&
+          _wasPlayingBeforeInterruption;
+      _wasPlayingBeforeInterruption = false;
+      if (shouldResume && !isPlaying) {
+        unawaited(_reactivateAndResume());
+      }
+    }
+  }
+
+  /// Re-apply the user's volume (with ReplayGain) to the main player, e.g.
+  /// after ducking or a cancelled sleep-timer fade.
+  Future<void> _applyUserVolumeToPlayer() async {
+    final multiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
+    await _player.setVolume((_volume * multiplier).clamp(0.0, 1.0));
+  }
+
+  /// Configure and activate the audio session right before audible playback
+  /// (iOS may have deactivated it in the background or after interruptions).
+  Future<void> _ensureSessionActiveForPlayback() async {
+    if (!Platform.isIOS) return;
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+      await session.setActive(true);
+    } catch (e) {
+      debugPrint('⚠️ Failed to activate audio session: $e');
+    }
+  }
+
+  /// Whether the app is in the foreground. The iOS FFT shadow player must not
+  /// be (re)started while backgrounded; main.dart suspends it on background
+  /// and IOSFFTService.resumeFromBackground() re-engages it on return.
+  bool get _isAppInForeground {
+    try {
+      final state = SchedulerBinding.instance.lifecycleState;
+      // `inactive` (Control Center, call banner) is still on screen.
+      return state == null ||
+          state == AppLifecycleState.resumed ||
+          state == AppLifecycleState.inactive;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Point the iOS FFT shadow player at [fileUrl] and start capture, but only
+  /// start capture when foregrounded. When backgrounded the URL is still set
+  /// so capture resumes on the right track when the app returns.
+  Future<void> _startIOSFFTFor(String fileUrl, {bool restart = false}) async {
+    if (!Platform.isIOS) return;
+    final fft = IOSFFTService.instance;
+    final foreground = _isAppInForeground;
+    if (restart) {
+      await fft.stopCapture();
+      fft.resetUrl();
+    }
+    await fft.setAudioUrl(fileUrl);
+    if (foreground) {
+      await fft.startCapture();
     }
   }
 
@@ -777,7 +897,9 @@ class AudioPlayerService {
 
       // Threshold-based checks only need to run ~once per second
       final posMs = position.inMilliseconds;
-      if (posMs - _lastThresholdCheckMs >= 1000) {
+      // `posMs < last` catches backward jumps (seek, A-B loop, new track) that
+      // would otherwise suppress the checks until the old position is passed.
+      if (posMs - _lastThresholdCheckMs >= 1000 || posMs < _lastThresholdCheckMs) {
         _lastThresholdCheckMs = posMs;
         // Check if we should start crossfade
         unawaited(_checkCrossfadeTrigger(position).catchError(
@@ -861,7 +983,9 @@ class AudioPlayerService {
     _playerCompleteSub = player.onPlayerComplete.listen(
       (_) async {
         if (_disposed) return;
-        if (!_isTransitioning) {
+        // During a crossfade the outgoing player completes mid-fade; the
+        // crossfade itself advances the queue, so don't advance twice.
+        if (!_isTransitioning && !_isCrossfading) {
           await _gaplessTransition();
         }
       },
@@ -870,8 +994,9 @@ class AudioPlayerService {
   }
   
   Future<void> _gaplessTransition() async {
-    // Record actual listening time for the completed track
+    // Close out the finished track: listening time + Jellyfin "stopped".
     _recordActualListeningTime();
+    _reportOutgoingStopped();
 
     // Check track-based sleep timer FIRST
     if (_isSleepTimerByTracks && _sleepTracksRemaining > 0) {
@@ -894,6 +1019,7 @@ class AudioPlayerService {
         _currentTrack!,
         queueContext: _queue,
         fromShuffle: _isShuffleEnabled,
+        queueIndex: _currentIndex,
       );
       return;
     }
@@ -917,9 +1043,15 @@ class AudioPlayerService {
     // Move to next track
     if (_currentIndex + 1 < _queue.length) {
       _isTransitioning = true;
+      // Claim the player: an older in-flight playTrack must not resume over
+      // us, and a newer one (user tap mid-swap) makes us back off.
+      final requestId = ++_playRequestId;
+      bool isStale() => _disposed || requestId != _playRequestId;
+      var usedFallback = false;
 
       try {
-        final nextTrack = _queue[_currentIndex + 1];
+        final nextIndex = _currentIndex + 1;
+        final nextTrack = _queue[nextIndex];
 
         // Check if we have this track pre-loaded AND gapless is enabled
         if (_gaplessPlaybackEnabled && _preloadedTrack?.id == nextTrack.id) {
@@ -927,19 +1059,15 @@ class AudioPlayerService {
 
           // CRITICAL: Ensure audio session is active before gapless transition (iOS fix)
           // Without this, resume() can fail silently if iOS deactivated the session
-          if (Platform.isIOS) {
-            try {
-              final session = await AudioSession.instance;
-              await session.configure(const AudioSessionConfiguration.music());
-            } catch (e) {
-              debugPrint('⚠️ Failed to reactivate audio session for gapless: $e');
-              await _audioHandler?.forceBroadcastCurrentState();
-            }
-          }
+          await _ensureSessionActiveForPlayback();
+          if (isStale()) return;
 
           // SWAP PLAYERS for seamless transition
-          // 1. Start playback on the pre-loaded player as early as possible
-          await _nextPlayer.setVolume(_volume);
+          // 1. Start playback on the pre-loaded player as early as possible,
+          //    at the user's volume with the new track's ReplayGain applied.
+          await _nextPlayer.setVolume(
+            (_volume * nextTrack.replayGainMultiplier).clamp(0.0, 1.0),
+          );
           await _nextPlayer.resume();
 
           // 2. Detach listeners from the old main player (which is ending)
@@ -958,6 +1086,19 @@ class AudioPlayerService {
           _audioHandler?.updateNautuneMediaItem(nextTrack, offlineArtUri: offlineArtUri);
           if (updateFuture != null) await updateFuture;
 
+          if (isStale()) {
+            // A newer playTrack took over the main player while we swapped:
+            // abandon the swap and hand the OS controls back to it.
+            debugPrint('⚡ Gapless swap superseded by a newer request');
+            await _nextPlayer.stop();
+            if (_disposed) return;
+            _audioHandler?.updatePlayer(_player);
+            _attachPlayerListeners(_player);
+            final current = _currentTrack;
+            if (current != null) unawaited(_publishMediaItem(current));
+            return;
+          }
+
           // 4. Stop the old player (AudioHandler is no longer listening to this one)
           await _player.stop();
 
@@ -969,10 +1110,14 @@ class AudioPlayerService {
           // 6. Re-attach listeners to the NEW main player
           _attachPlayerListeners(_player);
 
-          _currentIndex++;
+          final nextIsLocal = _preloadedTrackIsLocal;
+          _preloadedTrack = null;
+          _preloadedTrackIsLocal = false;
+
+          _currentIndex = nextIndex;
           _currentTrack = nextTrack;
           _currentTrackController.add(_currentTrack);
-          _isCurrentTrackLocal = _preloadedTrackIsLocal; // Update for A-B loop support
+          _isCurrentTrackLocal = nextIsLocal; // Update for A-B loop support
           _analyzeTrackForVisualizer(nextTrack); // Configure visualizer for track
 
           // 7. Explicitly emit playing state since the listener may not fire
@@ -980,13 +1125,15 @@ class AudioPlayerService {
           _playingController.add(true);
           _lastPlayingState = true;
 
+          // Per-track bookkeeping (scrobble/history/report/duration/loop...)
+          _onTrackBegan(
+            nextTrack,
+            playMethod: _playMethodFor(nextTrack, isLocal: nextIsLocal),
+            publishMediaItem: false, // already published above
+          );
+
           // 8. Force OS media controls to update (fixes lock screen grayed out button)
           await _audioHandler?.forcePlayingState();
-          
-          // Immediately update duration from metadata
-          if (nextTrack.duration != null) {
-            _durationController.add(nextTrack.duration);
-          }
 
           // Pre-warm album art for upcoming tracks
           if (!_batterySaverMode) {
@@ -996,67 +1143,70 @@ class AudioPlayerService {
           // Smart pre-cache more upcoming tracks
           unawaited(_smartPreCacheUpcoming(_queue, _currentIndex));
 
-          // Restart FFT for the new track during gapless transition
+          // Restart FFT for the new track during gapless transition.
+          // Capture only (re)starts when the app is foregrounded.
           // Wrapped in try-catch: FFT failures are non-fatal and must not crash playback
           try {
-            if (Platform.isIOS && _isCurrentTrackLocal) {
-              // Get the local file path for the new track
-              final cachedFile = await _audioCacheService.getCachedFile(nextTrack.id);
-              if (cachedFile != null) {
+            if (Platform.isIOS) {
+              String? localPath;
+              if (nextIsLocal) {
+                localPath = await _downloadService?.getLocalPath(nextTrack.id);
+                if (localPath == null) {
+                  final cachedFile = await _audioCacheService.getCachedFile(nextTrack.id);
+                  localPath = cachedFile?.path;
+                }
+              }
+              if (localPath != null) {
+                if (_currentTrack?.id == nextTrack.id) {
+                  await _startIOSFFTFor('file://$localPath', restart: true);
+                  debugPrint('🎵 iOS FFT: Restarted for gapless transition to ${nextTrack.name}');
+                }
+              } else {
+                // Streaming track during gapless - stop the old track's shadow
+                // player, then cache for FFT in background
                 await IOSFFTService.instance.stopCapture();
                 IOSFFTService.instance.resetUrl();
-                await IOSFFTService.instance.setAudioUrl('file://${cachedFile.path}');
-                await IOSFFTService.instance.startCapture();
-                debugPrint('🎵 iOS FFT: Restarted for gapless transition to ${nextTrack.name}');
-              }
-            } else if (Platform.isIOS) {
-              // Streaming track during gapless - cache for FFT in background
-              final (streamUrl, _) = _getStreamUrl(nextTrack);
-              if (streamUrl != null) {
-                unawaited(_cacheTrackForIOSFFT(nextTrack, streamUrl).catchError(
-                  (e) => debugPrint('🎵 iOS FFT cache (gapless) failed: $e'),
-                ));
+                final (streamUrl, _) = _getStreamUrl(nextTrack);
+                if (streamUrl != null) {
+                  unawaited(_cacheTrackForIOSFFT(nextTrack, streamUrl).catchError(
+                    (e) => debugPrint('🎵 iOS FFT cache (gapless) failed: $e'),
+                  ));
+                }
               }
             }
           } catch (fftError) {
             debugPrint('⚠️ FFT restart during gapless failed: $fftError');
             // Non-fatal: playback continues without visualization
           }
-
-          // Clear pre-load state
-          _preloadedTrack = null;
         } else {
           // No pre-loaded track or gapless disabled, do regular playback
           debugPrint('🎵 Gapless not available, using regular playback for: ${nextTrack.name}');
-          _currentIndex++;
+          usedFallback = true;
           await playTrack(
-            _queue[_currentIndex],
+            nextTrack,
             queueContext: _queue,
             fromShuffle: _isShuffleEnabled,
+            queueIndex: nextIndex,
           );
         }
       } catch (e) {
         debugPrint('❌ Gapless transition failed: $e');
+        // playTrack returns (rather than throws) when superseded, so an error
+        // from the fallback path is always the latest request's. For the
+        // swap path, a newer request means the user has taken over.
+        if (_disposed || (!usedFallback && isStale())) return;
         _playbackErrorController.add('Track transition failed, retrying...');
         // Recovery: reactivate audio session and try to play next track
         if (_currentIndex + 1 < _queue.length) {
-          _currentIndex++;
+          final retryIndex = _currentIndex + 1;
           try {
             // Ensure audio session is active before recovery attempt
-            if (Platform.isIOS) {
-              try {
-                final session = await AudioSession.instance;
-                await session.configure(const AudioSessionConfiguration.music());
-                debugPrint('🔊 Audio session reactivated for recovery');
-              } catch (sessionError) {
-                debugPrint('⚠️ Session reactivation failed: $sessionError');
-                await _audioHandler?.forceBroadcastCurrentState();
-              }
-            }
+            await _ensureSessionActiveForPlayback();
             await playTrack(
-              _queue[_currentIndex],
+              _queue[retryIndex],
               queueContext: _queue,
               fromShuffle: _isShuffleEnabled,
+              queueIndex: retryIndex,
             );
           } catch (retryError) {
             debugPrint('❌ Recovery also failed: $retryError');
@@ -1074,11 +1224,11 @@ class AudioPlayerService {
       // Queue finished - handle repeat all mode
       if (_repeatMode == RepeatMode.all && _queue.isNotEmpty) {
         debugPrint('🔁 Repeating queue from beginning');
-        _currentIndex = 0;
         await playTrack(
           _queue[0],
           queueContext: _queue,
           fromShuffle: _isShuffleEnabled,
+          queueIndex: 0,
         );
       } else if (_infiniteRadioEnabled) {
         // Try to fetch more tracks for infinite radio before stopping
@@ -1087,11 +1237,12 @@ class AudioPlayerService {
         
         // Check if we got new tracks
         if (_currentIndex + 1 < _queue.length) {
-          _currentIndex++;
+          final nextIndex = _currentIndex + 1;
           await playTrack(
-            _queue[_currentIndex],
+            _queue[nextIndex],
             queueContext: _queue,
             fromShuffle: _isShuffleEnabled,
+            queueIndex: nextIndex,
           );
         } else {
           // No more tracks available
@@ -1193,6 +1344,10 @@ class AudioPlayerService {
     PlaybackState state,
     List<JellyfinTrack> queue,
   ) async {
+    // If the user starts playback while we are restoring, their request wins.
+    final requestId = _playRequestId;
+    bool superseded() => _disposed || requestId != _playRequestId;
+
     _volume = state.volume.clamp(0.0, 1.0);
     await _player.setVolume(_volume);
     await _nextPlayer.setVolume(_volume);
@@ -1207,7 +1362,7 @@ class AudioPlayerService {
     _isShuffleEnabled = state.shuffleEnabled;
     _shuffleController.add(_isShuffleEnabled);
 
-    if (queue.isEmpty) {
+    if (queue.isEmpty || superseded()) {
       return;
     }
 
@@ -1218,34 +1373,60 @@ class AudioPlayerService {
     // This prevents unexpected audio on app restore
     _currentTrack = track;
     _currentTrackController.add(track);
-    _cachedDuration = track.duration;
-    _queue = queue;
+    _resetPerTrackState(track);
+    // Copy: restored lists may be fixed-length (toQueueTracks) and must not
+    // be shared with the caller.
+    _queue = List<JellyfinTrack>.of(queue);
     _currentIndex = clampedIndex;
     _queueController.add(List.from(_queue));
+    _isCurrentTrackLocal = false;
 
-    // Update duration from metadata immediately
-    if (track.duration != null) {
-      _durationController.add(track.duration);
-    }
+    // Publish the restored track to the lock screen / CarPlay (paused). If
+    // the audio handler isn't up yet, _initAudioHandler publishes it.
+    unawaited(_publishMediaItem(track));
+    _audioHandler?.updateNautuneQueue(_queue);
 
-    // Prepare audio source without playing
+    // Begin-track bookkeeping (start time, Jellyfin start report, now
+    // playing) is deferred to the first resume().
+    _trackStartTime = null;
+    _restoreBeginPending = true;
+    _restoreSourcePending = false;
+
+    final position = Duration(milliseconds: state.positionMs);
+    _positionController.add(position);
+    _lastPosition = position;
+
+    // Prepare audio source without playing. Bounded so an unreachable server
+    // can't hang app startup; on timeout the source is set lazily on resume.
+    var sourceReady = false;
     try {
-      final (url, _) = await _resolveTrackSource(track);
-      if (url != null) {
-        await _player.setSource(UrlSource(url));
+      final resolved = await _resolvePlaybackSource(track);
+      if (superseded()) return;
+      if (resolved != null) {
+        _isCurrentTrackLocal = resolved.isLocalFile;
+        _restorePlayMethod = resolved.playMethod;
+        await _withPlayerLock(() => _player
+            .setSource(_sourceFor(resolved.url, isLocalFile: resolved.isLocalFile))
+            .timeout(_restoreSourceTimeout));
+        sourceReady = true;
       }
+    } on TimeoutException {
+      debugPrint('⚠️ Restore: audio source not ready after '
+          '${_restoreSourceTimeout.inSeconds}s - will load on first play');
     } catch (e) {
       debugPrint('⚠️ Failed to prepare audio source during restore: $e');
     }
+    if (superseded()) return;
+    _restoreSourcePending = !sourceReady;
 
     // Seek to saved position
-    if (state.positionMs > 0) {
-      final position = Duration(milliseconds: state.positionMs);
+    if (sourceReady && state.positionMs > 0) {
       try {
-        await seek(position);
+        await seek(position).timeout(_restoreSourceTimeout);
       } catch (e) {
         debugPrint('⚠️ Failed to seek during restore: $e');
       }
+      if (superseded()) return;
       _positionController.add(position);
       _lastPosition = position;
     }
@@ -1277,19 +1458,197 @@ class AudioPlayerService {
     );
   }
 
-  /// Resolve the track source URL (download or streaming)
-  Future<(String?, bool)> _resolveTrackSource(JellyfinTrack track) async {
-    // 1) Downloaded file
+  static const Duration _restoreSourceTimeout = Duration(seconds: 5);
+  String _restorePlayMethod = 'DirectPlay';
+
+  /// Resolve where [track] plays from, in playback priority order:
+  /// downloaded file → audio cache → stream → asset/path override.
+  /// Returns null if no source is available.
+  Future<_ResolvedSource?> _resolvePlaybackSource(
+    JellyfinTrack track, {
+    String? sessionId,
+  }) async {
+    final (streamUrl, isDirectStream) = _getStreamUrl(track, sessionId: sessionId);
+
+    // 1) Downloaded file (works in airplane mode!)
     final localPath = await _downloadService?.getLocalPath(track.id);
     if (localPath != null) {
-      return (localPath, true);
+      debugPrint('✅ Found local file: $localPath');
+      return _ResolvedSource(
+        url: localPath,
+        isLocalFile: true,
+        isDownloaded: true,
+        isDirectStream: isDirectStream,
+        streamUrl: streamUrl,
+      );
     }
 
-    // 2) Streaming URL
-    final (url, _) = _getStreamUrl(track);
-    return (url, false);
+    // 2) Cached file (pre-cached during album playback)
+    final cachedFile = await _audioCacheService.getCachedFile(track.id);
+    if (cachedFile != null && await cachedFile.exists()) {
+      debugPrint('✅ Found in cache: ${cachedFile.path}');
+      return _ResolvedSource(
+        url: cachedFile.path,
+        isLocalFile: true,
+        isDownloaded: false,
+        isDirectStream: isDirectStream,
+        streamUrl: streamUrl,
+      );
+    }
+
+    // 3) Stream, based on quality preference
+    if (streamUrl != null) {
+      if (isDirectStream) {
+        debugPrint('🎵 Streaming: Original quality (direct)');
+      } else {
+        debugPrint('🎵 Streaming: ${_streamingQuality.label}');
+      }
+      return _ResolvedSource(
+        url: streamUrl,
+        isLocalFile: false,
+        isDownloaded: false,
+        isDirectStream: isDirectStream,
+        streamUrl: streamUrl,
+      );
+    }
+
+    // 4) Asset path override (bundled asset or local file)
+    final assetPath = track.assetPathOverride;
+    if (assetPath != null) {
+      debugPrint('🎵 Using asset path override: $assetPath');
+      return _ResolvedSource(
+        url: assetPath,
+        isLocalFile: true,
+        isDownloaded: false,
+        isDirectStream: isDirectStream,
+        streamUrl: streamUrl,
+      );
+    }
+    return null;
   }
-  
+
+  /// audioplayers [Source] for a resolved URL/path.
+  Source _sourceFor(String url, {required bool isLocalFile}) {
+    if (url.startsWith('assets/')) {
+      return AssetSource(url.substring('assets/'.length));
+    }
+    if (isLocalFile) return DeviceFileSource(url);
+    return UrlSource(url);
+  }
+
+  /// Run [op] after any in-flight player source/resume operation finishes.
+  Future<T> _withPlayerLock<T>(Future<T> Function() op) {
+    final previous = _playerOpLock;
+    final done = Completer<void>();
+    _playerOpLock = done.future;
+    return previous.then((_) => op()).whenComplete(done.complete);
+  }
+
+  String _playMethodFor(JellyfinTrack track, {required bool isLocal}) {
+    if (isLocal) return 'DirectPlay';
+    final (_, isDirectStream) = _getStreamUrl(track);
+    return isDirectStream ? 'DirectStream' : 'Transcode';
+  }
+
+  // ========== PER-TRACK BOOKKEEPING ==========
+
+  /// State that must be reset the moment the current track changes (before
+  /// any await), so position ticks can't act on the previous track's state.
+  void _resetPerTrackState(JellyfinTrack track) {
+    _hasScrobbled = false;
+    _lyricsPrefetched = false;
+    _lastThresholdCheckMs = -1000; // let the first tick run the checks
+    if (_loopState.hasMarkers || _loopState.isActive) {
+      clearLoop(); // A-B loop markers belong to the previous track
+    }
+    _cachedDuration = track.duration;
+    _durationController.add(track.duration);
+  }
+
+  /// Single place for everything that happens when [track] actually starts
+  /// playing, regardless of how it started (playTrack, gapless swap,
+  /// crossfade, or resuming a restored session).
+  void _onTrackBegan(
+    JellyfinTrack track, {
+    String? playMethod,
+    String? sessionId,
+    bool countPlay = true,
+    bool resetState = true,
+    bool publishMediaItem = true,
+  }) {
+    // Jellyfin "stopped" for whatever was reported before (no-op if the
+    // caller already closed it out).
+    _reportOutgoingStopped();
+
+    if (resetState) _resetPerTrackState(track);
+    _trackStartTime = DateTime.now();
+    // The player may know the real length better than metadata (and a
+    // pre-loaded player's duration event fired before we attached).
+    unawaited(_refreshDurationFromPlayer(track));
+
+    if (countPlay) {
+      _playStats.incrementPlayCount(track.id);
+      unawaited(_savePlayStats());
+    }
+
+    unawaited(ListenBrainzService().submitNowPlaying(track));
+
+    final reporting = _reportingService;
+    if (reporting != null && track.serverUrl != null) {
+      debugPrint('🎵 Reporting playback start to Jellyfin: ${track.name}');
+      _reportedTrack = track;
+      _enqueueReport(() => reporting.reportPlaybackStart(
+            track,
+            playMethod: playMethod ?? 'DirectPlay',
+            sessionId: sessionId,
+          ));
+    }
+
+    if (publishMediaItem) {
+      unawaited(_publishMediaItem(track));
+    }
+  }
+
+  /// Report "stopped" for the track whose start was last reported.
+  void _reportOutgoingStopped({Duration? position}) {
+    final track = _reportedTrack;
+    if (track == null) return;
+    _reportedTrack = null;
+    final reporting = _reportingService;
+    if (reporting == null) return;
+    final stoppedAt = position ?? _lastPosition;
+    _enqueueReport(() => reporting.reportPlaybackStopped(track, stoppedAt));
+  }
+
+  /// Run reporting calls strictly in order: a slow "stopped" for the old
+  /// track must finish before the new track's "start" sets a new session id.
+  void _enqueueReport(Future<void> Function() op) {
+    _reportChain = _reportChain
+        .then((_) => op().timeout(const Duration(seconds: 15)))
+        .catchError((Object e) {
+      debugPrint('📡 Playback report failed: $e');
+    });
+  }
+
+  Future<void> _refreshDurationFromPlayer(JellyfinTrack track) async {
+    try {
+      final duration = await _player.getDuration();
+      if (_disposed || _currentTrack?.id != track.id) return;
+      if (duration != null && duration.inSeconds > 1) {
+        _cachedDuration = duration;
+        _durationController.add(duration);
+      }
+    } catch (e) {
+      debugPrint('⚠️ Duration refresh failed: $e');
+    }
+  }
+
+  Future<void> _publishMediaItem(JellyfinTrack track) async {
+    final offlineArtUri = await _getOfflineArtworkUri(track.id);
+    if (_disposed || _currentTrack?.id != track.id) return;
+    _audioHandler?.updateNautuneMediaItem(track, offlineArtUri: offlineArtUri);
+  }
+
   Future<void> playTrack(
     JellyfinTrack track, {
     List<JellyfinTrack>? queueContext,
@@ -1297,19 +1656,21 @@ class AudioPlayerService {
     String? albumName,
     bool reorderQueue = false,
     bool fromShuffle = false,
+    int? queueIndex,
   }) async {
-    // CRITICAL: Ensure audio session is active before playing (iOS fix)
-    // iOS can deactivate the session when app is in background or after interruptions
-    if (Platform.isIOS) {
-      try {
-        final session = await AudioSession.instance;
-        await session.configure(const AudioSessionConfiguration.music());
-      } catch (e) {
-        debugPrint('⚠️ Failed to ensure audio session for playTrack: $e');
-      }
-      // Reset FFT URL tracking to ensure new track gets fresh FFT setup
-      IOSFFTService.instance.resetUrl();
-    }
+    // Newest request wins: every await below re-checks this token.
+    final requestId = ++_playRequestId;
+    bool isStale() => _disposed || requestId != _playRequestId;
+
+    // A crossfade in progress would swap players underneath this request.
+    if (_isCrossfading) _cancelCrossfade();
+
+    // Close out the OUTGOING track before switching, so its listening time
+    // and Jellyfin "stopped" are credited to it rather than to [track].
+    _recordActualListeningTime();
+    _reportOutgoingStopped();
+    _restoreBeginPending = false;
+    _restoreSourcePending = false;
 
     _isShuffleEnabled = fromShuffle;
     _shuffleController.add(_isShuffleEnabled);
@@ -1318,33 +1679,12 @@ class AudioPlayerService {
     _waveformExtractionSub?.cancel();
     _waveformExtractionSub = null;
 
-    _currentTrack = track;
-    _currentTrackController.add(track);
-    _cachedDuration = track.duration; // Initialize cached duration from track metadata
-    _lyricsPrefetched = false; // Reset lyrics prefetch flag for new track
-    clearLoop(); // Clear A-B loop markers on track change
-    _analyzeTrackForVisualizer(track); // Configure visualizer for track
-
-    // Track play count
-    _playStats.incrementPlayCount(track.id);
-    unawaited(_savePlayStats());
-
-    // Record actual listening time for the PREVIOUS track (if any) before starting new one
-    _recordActualListeningTime();
-
-    // Reset ListenBrainz scrobble state and submit "now playing"
-    _hasScrobbled = false;
-    _trackStartTime = DateTime.now();
-    unawaited(ListenBrainzService().submitNowPlaying(track));
-
-    // Immediately update duration from metadata to prevent UI lag
-    if (track.duration != null) {
-      _durationController.add(track.duration);
-    }
-    
+    // Queue + index are updated synchronously so rapid skips see them.
     if (queueContext != null) {
+      final isInternalQueue = identical(queueContext, _queue);
+      final List<JellyfinTrack> newQueue;
       if (reorderQueue) {
-        _queue = List<JellyfinTrack>.from(queueContext)
+        newQueue = List<JellyfinTrack>.from(queueContext)
           ..sort((a, b) {
             final discA = a.discNumber ?? 0;
             final discB = b.discNumber ?? 0;
@@ -1355,17 +1695,32 @@ class AudioPlayerService {
             return a.name.compareTo(b.name);
           });
       } else {
-        _queue = queueContext;
+        // Copy: never alias (and later mutate) the caller's list.
+        newQueue = List<JellyfinTrack>.of(queueContext);
       }
-      _currentIndex = _queue.indexWhere((t) => t.id == track.id);
-      if (_currentIndex == -1) {
-        _queue = List<JellyfinTrack>.from([track]);
+      final index = resolveQueueIndex<JellyfinTrack>(
+        newQueue,
+        track.id,
+        (t) => t.id,
+        requestedIndex: reorderQueue ? null : queueIndex,
+        nearIndex: isInternalQueue ? _currentIndex : null,
+      );
+      if (index == -1) {
+        _queue = <JellyfinTrack>[track];
         _currentIndex = 0;
+      } else {
+        _queue = newQueue;
+        _currentIndex = index;
       }
     } else {
-      _queue = List<JellyfinTrack>.from([track]);
+      _queue = <JellyfinTrack>[track];
       _currentIndex = 0;
     }
+
+    _currentTrack = track;
+    _currentTrackController.add(track);
+    _resetPerTrackState(track);
+    _analyzeTrackForVisualizer(track); // Configure visualizer for track
 
     _queueController.add(_queue);
 
@@ -1377,67 +1732,42 @@ class AudioPlayerService {
       _imagePrewarmService?.prewarmQueueImages(_queue, _currentIndex);
     }
 
+    // Reset FFT URL tracking to ensure new track gets fresh FFT setup
+    if (Platform.isIOS) {
+      IOSFFTService.instance.resetUrl();
+    }
+
+    // CRITICAL: Ensure audio session is active before playing (iOS fix)
+    // iOS can deactivate the session when app is in background or after interruptions
+    await _ensureSessionActiveForPlayback();
+    if (isStale()) return;
+
     // Update audio handler with current track metadata immediately
     // This is critical for Lock Screen to update BEFORE audio starts
     final offlineArtUri = await _getOfflineArtworkUri(track.id);
+    if (isStale()) return;
     _audioHandler?.updateNautuneMediaItem(track, offlineArtUri: offlineArtUri);
     _audioHandler?.updateNautuneQueue(_queue);
     
     // Generate a session ID to link the stream and the reporting
     final sessionId = DateTime.now().millisecondsSinceEpoch.toString();
 
-    // RESOLVE SOURCE BEFORE STOPPING PLAYER
+    // RESOLVE SOURCE BEFORE TOUCHING THE PLAYER
     // This minimizes "dead air" time which causes iOS background suspension
-    final (streamUrl, isDirectStream) = _getStreamUrl(track, sessionId: sessionId);
+    final resolved = await _resolvePlaybackSource(track, sessionId: sessionId);
+    if (isStale()) return;
 
-    // Don't stop yet! Resolve the source first.
-
-    String? activeUrl;
-    bool isOffline = false;
-    bool isLocalFile = false;
-
-    // Check for downloaded file first (works in airplane mode!)
-    final localPath = await _downloadService?.getLocalPath(track.id);
-    if (localPath != null) {
-      activeUrl = localPath;
-      isOffline = true;
-      isLocalFile = true;
-      debugPrint('✅ Found local file: $localPath');
-    }
-
-    // Check for cached file (pre-cached during album playback)
-    if (activeUrl == null) {
-      final cachedFile = await _audioCacheService.getCachedFile(track.id);
-      if (cachedFile != null && await cachedFile.exists()) {
-        activeUrl = cachedFile.path;
-        isLocalFile = true;
-        debugPrint('✅ Found in cache: ${cachedFile.path}');
-      }
-    }
-
-    // Try streaming if no local/cached file
-    if (activeUrl == null) {
-      // Use the stream URL based on quality preference
-      if (streamUrl != null) {
-        activeUrl = streamUrl;
-        if (isDirectStream) {
-          debugPrint('🎵 Streaming: Original quality (direct)');
-        } else {
-          debugPrint('🎵 Streaming: ${_streamingQuality.label}');
-        }
-      } else if (track.assetPathOverride != null) {
-        activeUrl = track.assetPathOverride;
-        isLocalFile = true;  // Asset path override is a local file
-        debugPrint('🎵 Using asset path override: ${track.assetPathOverride}');
-      }
-    }
-
-    if (activeUrl == null) {
+    if (resolved == null) {
       throw PlatformException(
         code: 'no_source',
         message: 'Unable to play ${track.name}. File may be unavailable.',
       );
     }
+
+    var activeUrl = resolved.url;
+    final isLocalFile = resolved.isLocalFile;
+    final isDirectStream = resolved.isDirectStream;
+    final streamUrl = resolved.streamUrl;
 
     // Store whether this track is playing from local storage (for A-B loop support)
     _isCurrentTrackLocal = isLocalFile;
@@ -1455,74 +1785,32 @@ class AudioPlayerService {
       }));
     }
 
-    // NOW we touch the player.
-    // We don't explicitly call stop() because setSource will handle it, 
+    // NOW we touch the player (serialised with other requests).
+    // We don't explicitly call stop() because setSource will handle it,
     // and we want to minimize the gap.
+    Future<bool> applySourceAndPlay(String url) => _withPlayerLock(() async {
+          if (isStale()) return false;
+          await _player.setSource(_sourceFor(url, isLocalFile: isLocalFile));
+          if (isStale()) return false;
 
-    Future<void> applySourceAndPlay() async {
-        final url = activeUrl!;
-        if (isLocalFile) {
-           await _player.setSource(DeviceFileSource(url));
-        } else if (url.startsWith('assets/')) {
-           final normalized = url.substring('assets/'.length);
-           await _player.setSource(AssetSource(normalized));
-        } else {
-           await _player.setSource(UrlSource(url));
-        }
+          // Apply ReplayGain normalization
+          final adjustedVolume = _volume * track.replayGainMultiplier;
+          await _player.setVolume(adjustedVolume.clamp(0.0, 1.0));
+          if (track.normalizationGain != null) {
+            debugPrint('🔊 Applied ReplayGain: ${track.normalizationGain} dB');
+          }
 
-        // Apply ReplayGain normalization
-        final adjustedVolume = _volume * track.replayGainMultiplier;
-        await _player.setVolume(adjustedVolume.clamp(0.0, 1.0));
-        if (track.normalizationGain != null) {
-           debugPrint('🔊 Applied ReplayGain: ${track.normalizationGain} dB');
-        }
-        
-        await _player.resume();
-    }
+          await _player.resume();
+          return !isStale();
+        });
 
+    String playMethod;
+    var usedFallback = false;
     try {
-      // Seed duration immediately from metadata (important for streams)
-      _durationController.add(track.duration);
-
-      await applySourceAndPlay();
-
-      // Report playback start to Jellyfin (only for real Jellyfin tracks)
-      if (_reportingService != null && track.serverUrl != null) {
-        debugPrint('🎵 Reporting playback start to Jellyfin: ${track.name}');
-        await _reportingService?.reportPlaybackStart(
-          track,
-          playMethod: isOffline ? 'DirectPlay' : (isDirectStream ? 'DirectStream' : 'Transcode'),
-          sessionId: sessionId,
-        );
-      }
-
-      _lastPlayingState = true;
-
-      // iOS FFT: Use local file immediately, or cache streaming track first
-      if (Platform.isIOS) {
-        if (isLocalFile) {
-          // Local file - start FFT immediately
-          await IOSFFTService.instance.setAudioUrl('file://$activeUrl');
-          await IOSFFTService.instance.startCapture();
-        } else {
-          // Streaming - cache in background (same quality as playback), then start FFT
-          unawaited(_cacheTrackForIOSFFT(track, activeUrl).catchError(
-            (e) => debugPrint('🎵 iOS FFT cache failed: $e'),
-          ));
-        }
-      }
-
-      // Waveform extraction: Extract for all tracks (local and streaming)
-      if (WaveformService.instance.isAvailable && !_batterySaverMode) {
-        if (isLocalFile) {
-          // Local file - extract waveform directly if not already exists
-          _extractWaveformForLocalFile(track, activeUrl);
-        } else {
-          // Streaming - cache first, then extract
-          _cacheTrackForWaveform(track, activeUrl);
-        }
-      }
+      if (!await applySourceAndPlay(activeUrl)) return;
+      playMethod = resolved.playMethod;
     } on PlatformException {
+      if (isStale()) return;
       // Fallback logic for streaming failure - try transcoded stream if direct failed
       if (!isLocalFile && isDirectStream) {
         final fallbackUrl = track.universalStreamUrl(
@@ -1534,23 +1822,54 @@ class AudioPlayerService {
         if (fallbackUrl != null) {
           debugPrint('⚠️ Direct stream failed, trying transcoded stream...');
           activeUrl = fallbackUrl;
-          await applySourceAndPlay();
-
-          // Report transcoded playback (only for real Jellyfin tracks)
-          if (_reportingService != null && track.serverUrl != null) {
-            await _reportingService?.reportPlaybackStart(
-              track,
-              playMethod: 'Transcode',
-              sessionId: sessionId,
-            );
-          }
-          _lastPlayingState = true;
-          // No iOS FFT for streaming - would double bandwidth
+          usedFallback = true;
+          if (!await applySourceAndPlay(activeUrl)) return;
+          playMethod = 'Transcode';
         } else {
           rethrow;
         }
       } else {
         rethrow;
+      }
+    }
+
+    _lastPlayingState = true;
+
+    // Per-track bookkeeping: start time, play count, now-playing, Jellyfin
+    // start report (after the outgoing track's stop). Queue/loop/duration
+    // state was already reset synchronously above.
+    _onTrackBegan(
+      track,
+      playMethod: playMethod,
+      sessionId: sessionId,
+      resetState: false,
+      publishMediaItem: false,
+    );
+
+    if (!usedFallback) {
+      // iOS FFT: Use local file immediately, or cache streaming track first
+      if (Platform.isIOS) {
+        if (isLocalFile) {
+          // Local file - start FFT immediately (foreground only)
+          await _startIOSFFTFor('file://$activeUrl');
+        } else {
+          // Streaming - cache in background (same quality as playback), then start FFT
+          unawaited(_cacheTrackForIOSFFT(track, activeUrl).catchError(
+            (e) => debugPrint('🎵 iOS FFT cache failed: $e'),
+          ));
+        }
+      }
+      if (isStale()) return;
+
+      // Waveform extraction: Extract for all tracks (local and streaming)
+      if (WaveformService.instance.isAvailable && !_batterySaverMode) {
+        if (isLocalFile) {
+          // Local file - extract waveform directly if not already exists
+          _extractWaveformForLocalFile(track, activeUrl);
+        } else {
+          // Streaming - cache first, then extract
+          _cacheTrackForWaveform(track, activeUrl);
+        }
       }
     }
 
@@ -1632,17 +1951,75 @@ class AudioPlayerService {
   
   Future<void> resume() async {
     HapticService.lightTap();
-    if (Platform.isIOS) {
-      try {
-        final session = await AudioSession.instance;
-        await session.configure(const AudioSessionConfiguration.music());
-      } catch (e) {
-        debugPrint('⚠️ Failed to ensure audio session for resume: $e');
-      }
+    await _ensureSessionActiveForPlayback();
+    // Restored session whose source couldn't be prepared at startup
+    // (e.g. server unreachable): load it now.
+    if (_restoreSourcePending) {
+      if (!await _prepareRestoredSource()) return;
     }
     await _resumeAndFadeIn();
+    if (_restoreBeginPending) {
+      _restoreBeginPending = false;
+      final track = _currentTrack;
+      if (track != null) _beginRestoredTrack(track);
+    }
     await _stateStore.savePlaybackSnapshot(isPlaying: true);
     await _audioHandler?.forceBroadcastCurrentState();
+  }
+
+  /// Lazily set the source for a track restored from a previous launch.
+  Future<bool> _prepareRestoredSource() async {
+    final track = _currentTrack;
+    if (track == null) return false;
+    final requestId = _playRequestId;
+    bool superseded() => _disposed || requestId != _playRequestId;
+    try {
+      final resolved = await _resolvePlaybackSource(track);
+      if (superseded()) return false;
+      if (resolved == null) {
+        _playbackErrorController.add('Unable to play ${track.name}. File may be unavailable.');
+        return false;
+      }
+      await _withPlayerLock(() => _player.setSource(
+            _sourceFor(resolved.url, isLocalFile: resolved.isLocalFile),
+          ));
+      if (superseded()) return false;
+      _isCurrentTrackLocal = resolved.isLocalFile;
+      _restorePlayMethod = resolved.playMethod;
+      _restoreSourcePending = false;
+      if (_lastPosition > Duration.zero) {
+        await _player.seek(_lastPosition);
+      }
+      return !superseded();
+    } catch (e) {
+      debugPrint('⚠️ Failed to load restored track: $e');
+      _playbackErrorController.add('Unable to play ${track.name}.');
+      return false;
+    }
+  }
+
+  /// First resume of a track restored from a previous launch.
+  ///
+  /// The play count is NOT incremented: it was counted when the track
+  /// originally started, and this is a continuation of that play. Listening
+  /// time/history, the Jellyfin start report and "now playing" do run, since
+  /// the previous launch never closed them out. If the restored position is
+  /// already past the scrobble point, the previous launch scrobbled it, so it
+  /// is not scrobbled again.
+  void _beginRestoredTrack(JellyfinTrack track) {
+    _onTrackBegan(
+      track,
+      playMethod: _restorePlayMethod,
+      countPlay: false,
+      resetState: false,
+      publishMediaItem: true,
+    );
+    final duration = track.duration ?? _cachedDuration;
+    if (duration != null &&
+        duration > Duration.zero &&
+        _lastPosition.inSeconds >= scrobbleThresholdSeconds(duration)) {
+      _hasScrobbled = true;
+    }
   }
   
   // Fade helpers
@@ -1697,6 +2074,10 @@ class AudioPlayerService {
         ? Duration(milliseconds: position.inMilliseconds.clamp(0, duration.inMilliseconds))
         : position;
 
+    // Let the once-per-second threshold checks (preload, crossfade,
+    // scrobble, lyrics) run on the next tick, including after backward seeks.
+    _lastThresholdCheckMs = clampedPosition.inMilliseconds - 1000;
+
     // Update position immediately for responsive UI (before player confirms)
     _lastPosition = clampedPosition;
     // After a seek, the next periodic save should write the new position.
@@ -1730,6 +2111,7 @@ class AudioPlayerService {
           _queue[_currentIndex],
           queueContext: _queue,
           fromShuffle: _isShuffleEnabled,
+          queueIndex: _currentIndex,
         );
       } else if (_repeatMode == RepeatMode.all && _queue.isNotEmpty) {
         _currentIndex = 0;
@@ -1737,6 +2119,7 @@ class AudioPlayerService {
           _queue[0],
           queueContext: _queue,
           fromShuffle: _isShuffleEnabled,
+          queueIndex: 0,
         );
       } else if (_infiniteRadioEnabled) {
         await _checkInfiniteRadio();
@@ -1746,6 +2129,7 @@ class AudioPlayerService {
             _queue[_currentIndex],
             queueContext: _queue,
             fromShuffle: _isShuffleEnabled,
+            queueIndex: _currentIndex,
           );
         }
       }
@@ -1772,6 +2156,7 @@ class AudioPlayerService {
           _queue[_currentIndex],
           queueContext: _queue,
           fromShuffle: _isShuffleEnabled,
+          queueIndex: _currentIndex,
         );
       } else if (_repeatMode == RepeatMode.all && _queue.isNotEmpty) {
         _currentIndex = _queue.length - 1;
@@ -1779,6 +2164,7 @@ class AudioPlayerService {
           _queue[_currentIndex],
           queueContext: _queue,
           fromShuffle: _isShuffleEnabled,
+          queueIndex: _currentIndex,
         );
       }
     } catch (e) {
@@ -1802,7 +2188,7 @@ class AudioPlayerService {
       await IOSFFTService.instance.setAudioUrl('file://$localPath');
       
       // Still start capture if track hasn't changed
-      if (_currentTrack?.id == trackId) {
+      if (_currentTrack?.id == trackId && _isAppInForeground) {
         await IOSFFTService.instance.startCapture();
       }
       return;
@@ -1815,7 +2201,7 @@ class AudioPlayerService {
       await IOSFFTService.instance.setAudioUrl('file://${cachedFile.path}');
       
       // Still start capture if track hasn't changed
-      if (_currentTrack?.id == trackId) {
+      if (_currentTrack?.id == trackId && _isAppInForeground) {
         await IOSFFTService.instance.startCapture();
       }
       return;
@@ -1850,8 +2236,9 @@ class AudioPlayerService {
       final currentPosMs = _lastPosition.inMilliseconds.toDouble() / 1000.0;
       await IOSFFTService.instance.syncPosition(currentPosMs);
 
-      // Re-check staleness after await
-      if (_currentTrack?.id != trackId) return;
+      // Re-check staleness after await. Don't start the shadow player while
+      // backgrounded; the URL is set so it resumes on return to foreground.
+      if (_currentTrack?.id != trackId || !_isAppInForeground) return;
 
       await IOSFFTService.instance.startCapture();
 
@@ -1936,8 +2323,20 @@ class AudioPlayerService {
   }
 
   Future<void> stop() async {
+    // Supersede any in-flight playTrack/gapless request so it can't resume
+    // audio after we stop.
+    _playRequestId++;
+    _restoreBeginPending = false;
+    _restoreSourcePending = false;
+    if (_isCrossfading) _cancelCrossfade();
+
     // Record actual listening time before stopping
     _recordActualListeningTime();
+
+    // Report stop to Jellyfin (only for tracks whose start was reported).
+    // Queued behind/ahead of other reports so it can't clear the session id
+    // of a track started after it. Position captured before stopping.
+    _reportOutgoingStopped();
 
     // 1. Stop audio immediately
     await _player.stop();
@@ -1953,14 +2352,6 @@ class AudioPlayerService {
       await _stateStore.clearPlaybackData();
     } catch (e) {
       debugPrint('Error clearing playback state: $e');
-    }
-    
-    // Report stop to Jellyfin (only for real Jellyfin tracks)
-    if (_currentTrack != null && _reportingService != null && _currentTrack!.serverUrl != null) {
-      _reportingService?.reportPlaybackStopped(
-        _currentTrack!,
-        _lastPosition,
-      ).catchError((e) => debugPrint('Stop report failed: $e'));
     }
     
     // 3. CLEAR active memory state
@@ -2044,6 +2435,7 @@ class AudioPlayerService {
           _queue[_currentIndex],
           queueContext: _queue,
           fromShuffle: _isShuffleEnabled,
+          queueIndex: _currentIndex,
         ));
       }
     }
@@ -2145,6 +2537,7 @@ class AudioPlayerService {
       _queue[_currentIndex],
       queueContext: _queue,
       fromShuffle: _isShuffleEnabled,
+      queueIndex: index,
     );
   }
   
@@ -2642,6 +3035,10 @@ class AudioPlayerService {
     if (!_crossfadeEnabled || _isCrossfading || _crossfadeDurationSeconds == 0) {
       return;
     }
+    // Repeat-one replays the same track; crossfading into itself is wrong and
+    // the completion handler already restarts it.
+    if (_repeatMode == RepeatMode.one) return;
+    if (_isTransitioning) return;
 
     // Use cached duration to avoid async getDuration() call on every position update
     final duration = _cachedDuration;
@@ -2658,8 +3055,9 @@ class AudioPlayerService {
     final nextIndex = _currentIndex + 1;
     if (nextIndex >= _queue.length && _repeatMode != RepeatMode.all) return;
 
-    // Get next track (wrap to 0 if repeating; safe because _queue is non-empty)
-    final nextTrack = nextIndex < _queue.length ? _queue[nextIndex] : _queue[0];
+    // Wrap to 0 if repeating (safe because _queue is non-empty)
+    final resolvedIndex = nextIndex < _queue.length ? nextIndex : 0;
+    final nextTrack = _queue[resolvedIndex];
 
     // SMART: Don't crossfade within same album (respect artist intent)
     final currentAlbumId = _currentTrack!.albumId;
@@ -2674,13 +3072,15 @@ class AudioPlayerService {
 
     // Trigger crossfade
     debugPrint('🌊 Starting crossfade: ${_currentTrack!.name} → ${nextTrack.name}');
-    _startCrossfade(nextTrack, nextIndex);
+    _startCrossfade(nextTrack, resolvedIndex);
   }
 
   /// Start crossfade to next track
   Future<void> _startCrossfade(JellyfinTrack nextTrack, int nextIndex) async {
     if (_isCrossfading || _crossfadePlayer == null) return;
     _isCrossfading = true;
+    // Claim the player; a user-initiated playTrack during the fade wins.
+    final requestId = ++_playRequestId;
 
     try {
       // Stop any existing playback in crossfade player
@@ -2693,11 +3093,21 @@ class AudioPlayerService {
       }
 
       // Execute the crossfade
-      await _executeCrossfade(nextTrack, nextIndex);
+      await _executeCrossfade(nextTrack, nextIndex, requestId);
 
     } catch (e) {
       debugPrint('❌ Crossfade failed: $e');
+      final wasOurs = _playRequestId == requestId;
       _cancelCrossfade();
+      if (wasOurs && !_disposed) {
+        // Restore the outgoing track's volume in case we were mid-fade.
+        unawaited(_applyUserVolumeToPlayer());
+        // The outgoing player may already have completed while the
+        // completion handler was suppressed for the crossfade: advance now.
+        if (_player.state == PlayerState.completed && !_isTransitioning) {
+          unawaited(_gaplessTransition());
+        }
+      }
     }
   }
 
@@ -2710,6 +3120,7 @@ class AudioPlayerService {
       final localPath = await _downloadService?.getLocalPath(track.id);
       if (localPath != null) {
         await _crossfadePlayer!.setSourceDeviceFile(localPath);
+        _crossfadeTrackIsLocal = true;
         debugPrint('✅ Crossfade: loaded local file');
         return true;
       }
@@ -2717,6 +3128,7 @@ class AudioPlayerService {
       // Fall back to streaming
       final downloadUrl = track.downloadUrl(_jellyfinService?.baseUrl, _jellyfinService?.token);
       await _crossfadePlayer!.setSourceUrl(downloadUrl);
+      _crossfadeTrackIsLocal = false;
       debugPrint('✅ Crossfade: loaded stream');
       return true;
     } catch (e) {
@@ -2726,19 +3138,29 @@ class AudioPlayerService {
   }
 
   /// Execute the crossfade (Concurrent overlap)
-  Future<void> _executeCrossfade(JellyfinTrack nextTrack, int nextIndex) async {
+  Future<void> _executeCrossfade(
+    JellyfinTrack nextTrack,
+    int nextIndex,
+    int requestId,
+  ) async {
     if (_crossfadePlayer == null) return;
+    bool aborted() =>
+        _disposed || !_isCrossfading || requestId != _playRequestId;
 
     final steps = 25; // More steps for smoother concurrent transition
     final stepDuration = Duration(milliseconds: (_crossfadeDurationSeconds * 1000) ~/ steps);
+    // ReplayGain for each side of the fade
+    final outMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
+    final inMultiplier = nextTrack.replayGainMultiplier;
 
     // Start the next track at volume 0.0 immediately
     await _crossfadePlayer!.setVolume(0.0);
+    if (aborted()) return;
     await _crossfadePlayer!.resume();
 
     // Concurrent Fade loop
     for (int i = 0; i <= steps; i++) {
-      if (!_isCrossfading || _crossfadePlayer == null) break;
+      if (aborted() || _crossfadePlayer == null) break;
 
       final progress = i / steps;
       // Quadratic curves for natural logarithmic volume perception
@@ -2746,19 +3168,22 @@ class AudioPlayerService {
       final fadeIn = progress * progress;
 
       // Update both volumes simultaneously
-      unawaited(_player.setVolume(_volume * fadeOut));
-      unawaited(_crossfadePlayer!.setVolume(_volume * fadeIn));
+      unawaited(_player.setVolume((_volume * fadeOut * outMultiplier).clamp(0.0, 1.0)));
+      unawaited(_crossfadePlayer!.setVolume((_volume * fadeIn * inMultiplier).clamp(0.0, 1.0)));
 
       if (i < steps) {
         await Future.delayed(stepDuration);
       }
     }
 
-    // Stop the old track AFTER the concurrent fade is complete
-    await _player.stop();
-    await _player.setVolume(_volume); // Reset volume for next use
+    // Cancelled (e.g. user picked another track): the new request owns the
+    // main player now — don't stop it or swap players under it.
+    if (aborted()) {
+      if (!_disposed) await _crossfadePlayer?.stop();
+      return;
+    }
 
-    // Complete the transition
+    // Complete the transition (stops the faded-out old player)
     await _completeCrossfadeTransition(nextTrack, nextIndex);
   }
 
@@ -2766,16 +3191,20 @@ class AudioPlayerService {
   Future<void> _completeCrossfadeTransition(JellyfinTrack nextTrack, int nextIndex) async {
     if (_crossfadePlayer == null) return;
 
+    // Close out the outgoing track (listening time + Jellyfin "stopped")
+    // before any state switches to the new one.
+    _recordActualListeningTime();
+    _reportOutgoingStopped();
+
     // Stop old main player (already faded out)
     await _player.stop();
+    await _player.setVolume(_volume); // Reset volume for next use
 
     // SWAP: crossfade player becomes the new main player
     await _detachListeners();
 
     // Update AudioHandler to listen to the crossfade player (now main)
     _audioHandler?.updatePlayer(_crossfadePlayer!);
-    final offlineArtUri = await _getOfflineArtworkUri(nextTrack.id);
-    _audioHandler?.updateNautuneMediaItem(nextTrack, offlineArtUri: offlineArtUri);
 
     // Swap the references
     final oldPlayer = _player;
@@ -2785,32 +3214,61 @@ class AudioPlayerService {
     // Re-attach listeners to the new main player
     _attachPlayerListeners(_player);
 
+    // The queue may have been edited during the fade; re-resolve the slot.
+    final resolvedIndex = resolveQueueIndex<JellyfinTrack>(
+      _queue,
+      nextTrack.id,
+      (t) => t.id,
+      requestedIndex: nextIndex,
+      nearIndex: _currentIndex,
+    );
+
     // Update track info
-    _currentIndex = nextIndex;
+    if (resolvedIndex != -1) _currentIndex = resolvedIndex;
     _currentTrack = nextTrack;
     _currentTrackController.add(_currentTrack);
+    _isCurrentTrackLocal = _crossfadeTrackIsLocal;
     _analyzeTrackForVisualizer(nextTrack);
 
     // Explicitly emit playing state
     _playingController.add(true);
     _lastPlayingState = true;
 
-    // Reset scrobble/timing state for new track
-    _hasScrobbled = false;
-    _trackStartTime = DateTime.now();
-    _lyricsPrefetched = false;
-    unawaited(ListenBrainzService().submitNowPlaying(nextTrack));
-
-    // Update duration from metadata
-    if (nextTrack.duration != null) {
-      _durationController.add(nextTrack.duration);
-    }
-
     _isCrossfading = false;
-    _preloadedTrack = null;
+    _clearPreload();
+
+    // Per-track bookkeeping (scrobble/history/report/duration/loop/media item)
+    _onTrackBegan(
+      nextTrack,
+      playMethod: _crossfadeTrackIsLocal ? 'DirectPlay' : 'DirectStream',
+    );
 
     // Force OS media controls update
     await _audioHandler?.forcePlayingState();
+
+    // Keep the FFT shadow player on the right track (foreground only).
+    if (Platform.isIOS) {
+      try {
+        await IOSFFTService.instance.stopCapture();
+        IOSFFTService.instance.resetUrl();
+        final (streamUrl, _) = _getStreamUrl(nextTrack);
+        if (streamUrl != null) {
+          unawaited(_cacheTrackForIOSFFT(nextTrack, streamUrl).catchError(
+            (e) => debugPrint('🎵 iOS FFT cache (crossfade) failed: $e'),
+          ));
+        }
+      } catch (e) {
+        debugPrint('⚠️ FFT restart after crossfade failed: $e');
+      }
+    }
+
+    unawaited(_stateStore.savePlaybackSnapshot(
+      currentTrack: _currentTrack,
+      position: Duration.zero,
+      queue: _queue,
+      currentQueueIndex: _currentIndex,
+      isPlaying: true,
+    ));
 
     debugPrint('✅ Crossfade complete → ${nextTrack.name}');
   }
@@ -3051,7 +3509,6 @@ class AudioPlayerService {
     cancelSleepTimer();
     _isSleepTimerByTracks = false;
     _sleepTimeRemaining = duration;
-    _preSleepVolume = _volume;
     _sleepTimerController.add(_sleepTimeRemaining);
 
     debugPrint('😴 Sleep timer started: ${duration.inMinutes} minutes');
@@ -3063,10 +3520,14 @@ class AudioPlayerService {
       _sleepTimeRemaining -= const Duration(seconds: 1);
       _sleepTimerController.add(_sleepTimeRemaining);
 
-      // Start fade-out in last 30 seconds (apply ReplayGain normalization)
-      if (_sleepTimeRemaining.inSeconds <= 30 && _sleepTimeRemaining.inSeconds > 0) {
-        final fadeProgress = _sleepTimeRemaining.inSeconds / 30.0;
-        final fadedVolume = _preSleepVolume * fadeProgress;
+      // Fade out over the last 30 seconds, from the user's current volume
+      // (apply ReplayGain normalization). [_volume] itself is never changed.
+      final fadedVolume = sleepTimerFadeVolume(
+        userVolume: _volume,
+        remaining: _sleepTimeRemaining,
+      );
+      if (fadedVolume != null) {
+        _sleepFadeApplied = true;
         final replayGainMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
         _player.setVolume((fadedVolume * replayGainMultiplier).clamp(0.0, 1.0));
       }
@@ -3084,7 +3545,6 @@ class AudioPlayerService {
     cancelSleepTimer();
     _isSleepTimerByTracks = true;
     _sleepTracksRemaining = trackCount;
-    _preSleepVolume = _volume;
     // Broadcast a sentinel value indicating track-based timer
     _sleepTimerController.add(Duration(seconds: -_sleepTracksRemaining));
 
@@ -3100,9 +3560,11 @@ class AudioPlayerService {
     _isSleepTimerByTracks = false;
     _sleepTimerController.add(Duration.zero);
 
-    // Restore volume if we were fading
-    if (_preSleepVolume != _volume) {
-      setVolume(_preSleepVolume);
+    // Only undo the fade if this timer actually lowered the player volume.
+    // The user's volume (_volume) was never modified, so re-apply it.
+    if (_sleepFadeApplied) {
+      _sleepFadeApplied = false;
+      unawaited(_applyUserVolumeToPlayer());
     }
 
     debugPrint('😴 Sleep timer cancelled');
@@ -3121,15 +3583,16 @@ class AudioPlayerService {
     final replayGainMultiplier = _currentTrack?.replayGainMultiplier ?? 1.0;
     await _player.setVolume((0.0 * replayGainMultiplier).clamp(0.0, 1.0));
     await pause();
+    _sleepFadeApplied = false;
 
-    // Restore volume for next session (guarded against disposed state)
-    final savedVolume = _preSleepVolume;
+    // Restore the player to the user's volume for next session (pause()
+    // already does this; repeat after a beat in case the fade raced it).
     await Future.delayed(const Duration(milliseconds: 500));
-    if (_currentTrack != null || _queue.isNotEmpty) {
-      await setVolume(savedVolume);
+    if (!_disposed && !isPlaying && (_currentTrack != null || _queue.isNotEmpty)) {
+      await _applyUserVolumeToPlayer();
     }
 
-    debugPrint('😴 Sleep timer: Playback stopped, volume restored to $savedVolume');
+    debugPrint('😴 Sleep timer: Playback stopped, volume restored to $_volume');
   }
 
   void dispose() {
@@ -3177,6 +3640,27 @@ class PositionData {
   final Duration position;
   final Duration bufferedPosition;
   final Duration duration;
+}
+
+/// Where a track will be played from (see `_resolvePlaybackSource`).
+class _ResolvedSource {
+  const _ResolvedSource({
+    required this.url,
+    required this.isLocalFile,
+    required this.isDownloaded,
+    required this.isDirectStream,
+    required this.streamUrl,
+  });
+
+  final String url;
+  final bool isLocalFile;
+  final bool isDownloaded;
+  final bool isDirectStream;
+  final String? streamUrl;
+
+  /// Jellyfin PlayMethod for reporting.
+  String get playMethod =>
+      isDownloaded ? 'DirectPlay' : (isDirectStream ? 'DirectStream' : 'Transcode');
 }
 
 /// Network type for auto quality selection

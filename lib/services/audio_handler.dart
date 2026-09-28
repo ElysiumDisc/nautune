@@ -18,6 +18,16 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
   StreamSubscription? _durationSubscription;
   StreamSubscription? _stateSubscription;
 
+  /// Latest position reported by the player. Kept locally and only pushed to
+  /// the OS on state changes / discontinuities: audio_service extrapolates
+  /// the lock-screen position from `updatePosition + speed * elapsed`, so
+  /// re-broadcasting on every ~200ms tick is wasted work.
+  Duration _lastKnownPosition = Duration.zero;
+
+  /// A reported position further than this from the OS's extrapolated
+  /// position is treated as a jump (seek, A-B loop, new track) and pushed.
+  static const Duration _positionDriftTolerance = Duration(milliseconds: 1500);
+
   /// Completer that resolves when the media session update is broadcast.
   /// Used by gapless transition to wait deterministically instead of a fixed delay.
   Completer<void>? _mediaUpdateCompleter;
@@ -45,9 +55,11 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
   void _listenToPlayerState() {
     // Listen to position changes
     _positionSubscription = _player.onPositionChanged.listen((position) {
-      playbackState.add(playbackState.value.copyWith(
-        updatePosition: position,
-      ));
+      _lastKnownPosition = position;
+      final expected = playbackState.value.position;
+      if ((position - expected).abs() > _positionDriftTolerance) {
+        _pushPosition(position);
+      }
     });
 
     // Listen to duration changes
@@ -75,8 +87,11 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
             ? audio_service.AudioProcessingState.ready
             : audio_service.AudioProcessingState.idle;
 
+    // copyWith stamps a fresh updateTime, so always pair it with the real
+    // position or the OS would extrapolate from a stale one.
     playbackState.add(playbackState.value.copyWith(
       playing: playing,
+      updatePosition: _lastKnownPosition,
       controls: [
         audio_service.MediaControl.skipToPrevious,
         playing ? audio_service.MediaControl.pause : audio_service.MediaControl.play,
@@ -92,6 +107,11 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
     ));
   }
 
+  void _pushPosition(Duration position) {
+    _lastKnownPosition = position;
+    playbackState.add(playbackState.value.copyWith(updatePosition: position));
+  }
+
   /// Force broadcast playing state to OS media controls.
   /// This is used after gapless transitions where the state change event
   /// may not fire because the new player is already in playing state.
@@ -99,6 +119,7 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
   Future<void> forcePlayingState() async {
     // Get current position from player
     final position = await _player.getCurrentPosition() ?? Duration.zero;
+    _lastKnownPosition = position;
 
     playbackState.add(playbackState.value.copyWith(
       playing: true,
@@ -123,16 +144,18 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
   /// the real player state. Ensures lock screen controls stay interactive.
   Future<void> forceBroadcastCurrentState() async {
     final position = await _player.getCurrentPosition() ?? Duration.zero;
+    _lastKnownPosition = position;
     _broadcastState(_player.state);
-    playbackState.add(playbackState.value.copyWith(
-      updatePosition: position,
-    ));
   }
 
+  /// [offlineArtUri] is the downloaded artwork file (only provided when the
+  /// track is downloaded and the file exists). It is preferred over the
+  /// network URL so the lock screen / CarPlay show art offline and don't
+  /// re-fetch what is already on disk.
   void updateNautuneMediaItem(JellyfinTrack track, {Uri? offlineArtUri}) {
-    // Use network artwork URL if available, otherwise fall back to offline artwork
     final networkArtUrl = track.artworkUrl();
-    final artUri = networkArtUrl != null ? Uri.parse(networkArtUrl) : offlineArtUri;
+    final artUri = offlineArtUri ??
+        (networkArtUrl != null ? Uri.parse(networkArtUrl) : null);
 
     final item = audio_service.MediaItem(
       id: track.id,
@@ -220,6 +243,7 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
   @override
   Future<void> seek(Duration position) async {
     onSeek(position);
+    _pushPosition(position);
   }
 
   Future<void> dispose() async {

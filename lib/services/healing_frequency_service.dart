@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:audio_session/audio_session.dart'
+    show AudioSession, AudioSessionConfiguration;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
@@ -49,19 +51,34 @@ class HealingFrequencyService {
     await player.setReleaseMode(ReleaseMode.loop);
     await player.setVolume(_volume);
 
-    // iOS: allow mixing so background music keeps playing.
-    if (Platform.isIOS) {
-      final context = AudioContext(
-        iOS: AudioContextIOS(
-          category: AVAudioSessionCategory.playback,
-          options: const {AVAudioSessionOptions.mixWithOthers},
-        ),
-      );
-      await player.setAudioContext(context);
-    }
-
     _player = player;
     _initialized = true;
+  }
+
+  /// iOS: allow mixing so background music keeps playing. Applied on every
+  /// play() because stop() hands the shared session back to the music player.
+  Future<void> _applyMixingContext(AudioPlayer player) async {
+    if (!Platform.isIOS) return;
+    final context = AudioContext(
+      iOS: AudioContextIOS(
+        category: AVAudioSessionCategory.playback,
+        options: const {AVAudioSessionOptions.mixWithOthers},
+      ),
+    );
+    await player.setAudioContext(context);
+  }
+
+  /// `playback + mixWithOthers` on the shared AVAudioSession makes the music
+  /// player lose Now Playing / remote-command eligibility; restore the music
+  /// configuration when the tone stops.
+  Future<void> _restoreMusicSession() async {
+    if (!Platform.isIOS) return;
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+    } catch (e) {
+      debugPrint('HealingFrequencyService: failed to restore audio session: $e');
+    }
   }
 
   /// Synthesize an integer number of full cycles so the buffer loops without a
@@ -111,6 +128,7 @@ class HealingFrequencyService {
 
     try {
       await player.stop();
+      await _applyMixingContext(player);
       await player.setVolume(_volume);
       final source = await _sourceFor(hz);
       await player.play(source);
@@ -130,8 +148,10 @@ class HealingFrequencyService {
     } catch (e) {
       debugPrint('HealingFrequencyService: stop failed: $e');
     }
+    final wasPlaying = _currentHz != null;
     _currentHz = null;
     _currentHzController.add(null);
+    if (wasPlaying) await _restoreMusicSession();
   }
 
   Future<void> setVolume(double v) async {
@@ -153,6 +173,7 @@ class HealingFrequencyService {
       debugPrint('HealingFrequencyService: player dispose failed: $e');
     }
     _player = null;
+    if (_initialized) await _restoreMusicSession();
     _byteCache.clear();
     _fileCache.clear();
     await _currentHzController.close();
