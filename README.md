@@ -12,13 +12,16 @@ Flutter, shipped for iOS.
 ## ✨ Features
 
 ### Playback
-- **Gapless playback and crossfade**, with **ReplayGain** volume normalization
+- **Gapless playback and crossfade**
+- **Volume levelling** with ReplayGain: Off, Track or Album mode, plus a
+  preamp that leaves room to raise quiet tracks
 - **Queue** with reordering, shuffle, repeat, **Infinite Radio** (keeps the
   queue topped up with similar tracks) and **Artist Radio**
 - **Sleep timer** by time or by number of tracks, with a gentle fade-out
 - **Synced lyrics** from Jellyfin, with LRCLIB and lyrics.ovh as fallbacks
 - **A-B repeat loops** on downloaded or cached tracks, saved for later
-- **Streaming quality**: Original, 320k, 192k, 128k, or Auto (network-aware)
+- **Streaming quality**: Original, 320k, 192k, 128k, or Auto (network-aware),
+  with MP3 or AAC for tracks the server has to convert
 - **Lock screen and Control Center** controls with artwork; playback
   resumes correctly after calls and other interruptions
 
@@ -66,12 +69,19 @@ Flutter, shipped for iOS.
   from a cold start while the phone is locked
 
 ### ListenBrainz
-- Scrobbles plays (after half the track or 4 minutes, whichever comes
-  first) and queues them while offline
+- Scrobbles plays after you've actually listened to half the track or 4
+  minutes, whichever comes first (seeking ahead doesn't count), and queues
+  them while offline
 - Recommendations on Home, plus popular-track highlights on artist and
   album pages
 
 ### Look and feel
+- An iOS-native design: large titles, frosted glass bars, grouped lists
+  and iOS page transitions
+- Every theme preset, and your own custom colours, in **light and dark**.
+  Follow the palette, follow iOS, or force either one
+- Accent colour from your palette or from the artwork that's playing,
+  continuous (iOS) or circular corners, and frosted glass or solid bars
 - 6 Now Playing layouts: Classic, Blur, Card, Gradient, Compact, Full Art
 - 5 audio-reactive visualizers (Ocean Waves, Spectrum Bars, Mirror Bars,
   Radial, Psychedelic), driven by real-time FFT on iOS and switched off

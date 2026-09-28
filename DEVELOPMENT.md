@@ -144,11 +144,13 @@ Secrets live in Codemagic: `APP_STORE_CONNECT_TEAM_ID`,
 lib/
   main.dart          bootstrap: services → providers → NautuneAppState → runApp
   app_state.dart     NautuneAppState: session, library, offline mode, wiring
-  providers/         Session, Connectivity, UIState, LibraryData, DemoMode, Theme, SyncStatus
+  providers/         Session, Connectivity, UIState, LibraryData, DemoMode, Theme, SyncStatus,
+                     NowPlayingColors
+  theme/             palettes, ThemeData builder, NautuneStyle, spacing/radius tokens
   jellyfin/          API client, service, models, URL/auth helpers
   services/          audio, CarPlay, downloads, caches, ListenBrainz, lyrics, easter eggs
   repositories/      MusicRepository: OnlineRepository / OfflineRepository
-  screens/ widgets/  UI
+  screens/ widgets/  UI (widgets/ios/: shared iOS-style building blocks)
   utils/             pure helpers (most unit tests live against these)
 ios/Runner/          AppDelegate, SceneDelegate, native plugins, Info.plist
 ```
@@ -175,8 +177,32 @@ lives in `lib/services/playback_logic.dart`. `NautuneAudioHandler`
 (`lib/services/audio_handler.dart`, `audio_service`) publishes the lock
 screen and Control Center state. `PlaybackReportingService` reports
 start, progress and stop to Jellyfin, with one reporting session per
-track. `AudioCacheService` keeps streamed copies in a 2 GiB LRU cache in
-the temporary directory.
+track; start and stop events recorded offline are persisted per account
+(`PendingReportStore`, Hive box `playback_report_queue`, capped at 500).
+While backgrounded it keeps reporting progress every 30 s during playback
+and stops while paused. `AudioCacheService` keeps streamed copies in a
+2 GiB LRU cache in the temporary directory, keyed `trackId@variant`
+(`orig`, or `bitrate-codec`) so a lower-quality copy never stands in for a
+higher streaming quality (`cacheVariantForUrl` in `playback_logic.dart`).
+ReplayGain (`replayGainMultiplier`), the listened-time tracker behind play
+counts and scrobbles (`ListenedTimeTracker`) and the cache-key rules are
+pure functions in `playback_logic.dart` with unit tests.
+
+**Design system.** `NautuneColorPalette` (`lib/theme/nautune_theme.dart`)
+builds the whole `ThemeData`. Each palette has a native brightness; its
+`variant()` generates the other brightness with WCAG-checked contrast, and
+`withAccent()` swaps in the Now Playing artwork colour. `ThemeProvider`
+turns the user's choices (palette, Light / Dark mode, accent source,
+corner style, frosted glass, artwork tint) into `theme`, `darkTheme` and
+`themeMode` for `MaterialApp`. Choices that have no Material slot travel
+in the `NautuneStyle` theme extension: read them with
+`NautuneStyle.of(context)`, and use `style.shape(radius)` for corners so the
+corner setting is honoured. Use the iOS type roles on `TextTheme`
+(`headline`, `body`, `footnote`, …) instead of hard-coded font sizes. Build
+new UI from `lib/widgets/ios/`: `FrostedBar`, `LargeTitleScrollView`,
+`GroupedSection` / `GroupedTile` and `showNautuneActionSheet`.
+`NowPlayingColorsProvider` extracts artwork colours once per artwork, in an
+isolate, for every screen that tints from the artwork.
 
 **CarPlay.** `CarPlayService` (`lib/services/carplay_service.dart`) builds
 the `flutter_carplay` templates. See [CarPlay](#carplay).
@@ -233,7 +259,8 @@ with `first_unlock` accessibility so CarPlay can cold-start while the
 phone is locked. Other boxes include `nautune_downloads`,
 `nautune_playback` (queue and UI state), `nautune_cache` (library cache),
 `nautune_playlists`, `nautune_sync_queue` (offline playlist edits),
-`nautune_lyrics`, `nautune_analytics` and `nautune_saved_loops`.
+`nautune_lyrics`, `nautune_analytics`, `nautune_saved_loops` and
+`playback_report_queue` (offline Jellyfin start/stop reports).
 
 **On-device storage.**
 
@@ -352,6 +379,21 @@ Simulator) before promoting a TestFlight build:
       and by tracks.
 - [ ] Kill the app during playback and relaunch: queue and position are
       restored without waiting on the network.
+- [ ] Lock the phone for a few minutes while playing: the Jellyfin
+      dashboard shows the current position.
+- [ ] Skip a track after a few seconds: its play count doesn't go up.
+      Seek past halfway: no scrobble until you've listened long enough.
+- [ ] ReplayGain Track/Album with a -6 dB preamp: quiet and loud tracks
+      play at a similar level.
+- [ ] Transcode Format AAC: an Opus or FLAC track at 128k plays and seeks.
+- [ ] Raise streaming quality to Original: a track cached at 128k is
+      streamed again rather than replayed from cache.
+
+**Look and feel**
+- [ ] Each preset and a custom palette in Light / Dark: Palette, System
+      (toggle iOS appearance), Light and Dark. Text stays readable.
+- [ ] Accent from artwork changes with each album; corners and frosted
+      glass toggles apply everywhere.
 
 **Downloads and offline**
 - [ ] Download an album and a playlist, kill the app mid-download, and

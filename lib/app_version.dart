@@ -6,7 +6,7 @@ class AppVersion {
   /// Fallback used until [init] reads the real value (or if it fails).
   /// Must equal pubspec.yaml `version:`; enforced by
   /// test/unit/repo_consistency_test.dart.
-  static String _version = '9.0.0+1';
+  static String _version = '9.1.0+1';
 
   /// The current app version string, `name+build` (e.g. "1.2.3+4").
   static String get current => _version;
