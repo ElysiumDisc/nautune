@@ -158,8 +158,12 @@ class AudioPlayerService {
   LyricsService? get lyricsService => _lyricsService;
   bool _lyricsPrefetched = false;
 
-  // ListenBrainz scrobbling tracking
+  // Play-count / scrobble tracking. Both fire once the track has actually been
+  // listened to for the scrobble threshold (not when it starts, and not by
+  // seeking past the threshold).
   bool _hasScrobbled = false;
+  bool _playCountPending = false;
+  final ListenedTimeTracker _listenedTime = ListenedTimeTracker();
   DateTime? _trackStartTime;
 
   // Sleep timer support
@@ -1095,6 +1099,7 @@ class AudioPlayerService {
       }
       // A stream that dies mid-track leaves the player "playing" with a frozen
       // position and no error/completion event: detect and reload.
+      if (playing) _listenedTime.onPosition(position, DateTime.now());
       if (playing && _stallDetector.onTick(position, DateTime.now())) {
         unawaited(_recoverFromStall());
       }
@@ -1119,10 +1124,8 @@ class AudioPlayerService {
         unawaited(_checkLyricsPrefetch(position).catchError(
           (e) => debugPrint('🎤 Lyrics prefetch failed: $e'),
         ));
-        // Check ListenBrainz scrobble threshold
-        unawaited(_checkListenBrainzScrobble(position).catchError(
-          (e) => debugPrint('🎵 ListenBrainz scrobble check failed: $e'),
-        ));
+        // Count the play / scrobble once enough has been heard
+        _checkPlayThreshold();
         // Sync iOS FFT shadow player position
         if (Platform.isIOS) {
           IOSFFTService.instance.syncPosition(posMs / 1000.0);
@@ -1848,6 +1851,7 @@ class AudioPlayerService {
   /// any await), so position ticks can't act on the previous track's state.
   void _resetPerTrackState(JellyfinTrack track) {
     _hasScrobbled = false;
+    _listenedTime.reset();
     _lyricsPrefetched = false;
     _positionFromPreviousTrack = false; // playTrack sets it again
     _fftStartOnResume = false; // the new track's start sets FFT up
@@ -1883,10 +1887,8 @@ class AudioPlayerService {
     // pre-loaded player's duration event fired before we attached).
     unawaited(_refreshDurationFromPlayer(track));
 
-    if (countPlay) {
-      _playStats.incrementPlayCount(track.id);
-      unawaited(_savePlayStats());
-    }
+    // Counted by _checkPlayThreshold once the track has really been heard.
+    _playCountPending = countPlay;
 
     unawaited(ListenBrainzService().submitNowPlaying(track));
 
@@ -2608,6 +2610,9 @@ class AudioPlayerService {
         duration > Duration.zero &&
         _lastPosition.inSeconds >= scrobbleThresholdSeconds(duration)) {
       _hasScrobbled = true;
+    } else {
+      // Credit what the previous launch already played of this track.
+      _listenedTime.reset(_lastPosition);
     }
     _afterTrackStarted(track);
   }
@@ -4014,34 +4019,35 @@ class AudioPlayerService {
     _lyricsService!.prefetchLyrics(nextTrack);
   }
 
-  /// Check if we should scrobble to ListenBrainz
-  /// Scrobbles when track has played for 50% OR 4 minutes, whichever is less
-  Future<void> _checkListenBrainzScrobble(Duration position) async {
-    if (_batterySaverMode) return;
-    if (_hasScrobbled || _currentTrack == null || _trackStartTime == null) return;
+  /// Once the current track has been listened to for the scrobble threshold
+  /// (50% or 4 minutes, whichever is less), count the play and scrobble it.
+  void _checkPlayThreshold() {
+    final track = _currentTrack;
+    if (track == null || (_hasScrobbled && !_playCountPending)) return;
 
-    final listenBrainz = ListenBrainzService();
-    if (!listenBrainz.isScrobblingEnabled) return;
-
-    // Use cached duration to avoid async getDuration() call on every position update
-    final duration = _currentTrack!.duration ?? _cachedDuration;
+    // Use cached duration to avoid async getDuration() call on every tick
+    final duration = track.duration ?? _cachedDuration;
     if (duration == null || duration.inMilliseconds == 0) return;
+    final thresholdSeconds = scrobbleThresholdSeconds(duration);
+    if (_listenedTime.listened.inSeconds < thresholdSeconds) return;
 
-    // Scrobble threshold: 50% of track OR 4 minutes, whichever is less
-    final halfDuration = duration.inSeconds ~/ 2;
-    const fourMinutes = 240; // 4 minutes in seconds
-    final thresholdSeconds = halfDuration < fourMinutes ? halfDuration : fourMinutes;
-
-    // Check if we've reached the threshold
-    if (position.inSeconds >= thresholdSeconds) {
-      _hasScrobbled = true;
-      debugPrint('🎵 ListenBrainz: Scrobbling "${_currentTrack!.name}" (${position.inSeconds}s >= ${thresholdSeconds}s threshold)');
-
-      unawaited(listenBrainz.submitListen(
-        _currentTrack!,
-        _trackStartTime!,
-      ));
+    if (_playCountPending) {
+      _playCountPending = false;
+      _playStats.incrementPlayCount(track.id);
+      unawaited(_savePlayStats());
     }
+
+    if (_hasScrobbled || _batterySaverMode) return;
+    final listenBrainz = ListenBrainzService();
+    final startTime = _trackStartTime;
+    if (!listenBrainz.isScrobblingEnabled || startTime == null) return;
+    _hasScrobbled = true;
+    debugPrint('🎵 ListenBrainz: Scrobbling "${track.name}" '
+        '(${_listenedTime.listened.inSeconds}s heard >= ${thresholdSeconds}s)');
+    unawaited(listenBrainz.submitListen(track, startTime).catchError((Object e) {
+      debugPrint('🎵 ListenBrainz scrobble failed: $e');
+      return false;
+    }));
   }
 
   /// Pre-load the next track into _nextPlayer for instant playback

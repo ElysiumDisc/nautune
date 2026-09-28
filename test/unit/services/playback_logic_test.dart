@@ -481,4 +481,52 @@ void main() {
       expect(gain(ReplayGainMode.track, preamp: -6), closeTo(0.501, 0.001));
     });
   });
+
+  group('ListenedTimeTracker', () {
+    final t0 = DateTime(2026);
+    Duration s(int seconds) => Duration(seconds: seconds);
+
+    test('counts normal playback', () {
+      final tracker = ListenedTimeTracker();
+      for (var i = 0; i <= 10; i++) {
+        tracker.onPosition(s(i), t0.add(s(i)));
+      }
+      expect(tracker.listened, s(10));
+    });
+
+    test('ignores a seek forward', () {
+      final tracker = ListenedTimeTracker()
+        ..onPosition(s(0), t0)
+        ..onPosition(s(1), t0.add(s(1)))
+        ..onPosition(s(120), t0.add(s(2)))
+        ..onPosition(s(121), t0.add(s(3)));
+      expect(tracker.listened, s(2));
+    });
+
+    test('ignores backward jumps and paused ticks', () {
+      final tracker = ListenedTimeTracker()
+        ..onPosition(s(10), t0)
+        ..onPosition(s(10), t0.add(s(5)))
+        ..onPosition(s(2), t0.add(s(6)))
+        ..onPosition(s(3), t0.add(s(7)));
+      expect(tracker.listened, s(1));
+    });
+
+    test('a seek made while paused is not credited', () {
+      final tracker = ListenedTimeTracker()
+        ..onPosition(s(10), t0)
+        ..onPosition(s(190), t0.add(const Duration(minutes: 5)));
+      expect(tracker.listened, Duration.zero);
+    });
+
+    test('reset clears and can seed', () {
+      final tracker = ListenedTimeTracker()
+        ..onPosition(s(0), t0)
+        ..onPosition(s(1), t0.add(s(1)))
+        ..reset(s(30));
+      expect(tracker.listened, s(30));
+      tracker.onPosition(s(50), t0.add(s(2)));
+      expect(tracker.listened, s(30)); // first tick after reset is a baseline
+    });
+  });
 }

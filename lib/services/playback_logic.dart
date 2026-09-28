@@ -99,6 +99,46 @@ int scrobbleThresholdSeconds(Duration trackDuration) {
   return half < fourMinutes ? half : fourMinutes;
 }
 
+/// Accumulates the time a track was actually listened to, from position
+/// ticks. A position jump that outruns the wall clock (a seek forward) and any
+/// backward jump (seek back, A-B loop restart) add nothing, and neither do
+/// paused ticks, so skipping ahead can't trigger a play count or scrobble.
+class ListenedTimeTracker {
+  Duration _listened = Duration.zero;
+  Duration? _lastPosition;
+  DateTime? _lastTick;
+
+  /// Allowance on top of elapsed wall time for timer/decoder jitter.
+  static const Duration _jitter = Duration(milliseconds: 1500);
+
+  /// Largest advance credited between two ticks (ticks arrive every ~200 ms).
+  /// Also rejects a seek made while paused, where wall time is long.
+  static const Duration _maxStep = Duration(seconds: 5);
+
+  Duration get listened => _listened;
+
+  /// Start counting a new track, optionally crediting [seed] already heard
+  /// (e.g. a session restored mid-track).
+  void reset([Duration seed = Duration.zero]) {
+    _listened = seed;
+    _lastPosition = null;
+    _lastTick = null;
+  }
+
+  void onPosition(Duration position, DateTime now) {
+    final lastPosition = _lastPosition;
+    final lastTick = _lastTick;
+    _lastPosition = position;
+    _lastTick = now;
+    if (lastPosition == null || lastTick == null) return;
+    final advanced = position - lastPosition;
+    if (advanced <= Duration.zero) return;
+    if (advanced > _maxStep) return; // a seek
+    if (advanced > now.difference(lastTick) + _jitter) return; // a seek
+    _listened += advanced;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Queue index bookkeeping
 // ---------------------------------------------------------------------------
