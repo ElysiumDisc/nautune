@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nautune/jellyfin/jellyfin_track.dart';
+import 'package:nautune/models/transcode_codec.dart';
 
 JellyfinTrack _track({String? container, String? codec}) => JellyfinTrack(
   id: 'abc123',
@@ -190,6 +191,32 @@ void main() {
         _track(container: 'OGG', codec: 'OPUS').isAvPlayerNativeFormat,
         isFalse,
       );
+    });
+  });
+
+  group('transcode codec', () {
+    test('capped and original URLs transcode to the chosen codec', () {
+      final capped = Uri.parse(_track().cappedStreamUrl(
+        deviceId: 'd',
+        maxBitrate: 192000,
+        transcodeCodec: TranscodeCodec.aac,
+      )!);
+      expect(capped.queryParameters['audioCodec'], 'aac');
+      expect(capped.queryParameters['transcodingContainer'], 'aac');
+
+      final original = Uri.parse(_track().originalQualityStreamUrl(
+        deviceId: 'd',
+        transcodeCodec: TranscodeCodec.aac,
+      )!);
+      expect(original.queryParameters['audioCodec'], 'aac');
+      expect(original.queryParameters['transcodingContainer'], 'aac');
+    });
+
+    test('defaults to mp3', () {
+      final uri = Uri.parse(
+        _track().cappedStreamUrl(deviceId: 'd', maxBitrate: 128000)!,
+      );
+      expect(uri.queryParameters['audioCodec'], 'mp3');
     });
   });
 }

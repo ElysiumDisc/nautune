@@ -14,6 +14,7 @@ import '../services/listening_analytics_service.dart';
 import '../services/network_download_service.dart';
 import '../models/now_playing_layout.dart';
 import '../models/replay_gain_mode.dart';
+import '../models/transcode_codec.dart';
 import '../models/playback_state.dart' show StreamingQuality, StreamingQualityExtension;
 import '../models/visualizer_type.dart';
 import '../providers/session_provider.dart';
@@ -98,7 +99,7 @@ const List<_SettingsCategory> _settingsCategories = [
     title: 'Audio',
     subtitle: 'Streaming, crossfade, gapless, volume levelling',
     icon: Icons.audiotrack,
-    keywords: ['streaming', 'quality', 'crossfade', 'gapless', 'infinite radio', 'replaygain', 'normalization', 'loudness', 'preamp', 'volume'],
+    keywords: ['streaming', 'quality', 'crossfade', 'gapless', 'infinite radio', 'replaygain', 'normalization', 'transcode', 'aac', 'mp3', 'codec', 'loudness', 'preamp', 'volume'],
   ),
   _SettingsCategory(
     id: 'performance',
@@ -1022,6 +1023,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ],
                       ),
                     ),
+                  ),
+                ),
+                _NautuneSettingsTile(
+                  icon: Icons.transform,
+                  title: 'Transcode Format',
+                  subtitle: 'Used when a track must be converted to stream',
+                  trailing: SegmentedButton<TranscodeCodec>(
+                    showSelectedIcon: false,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    segments: [
+                      for (final codec in TranscodeCodec.values)
+                        ButtonSegment(value: codec, label: Text(codec.label)),
+                    ],
+                    selected: {appState.transcodeCodec},
+                    onSelectionChanged: (selection) =>
+                        appState.setTranscodeCodec(selection.first),
                   ),
                 ),
                 _NautuneToggleTile(

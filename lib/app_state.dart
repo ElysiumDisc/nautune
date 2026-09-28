@@ -38,6 +38,7 @@ import 'providers/session_provider.dart';
 // Import repository layer for offline UI parity
 import 'models/playback_state.dart';
 import 'models/replay_gain_mode.dart';
+import 'models/transcode_codec.dart';
 import 'repositories/music_repository.dart';
 import 'repositories/repository_factory.dart';
 
@@ -478,6 +479,7 @@ class NautuneAppState extends ChangeNotifier {
   int get cacheTtlMinutes => _cacheTtlMinutes;
   StreamingQuality get streamingQuality => _streamingQuality;
   ReplayGainMode get replayGainMode => _audioPlayerService.replayGainMode;
+  TranscodeCodec get transcodeCodec => _audioPlayerService.transcodeCodec;
   double get replayGainPreampDb => _audioPlayerService.replayGainPreampDb;
   bool get visualizerEnabled => _visualizerEnabled;
   VisualizerType get visualizerType => _visualizerType;
@@ -742,6 +744,14 @@ class NautuneAppState extends ChangeNotifier {
     unawaited(_playbackStateStore.saveUiState(
       gaplessPlaybackEnabled: enabled,
     ));
+    notifyListeners();
+  }
+
+  /// Set the codec used when the server has to transcode, and persist it.
+  void setTranscodeCodec(TranscodeCodec codec) {
+    if (_audioPlayerService.transcodeCodec == codec) return;
+    _audioPlayerService.setTranscodeCodec(codec);
+    unawaited(_playbackStateStore.saveUiState(transcodeCodec: codec));
     notifyListeners();
   }
 
@@ -1213,6 +1223,7 @@ class NautuneAppState extends ChangeNotifier {
       _audioPlayerService.setInfiniteRadioEnabled(_infiniteRadioEnabled);
       _audioPlayerService.setGaplessPlaybackEnabled(_gaplessPlaybackEnabled);
       _audioPlayerService.setStreamingQuality(_streamingQuality);
+      _audioPlayerService.setTranscodeCodec(storedPlaybackState.transcodeCodec);
       unawaited(_audioPlayerService.setReplayGain(
         mode: storedPlaybackState.replayGainMode,
         preampDb: storedPlaybackState.replayGainPreampDb,

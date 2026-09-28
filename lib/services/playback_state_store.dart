@@ -6,6 +6,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../models/now_playing_layout.dart';
 import '../models/replay_gain_mode.dart';
+import '../models/transcode_codec.dart';
 import '../models/playback_state.dart';
 import '../models/visualizer_type.dart';
 export '../models/playback_state.dart' show StreamingQuality, StreamingQualityExtension;
@@ -167,6 +168,7 @@ class PlaybackStateStore {
     VisualizerPosition? visualizerPosition,
     int? preCacheTrackCount,
     bool? wifiOnlyCaching,
+    TranscodeCodec? transcodeCodec,
     double? replayGainPreampDb,
     ReplayGainMode? replayGainMode,
     bool? isOfflineMode,
@@ -207,6 +209,7 @@ class PlaybackStateStore {
         visualizerPosition: visualizerPosition ?? state.visualizerPosition,
         preCacheTrackCount: preCacheTrackCount ?? state.preCacheTrackCount,
         wifiOnlyCaching: wifiOnlyCaching ?? state.wifiOnlyCaching,
+        transcodeCodec: transcodeCodec ?? state.transcodeCodec,
         replayGainPreampDb: replayGainPreampDb ?? state.replayGainPreampDb,
         replayGainMode: replayGainMode ?? state.replayGainMode,
         isOfflineMode: isOfflineMode ?? state.isOfflineMode,

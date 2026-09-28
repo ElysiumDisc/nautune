@@ -1,4 +1,5 @@
 
+import '../models/transcode_codec.dart';
 import 'jellyfin_auth_header.dart';
 import 'server_uri.dart';
 
@@ -563,37 +564,40 @@ class JellyfinTrack {
   /// bitrate cap, so FLAC/ALAC/MP3/AAC/WAV files are streamed untouched
   /// (static, Range-seekable) while formats AVPlayer can't open
   /// (Opus, Vorbis, FLAC-in-Ogg, WMA, APE, …) are transcoded server-side to
-  /// MP3 instead of silently failing. Unlike [directDownloadUrl] it needs
-  /// no download permission and doesn't spam the server activity log.
+  /// [transcodeCodec] (MP3 by default) instead of silently failing. Unlike
+  /// [directDownloadUrl] it needs no download permission and doesn't spam
+  /// the server activity log.
   String? originalQualityStreamUrl({
     required String deviceId,
     int transcodeBitrate = 320000,
+    TranscodeCodec transcodeCodec = TranscodeCodec.mp3,
   }) {
     return universalStreamUrl(
       deviceId: deviceId,
       maxBitrate: kOriginalQualityMaxStreamingBitrate,
       audioBitrate: transcodeBitrate,
-      audioCodec: 'mp3',
+      audioCodec: transcodeCodec.audioCodec,
       containers: kAvPlayerDirectPlayContainers,
-      transcodingContainer: 'mp3',
+      transcodingContainer: transcodeCodec.container,
     );
   }
 
   /// Bitrate-capped stream URL: the file is served as-is when it is already
   /// in a lossy format AVPlayer plays and at or below [maxBitrate] (e.g. a
   /// 256 kbps AAC under a 320 kbps cap — no pointless re-encode), otherwise
-  /// transcoded to MP3 at [maxBitrate].
+  /// transcoded to [transcodeCodec] (MP3 by default) at [maxBitrate].
   String? cappedStreamUrl({
     required String deviceId,
     required int maxBitrate,
+    TranscodeCodec transcodeCodec = TranscodeCodec.mp3,
   }) {
     return universalStreamUrl(
       deviceId: deviceId,
       maxBitrate: maxBitrate,
       audioBitrate: maxBitrate,
-      audioCodec: 'mp3',
+      audioCodec: transcodeCodec.audioCodec,
       containers: kAvPlayerLossyContainers,
-      transcodingContainer: 'mp3',
+      transcodingContainer: transcodeCodec.container,
     );
   }
 

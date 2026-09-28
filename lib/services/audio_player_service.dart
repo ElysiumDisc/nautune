@@ -26,6 +26,7 @@ import 'playback_state_store.dart';
 import 'power_mode_service.dart';
 import '../models/playback_state.dart';
 import '../models/replay_gain_mode.dart';
+import '../models/transcode_codec.dart';
 import '../models/play_stats.dart';
 import 'local_cache_service.dart';
 import 'ios_fft_service.dart';
@@ -372,6 +373,15 @@ class AudioPlayerService {
     debugPrint('🎵 Streaming quality: ${quality.label}');
   }
 
+  TranscodeCodec _transcodeCodec = TranscodeCodec.mp3;
+  TranscodeCodec get transcodeCodec => _transcodeCodec;
+
+  /// Codec for server-side transcodes; applies from the next track loaded.
+  void setTranscodeCodec(TranscodeCodec codec) {
+    _transcodeCodec = codec;
+    debugPrint('🎵 Transcode codec: ${codec.label}');
+  }
+
   StreamingQuality get streamingQuality => _streamingQuality;
 
   void setConnectivityService(ConnectivityService service) {
@@ -475,7 +485,10 @@ class AudioPlayerService {
   }
 
   (String? url, bool isDirectStream) _originalQualityUrl(JellyfinTrack track) {
-    final url = track.originalQualityStreamUrl(deviceId: _deviceId);
+    final url = track.originalQualityStreamUrl(
+      deviceId: _deviceId,
+      transcodeCodec: _transcodeCodec,
+    );
     if (url != null) {
       return (url, track.streamUrlOverride != null || track.isAvPlayerNativeFormat);
     }
@@ -488,7 +501,11 @@ class AudioPlayerService {
     int maxBitrate, {
     String? sessionId,
   }) {
-    final url = track.cappedStreamUrl(deviceId: _deviceId, maxBitrate: maxBitrate);
+    final url = track.cappedStreamUrl(
+      deviceId: _deviceId,
+      maxBitrate: maxBitrate,
+      transcodeCodec: _transcodeCodec,
+    );
     if (url != null) {
       final bitrate = track.bitrate;
       final servedAsIs = track.streamUrlOverride != null ||
@@ -500,8 +517,8 @@ class AudioPlayerService {
       track.transcodedStreamUrl(
         deviceId: _deviceId,
         audioBitrate: maxBitrate,
-        audioCodec: 'mp3',
-        container: 'mp3',
+        audioCodec: _transcodeCodec.audioCodec,
+        container: _transcodeCodec.container,
         playSessionId: sessionId,
       ),
       false,
@@ -2228,8 +2245,8 @@ class AudioPlayerService {
           fallbackUrl = track.transcodedStreamUrl(
             deviceId: _deviceId,
             audioBitrate: 320000,
-            audioCodec: 'mp3',
-            container: 'mp3',
+            audioCodec: _transcodeCodec.audioCodec,
+            container: _transcodeCodec.container,
             playSessionId: sessionId,
           );
           playMethod = 'Transcode';

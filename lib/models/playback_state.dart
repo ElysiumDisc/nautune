@@ -1,6 +1,7 @@
 import '../jellyfin/jellyfin_track.dart';
 import 'now_playing_layout.dart';
 import 'replay_gain_mode.dart';
+import 'transcode_codec.dart';
 import 'visualizer_type.dart';
 
 /// Streaming quality options for audio playback
@@ -105,6 +106,7 @@ class PlaybackState {
     // Smart caching
     this.preCacheTrackCount = 3,  // 0 = off, 3, 5, or 10
     this.wifiOnlyCaching = false,
+    this.transcodeCodec = TranscodeCodec.mp3,
     this.replayGainPreampDb = 0.0,
     this.replayGainMode = ReplayGainMode.track,
     // Offline mode
@@ -163,6 +165,7 @@ class PlaybackState {
   // Smart caching
   final int preCacheTrackCount;  // 0 = off, 3, 5, or 10
   final bool wifiOnlyCaching;
+  final TranscodeCodec transcodeCodec;
   final double replayGainPreampDb;
   final ReplayGainMode replayGainMode;
   // Offline mode
@@ -218,6 +221,7 @@ class PlaybackState {
     VisualizerPosition? visualizerPosition,
     int? preCacheTrackCount,
     bool? wifiOnlyCaching,
+    TranscodeCodec? transcodeCodec,
     double? replayGainPreampDb,
     ReplayGainMode? replayGainMode,
     bool? isOfflineMode,
@@ -265,6 +269,7 @@ class PlaybackState {
       visualizerPosition: visualizerPosition ?? this.visualizerPosition,
       preCacheTrackCount: preCacheTrackCount ?? this.preCacheTrackCount,
       wifiOnlyCaching: wifiOnlyCaching ?? this.wifiOnlyCaching,
+      transcodeCodec: transcodeCodec ?? this.transcodeCodec,
       replayGainPreampDb: replayGainPreampDb ?? this.replayGainPreampDb,
       replayGainMode: replayGainMode ?? this.replayGainMode,
       isOfflineMode: isOfflineMode ?? this.isOfflineMode,
@@ -315,6 +320,7 @@ class PlaybackState {
       'visualizerPosition': visualizerPosition.name,
       'preCacheTrackCount': preCacheTrackCount,
       'wifiOnlyCaching': wifiOnlyCaching,
+      'transcodeCodec': transcodeCodec.name,
       'replayGainPreampDb': replayGainPreampDb,
       'replayGainMode': replayGainMode.name,
       'isOfflineMode': isOfflineMode,
@@ -377,6 +383,7 @@ class PlaybackState {
       visualizerPosition: VisualizerPositionExtension.fromString(json['visualizerPosition'] as String?),
       preCacheTrackCount: (json['preCacheTrackCount'] as num?)?.toInt() ?? 3,
       wifiOnlyCaching: json['wifiOnlyCaching'] as bool? ?? false,
+      transcodeCodec: TranscodeCodec.fromName(json['transcodeCodec'] as String?),
       replayGainPreampDb: (json['replayGainPreampDb'] as num?)?.toDouble() ?? 0.0,
       replayGainMode: ReplayGainMode.fromName(json['replayGainMode'] as String?),
       isOfflineMode: json['isOfflineMode'] as bool? ?? false,
@@ -433,6 +440,7 @@ class PlaybackState {
       visualizerPosition: visualizerPosition, // Preserve visualizer position
       preCacheTrackCount: preCacheTrackCount, // Preserve smart cache settings
       wifiOnlyCaching: wifiOnlyCaching,
+      transcodeCodec: transcodeCodec,
       replayGainPreampDb: replayGainPreampDb,
       replayGainMode: replayGainMode,
       submarineModeEnabled: submarineModeEnabled, // Preserve submarine mode
