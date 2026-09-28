@@ -472,6 +472,45 @@ class LibraryDataProvider extends ChangeNotifier {
     }
   }
 
+  /// Load every remaining album page (in large chunks), e.g. before an A-Z
+  /// jump to a letter that isn't loaded yet. Later pages continue from the
+  /// loaded count, so ordinary pagination stays consistent afterwards.
+  Future<void> loadAllAlbums() async {
+    final libraryId = _sessionProvider.session?.selectedLibraryId;
+    if (libraryId == null ||
+        _isLoadingMoreAlbums ||
+        _isLoadingAlbums ||
+        !_hasMoreAlbums ||
+        _albums == null) {
+      return;
+    }
+    _isLoadingMoreAlbums = true;
+    final loadId = _albumsLoadId;
+    notifyListeners();
+    try {
+      while (_hasMoreAlbums) {
+        final chunk = await _jellyfinService.loadAlbums(
+          libraryId: libraryId,
+          startIndex: _albums!.length,
+          limit: _loadAllChunk,
+          sortBy: sortOptionToJellyfin(_albumSortBy),
+          sortOrder: sortOrderToJellyfin(_albumSortOrder),
+        );
+        if (loadId != _albumsLoadId) return;
+        _albums = List.of(_albums!)..addAll(chunk);
+        _hasMoreAlbums = chunk.length == _loadAllChunk;
+      }
+      _albumsPage = (_albums!.length / _albumsPageSize).ceil() - 1;
+    } catch (error) {
+      debugPrint('LibraryDataProvider: Error loading all albums: $error');
+    } finally {
+      _isLoadingMoreAlbums = false;
+      notifyListeners();
+    }
+  }
+
+  static const int _loadAllChunk = 1000;
+
   /// Load artists for the currently selected library.
   Future<void> loadArtists({bool forceRefresh = false}) async {
     final libraryId = _sessionProvider.session?.selectedLibraryId;
@@ -567,6 +606,41 @@ class LibraryDataProvider extends ChangeNotifier {
     } catch (error) {
       debugPrint('LibraryDataProvider: Error loading more artists: $error');
       _artistsPage--; // Revert page on error
+    } finally {
+      _isLoadingMoreArtists = false;
+      notifyListeners();
+    }
+  }
+
+  /// Load every remaining artist page (see [loadAllAlbums]).
+  Future<void> loadAllArtists() async {
+    final libraryId = _sessionProvider.session?.selectedLibraryId;
+    if (libraryId == null ||
+        _isLoadingMoreArtists ||
+        _isLoadingArtists ||
+        !_hasMoreArtists ||
+        _artists == null) {
+      return;
+    }
+    _isLoadingMoreArtists = true;
+    final loadId = _artistsLoadId;
+    notifyListeners();
+    try {
+      while (_hasMoreArtists) {
+        final chunk = await _jellyfinService.loadArtists(
+          libraryId: libraryId,
+          startIndex: _artists!.length,
+          limit: _loadAllChunk,
+          sortBy: sortOptionToJellyfin(_artistSortBy),
+          sortOrder: sortOrderToJellyfin(_artistSortOrder),
+        );
+        if (loadId != _artistsLoadId) return;
+        _artists = List.of(_artists!)..addAll(chunk);
+        _hasMoreArtists = chunk.length == _loadAllChunk;
+      }
+      _artistsPage = (_artists!.length / _artistsPageSize).ceil() - 1;
+    } catch (error) {
+      debugPrint('LibraryDataProvider: Error loading all artists: $error');
     } finally {
       _isLoadingMoreArtists = false;
       notifyListeners();

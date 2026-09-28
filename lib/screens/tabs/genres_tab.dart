@@ -66,64 +66,18 @@ class _GenresTabState extends State<_GenresTab> {
       );
     }
 
-    return RefreshIndicator(
+    return IndexedCollectionView<JellyfinGenre>(
+      items: genres,
+      nameOf: (genre) => genre.name,
+      controller: _genresScrollController,
+      columns: context.watch<UIStateProvider>().gridSize,
+      gridSpacing: NautuneSpacing.md,
+      gridItemExtent: (w) => w / 1.5,
       onRefresh: () => widget.appState.refreshGenres(),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // User-controlled grid size - directly sets columns per row
-          final uiState = context.watch<UIStateProvider>();
-          final crossAxisCount = uiState.gridSize;
-
-          // Genres are always sorted by name
-          final genreLetterGroups = AlphabetSectionBuilder.groupByLetter<JellyfinGenre>(
-            genres,
-            (genre) => genre.name,
-            SortOrder.ascending,
-          );
-          final genreItemHeight = ((constraints.maxWidth - 32 - (crossAxisCount - 1) * 12) / crossAxisCount) / 1.5 + 12;
-
-          return Stack(
-            children: [
-              CustomScrollView(
-                controller: _genresScrollController,
-                slivers: [
-                  for (final (letter, items) in genreLetterGroups) ...[
-                    SliverToBoxAdapter(
-                      child: _AlphabetSectionHeader(letter: letter),
-                    ),
-                    SliverPadding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      sliver: SliverGrid(
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: crossAxisCount,
-                          childAspectRatio: 1.5,
-                          crossAxisSpacing: 12,
-                          mainAxisSpacing: 12,
-                        ),
-                        delegate: SliverChildBuilderDelegate(
-                          (context, index) {
-                            if (index >= items.length) return null;
-                            final genre = items[index];
-                            return _GenreCard(genre: genre, appState: widget.appState);
-                          },
-                          childCount: items.length,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              AlphabetScrollbar(
-                items: genres,
-                getItemName: (genre) => (genre as JellyfinGenre).name,
-                scrollController: _genresScrollController,
-                itemHeight: genreItemHeight,
-                crossAxisCount: crossAxisCount,
-              ),
-            ],
-          );
-        },
-      ),
+      listItemBuilder: (context, genre) =>
+          _GenreCard(genre: genre, appState: widget.appState),
+      gridItemBuilder: (context, genre) =>
+          _GenreCard(genre: genre, appState: widget.appState),
     );
   }
 }

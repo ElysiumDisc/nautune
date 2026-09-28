@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
@@ -24,7 +25,10 @@ import '../services/smart_playlist_service.dart';
 import '../models/listenbrainz_config.dart';
 import '../widgets/add_to_playlist_dialog.dart';
 import '../widgets/download_indicators.dart';
+import '../widgets/indexed_collection_view.dart';
+import '../widgets/ios/action_sheet.dart';
 import '../widgets/jellyfin_image.dart';
+import '../widgets/library_tiles.dart';
 import '../utils/debouncer.dart';
 import '../utils/download_library.dart';
 import '../utils/easter_egg_keywords.dart';
@@ -47,6 +51,7 @@ import 'profile_screen.dart';
 import 'recently_played_screen.dart';
 import 'settings_screen.dart';
 import '../theme/nautune_spacing.dart';
+import '../theme/nautune_theme.dart';
 
 part 'tabs/albums_tab.dart';
 part 'tabs/artists_tab.dart';
@@ -55,7 +60,6 @@ part 'tabs/genres_tab.dart';
 part 'tabs/home_tab.dart';
 part 'tabs/playlists_tab.dart';
 part 'tabs/search_tab.dart';
-part '../widgets/alphabet_scrollbar.dart';
 
 /// Overflow actions in the library app bar.
 enum _LibraryMenuAction { toggleOffline, offlineLibrary, switchLibrary, logOut }
@@ -1015,56 +1019,62 @@ class _LibraryTabState extends State<_LibraryTab> {
   Widget build(BuildContext context) {
     final isOffline = widget.appState.isOfflineMode;
 
-    return NestedScrollView(
-      headerSliverBuilder: (context, innerBoxIsScrolled) {
-        return [
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  SegmentedButton<String>(
-                    segments: [
-                      const ButtonSegment(
-                        value: 'albums',
-                        label: Text('Albums'),
-                        icon: Icon(Icons.album),
-                      ),
-                      const ButtonSegment(
-                        value: 'artists',
-                        label: Text('Artists'),
-                        icon: Icon(Icons.person),
-                      ),
-                      if (!isOffline)
-                        const ButtonSegment(
-                          value: 'genres',
-                          label: Text('Genres'),
-                          icon: Icon(Icons.category),
+    final theme = Theme.of(context);
+    // Header stays put while the collection scrolls under it, so the A-Z
+    // index's offsets are relative to the collection alone.
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            NautuneSpacing.lg, NautuneSpacing.sm, NautuneSpacing.lg, NautuneSpacing.xs),
+          child: Row(
+            children: [
+              Expanded(
+                child: CupertinoSlidingSegmentedControl<String>(
+                  groupValue: _selectedView,
+                  thumbColor: theme.colorScheme.primary,
+                  backgroundColor: theme.colorScheme.onSurface.withValues(alpha: 0.08),
+                  children: {
+                    for (final (value, label) in [
+                      ('albums', 'Albums'),
+                      ('artists', 'Artists'),
+                      if (!isOffline) ('genres', 'Genres'),
+                    ])
+                      value: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Text(
+                          label,
+                          style: theme.textTheme.subhead.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: _selectedView == value
+                                ? theme.colorScheme.onPrimary
+                                : theme.colorScheme.onSurface,
+                          ),
                         ),
-                    ],
-                    selected: {_selectedView},
-                    onSelectionChanged: (Set<String> newSelection) {
-                      setState(() {
-                        _selectedView = newSelection.first;
-                      });
-                    },
-                  ),
-                  // Sort controls for albums and artists (not genres)
-                  if (!isOffline && _selectedView != 'genres')
-                    Padding(
-                      padding: const EdgeInsets.only(top: 12),
-                      child: _SortControls(
-                        appState: widget.appState,
-                        isAlbums: _selectedView == 'albums',
                       ),
-                    ),
-                ],
+                  },
+                  onValueChanged: (value) {
+                    if (value == null) return;
+                    HapticService.selectionClick();
+                    setState(() => _selectedView = value);
+                  },
+                ),
               ),
-            ),
+              // Sort controls for albums and artists (not genres)
+              if (!isOffline && _selectedView != 'genres') ...[
+                const SizedBox(width: NautuneSpacing.sm),
+                _SortControls(
+                  appState: widget.appState,
+                  isAlbums: _selectedView == 'albums',
+                ),
+              ],
+            ],
           ),
-        ];
-      },
-      body: isOffline ? _buildOfflineContent() : _buildOnlineContent(),
+        ),
+        Expanded(
+          child: isOffline ? _buildOfflineContent() : _buildOnlineContent(),
+        ),
+      ],
     );
   }
 
@@ -1154,6 +1164,10 @@ class _LibraryTabState extends State<_LibraryTab> {
         onRefresh: () => widget.appState.refreshAlbums(),
         onAlbumTap: widget.onAlbumTap,
         appState: widget.appState,
+        sortBy: widget.appState.albumSortBy,
+        sortOrder: widget.appState.albumSortOrder,
+        hasMore: widget.appState.hasMoreAlbums,
+        onLoadAll: widget.appState.loadAllAlbums,
       );
     } else if (_selectedView == 'artists') {
       return _ArtistsTab(

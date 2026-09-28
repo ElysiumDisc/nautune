@@ -2227,6 +2227,16 @@ class NautuneAppState extends ChangeNotifier {
     }
   }
 
+  /// Load every remaining album (before an A-Z jump past the loaded pages).
+  Future<void> loadAllAlbums() async {
+    await _libraryDataProvider?.loadAllAlbums();
+  }
+
+  /// Load every remaining artist (before an A-Z jump past the loaded pages).
+  Future<void> loadAllArtists() async {
+    await _libraryDataProvider?.loadAllArtists();
+  }
+
   Future<void> loadMoreAlbums() async {
     if (_libraryDataProvider != null) {
       await _libraryDataProvider.loadMoreAlbums();

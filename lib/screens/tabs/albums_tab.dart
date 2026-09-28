@@ -133,6 +133,10 @@ class _AlbumsTab extends StatelessWidget {
     required this.onRefresh,
     required this.onAlbumTap,
     required this.appState,
+    this.sortBy = SortOption.name,
+    this.sortOrder = SortOrder.ascending,
+    this.hasMore = false,
+    this.onLoadAll,
   });
 
   final List<JellyfinAlbum>? albums;
@@ -140,221 +144,169 @@ class _AlbumsTab extends StatelessWidget {
   final bool isLoadingMore;
   final Object? error;
   final ScrollController scrollController;
-  final VoidCallback onRefresh;
+  final Future<void> Function() onRefresh;
   final Function(JellyfinAlbum) onAlbumTap;
   final NautuneAppState appState;
+  final SortOption sortBy;
+  final SortOrder sortOrder;
+  final bool hasMore;
+  final Future<void> Function()? onLoadAll;
 
   @override
   Widget build(BuildContext context) {
-    if (error != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.error, size: 64, color: Theme.of(context).colorScheme.error),
-            const SizedBox(height: 16),
-            const Text('Failed to load albums'),
-            const SizedBox(height: 8),
-            ElevatedButton.icon(onPressed: onRefresh, icon: const Icon(Icons.refresh), label: const Text('Retry')),
-          ],
-        ),
+    if (error != null && (albums == null || albums!.isEmpty)) {
+      return _LibraryMessage(
+        icon: Icons.error_outline,
+        title: 'Couldn\'t load albums',
+        actionLabel: 'Retry',
+        onAction: onRefresh,
       );
     }
-    if (isLoading && (albums == null || albums!.isEmpty)) return const Center(child: CircularProgressIndicator());
+    if (isLoading && (albums == null || albums!.isEmpty)) {
+      return const _LibraryGridSkeleton();
+    }
     if (albums == null || albums!.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.album, size: 64, color: Theme.of(context).colorScheme.onSurfaceVariant),
-            const SizedBox(height: 16),
-            const Text('No albums found'),
-          ],
-        ),
-      );
+      return const _LibraryMessage(icon: Icons.album, title: 'No albums found');
     }
-    return RefreshIndicator(
-      onRefresh: () async => onRefresh(),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // User-controlled grid size - directly sets columns per row
-          final uiState = context.watch<UIStateProvider>();
-          final crossAxisCount = uiState.gridSize;
-          final useListMode = uiState.useListMode;
+    final uiState = context.watch<UIStateProvider>();
+    final metrics = LibraryTileMetrics.of(context);
+    return IndexedCollectionView<JellyfinAlbum>(
+      items: albums!,
+      nameOf: (album) => album.groupingName,
+      controller: scrollController,
+      listMode: uiState.useListMode,
+      columns: uiState.gridSize,
+      indexed: sortBy == SortOption.name,
+      ascending: sortOrder == SortOrder.ascending,
+      listItemExtent: metrics.listRowExtent,
+      gridItemExtent: metrics.gridExtent,
+      isLoadingMore: isLoadingMore,
+      hasMore: hasMore,
+      onLoadAll: onLoadAll,
+      onRefresh: onRefresh,
+      listItemBuilder: (context, album) => _AlbumListTile(
+        album: album,
+        onTap: () => onAlbumTap(album),
+        appState: appState,
+      ),
+      gridItemBuilder: (context, album) => _AlbumCard(
+        album: album,
+        onTap: () => onAlbumTap(album),
+        appState: appState,
+      ),
+    );
+  }
+}
 
-          // List mode rendering
-          if (useListMode) {
-            // Only show section headers when sorted by name
-            final showHeaders = appState.albumSortBy == SortOption.name;
-            final letterGroups = showHeaders
-                ? AlphabetSectionBuilder.groupByLetter<JellyfinAlbum>(
-                    albums!,
-                    (album) => album.groupingName,
-                    appState.albumSortOrder,
-                  )
-                : <(String, List<JellyfinAlbum>)>[];
+/// Centered icon + message (+ optional action) for empty and error states.
+class _LibraryMessage extends StatelessWidget {
+  const _LibraryMessage({
+    required this.icon,
+    required this.title,
+    this.actionLabel,
+    this.onAction,
+  });
 
-            return Stack(
-              children: [
-                CustomScrollView(
-                  controller: scrollController,
-                  slivers: [
-                    SliverPadding(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      sliver: showHeaders
-                          ? SliverList(
-                              delegate: SliverChildBuilderDelegate(
-                                (context, index) {
-                                  // Calculate which group and item we're at
-                                  int currentIndex = 0;
-                                  for (final (letter, items) in letterGroups) {
-                                    // Header
-                                    if (index == currentIndex) {
-                                      return _AlphabetSectionHeader(letter: letter);
-                                    }
-                                    currentIndex++;
-                                    // Items in this group
-                                    if (index < currentIndex + items.length) {
-                                      final album = items[index - currentIndex];
-                                      return _AlbumListTile(
-                                        album: album,
-                                        onTap: () => onAlbumTap(album),
-                                        appState: appState,
-                                      );
-                                    }
-                                    currentIndex += items.length;
-                                  }
-                                  // Loading indicator
-                                  return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
-                                },
-                                childCount: letterGroups.fold(0, (sum, g) => sum + 1 + g.$2.length) + (isLoadingMore ? 1 : 0),
-                              ),
-                            )
-                          : SliverList(
-                              delegate: SliverChildBuilderDelegate(
-                                (context, index) {
-                                  if (index >= albums!.length) {
-                                    return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
-                                  }
-                                  final album = albums![index];
-                                  return _AlbumListTile(
-                                    album: album,
-                                    onTap: () => onAlbumTap(album),
-                                    appState: appState,
-                                  );
-                                },
-                                childCount: albums!.length + (isLoadingMore ? 1 : 0),
-                              ),
-                            ),
-                    ),
-                  ],
-                ),
-                AlphabetScrollbar(
-                  items: albums!,
-                  getItemName: (album) => (album as JellyfinAlbum).groupingName,
-                  scrollController: scrollController,
-                  itemHeight: 72, // List tile height
-                  crossAxisCount: 1,
-                  sortOrder: appState.albumSortOrder,
-                  sortBy: appState.albumSortBy,
-                ),
-              ],
-            );
-          }
+  final IconData icon;
+  final String title;
+  final String? actionLabel;
+  final Future<void> Function()? onAction;
 
-          // Grid mode rendering
-          final showGridHeaders = appState.albumSortBy == SortOption.name;
-          final gridLetterGroups = showGridHeaders
-              ? AlphabetSectionBuilder.groupByLetter<JellyfinAlbum>(
-                  albums!,
-                  (album) => album.groupingName,
-                  appState.albumSortOrder,
-                )
-              : <(String, List<JellyfinAlbum>)>[];
-          final itemHeight = ((constraints.maxWidth - 32 - (crossAxisCount - 1) * 16) / crossAxisCount) / 0.7 + 16;
-
-          return Stack(
-            children: [
-              CustomScrollView(
-                controller: scrollController,
-                slivers: showGridHeaders
-                    ? [
-                        // Build alternating headers and grids for each letter group
-                        for (final (letter, items) in gridLetterGroups) ...[
-                          SliverToBoxAdapter(
-                            child: _AlphabetSectionHeader(letter: letter),
-                          ),
-                          SliverPadding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                            sliver: SliverGrid(
-                              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: crossAxisCount,
-                                childAspectRatio: 0.7,
-                                crossAxisSpacing: 16,
-                                mainAxisSpacing: 16,
-                              ),
-                              delegate: SliverChildBuilderDelegate(
-                                (context, index) {
-                                  if (index >= items.length) return null;
-                                  final album = items[index];
-                                  return _AlbumCard(
-                                    album: album,
-                                    onTap: () => onAlbumTap(album),
-                                    appState: appState,
-                                  );
-                                },
-                                childCount: items.length,
-                              ),
-                            ),
-                          ),
-                        ],
-                        if (isLoadingMore)
-                          const SliverToBoxAdapter(
-                            child: Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator())),
-                          ),
-                      ]
-                    : [
-                        // Original single grid without headers
-                        SliverPadding(
-                          padding: const EdgeInsets.all(16),
-                          sliver: SliverGrid(
-                            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: crossAxisCount,
-                              childAspectRatio: 0.7,
-                              crossAxisSpacing: 16,
-                              mainAxisSpacing: 16,
-                            ),
-                            delegate: SliverChildBuilderDelegate(
-                              (context, index) {
-                                if (index >= albums!.length) {
-                                  return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
-                                }
-                                final album = albums![index];
-                                return _AlbumCard(
-                                  album: album,
-                                  onTap: () => onAlbumTap(album),
-                                  appState: appState,
-                                );
-                              },
-                              childCount: albums!.length + (isLoadingMore ? 2 : 0),
-                            ),
-                          ),
-                        ),
-                      ],
-              ),
-              AlphabetScrollbar(
-                items: albums!,
-                getItemName: (album) => (album as JellyfinAlbum).groupingName,
-                scrollController: scrollController,
-                itemHeight: itemHeight,
-                crossAxisCount: crossAxisCount,
-                sortOrder: appState.albumSortOrder,
-                sortBy: appState.albumSortBy,
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(NautuneSpacing.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 56, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(height: NautuneSpacing.lg),
+            Text(title, style: theme.textTheme.headline, textAlign: TextAlign.center),
+            if (actionLabel != null && onAction != null) ...[
+              const SizedBox(height: NautuneSpacing.md),
+              FilledButton.tonal(
+                onPressed: () => onAction!(),
+                child: Text(actionLabel!),
               ),
             ],
-          );
-        },
+          ],
+        ),
       ),
+    );
+  }
+}
+
+/// Placeholder grid shown while the first page of a collection loads.
+class _LibraryGridSkeleton extends StatelessWidget {
+  const _LibraryGridSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final columns = context.watch<UIStateProvider>().gridSize;
+    return GridView.builder(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.all(NautuneSpacing.lg),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: columns,
+        crossAxisSpacing: NautuneSpacing.lg,
+        mainAxisSpacing: NautuneSpacing.lg,
+        childAspectRatio: 0.8,
+      ),
+      itemCount: columns * 4,
+      itemBuilder: (context, _) => LayoutBuilder(
+        builder: (context, c) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SkeletonLoader(width: c.maxWidth, height: c.maxWidth, borderRadius: NautuneRadius.md),
+            const SizedBox(height: 6),
+            SkeletonLoader(width: c.maxWidth * 0.8, height: 12, borderRadius: 4),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+Widget _albumArtwork(JellyfinAlbum album, {int? maxWidth}) {
+  if (album.primaryImageTag == null) {
+    return Image.asset('assets/no_album_art.png', fit: BoxFit.cover);
+  }
+  return JellyfinImage(
+    itemId: album.id,
+    imageTag: album.primaryImageTag,
+    albumId: album.id,
+    maxWidth: maxWidth,
+    boxFit: BoxFit.cover,
+    errorBuilder: (context, url, error) =>
+        Image.asset('assets/no_album_art.png', fit: BoxFit.cover),
+  );
+}
+
+Future<void> _showAlbumActions(
+  BuildContext context,
+  NautuneAppState appState,
+  JellyfinAlbum album,
+) async {
+  HapticService.mediumTap();
+  final action = await showNautuneActionSheet<String>(
+    context,
+    title: album.name,
+    message: album.displayArtist,
+    actions: const [
+      NautuneSheetAction(
+        label: 'Add to Playlist',
+        value: 'playlist',
+        icon: Icons.playlist_add,
+      ),
+    ],
+  );
+  if (action == 'playlist' && context.mounted) {
+    await showAddToPlaylistDialog(
+      context: context,
+      appState: appState,
+      album: album,
     );
   }
 }
@@ -367,74 +319,12 @@ class _AlbumListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return ListTile(
+    return LibraryListRow(
+      artwork: _albumArtwork(album),
+      title: album.name,
+      subtitle: album.artists.isNotEmpty ? album.displayArtist : null,
       onTap: onTap,
-      onLongPress: () {
-        showModalBottomSheet(
-          context: context,
-          builder: (context) => SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.playlist_add),
-                  title: const Text('Add to Playlist'),
-                  onTap: () async {
-                    Navigator.pop(context);
-                    await showAddToPlaylistDialog(
-                      context: context,
-                      appState: appState,
-                      album: album,
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(4),
-        child: SizedBox(
-          width: 56,
-          height: 56,
-          child: album.primaryImageTag != null
-              ? JellyfinImage(
-                  itemId: album.id,
-                  imageTag: album.primaryImageTag,
-                  albumId: album.id,
-                  boxFit: BoxFit.cover,
-                  errorBuilder: (context, url, error) => Image.asset(
-                    'assets/no_album_art.png',
-                    fit: BoxFit.cover,
-                  ),
-                )
-              : Image.asset(
-                  'assets/no_album_art.png',
-                  fit: BoxFit.cover,
-                ),
-        ),
-      ),
-      title: Text(
-        album.name,
-        style: theme.textTheme.titleSmall?.copyWith(
-          color: theme.colorScheme.tertiary,
-        ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: album.artists.isNotEmpty
-          ? Text(
-              album.displayArtist,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            )
-          : null,
+      onLongPress: () => _showAlbumActions(context, appState, album),
     );
   }
 }
@@ -524,97 +414,12 @@ class _AlbumCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: () {
-          showModalBottomSheet(
-            context: context,
-            builder: (context) => SafeArea(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ListTile(
-                    leading: const Icon(Icons.playlist_add),
-                    title: const Text('Add to Playlist'),
-                    onTap: () async {
-                      Navigator.pop(context);
-                      await showAddToPlaylistDialog(
-                        context: context,
-                        appState: appState,
-                        album: album,
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            AspectRatio(
-              aspectRatio: 1,
-              child: Container(
-                color: theme.colorScheme.surfaceContainerHighest,
-                child: album.primaryImageTag != null
-                    ? JellyfinImage(
-                        itemId: album.id,
-                        imageTag: album.primaryImageTag,
-                        albumId: album.id,
-                        boxFit: BoxFit.cover,
-                        errorBuilder: (context, url, error) => Image.asset(
-                          'assets/no_album_art.png',
-                          fit: BoxFit.cover,
-                        ),
-                      )
-                    : Image.asset(
-                        'assets/no_album_art.png',
-                        fit: BoxFit.cover,
-                      ),
-              ),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.start,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        album.name,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          color: theme.colorScheme.tertiary,  // Ocean blue
-                          height: 1.15,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (album.artists.isNotEmpty) ...[
-                      const SizedBox(height: 3),
-                      Text(
-                        album.displayArtist,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.tertiary.withValues(alpha: 0.7),  // Ocean blue slightly transparent
-                          height: 1.1,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+    return ArtworkGridTile(
+      artwork: _albumArtwork(album),
+      title: album.name,
+      subtitle: album.artists.isNotEmpty ? album.displayArtist : null,
+      onTap: onTap,
+      onLongPress: () => _showAlbumActions(context, appState, album),
     );
   }
 }
