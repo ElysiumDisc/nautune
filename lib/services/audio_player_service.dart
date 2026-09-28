@@ -38,21 +38,9 @@ enum RepeatMode {
   one,      // Repeat current track
 }
 
-/// Combined player state snapshot for efficient UI updates.
-/// Avoids nested StreamBuilders and reduces widget rebuilds.
-class PlayerSnapshot {
-  final JellyfinTrack? track;
-  final bool isPlaying;
-  final Duration position;
-  final Duration duration;
-
-  const PlayerSnapshot({
-    this.track,
-    this.isPlaying = false,
-    this.position = Duration.zero,
-    this.duration = Duration.zero,
-  });
-}
+/// Current track and playing flag, without position (see
+/// [AudioPlayerService.trackPlayingStream]).
+typedef TrackPlayingState = ({JellyfinTrack? track, bool isPlaying});
 
 /// Frequency bands extracted from visualizer for reactive effects.
 /// Bass, mid, and treble are normalized 0.0-1.0 values.
@@ -246,10 +234,11 @@ class AudioPlayerService {
   // it doesn't compete with the new stream's initial buffering.
   Timer? _preCacheTimer;
 
-  // Visualizers currently on screen (see retainVisualizer). null until the
-  // first visualizer registers, in which case FFT is treated as wanted
-  // (previous behaviour).
-  int? _visualizerViewers;
+  // FFT consumers currently on screen (see retainVisualizer): every
+  // BaseVisualizer and the Essential Mix screen retain/release.
+  int _visualizerViewers = 0;
+  // A visualizer appeared while paused: start FFT on the next resume().
+  bool _fftStartOnResume = false;
 
   // Mid-stream stall recovery (see _recoverFromStall).
   final PlaybackStallDetector _stallDetector = PlaybackStallDetector();
@@ -282,6 +271,9 @@ class AudioPlayerService {
   bool _isTransitioning = false;
   bool _disposed = false;
   Duration _lastPosition = Duration.zero;
+  // playTrack switched _currentTrack but the new source isn't loaded yet:
+  // _lastPosition still comes from the outgoing track's player.
+  bool _positionFromPreviousTrack = false;
   bool _lastPlayingState = false;
   RepeatMode _repeatMode = RepeatMode.off;
 
@@ -679,20 +671,17 @@ class AudioPlayerService {
           (position, bufferedPosition, duration) => PositionData(
               position, bufferedPosition, duration ?? Duration.zero));
 
-  /// Combined player snapshot stream for full player screen.
-  /// Flattens 4 nested StreamBuilders into one, reducing rebuild overhead by ~75%.
-  Stream<PlayerSnapshot> get playerSnapshotStream =>
-      Rx.combineLatest4<JellyfinTrack?, bool, Duration, Duration?, PlayerSnapshot>(
-          _currentTrackController.stream,
-          _playingController.stream,
-          _positionController.stream,
-          _durationController.stream,
-          (track, isPlaying, position, duration) => PlayerSnapshot(
-              track: track,
-              isPlaying: isPlaying,
-              position: position,
-              duration: duration ?? track?.duration ?? Duration.zero,
-          ),
+  /// Track + playing state only, for UI that must not rebuild on every
+  /// position tick (give the progress UI its own [positionDataStream]
+  /// builder). Emits only when the track object or the playing flag
+  /// changes; a favourite toggle ([updateCurrentTrack]) is a new object.
+  Stream<TrackPlayingState> get trackPlayingStream =>
+      Rx.combineLatest2<JellyfinTrack?, bool, TrackPlayingState>(
+        _currentTrackController.stream,
+        _playingController.stream,
+        (track, isPlaying) => (track: track, isPlaying: isPlaying),
+      ).distinct(
+        (a, b) => identical(a.track, b.track) && a.isPlaying == b.isPlaying,
       );
 
   JellyfinTrack? get currentTrack => _currentTrack;
@@ -1733,6 +1722,7 @@ class AudioPlayerService {
   void _setCurrentSource(String url, {required bool isLocal}) {
     _currentSourceUrl = url;
     _currentSourceIsLocal = isLocal;
+    _positionFromPreviousTrack = false;
   }
 
   // ========== PER-TRACK BOOKKEEPING ==========
@@ -1742,6 +1732,8 @@ class AudioPlayerService {
   void _resetPerTrackState(JellyfinTrack track) {
     _hasScrobbled = false;
     _lyricsPrefetched = false;
+    _positionFromPreviousTrack = false; // playTrack sets it again
+    _fftStartOnResume = false; // the new track's start sets FFT up
     _pendingSeek = null; // a seek queued for the previous track's load
     _stallDetector.reset();
     _stallRecoveries = 0;
@@ -1951,6 +1943,7 @@ class AudioPlayerService {
     _currentTrack = track;
     _currentTrackController.add(track);
     _resetPerTrackState(track);
+    _positionFromPreviousTrack = true;
     _analyzeTrackForVisualizer(track); // Configure visualizer for track
 
     _queueController.add(_queue);
@@ -2284,10 +2277,17 @@ class AudioPlayerService {
       }
     }
     await _resumeAndFadeIn();
+    final fftDeferred = _fftStartOnResume;
+    _fftStartOnResume = false;
     if (_restoreBeginPending) {
+      // _beginRestoredTrack starts FFT itself (_afterTrackStarted).
       _restoreBeginPending = false;
       final track = _currentTrack;
       if (track != null) _beginRestoredTrack(track);
+    } else if (fftDeferred && _visualizerWanted && isPlaying) {
+      unawaited(_startFftForCurrentTrack().catchError(
+        (Object e) => debugPrint('🎵 iOS FFT start failed: $e'),
+      ));
     }
     await _stateStore.savePlaybackSnapshot(isPlaying: true);
     await _audioHandler?.forceBroadcastCurrentState();
@@ -2516,8 +2516,40 @@ class AudioPlayerService {
     }
   }
 
+  /// "Previous" from the app, lock screen or CarPlay: restarts the current
+  /// track when more than 3 s in, otherwise goes to the previous track (see
+  /// [resolvePreviousAction]).
   Future<void> skipToPrevious() async {
     HapticService.mediumTap();
+
+    final action = resolvePreviousAction(
+      // Mid-switch the position still belongs to the outgoing track.
+      position: _positionFromPreviousTrack ? Duration.zero : _lastPosition,
+      currentIndex: _currentIndex,
+      queueLength: _currentTrack == null ? 0 : _queue.length,
+      repeatAll: _repeatMode == RepeatMode.all,
+    );
+    final int targetIndex;
+    switch (action) {
+      case PreviousAction.none:
+        return;
+      case PreviousAction.restartCurrent:
+        final canReload = _currentIndex >= 0 && _currentIndex < _queue.length;
+        if (!_isCrossfading || !canReload) {
+          // Same track keeps playing: no listen-time record, FFT stays
+          // running (seek re-syncs it).
+          await seek(Duration.zero);
+          return;
+        }
+        // Mid-crossfade the next track is already fading in: reload this
+        // one from the start instead (playTrack cancels the crossfade).
+        targetIndex = _currentIndex;
+      case PreviousAction.previousTrack:
+        targetIndex = _currentIndex - 1;
+      case PreviousAction.wrapToLast:
+        targetIndex = _queue.length - 1;
+    }
+
     // Record actual listening time before skipping
     _recordActualListeningTime();
 
@@ -2528,23 +2560,13 @@ class AudioPlayerService {
     }
 
     try {
-      if (_currentIndex > 0) {
-        _currentIndex--;
-        await playTrack(
-          _queue[_currentIndex],
-          queueContext: _queue,
-          fromShuffle: _isShuffleEnabled,
-          queueIndex: _currentIndex,
-        );
-      } else if (_repeatMode == RepeatMode.all && _queue.isNotEmpty) {
-        _currentIndex = _queue.length - 1;
-        await playTrack(
-          _queue[_currentIndex],
-          queueContext: _queue,
-          fromShuffle: _isShuffleEnabled,
-          queueIndex: _currentIndex,
-        );
-      }
+      _currentIndex = targetIndex;
+      await playTrack(
+        _queue[_currentIndex],
+        queueContext: _queue,
+        fromShuffle: _isShuffleEnabled,
+        queueIndex: _currentIndex,
+      );
     } catch (e) {
       debugPrint('❌ Skip to previous failed: $e');
       rethrow;
@@ -2553,30 +2575,34 @@ class AudioPlayerService {
 
   // ========== VISUALIZER DEMAND / BACKGROUND COPY ==========
 
-  /// Whether the iOS FFT shadow player is wanted. Until a visualizer has
-  /// registered via [retainVisualizer], assume yes (previous behaviour).
-  bool get _visualizerWanted => (_visualizerViewers ?? 1) > 0;
+  /// Whether the iOS FFT shadow player is wanted: only while something that
+  /// renders FFT is on screen (see [retainVisualizer]).
+  bool get _visualizerWanted => _visualizerViewers > 0;
 
   /// A visualizer became visible. Visualizer widgets should call this in
   /// initState (and [releaseVisualizer] in dispose) so the FFT shadow player
   /// — and the extra download it needs for streamed tracks — only runs while
   /// one is on screen.
   void retainVisualizer() {
-    final before = _visualizerViewers ?? 0;
+    final before = _visualizerViewers;
     _visualizerViewers = before + 1;
-    if (before == 0 && isPlaying) {
+    if (before != 0) return;
+    if (isPlaying) {
       unawaited(_startFftForCurrentTrack().catchError(
         (Object e) => debugPrint('🎵 iOS FFT start failed: $e'),
       ));
+    } else {
+      _fftStartOnResume = true;
     }
   }
 
   /// A visualizer was hidden/disposed (see [retainVisualizer]).
   void releaseVisualizer() {
-    final after = ((_visualizerViewers ?? 1) - 1).clamp(0, 1 << 30);
+    final after = (_visualizerViewers - 1).clamp(0, 1 << 30);
     _visualizerViewers = after;
-    if (after == 0 && Platform.isIOS) {
-      unawaited(IOSFFTService.instance.stopCapture());
+    if (after == 0) {
+      _fftStartOnResume = false;
+      if (Platform.isIOS) unawaited(IOSFFTService.instance.stopCapture());
     }
   }
 

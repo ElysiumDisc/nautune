@@ -139,6 +139,43 @@ List<T> shuffleKeepingCurrent<T>(
   return <T>[queue[currentIndex], ...rest];
 }
 
+/// What the "previous" control (in-app, lock screen, CarPlay) should do.
+enum PreviousAction {
+  /// Nothing to do (empty queue).
+  none,
+
+  /// Seek the current track back to 0.
+  restartCurrent,
+
+  /// Play the track at `currentIndex - 1`.
+  previousTrack,
+
+  /// Wrap around to the last track (repeat-all at the start of the queue).
+  wrapToLast,
+}
+
+/// How far into a track "previous" restarts it instead of going back
+/// (Apple Music behaviour).
+const Duration previousRestartThreshold = Duration(seconds: 3);
+
+/// Decides what "previous" does. More than [restartThreshold] into the
+/// track it restarts the track; otherwise it goes to the previous track,
+/// wrapping to the last one under repeat-all at the start of the queue, or
+/// restarting the first track when there is nothing before it.
+PreviousAction resolvePreviousAction({
+  required Duration position,
+  required int currentIndex,
+  required int queueLength,
+  required bool repeatAll,
+  Duration restartThreshold = previousRestartThreshold,
+}) {
+  if (queueLength <= 0) return PreviousAction.none;
+  if (position > restartThreshold) return PreviousAction.restartCurrent;
+  if (currentIndex > 0) return PreviousAction.previousTrack;
+  if (repeatAll) return PreviousAction.wrapToLast;
+  return PreviousAction.restartCurrent;
+}
+
 // ---------------------------------------------------------------------------
 // Streaming / caching policy
 // ---------------------------------------------------------------------------

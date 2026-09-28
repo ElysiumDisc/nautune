@@ -188,6 +188,57 @@ void main() {
     });
   });
 
+  group('resolvePreviousAction', () {
+    PreviousAction resolve({
+      required int seconds,
+      required int index,
+      int length = 5,
+      bool repeatAll = false,
+    }) =>
+        resolvePreviousAction(
+          position: Duration(seconds: seconds),
+          currentIndex: index,
+          queueLength: length,
+          repeatAll: repeatAll,
+        );
+
+    test('more than 3 s in restarts the current track', () {
+      expect(resolve(seconds: 4, index: 2), PreviousAction.restartCurrent);
+      expect(resolve(seconds: 4, index: 0), PreviousAction.restartCurrent);
+      expect(resolve(seconds: 4, index: 0, repeatAll: true),
+          PreviousAction.restartCurrent);
+    });
+
+    test('within the first 3 s goes to the previous track', () {
+      expect(resolve(seconds: 0, index: 2), PreviousAction.previousTrack);
+      expect(resolve(seconds: 3, index: 2), PreviousAction.previousTrack,
+          reason: 'exactly 3 s is still "at the start"');
+      expect(
+        resolvePreviousAction(
+          position: const Duration(milliseconds: 3001),
+          currentIndex: 2,
+          queueLength: 5,
+          repeatAll: false,
+        ),
+        PreviousAction.restartCurrent,
+      );
+    });
+
+    test('at the start of the queue', () {
+      expect(resolve(seconds: 1, index: 0, repeatAll: true),
+          PreviousAction.wrapToLast);
+      expect(resolve(seconds: 1, index: 0), PreviousAction.restartCurrent);
+      expect(resolve(seconds: 1, index: 0, length: 1, repeatAll: true),
+          PreviousAction.wrapToLast);
+    });
+
+    test('empty queue does nothing', () {
+      expect(resolve(seconds: 10, index: 0, length: 0), PreviousAction.none);
+      expect(resolve(seconds: 0, index: 0, length: 0, repeatAll: true),
+          PreviousAction.none);
+    });
+  });
+
   group('shouldCacheStreamingCopy', () {
     test('only on Wi-Fi, when wanted, outside power saving', () {
       expect(

@@ -69,6 +69,10 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
       duration: const Duration(seconds: 10),
     );
 
+    // On screen: keep the iOS FFT shadow player running (ref-counted by the
+    // service; balanced in dispose / didUpdateWidget).
+    widget.audioService.retainVisualizer();
+
     _initFFTSource();
 
     // Listen to playing state - start/stop animation only
@@ -146,7 +150,17 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
   }
 
   @override
+  void didUpdateWidget(covariant T oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.audioService, widget.audioService)) {
+      widget.audioService.retainVisualizer();
+      oldWidget.audioService.releaseVisualizer();
+    }
+  }
+
+  @override
   void dispose() {
+    widget.audioService.releaseVisualizer();
     _fftSubscription?.cancel();
     _frequencySubscription?.cancel();
     _playingSubscription?.cancel();

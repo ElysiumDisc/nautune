@@ -56,6 +56,9 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
 
   // FFT for visualizer - animation controller driven interpolation (like fullscreen player)
   StreamSubscription? _fftSubscription;
+  // Holds AudioPlayerService.retainVisualizer() while _fftSubscription is
+  // live, so the service keeps the FFT shadow player running for us.
+  bool _retainedVisualizer = false;
   final ValueNotifier<_FFTData> _fftNotifier = ValueNotifier(const _FFTData(0, 0, 0, 0));
 
   // Target values from FFT (set by FFT listener)
@@ -293,12 +296,20 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
         _targetMid = data.mid;
         _targetTreble = data.treble;
       });
+      if (!_retainedVisualizer) {
+        _retainedVisualizer = true;
+        _audioService.retainVisualizer();
+      }
     }
   }
 
   void _stopFFTListener() {
     _fftSubscription?.cancel();
     _fftSubscription = null;
+    if (_retainedVisualizer) {
+      _retainedVisualizer = false;
+      _audioService.releaseVisualizer();
+    }
 
     // Stop animation controller
     _artworkController.stop();

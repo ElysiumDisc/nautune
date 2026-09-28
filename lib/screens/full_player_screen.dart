@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui show Image, ImageFilter;
 
@@ -22,7 +21,6 @@ import '../jellyfin/jellyfin_track.dart';
 import '../services/audio_player_service.dart';
 import '../services/haptic_service.dart';
 import '../services/palette_cache_service.dart';
-import '../services/ios_fft_service.dart';
 import '../services/saved_loops_service.dart';
 import '../widgets/track_context_menu.dart';
 import '../widgets/visualizers/visualizer_factory.dart';
@@ -123,8 +121,12 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   bool _showLoopControls = false;
   bool _showLoopButton = false; // Toggle visibility of A-B Loop button (off by default)
 
-  // Cached player snapshot stream (avoid resubscription per build)
-  Stream<PlayerSnapshot>? _playerSnapshotStream;
+  // Cached streams (avoid resubscription per build). The page itself only
+  // rebuilds on track / playing changes; position drives just the progress
+  // bar and the lyrics list, each through its own builder.
+  Stream<TrackPlayingState>? _trackPlayingStream;
+  Stream<PositionData>? _positionDataStream;
+  Stream<Duration>? _positionStream;
 
   // Visualizer in album art toggle state
   bool _showingVisualizerInArtwork = false;
@@ -145,7 +147,9 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     _appState = Provider.of<NautuneAppState>(context, listen: false);
     _audioService = _appState.audioService;
     _lyricsService ??= LyricsService(jellyfinService: _appState.jellyfinService);
-    _playerSnapshotStream ??= _audioService.playerSnapshotStream;
+    _trackPlayingStream ??= _audioService.trackPlayingStream;
+    _positionDataStream ??= _audioService.positionDataStream;
+    _positionStream ??= _audioService.positionStream;
 
     // Set up stream listeners only once
     if (_trackSub == null) {
@@ -164,9 +168,10 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
           }
         }
       });
-      // Position and playing state are handled by StreamBuilder<PlayerSnapshot>
-      // in build() — no setState needed here (avoids double-rebuilds).
-      // Only loop state needs setState since it's not in PlayerSnapshot.
+      // Playing state is handled by StreamBuilder<TrackPlayingState> in
+      // build(), position by the progress bar / lyrics builders — no
+      // setState needed here (avoids double-rebuilds).
+      // Only loop state needs setState since it's not in TrackPlayingState.
       _loopSub = _audioService.loopStateStream.listen((_) {
         if (mounted) setState(() {});
       });
@@ -840,21 +845,11 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   /// Toggle visualizer display in album art area
   void _toggleVisualizerInArtwork() {
     HapticService.mediumTap();
+    // The visualizer widget is only mounted while shown; it retains the iOS
+    // FFT capture in initState and releases it in dispose (BaseVisualizer).
     setState(() {
       _showingVisualizerInArtwork = !_showingVisualizerInArtwork;
     });
-
-    // BATTERY FIX: Control iOS FFT capture based on visualizer visibility
-    // Stop FFT when visualizer is hidden to prevent battery drain
-    if (Platform.isIOS) {
-      if (_showingVisualizerInArtwork && _audioService.isPlaying) {
-        // Visualizer now visible - start FFT capture
-        IOSFFTService.instance.startCapture();
-      } else {
-        // Visualizer hidden - stop FFT capture to save battery
-        IOSFFTService.instance.stopCapture();
-      }
-    }
   }
 
   /// Build artwork with layout-specific styling
@@ -1265,22 +1260,19 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     final size = MediaQuery.of(context).size;
     final isDesktop = size.width > 600;
 
-    // Single combined stream instead of 4 nested StreamBuilders
-    // Reduces widget rebuilds by ~75% during playback
-    return StreamBuilder<PlayerSnapshot>(
-      stream: _playerSnapshotStream,
-      initialData: PlayerSnapshot(
+    // Track + playing state only: position ticks (5/s) must not rebuild the
+    // artwork, background, controls and menus.
+    return StreamBuilder<TrackPlayingState>(
+      stream: _trackPlayingStream,
+      initialData: (
         track: _audioService.currentTrack,
         isPlaying: _audioService.isPlaying,
-        position: _audioService.currentPosition,
-        duration: _audioService.currentTrack?.duration ?? Duration.zero,
       ),
       builder: (context, snapshot) {
-        final playerState = snapshot.data ?? const PlayerSnapshot();
+        final playerState = snapshot.data ??
+            (track: _audioService.currentTrack, isPlaying: false);
         final track = playerState.track;
         final isPlaying = playerState.isPlaying;
-        final position = playerState.position;
-        final duration = playerState.duration;
 
         if (track == null) {
           return Scaffold(
@@ -1411,8 +1403,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                             _buildNowPlayingTab(
                               track: track,
                               isPlaying: isPlaying,
-                              position: position,
-                              duration: duration,
                               isDesktop: isDesktop,
                               theme: theme,
                               artwork: artwork,
@@ -1421,7 +1411,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                             // Tab 2: Lyrics
                             _buildLyricsTab(
                               track: track,
-                              position: position,
                               theme: theme,
                             ),
                           ],
@@ -1441,8 +1430,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   Widget _buildNowPlayingTab({
     required JellyfinTrack track,
     required bool isPlaying,
-    required Duration position,
-    required Duration duration,
     required bool isDesktop,
     required ThemeData theme,
     required Widget artwork,
@@ -1881,7 +1868,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                         children: [
                           // Progress Slider with A-B Loop support
                           StreamBuilder<PositionData>(
-                        stream: _audioService.positionDataStream,
+                        stream: _positionDataStream,
                         builder: (context, snapshot) {
                           final positionData =
                               snapshot.data ??
@@ -2373,7 +2360,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
 
   Widget _buildLyricsTab({
     required JellyfinTrack track,
-    required Duration position,
     required ThemeData theme,
   }) {
     if (_loadingLyrics) {
@@ -2419,6 +2405,22 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
       );
     }
 
+    // Only the synced list follows position (its own builder, so position
+    // ticks don't rebuild the rest of the player).
+    return StreamBuilder<Duration>(
+      stream: _positionStream,
+      initialData: _audioService.currentPosition,
+      builder: (context, snapshot) => _buildSyncedLyrics(
+        position: snapshot.data ?? Duration.zero,
+        theme: theme,
+      ),
+    );
+  }
+
+  Widget _buildSyncedLyrics({
+    required Duration position,
+    required ThemeData theme,
+  }) {
     // Find current lyric based on position
     final currentTicks = position.inMicroseconds * 10;
     int activeIndex = 0;

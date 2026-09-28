@@ -30,6 +30,10 @@ class NowPlayingBar extends StatefulWidget {
 
 class _NowPlayingBarState extends State<NowPlayingBar> {
   StreamSubscription<String>? _errorSubscription;
+  // Cached so rebuilds don't resubscribe. The bar rebuilds on track /
+  // playing changes only; position drives just the waveform strip.
+  late Stream<TrackPlayingState> _trackPlayingStream;
+  late Stream<PositionData> _positionDataStream;
 
   AudioPlayerService get audioService => widget.audioService;
   NautuneAppState get appState => widget.appState;
@@ -37,6 +41,8 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
   @override
   void initState() {
     super.initState();
+    _trackPlayingStream = audioService.trackPlayingStream;
+    _positionDataStream = audioService.positionDataStream;
     _errorSubscription = audioService.playbackErrorStream.listen((message) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -47,6 +53,15 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
         ),
       );
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant NowPlayingBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.audioService, widget.audioService)) {
+      _trackPlayingStream = audioService.trackPlayingStream;
+      _positionDataStream = audioService.positionDataStream;
+    }
   }
 
   @override
@@ -68,13 +83,11 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    // Show audio player track using single snapshot stream
-    return StreamBuilder<PlayerSnapshot>(
-      stream: audioService.playerSnapshotStream,
-      initialData: PlayerSnapshot(
-        track: audioService.currentTrack,
-        isPlaying: false,
-      ),
+    // Track + playing state only; the waveform strip has its own position
+    // builder so position ticks don't rebuild the whole bar.
+    return StreamBuilder<TrackPlayingState>(
+      stream: _trackPlayingStream,
+      initialData: (track: audioService.currentTrack, isPlaying: false),
       builder: (context, snapshot) {
         final data = snapshot.data;
         final track = data?.track ?? audioService.currentTrack;
@@ -121,6 +134,7 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
               children: [
                 _WaveformStrip(
                   audioService: audioService,
+                  positionDataStream: _positionDataStream,
                   track: track,
                   isPlaying: isPlaying,
                 ),
@@ -255,21 +269,23 @@ class _PlayPauseButton extends StatelessWidget {
 class _WaveformStrip extends StatelessWidget {
   const _WaveformStrip({
     required this.audioService,
+    required this.positionDataStream,
     required this.track,
     required this.isPlaying,
   });
 
   final AudioPlayerService audioService;
+  final Stream<PositionData> positionDataStream;
   final JellyfinTrack track;
   final bool isPlaying;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Use the combined positionDataStream for reliable position updates
-    // This is the same stream used by the fullscreen player
+    // The only position-driven part of the bar (same stream as the
+    // fullscreen player's progress bar).
     return StreamBuilder<PositionData>(
-      stream: audioService.positionDataStream,
+      stream: positionDataStream,
       builder: (context, snapshot) {
         final positionData = snapshot.data;
         final duration = positionData?.duration ?? Duration.zero;

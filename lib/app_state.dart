@@ -1158,6 +1158,11 @@ class NautuneAppState extends ChangeNotifier {
     final storedPlaybackState = initResults[0] as PlaybackState?;
     final storedSession = initResults[1] as JellyfinSession?;
 
+    // Network type for auto quality / Wi-Fi-only caching. Needed even on a
+    // first launch (no stored state), which used to leave it unset.
+    _audioPlayerService.setConnectivityService(_connectivityService);
+    _downloadService.setConnectivityService(_connectivityService);
+
     if (storedPlaybackState != null) {
       _showVolumeBar = storedPlaybackState.showVolumeBar;
       _crossfadeEnabled = storedPlaybackState.crossfadeEnabled;
@@ -1178,8 +1183,10 @@ class NautuneAppState extends ChangeNotifier {
       _libraryScrollOffsets =
           Map<String, double>.from(storedPlaybackState.scrollOffsets);
 
-      // Hydrate audio service and set preferences
-      await _audioPlayerService.hydrateFromPersistence(storedPlaybackState);
+      // Apply playback preferences BEFORE restoring the session: the restore
+      // prepares the source for the restored track, which must already see
+      // the streaming quality, connectivity (network type for auto quality,
+      // Wi-Fi-only caching) and battery-saver settings.
       _audioPlayerService.setCrossfadeEnabled(_crossfadeEnabled);
       _audioPlayerService.setCrossfadeDuration(_crossfadeDurationSeconds);
       _audioPlayerService.setInfiniteRadioEnabled(_infiniteRadioEnabled);
@@ -1187,8 +1194,6 @@ class NautuneAppState extends ChangeNotifier {
       _audioPlayerService.setStreamingQuality(_streamingQuality);
       _audioPlayerService.setPreCacheTrackCount(storedPlaybackState.preCacheTrackCount);
       _audioPlayerService.setWifiOnlyCaching(storedPlaybackState.wifiOnlyCaching);
-      _audioPlayerService.setConnectivityService(_connectivityService);
-      _downloadService.setConnectivityService(_connectivityService);
       _jellyfinService.setCacheTtl(Duration(minutes: _cacheTtlMinutes));
 
       if (_submarineModeEnabled) {
@@ -1214,6 +1219,10 @@ class NautuneAppState extends ChangeNotifier {
         _audioPlayerService.reportingService?.setEnabled(false);
         _audioPlayerService.setImagePrewarmEnabled(false);
       }
+
+      // Restore the saved queue/track (paused). Doesn't wait on the network:
+      // the source is prepared in the background.
+      await _audioPlayerService.hydrateFromPersistence(storedPlaybackState);
     } else {
       _initPowerModeListener();
     }
