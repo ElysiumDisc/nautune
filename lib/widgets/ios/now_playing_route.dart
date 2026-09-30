@@ -2,17 +2,32 @@ import 'package:flutter/material.dart';
 
 import '../../services/haptic_service.dart';
 
-/// Hero tag shared by the mini player's artwork and the full player's, so
-/// the artwork flies between them when the player opens and closes.
+/// Base of the Hero tag shared by the mini player's artwork and the full
+/// player's, so the artwork flies between them when the player opens and
+/// closes. Use [nowPlayingArtworkHeroTag] for the actual tag.
 const String kNowPlayingArtworkHeroTag = 'now-playing-artwork';
+
+/// Hero tag of the mini player artwork on [route], and of the full player
+/// opened from it. Scoped to the route: with one global tag, every push
+/// between two pages that both show a mini player (library → album) flew
+/// the artwork between their bars.
+Object nowPlayingArtworkHeroTag(Route<dynamic>? route) =>
+    (kNowPlayingArtworkHeroTag, route);
 
 /// Full-screen player route that slides up from the bottom like a sheet and
 /// can be dragged down to close, following the finger as iOS Music does.
 class NowPlayingRoute<T> extends PageRoute<T> {
-  NowPlayingRoute({required this.builder, super.settings})
+  NowPlayingRoute({required this.builder, this.opener, super.settings})
       : super(fullscreenDialog: true);
 
   final WidgetBuilder builder;
+
+  /// The route whose mini player opened this player (see
+  /// [artworkHeroTag]).
+  final Route<dynamic>? opener;
+
+  /// Hero tag for the player's artwork: matches the opener's mini player.
+  Object get artworkHeroTag => nowPlayingArtworkHeroTag(opener);
 
   /// Player routes currently in a navigator (see [show]).
   static final Set<NowPlayingRoute<dynamic>> _installed = {};
@@ -29,7 +44,10 @@ class NowPlayingRoute<T> extends PageRoute<T> {
         return;
       }
     }
-    nav.push(NowPlayingRoute<void>(builder: builder));
+    nav.push(NowPlayingRoute<void>(
+      builder: builder,
+      opener: ModalRoute.of(context),
+    ));
   }
 
   // Created once: buildTransitions runs on every animation tick, and a
@@ -43,8 +61,14 @@ class NowPlayingRoute<T> extends PageRoute<T> {
   @override
   String? get barrierLabel => null;
 
+  // Opaque once open: the page below is then offstage (not laid out, painted
+  // or rasterized, and its tickers muted) instead of being drawn in full,
+  // blurs included, under the player on every frame. TransitionRoute makes
+  // the route non-opaque while its animation runs, and a drag moves the
+  // controller off `completed`, so the page below is still revealed while
+  // opening, closing and dragging.
   @override
-  bool get opaque => false;
+  bool get opaque => true;
 
   @override
   bool get maintainState => true;

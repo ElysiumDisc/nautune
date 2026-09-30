@@ -45,7 +45,7 @@ public class AudioDecoderPlugin: NSObject, FlutterPlugin {
 
                 let format = audioFile.processingFormat
 
-                // Refuse over-long files before allocating the PCM buffer
+                // Refuse over-long files before allocating the output buffer
                 if let maxSeconds = maxDurationSeconds, format.sampleRate > 0,
                    Double(audioFile.length) / format.sampleRate > Double(maxSeconds) {
                     DispatchQueue.main.async {
@@ -59,65 +59,101 @@ public class AudioDecoderPlugin: NSObject, FlutterPlugin {
                     }
                     return
                 }
-                let frameCount = AVAudioFrameCount(audioFile.length)
+                let channelCount = Int(format.channelCount)
+                let totalFrames = Int(audioFile.length)
+                let sourceSampleRate = format.sampleRate
+                guard sourceSampleRate > 0, targetSampleRate > 0 else {
+                    DispatchQueue.main.async {
+                        result(FlutterError(code: "BUFFER_ERROR", message: "Invalid sample rate", details: nil))
+                    }
+                    return
+                }
+                // Output sample i sits at source frame i / ratio (linear resampling).
+                let ratio = Double(targetSampleRate) / sourceSampleRate
+                let outputCapacity = Int(Double(totalFrames) * ratio)
 
-                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+                // Read in fixed-size chunks: only one small PCM buffer plus the
+                // mono output exist at once, never the whole multi-channel file.
+                let chunkFrames: AVAudioFrameCount = 65536
+                guard channelCount > 0, outputCapacity > 0,
+                      let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrames) else {
                     DispatchQueue.main.async {
                         result(FlutterError(code: "BUFFER_ERROR", message: "Failed to create audio buffer", details: nil))
                     }
                     return
                 }
 
-                try audioFile.read(into: buffer)
+                print("🎵 AudioDecoder: Decoding \(totalFrames) frames, \(channelCount) channels, \(sourceSampleRate) Hz")
 
-                guard let floatChannelData = buffer.floatChannelData else {
+                // Mono float32 output, written in place (sent as-is below).
+                var data = Data(count: outputCapacity * MemoryLayout<Float>.size)
+                var written = 0
+                var missingChannelData = false
+
+                try data.withUnsafeMutableBytes { (raw: UnsafeMutableRawBufferPointer) throws -> Void in
+                    let output = raw.bindMemory(to: Float.self)
+                    var chunkStart = 0        // absolute frame index of the chunk's first frame
+                    var previousMono: Float = 0 // mono value of the frame before the chunk
+
+                    while written < outputCapacity && audioFile.framePosition < audioFile.length {
+                        try audioFile.read(into: buffer, frameCount: chunkFrames)
+                        let frames = Int(buffer.frameLength)
+                        if frames == 0 { break }
+                        guard let channels = buffer.floatChannelData else {
+                            missingChannelData = true
+                            return
+                        }
+                        let chunkEnd = chunkStart + frames
+                        let isLastChunk = audioFile.framePosition >= audioFile.length
+
+                        // Mono value of an absolute frame in this chunk (or the one just before it).
+                        func mono(_ frame: Int) -> Float {
+                            if frame < chunkStart { return previousMono }
+                            let j = frame - chunkStart
+                            if channelCount == 1 { return channels[0][j] }
+                            var sum: Float = 0
+                            for ch in 0..<channelCount {
+                                sum += channels[ch][j]
+                            }
+                            return sum / Float(channelCount)
+                        }
+
+                        while written < outputCapacity {
+                            let sourcePosition = Double(written) / ratio
+                            let s0 = Int(sourcePosition)
+                            if s0 >= chunkEnd { break }
+                            let s1 = s0 + 1
+                            // The next frame is in the next chunk: read it first.
+                            if s1 >= chunkEnd && !isLastChunk { break }
+                            let frac = Float(sourcePosition - Double(s0))
+                            let a = mono(s0)
+                            let b = s1 < chunkEnd ? mono(s1) : a
+                            output[written] = a * (1 - frac) + b * frac
+                            written += 1
+                        }
+
+                        previousMono = mono(chunkEnd - 1)
+                        chunkStart = chunkEnd
+                    }
+                }
+
+                if missingChannelData {
                     DispatchQueue.main.async {
                         result(FlutterError(code: "DATA_ERROR", message: "No float channel data", details: nil))
                     }
                     return
                 }
-
-                let channelCount = Int(format.channelCount)
-                let sampleCount = Int(buffer.frameLength)
-
-                print("🎵 AudioDecoder: Read \(sampleCount) frames, \(channelCount) channels, \(format.sampleRate) Hz")
-
-                // Mix to mono
-                var monoSamples = [Float](repeating: 0, count: sampleCount)
-
-                if channelCount == 1 {
-                    // Already mono
-                    for i in 0..<sampleCount {
-                        monoSamples[i] = floatChannelData[0][i]
-                    }
-                } else {
-                    // Mix channels to mono
-                    for i in 0..<sampleCount {
-                        var sum: Float = 0
-                        for ch in 0..<channelCount {
-                            sum += floatChannelData[ch][i]
-                        }
-                        monoSamples[i] = sum / Float(channelCount)
-                    }
+                if written < outputCapacity {
+                    data.count = written * MemoryLayout<Float>.size
                 }
 
-                // Resample if needed
-                let sourceSampleRate = Int(format.sampleRate)
-                let outputSamples: [Float]
-
-                if sourceSampleRate != targetSampleRate {
-                    outputSamples = self.resample(monoSamples, from: sourceSampleRate, to: targetSampleRate)
-                    print("🎵 AudioDecoder: Resampled from \(sourceSampleRate) to \(targetSampleRate) Hz (\(outputSamples.count) samples)")
-                } else {
-                    outputSamples = monoSamples
-                }
+                print("🎵 AudioDecoder: Decoded \(written) samples at \(targetSampleRate) Hz")
 
                 // Send as a typed float32 buffer (arrives in Dart as Float32List,
                 // 4 bytes per sample, no per-element boxing)
-                let data = outputSamples.withUnsafeBufferPointer { Data(buffer: $0) }
-
+                let samples = data
                 DispatchQueue.main.async {
-                    result(["samples": FlutterStandardTypedData(float32: data)])
+                    result(["samples": FlutterStandardTypedData(float32: samples)])
                 }
 
             } catch {
@@ -126,27 +162,5 @@ public class AudioDecoderPlugin: NSObject, FlutterPlugin {
                 }
             }
         }
-    }
-
-    /// Simple linear resampling
-    private func resample(_ samples: [Float], from sourceSampleRate: Int, to targetSampleRate: Int) -> [Float] {
-        let ratio = Double(targetSampleRate) / Double(sourceSampleRate)
-        let outputCount = Int(Double(samples.count) * ratio)
-        var output = [Float](repeating: 0, count: outputCount)
-
-        for i in 0..<outputCount {
-            let srcIndex = Double(i) / ratio
-            let srcIndexInt = Int(srcIndex)
-            let frac = Float(srcIndex - Double(srcIndexInt))
-
-            if srcIndexInt + 1 < samples.count {
-                // Linear interpolation
-                output[i] = samples[srcIndexInt] * (1 - frac) + samples[srcIndexInt + 1] * frac
-            } else if srcIndexInt < samples.count {
-                output[i] = samples[srcIndexInt]
-            }
-        }
-
-        return output
     }
 }

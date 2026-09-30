@@ -397,6 +397,21 @@ class JellyfinTrack {
     return names.join(', ');
   }
 
+  /// Artist for Last.fm: the primary (first) artist only. Last.fm treats a
+  /// joined credit ("A, B") as one artist that doesn't exist, so
+  /// featured artists are left out there; ListenBrainz keeps
+  /// [scrobbleArtist], the full credit.
+  String? get lastFmArtist => lastFmArtistFor(artists);
+
+  /// Pure form of [lastFmArtist].
+  static String? lastFmArtistFor(List<String> artists) {
+    for (final a in artists) {
+      if (a.trim().isEmpty) continue;
+      return scrobbleArtistFor([a]);
+    }
+    return null;
+  }
+
   String get displayArtist {
     if (artists.isEmpty) {
       return 'Unknown Artist';

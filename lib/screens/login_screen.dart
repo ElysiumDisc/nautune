@@ -1,6 +1,11 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 
+import '../jellyfin/jellyfin_exceptions.dart';
 import '../providers/demo_mode_provider.dart';
 import '../providers/session_provider.dart';
 
@@ -92,11 +97,35 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _errorMessage = error.toString();
+        _errorMessage = _describeLoginError(error);
       });
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  /// A readable message for a failed sign-in instead of a raw exception.
+  static String _describeLoginError(Object error) {
+    if (error is JellyfinAuthException) {
+      final message = error.message;
+      if (message.contains('401') || message.contains('403')) {
+        return 'Wrong username or password.';
+      }
+      return 'Sign-in failed. Check the server address and try again.';
+    }
+    if (error is SocketException ||
+        error is TimeoutException ||
+        error is HandshakeException ||
+        error is http.ClientException) {
+      return "Can't reach the server. Check the address and your connection.";
+    }
+    if (error is FormatException || error is ArgumentError) {
+      return "That server address isn't valid.";
+    }
+    if (error is JellyfinException) {
+      return error.message;
+    }
+    return error.toString().replaceFirst(RegExp(r'^\w*Exception: '), '');
   }
 
   @override
@@ -135,124 +164,125 @@ class _LoginScreenState extends State<LoginScreen> {
                         padding: const EdgeInsets.all(24),
                         child: Form(
                           key: _formKey,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Welcome aboard',
-                                style: theme.textTheme.titleLarge,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'Sign in to your Jellyfin server to start the voyage.',
-                                style: theme.textTheme.bodyMedium,
-                              ),
-                              const SizedBox(height: 24),
-                              TextFormField(
-                                controller: _serverController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Server URL',
-                                  hintText: 'https://your-jellyfin-server.com',
+                          // Lets iOS offer to save the credentials.
+                          child: AutofillGroup(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Welcome aboard',
+                                  style: theme.textTheme.titleLarge,
                                 ),
-                                keyboardType: TextInputType.url,
-                                textInputAction: TextInputAction.next,
-                                autocorrect: false,
-                                enableSuggestions: false,
-                                validator: (value) {
-                                  final trimmed = value?.trim() ?? '';
-                                  if (trimmed.isEmpty) {
-                                    if (_looksLikeDemoRequest(
-                                      serverValue: value ?? '',
-                                    )) {
-                                      return null;
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Sign in to your Jellyfin server to start the voyage.',
+                                  style: theme.textTheme.bodyMedium,
+                                ),
+                                const SizedBox(height: 24),
+                                TextFormField(
+                                  controller: _serverController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Server URL',
+                                    hintText:
+                                        'https://your-jellyfin-server.com',
+                                  ),
+                                  keyboardType: TextInputType.url,
+                                  textInputAction: TextInputAction.next,
+                                  autocorrect: false,
+                                  enableSuggestions: false,
+                                  validator: (value) {
+                                    final trimmed = value?.trim() ?? '';
+                                    if (trimmed.isEmpty) {
+                                      if (_looksLikeDemoRequest(
+                                        serverValue: value ?? '',
+                                      )) {
+                                        return null;
+                                      }
+                                      return 'Enter your server URL';
                                     }
-                                    return 'Enter your server URL';
-                                  }
-                                  final lower = trimmed.toLowerCase();
-                                  if (!lower.startsWith('http://') &&
-                                      !lower.startsWith('https://')) {
-                                    return 'URL must start with http:// or https://';
-                                  }
-                                  return null;
-                                },
-                              ),
-                              const SizedBox(height: 16),
-                              TextFormField(
-                                controller: _usernameController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Username',
+                                    final lower = trimmed.toLowerCase();
+                                    if (!lower.startsWith('http://') &&
+                                        !lower.startsWith('https://')) {
+                                      return 'URL must start with http:// or https://';
+                                    }
+                                    return null;
+                                  },
                                 ),
-                                textInputAction: TextInputAction.next,
-                                autocorrect: false,
-                                enableSuggestions: false,
-                                autofillHints: const [AutofillHints.username],
-                                validator: (value) {
-                                  if (value == null || value.trim().isEmpty) {
-                                    return 'Enter your username';
-                                  }
-                                  return null;
-                                },
-                              ),
-                              const SizedBox(height: 16),
-                              TextFormField(
-                                controller: _passwordController,
-                                decoration: InputDecoration(
-                                  labelText: 'Password',
-                                  suffixIcon: IconButton(
-                                    onPressed: () {
-                                      setState(() {
-                                        _obscurePassword = !_obscurePassword;
-                                      });
-                                    },
-                                    icon: Icon(
-                                      _obscurePassword
-                                          ? Icons.visibility_outlined
-                                          : Icons.visibility_off_outlined,
+                                const SizedBox(height: 16),
+                                TextFormField(
+                                  controller: _usernameController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Username',
+                                  ),
+                                  textInputAction: TextInputAction.next,
+                                  autocorrect: false,
+                                  enableSuggestions: false,
+                                  autofillHints: const [AutofillHints.username],
+                                  validator: (value) {
+                                    if (value == null || value.trim().isEmpty) {
+                                      return 'Enter your username';
+                                    }
+                                    return null;
+                                  },
+                                ),
+                                const SizedBox(height: 16),
+                                TextFormField(
+                                  controller: _passwordController,
+                                  decoration: InputDecoration(
+                                    labelText: 'Password',
+                                    suffixIcon: IconButton(
+                                      onPressed: () {
+                                        setState(() {
+                                          _obscurePassword = !_obscurePassword;
+                                        });
+                                      },
+                                      icon: Icon(
+                                        _obscurePassword
+                                            ? Icons.visibility_outlined
+                                            : Icons.visibility_off_outlined,
+                                      ),
                                     ),
                                   ),
+                                  obscureText: _obscurePassword,
+                                  textInputAction: TextInputAction.go,
+                                  autofillHints: const [AutofillHints.password],
+                                  onFieldSubmitted: (_) {
+                                    if (!isLoading) _submit();
+                                  },
+                                  // No validator: Jellyfin allows accounts
+                                  // without a password.
                                 ),
-                                obscureText: _obscurePassword,
-                                textInputAction: TextInputAction.go,
-                                autofillHints: const [AutofillHints.password],
-                                onFieldSubmitted: (_) {
-                                  if (!isLoading) _submit();
-                                },
-                                validator: (value) {
-                                  if (value == null || value.isEmpty) {
-                                    return 'Enter your password';
-                                  }
-                                  return null;
-                                },
-                              ),
-                              const SizedBox(height: 24),
-                              if (_errorMessage != null)
-                                Padding(
-                                  padding: const EdgeInsets.only(bottom: 16),
-                                  child: Text(
-                                    _errorMessage!,
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      color: theme.colorScheme.error,
-                                    ),
-                                  ),
-                                ),
-                              SizedBox(
-                                width: double.infinity,
-                                child: FilledButton(
-                                  onPressed: isLoading ? null : _submit,
-                                  child: isLoading
-                                      ? const SizedBox(
-                                          width: 22,
-                                          height: 22,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
+                                const SizedBox(height: 24),
+                                if (_errorMessage != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 16),
+                                    child: Text(
+                                      _errorMessage!,
+                                      style: theme.textTheme.bodyMedium
+                                          ?.copyWith(
+                                            color: theme.colorScheme.error,
                                           ),
-                                        )
-                                      : const Text('Sign In'),
+                                    ),
+                                  ),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: FilledButton(
+                                    onPressed: isLoading ? null : _submit,
+                                    child: isLoading
+                                        ? const SizedBox(
+                                            width: 22,
+                                            height: 22,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          )
+                                        : const Text('Sign In'),
+                                  ),
                                 ),
-                              ),
-                              _buildDemoHint(theme),
-                            ],
+                                _buildDemoHint(theme),
+                              ],
+                            ),
                           ),
                         ),
                       ),

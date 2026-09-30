@@ -119,6 +119,10 @@ class _OfflineLibraryViewState extends State<OfflineLibraryView>
   Object? _groupsKey;
   List<OfflineAlbumGroup> _albums = const [];
   List<OfflineArtistGroup> _artists = const [];
+  // Derived from the download set only (not query/sort/view).
+  Object? _totalsKey;
+  List<JellyfinTrack> _allTracks = const [];
+  int _totalBytes = 0;
 
   DownloadService get _service => widget.appState.downloadService;
 
@@ -132,6 +136,14 @@ class _OfflineLibraryViewState extends State<OfflineLibraryView>
   }
 
   void _regroupIfNeeded(List<DownloadItem> completed) {
+    if (!identical(_totalsKey, completed)) {
+      _totalsKey = completed;
+      _allTracks = [for (final d in completed) d.track];
+      _totalBytes = completed.fold(
+        0,
+        (sum, d) => sum + (d.fileSizeBytes ?? d.totalBytes ?? 0),
+      );
+    }
     final key = (_service.revision, _query, _sort, _view);
     if (key == _groupsKey) return;
     _groupsKey = key;
@@ -178,7 +190,8 @@ class _OfflineLibraryViewState extends State<OfflineLibraryView>
         content: Text(
           'Remove ${album.items.length} downloaded tracks '
           '(${formatDownloadBytes(album.totalBytes)}) of “${album.name}” '
-          'from this device?',
+          'from this device? Tracks that are also part of a downloaded '
+          'playlist or another album are kept.',
         ),
         actions: [
           TextButton(
@@ -196,8 +209,21 @@ class _OfflineLibraryViewState extends State<OfflineLibraryView>
         ],
       ),
     );
-    if (ok != true) return;
-    await _service.deleteDownloads(album.items.map((d) => d.track.id).toList());
+    if (ok != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    // Tracks a downloaded playlist (or another album) also needs are kept.
+    final result = await _service
+        .releaseAlbumTracks(album.items.map((d) => d.track.id).toList());
+    if (result.kept > 0) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Removed ${result.removed} downloads of “${album.name}”. '
+            '${result.kept} kept for playlists or other albums',
+          ),
+        ),
+      );
+    }
   }
 
   void _showAlbumActions(OfflineAlbumGroup album) {
@@ -260,8 +286,8 @@ class _OfflineLibraryViewState extends State<OfflineLibraryView>
           );
         }
         _regroupIfNeeded(completed);
-        final totalBytes = _service.completedBytes;
-        final allTracks = [for (final d in completed) d.track];
+        final totalBytes = _totalBytes;
+        final allTracks = _allTracks;
         final isAlbums = _view == _LibraryView.albums;
         final count = isAlbums ? _albums.length : _artists.length;
 
@@ -561,7 +587,8 @@ class _ManageDownloadsTab extends StatelessWidget {
         final downloads = service.downloads;
         final active = service.activeDownloads;
         final failed = service.failedDownloads;
-        final completed = service.completedDownloads;
+        // Storage management: every account's downloads.
+        final completed = service.allCompletedDownloads;
         final pause = service.queuePause;
         // Downloading first, then queued (in queue order), failed, done.
         final activeSorted = [

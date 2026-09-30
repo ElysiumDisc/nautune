@@ -41,6 +41,11 @@ class NowPlayingBar extends StatefulWidget {
 }
 
 class _NowPlayingBarState extends State<NowPlayingBar> {
+  // Every page keeps its own bar (the library under an album page, ...), and
+  // all of them hear the same errors. Only the most recently mounted one (the
+  // top page's) shows them; each bar used to queue its own copy.
+  static final List<_NowPlayingBarState> _mounted = [];
+
   StreamSubscription<String>? _errorSubscription;
   // Cached so rebuilds don't resubscribe. The bar rebuilds on track /
   // playing changes only; position drives just the waveform strip / progress
@@ -55,8 +60,9 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
   void initState() {
     super.initState();
     _trackPlayingStream = audioService.trackPlayingStream;
+    _mounted.add(this);
     _errorSubscription = audioService.playbackErrorStream.listen((message) {
-      if (!mounted) return;
+      if (!mounted || !identical(_mounted.last, this)) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(message),
@@ -77,6 +83,7 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
 
   @override
   void dispose() {
+    _mounted.remove(this);
     _errorSubscription?.cancel();
     super.dispose();
   }
@@ -127,6 +134,11 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
     final showWaveform = context.select<NautuneAppState, bool>(
       (s) => s.visualizerEnabled && s.visualizerPosition == VisualizerPosition.controlsBar,
     );
+    // Through the app state: the bar itself only rebuilds on track / playing
+    // changes, so the radio icon went stale after a toggle.
+    final radioEnabled = context.select<NautuneAppState, bool>(
+      (s) => s.infiniteRadioEnabled,
+    );
     final shape = style.shape(NautuneRadius.lg);
 
     final card = Padding(
@@ -176,10 +188,14 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
                     if (showWaveform)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-                        child: _WaveformStrip(
-                          audioService: audioService,
-                          track: track,
-                          isPlaying: isPlaying,
+                        // Repaints on every position tick; keep that off
+                        // the page's layer.
+                        child: RepaintBoundary(
+                          child: _WaveformStrip(
+                            audioService: audioService,
+                            track: track,
+                            isPlaying: isPlaying,
+                          ),
                         ),
                       ),
                     Padding(
@@ -187,7 +203,7 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
                       child: Row(
                         children: [
                           Hero(
-                            tag: kNowPlayingArtworkHeroTag,
+                            tag: nowPlayingArtworkHeroTag(ModalRoute.of(context)),
                             transitionOnUserGestures: true,
                             child: _MiniArtwork(track: track),
                           ),
@@ -207,7 +223,7 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
                                 ),
                                 Row(
                                   children: [
-                                    if (audioService.infiniteRadioEnabled) ...[
+                                    if (radioEnabled) ...[
                                       Icon(Icons.radio, size: 12, color: theme.colorScheme.primary),
                                       const SizedBox(width: 4),
                                     ],
@@ -257,7 +273,9 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
                       ),
                     ),
                     if (!showWaveform)
-                      _ProgressLine(audioService: audioService),
+                      RepaintBoundary(
+                        child: _ProgressLine(audioService: audioService),
+                      ),
                   ],
                 ),
               ),
@@ -506,12 +524,21 @@ class _WaveformDisplayState extends State<_WaveformDisplay> {
     // Only show visualizer overlay when position is set to controlsBar
     final showVisualizerOverlay = visualizerEnabled &&
         visualizerPosition == VisualizerPosition.controlsBar;
-    // The full player is a non-opaque route, so this bar stays on screen
-    // (and its tickers running) underneath it. Pause the visualizer (and
-    // let it release the iOS FFT capture) whenever this page isn't on top.
+    // Pause the visualizer (and let it release the iOS FFT capture) whenever
+    // this page isn't on top: under a sheet, or while the full player opens,
+    // closes or is dragged over it.
     final routeIsCurrent = ModalRoute.of(context)?.isCurrent ?? true;
+    final durationMs = widget.duration.inMilliseconds;
 
-    return SizedBox(
+    // A slider for VoiceOver: 10 s steps, like the full player's bar.
+    return Semantics(
+      container: true,
+      slider: true,
+      label: 'Playback position',
+      value: '${(widget.progress * 100).round()}%',
+      onIncrease: durationMs > 0 ? () => _seekBy(10000) : null,
+      onDecrease: durationMs > 0 ? () => _seekBy(-10000) : null,
+      child: SizedBox(
       height: 40,
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -607,6 +634,15 @@ class _WaveformDisplayState extends State<_WaveformDisplay> {
           );
         },
       ),
+      ),
+    );
+  }
+
+  void _seekBy(int deltaMs) {
+    final durationMs = widget.duration.inMilliseconds;
+    final positionMs = (widget.progress * durationMs).round();
+    widget.audioService.seek(
+      Duration(milliseconds: (positionMs + deltaMs).clamp(0, durationMs)),
     );
   }
 

@@ -1,3 +1,4 @@
+import 'dart:collection' show ListBase;
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -8,6 +9,10 @@ import '../utils/backup_exclusion.dart';
 
 /// Service for caching generated rhythm game charts.
 /// Stores charts as JSON files for fast loading on replay.
+///
+/// Every chart on disk is listed in a lightweight catalog (scores and note
+/// count, no notes) used for listings and stats; only the most recently used
+/// full charts stay in memory.
 class ChartCacheService extends ChangeNotifier {
   static ChartCacheService? _instance;
   static ChartCacheService get instance => _instance ??= ChartCacheService._();
@@ -15,9 +20,15 @@ class ChartCacheService extends ChangeNotifier {
   ChartCacheService._();
 
   Directory? _cacheDir;
+
+  /// Full charts (with notes), most recently used last.
   final Map<String, ChartData> _cache = {};
+
+  /// Every chart on disk, without its notes (see [_summaryOf]).
+  final Map<String, ChartData> _catalog = {};
   bool _initialized = false;
-  static const int _maxMemoryCacheSize = 100;
+  Future<void>? _initFuture;
+  static const int _maxMemoryCacheSize = 20;
 
   // Through the Fire and Flames - legendary unlock for perfect scores
   // Bundled in assets - no download needed!
@@ -27,7 +38,7 @@ class ChartCacheService extends ChangeNotifier {
   static const String _legendaryArtistName = 'DragonForce';
 
   bool _legendaryUnlocked = false;
-  bool _legendaryCopying = false;
+  Future<bool>? _legendaryCopy;
   File? _legendaryTrackFile;
 
   /// Size of the legendary track when it was fully copied (null = unknown).
@@ -36,10 +47,14 @@ class ChartCacheService extends ChangeNotifier {
   /// Whether the service is initialized
   bool get isInitialized => _initialized;
 
-  /// Initialize the cache service
-  Future<void> initialize() async {
-    if (_initialized) return;
+  /// Initialize the cache service. Concurrent calls share one load; a failed
+  /// load can be retried.
+  Future<void> initialize() {
+    if (_initialized) return Future<void>.value();
+    return _initFuture ??= _initialize();
+  }
 
+  Future<void> _initialize() async {
     try {
       final appDir = await getApplicationDocumentsDirectory();
 
@@ -50,59 +65,49 @@ class ChartCacheService extends ChangeNotifier {
       }
       await excludeFromBackup(_cacheDir!.path);
 
-      // Load existing charts into memory
-      await _loadAllCharts();
-      _trimMemoryCache();
+      // Catalog every chart on disk (parsed off the UI isolate)
+      await _loadCatalog();
 
       // Load legendary track unlock state
       await _loadLegendaryUnlockState();
 
       _initialized = true;
-      debugPrint('🎮 ChartCache: Initialized with ${_cache.length} cached charts');
+      debugPrint('🎮 ChartCache: Initialized with ${_catalog.length} cached charts');
     } catch (e) {
       debugPrint('🎮 ChartCache: Init error - $e');
+      _initFuture = null;
     }
   }
 
-  /// Load all cached charts from disk
-  Future<void> _loadAllCharts() async {
+  /// Build the catalog from the chart files on disk.
+  Future<void> _loadCatalog() async {
     if (_cacheDir == null) return;
 
     try {
-      final files = await _cacheDir!.list().toList();
-      for (final entity in files) {
-        if (entity is File && entity.path.endsWith('.json')) {
-          try {
-            final content = await entity.readAsString();
-            final json = jsonDecode(content) as Map<String, dynamic>;
-            final chart = ChartData.fromJson(json);
-            _cache[chart.trackId] = chart;
-          } catch (e) {
-            debugPrint('🎮 ChartCache: Error loading ${entity.path}: $e');
-          }
-        }
+      final summaries = await compute(_readCatalog, _cacheDir!.path);
+      for (final summary in summaries) {
+        // Charts saved while loading are newer.
+        _catalog.putIfAbsent(summary.trackId, () => summary);
       }
     } catch (e) {
       debugPrint('🎮 ChartCache: Error listing charts: $e');
     }
   }
 
-  /// Trim in-memory cache to max size, keeping most recently generated charts.
-  void _trimMemoryCache() {
-    if (_cache.length <= _maxMemoryCacheSize) return;
-    final sorted = _cache.entries.toList()
-      ..sort((a, b) => b.value.generatedAt.compareTo(a.value.generatedAt));
-    final keysToRemove = sorted.skip(_maxMemoryCacheSize).map((e) => e.key).toList();
-    for (final key in keysToRemove) {
-      _cache.remove(key);
+  /// Keep [chart] in memory (most recently used) and in the catalog.
+  void _remember(ChartData chart) {
+    _cache.remove(chart.trackId);
+    _cache[chart.trackId] = chart;
+    while (_cache.length > _maxMemoryCacheSize) {
+      _cache.remove(_cache.keys.first);
     }
-    debugPrint('🎮 ChartCache: Trimmed memory cache to $_maxMemoryCacheSize entries');
+    _catalog[chart.trackId] = _summaryOf(chart);
   }
 
   /// Check if a chart exists for a track
-  bool hasChart(String trackId) => _cache.containsKey(trackId);
+  bool hasChart(String trackId) => _catalog.containsKey(trackId) || _cache.containsKey(trackId);
 
-  /// Get a cached chart (null if not cached)
+  /// Get a full cached chart from memory (null if not loaded; see [loadChart])
   ChartData? getChart(String trackId) => _cache[trackId];
 
   File? _chartFile(String trackId) =>
@@ -133,7 +138,7 @@ class ChartCacheService extends ChangeNotifier {
     if (_cacheDir == null) await initialize();
     final chart = await _findAnyChart(trackId);
     if (chart == null || !chart.isCurrentVersion) return null;
-    _cache[trackId] = chart;
+    _remember(chart);
     return chart;
   }
 
@@ -145,9 +150,10 @@ class ChartCacheService extends ChangeNotifier {
     await tmp.rename(file.path);
   }
 
-  /// Get all cached charts
+  /// Every cached chart, as catalog entries: scores and metadata, and
+  /// `notes.length` only (their notes can't be read; use [loadChart]).
   List<ChartData> getAllCharts() {
-    final charts = _cache.values.toList();
+    final charts = _catalog.values.toList();
     // Sort by most recently played/generated
     charts.sort((a, b) => b.generatedAt.compareTo(a.generatedAt));
     return charts;
@@ -162,7 +168,7 @@ class ChartCacheService extends ChangeNotifier {
       final file = File('${_cacheDir!.path}/${chart.trackId}.json');
       final json = jsonEncode(chart.toJson());
       await _writeAtomic(file, utf8.encode(json));
-      _cache[chart.trackId] = chart;
+      _remember(chart);
       notifyListeners();
       debugPrint('🎮 ChartCache: Saved chart for ${chart.trackName}');
     } catch (e) {
@@ -186,20 +192,23 @@ class ChartCacheService extends ChangeNotifier {
   }
 
   /// Record a finished play: counts the play and keeps the best score and
-  /// multiplier. Returns the updated chart (null if the chart is unknown).
+  /// multiplier. With [recordBest] false (e.g. a run that used the cheat)
+  /// the best score and multiplier are left alone. Returns the updated chart
+  /// (null if the chart is unknown).
   Future<ChartData?> updateScore(
     String trackId,
     int score,
     int maxMultiplier, {
     int notesHit = 0,
+    bool recordBest = true,
   }) async {
     if (_cacheDir == null) await initialize();
     final existing = await _findAnyChart(trackId);
     if (existing == null) return null;
 
     final updated = existing.copyWithScore(
-      highScore: score > existing.highScore ? score : existing.highScore,
-      maxMultiplier: maxMultiplier > existing.maxMultiplier
+      highScore: recordBest && score > existing.highScore ? score : existing.highScore,
+      maxMultiplier: recordBest && maxMultiplier > existing.maxMultiplier
           ? maxMultiplier
           : existing.maxMultiplier,
       playCount: existing.playCount + 1,
@@ -220,6 +229,7 @@ class ChartCacheService extends ChangeNotifier {
         await file.delete();
       }
       _cache.remove(trackId);
+      _catalog.remove(trackId);
       notifyListeners();
       debugPrint('🎮 ChartCache: Deleted chart for $trackId');
     } catch (e) {
@@ -239,6 +249,7 @@ class ChartCacheService extends ChangeNotifier {
         }
       }
       _cache.clear();
+      _catalog.clear();
       notifyListeners();
       debugPrint('🎮 ChartCache: Cleared all charts');
     } catch (e) {
@@ -274,11 +285,11 @@ class ChartCacheService extends ChangeNotifier {
   }
 
   /// Get chart count
-  int get chartCount => _cache.length;
+  int get chartCount => _catalog.length;
 
   /// Get aggregate stats across all charts for profile display
   FretsOnFireStats getAggregateStats() {
-    if (_cache.isEmpty) {
+    if (_catalog.isEmpty) {
       return const FretsOnFireStats(
         totalSongsPlayed: 0,
         totalPlayCount: 0,
@@ -297,7 +308,7 @@ class ChartCacheService extends ChangeNotifier {
     int bestMultiplier = 0;
     int totalNotes = 0;
 
-    for (final chart in _cache.values) {
+    for (final chart in _catalog.values) {
       totalPlays += chart.playCount;
       totalNotes += chart.totalNotesHit;
 
@@ -312,7 +323,7 @@ class ChartCacheService extends ChangeNotifier {
     }
 
     return FretsOnFireStats(
-      totalSongsPlayed: _cache.values.where((c) => c.playCount > 0).length,
+      totalSongsPlayed: _catalog.values.where((c) => c.playCount > 0).length,
       totalPlayCount: totalPlays,
       totalNotesHit: totalNotes,
       bestHighScore: bestScore,
@@ -323,7 +334,7 @@ class ChartCacheService extends ChangeNotifier {
   }
 
   /// Check if any games have been played
-  bool get hasPlayedAnyGames => _cache.values.any((c) => c.playCount > 0);
+  bool get hasPlayedAnyGames => _catalog.values.any((c) => c.playCount > 0);
 
   // ============================================================
   // LEGENDARY TRACK: Through the Fire and Flames
@@ -334,7 +345,7 @@ class ChartCacheService extends ChangeNotifier {
   bool get isLegendaryUnlocked => _legendaryUnlocked;
 
   /// Whether the legendary track is currently being copied from assets
-  bool get isLegendaryCopying => _legendaryCopying;
+  bool get isLegendaryCopying => _legendaryCopy != null;
 
   /// Whether the legendary track is ready to play (fully copied from assets)
   bool get isLegendaryReady {
@@ -371,14 +382,21 @@ class ChartCacheService extends ChangeNotifier {
   }
 
   /// Copy the legendary track from bundled assets to documents directory
-  /// Can be called regardless of unlock state (for demo/offline mode)
-  Future<bool> prepareLegendaryTrack() async {
-    if (_legendaryCopying) return false;
-    if (isLegendaryReady) return true;
-
-    _legendaryCopying = true;
+  /// Can be called regardless of unlock state (for demo/offline mode).
+  /// A call while a copy is running waits for that copy.
+  Future<bool> prepareLegendaryTrack() {
+    if (isLegendaryReady) return Future<bool>.value(true);
+    final running = _legendaryCopy;
+    if (running != null) return running;
+    final copy = _legendaryCopy = _copyLegendaryTrack().whenComplete(() {
+      _legendaryCopy = null;
+      notifyListeners();
+    });
     notifyListeners();
+    return copy;
+  }
 
+  Future<bool> _copyLegendaryTrack() async {
     try {
       final appDir = await getApplicationDocumentsDirectory();
 
@@ -402,15 +420,11 @@ class ChartCacheService extends ChangeNotifier {
       _legendaryTrackFile = file;
       _legendaryTrackBytes = bytes.length;
       await _saveLegendaryUnlockState();
-      _legendaryCopying = false;
-      notifyListeners();
 
       debugPrint('🔥🎸 Ready: Through the Fire and Flames (${(bytes.length / 1024 / 1024).toStringAsFixed(1)} MB)');
       return true;
     } catch (e) {
       debugPrint('🔥 Copy error: $e');
-      _legendaryCopying = false;
-      notifyListeners();
       return false;
     }
   }
@@ -509,4 +523,62 @@ class FretsOnFireStats {
     }
     return totalNotesHit.toString();
   }
+}
+
+/// Catalog entry for [chart]: everything but the notes, whose count is kept.
+ChartData _summaryOf(ChartData chart) => ChartData(
+      version: chart.version,
+      id: chart.id,
+      trackId: chart.trackId,
+      trackName: chart.trackName,
+      artistName: chart.artistName,
+      notes: _NoteCountOnly(chart.notes.length),
+      bpm: chart.bpm,
+      durationMs: chart.durationMs,
+      generatedAt: chart.generatedAt,
+      highScore: chart.highScore,
+      maxMultiplier: chart.maxMultiplier,
+      playCount: chart.playCount,
+      totalNotesHit: chart.totalNotesHit,
+    );
+
+/// Isolate entry point: catalog entries for every chart file in [dirPath].
+List<ChartData> _readCatalog(String dirPath) {
+  final summaries = <ChartData>[];
+  final dir = Directory(dirPath);
+  if (!dir.existsSync()) return summaries;
+  for (final entity in dir.listSync()) {
+    if (entity is File && entity.path.endsWith('.json')) {
+      try {
+        final json = jsonDecode(entity.readAsStringSync()) as Map<String, dynamic>;
+        summaries.add(_summaryOf(ChartData.fromJson(json)));
+      } catch (e) {
+        debugPrint('🎮 ChartCache: Error loading ${entity.path}: $e');
+      }
+    }
+  }
+  return summaries;
+}
+
+/// The notes of a catalog entry: only their number is known. Reading a note
+/// is a bug (load the full chart instead), so it throws.
+class _NoteCountOnly extends ListBase<ChartNote> {
+  _NoteCountOnly(this._length);
+
+  final int _length;
+
+  @override
+  int get length => _length;
+
+  @override
+  set length(int newLength) =>
+      throw UnsupportedError('Catalog chart entries are read-only');
+
+  @override
+  ChartNote operator [](int index) =>
+      throw UnsupportedError('Catalog chart entries hold no notes; use loadChart');
+
+  @override
+  void operator []=(int index, ChartNote value) =>
+      throw UnsupportedError('Catalog chart entries are read-only');
 }

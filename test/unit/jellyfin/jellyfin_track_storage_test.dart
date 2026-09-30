@@ -37,6 +37,15 @@ void main() {
       expect(JellyfinTrack.scrobbleArtistFor(const ['Daft Punk & 2 more']),
           'Daft Punk');
     });
+
+    test('Last.fm gets the primary artist only', () {
+      final t = _track(artists: const ['Daft Punk', 'Pharrell Williams']);
+      expect(t.lastFmArtist, 'Daft Punk');
+      expect(JellyfinTrack.lastFmArtistFor(const ['  ', 'Björk']), 'Björk');
+      expect(JellyfinTrack.lastFmArtistFor(const ['Daft Punk & 1 more']),
+          'Daft Punk');
+      expect(JellyfinTrack.lastFmArtistFor(const []), isNull);
+    });
   });
 
   group('storage JSON', () {

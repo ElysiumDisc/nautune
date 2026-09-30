@@ -6,12 +6,17 @@ class NetworkChannel {
   final String audioFile;
   final String? imageFile;
 
+  /// False when the recording is gone from the server. The channel stays on
+  /// the dial but plays nothing ("signal lost") and is never downloaded.
+  final bool available;
+
   const NetworkChannel({
     required this.number,
     required this.name,
     required this.artist,
     required this.audioFile,
     this.imageFile,
+    this.available = true,
   });
 
   /// Returns the full audio URL for streaming.

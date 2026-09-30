@@ -8,6 +8,7 @@ import '../jellyfin/jellyfin_client.dart';
 import '../jellyfin/jellyfin_credentials.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../jellyfin/server_uri.dart';
+import 'playback_logic.dart';
 
 /// Represents a single play event recorded locally
 class PlayEvent {
@@ -32,6 +33,10 @@ class PlayEvent {
   /// timestamp is invented), excluded from time-of-day / calendar stats.
   final bool isCatchUp;
 
+  /// The track was left before the play threshold (half the track or 4
+  /// minutes): its listening time counts, but it is not a play.
+  final bool isSkip;
+
   PlayEvent({
     required this.trackId,
     required this.trackName,
@@ -46,6 +51,7 @@ class PlayEvent {
     this.userId,
     this.serverUrl,
     this.isCatchUp = false,
+    this.isSkip = false,
   }) : eventId = eventId ?? '${trackId}_${timestamp.millisecondsSinceEpoch}';
 
   /// Create a copy with updated sync status
@@ -63,6 +69,7 @@ class PlayEvent {
     userId: userId,
     serverUrl: serverUrl,
     isCatchUp: isCatchUp,
+    isSkip: isSkip,
   );
 
   /// Whether this event belongs to the account ([serverUrl], [userId]).
@@ -98,6 +105,7 @@ class PlayEvent {
     if (userId != null) 'userId': userId,
     if (serverUrl != null) 'serverUrl': serverUrl,
     if (isCatchUp) 'isCatchUp': true,
+    if (isSkip) 'isSkip': true,
   };
 
   factory PlayEvent.fromJson(Map<String, dynamic> json) => PlayEvent(
@@ -114,6 +122,7 @@ class PlayEvent {
     userId: json['userId'] as String?,
     serverUrl: json['serverUrl'] as String?,
     isCatchUp: json['isCatchUp'] as bool? ?? false,
+    isSkip: json['isSkip'] as bool? ?? false,
   );
 }
 
@@ -184,6 +193,18 @@ ListeningStreak computeListeningStreak(
 /// Start (local midnight) of the Monday-based week containing [now].
 DateTime startOfWeek(DateTime now) =>
     DateTime(now.year, now.month, now.day - (now.weekday - 1));
+
+/// [t] moved by whole calendar [months] (and [days]), keeping the time of
+/// day; the day of month is clamped to the target month's length (Mar 31
+/// minus one month is Feb 28/29). DST-safe.
+DateTime shiftCalendar(DateTime t, {int months = 0, int days = 0}) {
+  final firstOfTarget = DateTime(t.year, t.month + months, 1);
+  final lastDay =
+      DateTime(firstOfTarget.year, firstOfTarget.month + 1, 0).day;
+  final day = t.day < lastDay ? t.day : lastDay;
+  return DateTime(firstOfTarget.year, firstOfTarget.month, day + days, t.hour,
+      t.minute, t.second, t.millisecond, t.microsecond);
+}
 
 /// Play counts per calendar day for the [days] days ending today (index 0 =
 /// oldest), DST-safe.
@@ -379,7 +400,8 @@ class ListeningAnalyticsService extends ChangeNotifier {
   static const _relaxModeKey = 'relax_mode_stats';
   static const _pianoStatsKey = 'piano_stats';
 
-  /// Events older than this are pruned.
+  /// Events older than this are pruned — but never this year's or last
+  /// year's (see [_pruneCutoff]), which the year-over-year comparison needs.
   static const Duration _retention = Duration(days: 365);
 
   // Legacy Hive keys from the retired milestone/badge system. Kept here only
@@ -435,6 +457,12 @@ class ListeningAnalyticsService extends ChangeNotifier {
   /// depend on when a play happened.
   Iterable<PlayEvent> get _timedEvents =>
       _visibleEvents.where((e) => !e.isCatchUp);
+
+  /// Events that count as plays (skips only add listening time).
+  Iterable<PlayEvent> get _visiblePlays => _visibleEvents.where((e) => !e.isSkip);
+
+  /// Real plays of the current account, for play counts by time.
+  Iterable<PlayEvent> get _timedPlays => _timedEvents.where((e) => !e.isSkip);
 
   /// Check if a track ID belongs to an easter egg (not a real Jellyfin track)
   bool _isEasterEggTrack(String trackId) {
@@ -674,10 +702,18 @@ class ListeningAnalyticsService extends ChangeNotifier {
     await box.putAll(entries);
   }
 
-  /// Drop events older than [_retention] (keeps a year for streaks, period
-  /// comparisons and top content on the Profile dashboard).
+  /// Oldest event kept: a year back, or Jan 1 of last year when that is
+  /// earlier, so "this year vs last year" has all of last year's plays.
+  static DateTime _pruneCutoff(DateTime now) {
+    final yearAgo = now.subtract(_retention);
+    final lastYearStart = DateTime(now.year - 1, 1, 1);
+    return lastYearStart.isBefore(yearAgo) ? lastYearStart : yearAgo;
+  }
+
+  /// Drop events older than [_pruneCutoff] (keeps the history needed for
+  /// streaks, period comparisons and top content on the Profile dashboard).
   Future<void> _pruneOldEvents() async {
-    final cutoff = DateTime.now().subtract(_retention);
+    final cutoff = _pruneCutoff(DateTime.now());
     final old = _events.where((e) => e.timestamp.isBefore(cutoff)).toList();
     if (old.isEmpty) return;
     _events.removeWhere((e) => e.timestamp.isBefore(cutoff));
@@ -692,11 +728,16 @@ class ListeningAnalyticsService extends ChangeNotifier {
   /// replayed later). Such events are stored as synced and are never pushed
   /// again with `markPlayed`, which would count the play a second time.
   /// Pass false only when no playback reporting covered the play.
+  /// [countsAsPlay] - whether the play threshold (half the track or 4
+  /// minutes) was reached. When omitted it is judged from the listened
+  /// duration; below the threshold the event is stored as a skip, which
+  /// adds listening time but no play.
   Future<void> recordPlay(
     JellyfinTrack track, {
     int? actualDurationMs,
     DateTime? playStartTime,
     bool reportedToServer = true,
+    bool? countsAsPlay,
   }) async {
     if (!_initialized) {
       debugPrint('ListeningAnalyticsService: Not initialized, skipping record');
@@ -713,6 +754,12 @@ class ListeningAnalyticsService extends ChangeNotifier {
       return;
     }
 
+    final trackDuration = track.duration;
+    final isPlay = countsAsPlay ??
+        (trackDuration == null ||
+            trackDuration <= Duration.zero ||
+            durationMs ~/ 1000 >= scrobbleThresholdSeconds(trackDuration));
+
     final event = PlayEvent(
       trackId: track.id,
       trackName: track.name,
@@ -722,9 +769,11 @@ class ListeningAnalyticsService extends ChangeNotifier {
       genres: track.genres ?? [],
       timestamp: playStartTime ?? DateTime.now(),
       durationMs: durationMs,
-      synced: reportedToServer,
+      // A skip is never pushed as a play (markPlayed) either.
+      synced: reportedToServer || !isPlay,
       userId: track.userId,
       serverUrl: track.serverUrl,
+      isSkip: !isPlay,
     );
 
     _events.insert(0, event); // Add to front (most recent)
@@ -746,7 +795,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
       counts[i] = 0;
     }
 
-    for (final event in _timedEvents) {
+    for (final event in _timedPlays) {
       if (event.timestamp.isAfter(cutoff)) {
         final hour = event.timestamp.hour;
         counts[hour] = (counts[hour] ?? 0) + 1;
@@ -765,7 +814,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
       counts[i] = 0;
     }
 
-    for (final event in _timedEvents) {
+    for (final event in _timedPlays) {
       if (event.timestamp.isAfter(cutoff)) {
         // DateTime.weekday is 1-7 (Monday-Sunday), convert to 0-6
         final day = event.timestamp.weekday - 1;
@@ -791,7 +840,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
     }
 
     // Count events
-    for (final event in _timedEvents) {
+    for (final event in _timedPlays) {
       if (event.timestamp.isAfter(cutoff)) {
         final day = event.timestamp.weekday - 1; // 0-6
         final hour = event.timestamp.hour; // 0-23
@@ -808,51 +857,50 @@ class ListeningAnalyticsService extends ChangeNotifier {
   /// Get listening streak information (DST-safe calendar-day arithmetic).
   ListeningStreak getStreakInfo() {
     return computeListeningStreak(
-      _timedEvents.map((e) => e.timestamp),
+      _timedPlays.map((e) => e.timestamp),
       DateTime.now(),
     );
   }
 
-  /// Compare this week vs last week
-  PeriodComparison getWeekOverWeekComparison() {
-    final now = DateTime.now();
-    final startOfThisWeek = startOfWeek(now);
-    final startOfLastWeek = localDateOffset(startOfThisWeek, -7);
+  // The comparisons set the period so far against the same stretch of the
+  // previous period (Monday to now vs last Monday to the same moment last
+  // week), not against the whole previous period, which would make every
+  // period look like a drop until it ends.
+
+  /// Compare this week so far vs the same part of last week
+  PeriodComparison getWeekOverWeekComparison({DateTime? now}) {
+    final at = now ?? DateTime.now();
+    final startOfThisWeek = startOfWeek(at);
 
     return _comparePeriods(
       currentStart: startOfThisWeek,
-      currentEnd: now,
-      previousStart: startOfLastWeek,
-      previousEnd: startOfThisWeek,
+      currentEnd: at,
+      previousStart: localDateOffset(startOfThisWeek, -7),
+      previousEnd: shiftCalendar(at, days: -7),
     );
   }
 
-  /// Compare this month vs last month
-  PeriodComparison getMonthOverMonthComparison() {
-    final now = DateTime.now();
-    final startOfThisMonth = DateTime(now.year, now.month, 1);
-    final startOfLastMonth = DateTime(now.year, now.month - 1, 1);
+  /// Compare this month so far vs the same part of last month
+  PeriodComparison getMonthOverMonthComparison({DateTime? now}) {
+    final at = now ?? DateTime.now();
 
     return _comparePeriods(
-      currentStart: startOfThisMonth,
-      currentEnd: now,
-      previousStart: startOfLastMonth,
-      previousEnd: startOfThisMonth,
+      currentStart: DateTime(at.year, at.month, 1),
+      currentEnd: at,
+      previousStart: DateTime(at.year, at.month - 1, 1),
+      previousEnd: shiftCalendar(at, months: -1),
     );
   }
 
-  /// Compare this year vs last year
-  PeriodComparison getYearOverYearComparison() {
-    final now = DateTime.now();
-    final startOfThisYear = DateTime(now.year, 1, 1);
-    final startOfLastYear = DateTime(now.year - 1, 1, 1);
-    final endOfLastYear = DateTime(now.year, 1, 1);
+  /// Compare this year so far vs the same part of last year
+  PeriodComparison getYearOverYearComparison({DateTime? now}) {
+    final at = now ?? DateTime.now();
 
     return _comparePeriods(
-      currentStart: startOfThisYear,
-      currentEnd: now,
-      previousStart: startOfLastYear,
-      previousEnd: endOfLastYear,
+      currentStart: DateTime(at.year, 1, 1),
+      currentEnd: at,
+      previousStart: DateTime(at.year - 1, 1, 1),
+      previousEnd: shiftCalendar(at, months: -12),
     );
   }
 
@@ -869,7 +917,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
     final currentTracks = <String>{};
     final previousTracks = <String>{};
 
-    for (final event in _timedEvents) {
+    for (final event in _timedPlays) {
       final ts = event.timestamp;
       // Use inclusive comparison: start <= timestamp <= end
       // This ensures events at exactly midnight or exactly now are counted
@@ -877,8 +925,8 @@ class ListeningAnalyticsService extends ChangeNotifier {
         currentPlays++;
         currentTimeMs += event.durationMs;
         currentTracks.add(event.trackId);
-      } else if (!ts.isBefore(previousStart) && ts.isBefore(previousEnd)) {
-        // Previous period: start <= timestamp < end (exclusive end to avoid overlap)
+      } else if (!ts.isBefore(previousStart) && !ts.isAfter(previousEnd)) {
+        // Previous period: start <= timestamp <= end (the same span)
         previousPlays++;
         previousTimeMs += event.durationMs;
         previousTracks.add(event.trackId);
@@ -898,7 +946,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
   /// Get total plays in the given date range
   int getTotalPlays({DateTime? since}) {
     final cutoff = since ?? DateTime(2000);
-    return _visibleEvents.where((e) => e.timestamp.isAfter(cutoff)).length;
+    return _visiblePlays.where((e) => e.timestamp.isAfter(cutoff)).length;
   }
 
   /// Get total listening time in the given date range
@@ -951,7 +999,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
   /// Index 0 = oldest day, last index = today.
   List<int> getDailyPlayCounts({int days = 28}) {
     return dailyPlayCounts(
-      _timedEvents.map((e) => e.timestamp),
+      _timedPlays.map((e) => e.timestamp),
       DateTime.now(),
       days,
     );
@@ -1010,7 +1058,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
 
   /// Get recent play events
   List<PlayEvent> getRecentEvents({int limit = 50}) {
-    return _visibleEvents.take(limit).toList();
+    return _visiblePlays.take(limit).toList();
   }
 
   /// Get play events from the same day in previous months/years (On This Day)
@@ -1023,7 +1071,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
     final todayDate = DateTime(now.year, now.month, now.day);
 
     // Find events from the same day of the month in any previous month
-    final matchingEvents = _timedEvents.where((event) {
+    final matchingEvents = _timedPlays.where((event) {
       // Must be from a previous date (not today)
       final eventDate = DateTime(event.timestamp.year, event.timestamp.month, event.timestamp.day);
       if (!eventDate.isBefore(todayDate)) return false;
@@ -1095,7 +1143,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
   /// Higher percentage = more exploration, lower = more replay
   double getDiscoveryRate({DateTime? since}) {
     final cutoff = since ?? DateTime.now().subtract(const Duration(days: 30));
-    final relevantEvents = _visibleEvents.where((e) => e.timestamp.isAfter(cutoff)).toList();
+    final relevantEvents = _visiblePlays.where((e) => e.timestamp.isAfter(cutoff)).toList();
 
     if (relevantEvents.isEmpty) return 0.0;
 
@@ -1212,6 +1260,12 @@ class ListeningAnalyticsService extends ChangeNotifier {
           campfireUsageMs: _relaxModeStats.campfireUsageMs > importedRelax.campfireUsageMs
               ? _relaxModeStats.campfireUsageMs
               : importedRelax.campfireUsageMs,
+          waveUsageMs: _relaxModeStats.waveUsageMs > importedRelax.waveUsageMs
+              ? _relaxModeStats.waveUsageMs
+              : importedRelax.waveUsageMs,
+          loonUsageMs: _relaxModeStats.loonUsageMs > importedRelax.loonUsageMs
+              ? _relaxModeStats.loonUsageMs
+              : importedRelax.loonUsageMs,
         );
       }
 
@@ -1271,6 +1325,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
           .where((e) =>
               !e.synced &&
               !e.isCatchUp &&
+              !e.isSkip &&
               !_isEasterEggTrack(e.trackId) &&
               e.belongsTo(serverUrl: serverUrl, userId: userId))
           .toList();

@@ -74,10 +74,67 @@ void main() {
       expect(belongs('HTTPS://Music.Example.com:443/jf', 'user-b'), isTrue);
     });
 
-    test('another server or user does not belong', () {
-      expect(belongs('https://other.example.com', 'user-b'), isFalse);
+    test('another user does not belong', () {
       expect(belongs('https://music.example.com/jf', 'user-a'), isFalse);
       expect(belongs(null, 'user-a'), isFalse);
+      expect(belongs('https://other.example.com', 'user-a'), isFalse);
+    });
+
+    test('the same user keeps its downloads after a server address change',
+        () {
+      expect(belongs('http://192.168.1.10:8096', 'user-b'), isTrue);
+    });
+
+    test('without a user id, another server does not belong', () {
+      expect(belongs('https://other.example.com', null), isFalse);
+      expect(belongs('https://other.example.com', ''), isFalse);
+    });
+  });
+
+  group('continuesPartialDownload', () {
+    bool continues(String? range, {int offset = 4, int total = 10}) =>
+        continuesPartialDownload(
+          contentRange: range,
+          offset: offset,
+          totalBytes: total,
+        );
+
+    test('accepts the rest of the same file', () {
+      expect(continues('bytes 4-9/10'), isTrue);
+      expect(continues('BYTES 4-9/10 '), isTrue);
+    });
+
+    test('rejects another range, size or a malformed header', () {
+      expect(continues('bytes 0-9/10'), isFalse);
+      expect(continues('bytes 4-8/10'), isFalse);
+      expect(continues('bytes 4-11/12'), isFalse);
+      expect(continues('bytes 4-9/*'), isFalse);
+      expect(continues(null), isFalse);
+      expect(continues('bytes 0-9/10', offset: 0), isFalse);
+    });
+  });
+
+  group('redactSecrets', () {
+    test('strips access tokens from URLs in error messages', () {
+      const message = 'ClientException: Connection reset, '
+          'uri=https://jf.example/Items/1/Download?ApiKey=abc123&x=1';
+      final redacted = redactSecrets(message);
+      expect(redacted, isNot(contains('abc123')));
+      expect(redacted, contains('ApiKey=<redacted>&x=1'));
+    });
+
+    test('handles api_key spellings and several URLs', () {
+      final redacted = redactSecrets(
+        'a?api_key=one b&X-Emby-Token=two c?token=three',
+      );
+      expect(redacted, isNot(contains('one')));
+      expect(redacted, isNot(contains('two')));
+      expect(redacted, isNot(contains('three')));
+    });
+
+    test('leaves text without tokens alone', () {
+      expect(redactSecrets('HTTP 404'), 'HTTP 404');
+      expect(redactSecrets(null), 'null');
     });
   });
 

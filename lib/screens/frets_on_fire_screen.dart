@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:io' show Platform;
-import 'dart:math' show Random, max, pow;
+import 'dart:io' show File, Platform;
+import 'dart:math' show Random, max, min, pow;
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
@@ -49,6 +49,18 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   bool _awaitingFirstPosition = false;
   bool _starting = false;
 
+  /// The song finished. The game runs on for the last notes' late window
+  /// (until [_endAtMs]) on its own clock: the player's position after
+  /// completion is meaningless.
+  bool _audioCompleted = false;
+  int _endAtMs = 0;
+
+  /// Track being analysed (for its progress indicator).
+  String? _analysisTrackId;
+
+  /// Main music player's playing state while a game runs.
+  StreamSubscription<bool>? _mainPlayingSubscription;
+
   // Gameplay
   int _score = 0;
   int _combo = 0;
@@ -66,13 +78,19 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   bool _lastRunPerfect = false;
   bool _isNewHighScore = false;
 
-  // Active bonuses (expiry in song milliseconds, so pausing doesn't eat it)
-  BonusType? _activeBonus;
-  int? _bonusExpiryMs;
+  /// The Lightning cheat (bolt button / F key) was used this run: its score
+  /// and multiplier aren't recorded as bests and it can't unlock anything.
+  bool _usedCheat = false;
+
+  // Active bonuses. Each timed bonus has its own expiry (in song
+  // milliseconds, so pausing doesn't eat it).
   int _shieldCharges = 0;
   int? _lightningLane; // Which lane is being auto-hit
+  int? _lightningExpiryMs;
   bool _doublePointsActive = false;
+  int? _doublePointsExpiryMs;
   bool _noteMagnetActive = false;
+  int? _noteMagnetExpiryMs;
   int _bonusesCollected = 0;
 
   // Hit feedback
@@ -88,8 +106,23 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   Duration _lastTickElapsed = Duration.zero;
   double _fireSpawnCarry = 0;
 
-  /// Bumped whenever the highway needs repainting.
-  int _repaintToken = 0;
+  /// Song time of the last FFT shadow-player sync.
+  int _lastFftSyncMs = 0;
+
+  /// Everything the highway painter draws, updated in place each frame.
+  late final _HighwayModel _highway = _HighwayModel(
+    lanePressed: _lanePressed,
+    laneHitTime: _laneHitTime,
+    spectrumBands: _smoothBands,
+    hitParticles: _hitParticles,
+    fireParticles: _fireParticles,
+  );
+
+  /// Repaints the highway without rebuilding any widget.
+  final _Repaint _highwayRepaint = _Repaint();
+
+  /// HUD values last built (see [_refreshHud]).
+  int? _hudSignature;
 
   // Streak feedback animations
   late AnimationController _multiplierPulseController;
@@ -115,7 +148,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   // Particle effects
   final List<_Particle> _hitParticles = [];
   final List<_Particle> _fireParticles = [];
-  Offset _shakeOffset = Offset.zero;
+  Offset _shakeOffset = Offset.zero; // applied by the painter
   DateTime? _shakeStartTime;
   double _shakeIntensity = 0;
 
@@ -193,15 +226,17 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       CurvedAnimation(parent: _milestoneFlashController, curve: Curves.easeOut),
     );
     _milestoneFlashController.addStatusListener((status) {
-      if (status == AnimationStatus.completed) {
+      if (status == AnimationStatus.completed && mounted) {
         setState(() => _milestoneText = null);
       }
     });
 
     _positionSubscription = _gamePlayer.onPositionChanged.listen(
       (pos) {
-        // Update position without setState — the game loop in _onTick()
-        // already calls setState every frame during gameplay
+        // Read by the game loop in _onTick(), which repaints every frame.
+        // After completion the player reports its rewound position; the
+        // game clock carries on by itself then.
+        if (_audioCompleted) return;
         _position = pos;
         _awaitingFirstPosition = false;
       },
@@ -211,11 +246,25 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     _completeSubscription = _gamePlayer.onPlayerComplete.listen(
       (_) {
         if (mounted && _gameState == GameState.playing) {
-          _endGame();
+          _onAudioComplete();
         }
       },
       onError: (e) => debugPrint('Game complete stream error: $e'),
     );
+  }
+
+  /// The song ended: keep judging until the last notes' late window has
+  /// passed (a slightly late tap on the final note still counts), then end.
+  void _onAudioComplete() {
+    if (_audioCompleted || _chart == null) return;
+    _audioCompleted = true;
+    _awaitingFirstPosition = false;
+    final nowMs = _position.inMilliseconds;
+    final notes = _chart!.notes;
+    final lastNoteMs = notes.isEmpty ? 0 : notes.last.timestampMs;
+    // If the audio stopped well before the chart's end (a failed or short
+    // file), don't keep playing a silent chart: at most one more second.
+    _endAtMs = min(max(nowMs, lastNoteMs), nowMs + 1000) + _effectiveHitWindow;
   }
 
   @override
@@ -236,13 +285,20 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // A generation that hasn't started analysing is no longer wanted.
+    final analysing = _analysisTrackId;
+    if (_gameState == GameState.analyzing && analysing != null) {
+      _chartGenerator.cancel(analysing);
+    }
     _stopFFTCapture();
     _positionSubscription?.cancel();
     _completeSubscription?.cancel();
+    _mainPlayingSubscription?.cancel();
     _ticker.dispose();
     _multiplierPulseController.dispose();
     _milestoneFlashController.dispose();
     _gamePlayer.dispose();
+    _highwayRepaint.dispose();
     _focusNode.dispose();
     super.dispose();
   }
@@ -260,6 +316,11 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     _lastTickElapsed = elapsed;
     final frameScale = dt / 0.016; // 1.0 at 60fps
 
+    // After the song ends, the game clock runs on by itself (see
+    // _onAudioComplete).
+    if (_audioCompleted) {
+      _position += Duration(microseconds: (dt * 1e6).round());
+    }
     final currentMs = _position.inMilliseconds;
 
     // Update FFT smooth bands with asymmetric smoothing (fast attack, slow decay)
@@ -286,6 +347,19 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       final notes = _chart!.notes;
       for (final i in _judge!.expire(currentMs, _effectiveHitWindow)) {
         if (!notes[i].isBonus) _missNote();
+      }
+
+      if (_audioCompleted && currentMs >= _endAtMs) {
+        _endGame();
+        return;
+      }
+
+      // Keep the FFT shadow player (spectrum lanes) on the game track's
+      // position; it otherwise runs on its own clock.
+      if (_fftCaptureStarted && !_audioCompleted &&
+          (currentMs - _lastFftSyncMs).abs() >= 1000) {
+        _lastFftSyncMs = currentMs;
+        IOSFFTService.instance.syncPosition(currentMs / 1000.0);
       }
     }
 
@@ -346,17 +420,70 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       }
     }
 
-    _repaintToken++;
+    // Repaint the highway every frame; rebuild widgets only when the HUD
+    // shows something new.
+    _repaintHighway();
+    _refreshHud();
+  }
+
+  /// Copy the per-frame state into the painter's model and repaint it.
+  void _repaintHighway() {
+    final chart = _chart;
+    final judge = _judge;
+    if (chart == null || judge == null) return;
+    _highway
+      ..chart = chart
+      ..judge = judge
+      ..currentTimeMs = _position.inMilliseconds
+      ..leadTimeMs = _noteLeadTime
+      ..lateWindowMs = _effectiveHitWindow
+      ..showStreakFire = _showStreakFire
+      ..combo = _combo
+      ..lightningLane = _lightningLane
+      ..hitFeedbackText = _hitFeedbackText
+      ..hitFeedbackColor = _hitFeedbackColor
+      ..hitFeedbackTime = _hitFeedbackTime
+      ..hitFeedbackLane = _hitFeedbackLane
+      ..shakeOffset = _shakeOffset;
+    _highwayRepaint.repaint();
+  }
+
+  /// Seconds left on a timed bonus, in tenths (the HUD countdown's step).
+  int _bonusTenthsLeft(int? expiryMs) => expiryMs == null
+      ? 0
+      : ((expiryMs - _position.inMilliseconds) / 100).ceil().clamp(0, 990);
+
+  /// Rebuild the HUD only when a value it shows has changed.
+  void _refreshHud() {
+    final signature = Object.hash(
+      _score,
+      _combo,
+      _multiplier,
+      _showStreakFire,
+      _lightningLane,
+      _milestoneText,
+      _shieldCharges,
+      _bonusTenthsLeft(_lightningExpiryMs),
+      _bonusTenthsLeft(_doublePointsExpiryMs),
+      _bonusTenthsLeft(_noteMagnetExpiryMs),
+    );
+    if (signature == _hudSignature) return;
+    _hudSignature = signature;
     if (mounted) setState(() {});
   }
 
   void _checkBonusExpiry(int currentMs) {
-    if (_bonusExpiryMs != null && currentMs >= _bonusExpiryMs!) {
-      _activeBonus = null;
-      _bonusExpiryMs = null;
+    if (_lightningExpiryMs != null && currentMs >= _lightningExpiryMs!) {
       _lightningLane = null;
+      _lightningExpiryMs = null;
+    }
+    if (_doublePointsExpiryMs != null && currentMs >= _doublePointsExpiryMs!) {
       _doublePointsActive = false;
+      _doublePointsExpiryMs = null;
+    }
+    if (_noteMagnetExpiryMs != null && currentMs >= _noteMagnetExpiryMs!) {
       _noteMagnetActive = false;
+      _noteMagnetExpiryMs = null;
     }
   }
 
@@ -373,7 +500,8 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   }
 
   void _missNote() {
-    // Shield protects combo from misses
+    // The note is missed either way; a shield only protects the combo.
+    _missedNotes++;
     if (_shieldCharges > 0) {
       _shieldCharges--;
       // Show shield absorbed feedback
@@ -381,7 +509,6 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       return;
     }
 
-    _missedNotes++;
     _combo = 0;
     _multiplier = 1;
     _showStreakFire = false;
@@ -472,8 +599,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       case BonusType.lightningLane:
         // Pick a random lane to auto-hit
         _lightningLane = _random.nextInt(5);
-        _activeBonus = bonusType;
-        _bonusExpiryMs = _position.inMilliseconds + 5000;
+        _lightningExpiryMs = _position.inMilliseconds + 5000;
         _triggerMilestone('LIGHTNING!');
         break;
 
@@ -484,8 +610,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
       case BonusType.doublePoints:
         _doublePointsActive = true;
-        _activeBonus = bonusType;
-        _bonusExpiryMs = _position.inMilliseconds + 5000;
+        _doublePointsExpiryMs = _position.inMilliseconds + 5000;
         _triggerMilestone('2X POINTS!');
         break;
 
@@ -493,6 +618,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
         _multiplier = 4;
         _maxMultiplier = 4;
         _combo = max(_combo, 30); // Ensure combo supports 4x
+        _maxCombo = max(_maxCombo, _combo);
         _showStreakFire = true;
         if (!_multiplierPulseController.isAnimating) {
           _multiplierPulseController.repeat(reverse: true);
@@ -502,8 +628,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
       case BonusType.noteMagnet:
         _noteMagnetActive = true;
-        _activeBonus = bonusType;
-        _bonusExpiryMs = _position.inMilliseconds + 3000;
+        _noteMagnetExpiryMs = _position.inMilliseconds + 3000;
         _triggerMilestone('MAGNET!');
         break;
     }
@@ -526,13 +651,11 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     if (lane < 0 || lane >= 5) return; // Validate lane index
 
     _lanePressed[lane] = true;
-    _repaintToken++;
+    _repaintHighway();
     Future.delayed(const Duration(milliseconds: 100), () {
       if (mounted) {
-        setState(() {
-          _lanePressed[lane] = false;
-          _repaintToken++;
-        });
+        _lanePressed[lane] = false;
+        _repaintHighway();
       }
     });
 
@@ -543,7 +666,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     final effectiveHitWindow = _effectiveHitWindow;
     final effectivePerfectWindow = _noteMagnetActive ? (_hitWindow * 0.8).round() : _perfectWindow;
 
-    // Earliest unjudged note in this lane within the hit window. Notes in
+    // Closest unjudged note in this lane within the hit window. Notes in
     // other lanes (e.g. chord partners) are left for their own taps.
     final index = _judge!.findHittable(lane, currentMs, effectiveHitWindow);
     if (index < 0) return;
@@ -559,7 +682,8 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       final diff = (note.timestampMs - currentMs).abs();
       _hitNote(lane, diff <= effectivePerfectWindow);
     }
-    setState(() {});
+    _repaintHighway();
+    _refreshHud();
   }
 
   Future<void> _selectTrack() async {
@@ -629,6 +753,19 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     String artistName,
     int durationMs,
   ) async {
+    _analysisTrackId = trackId;
+
+    // A cached chart is no use if the audio file is gone (e.g. a download
+    // record whose file was removed).
+    if (!await File(path).exists()) {
+      if (!mounted) return;
+      setState(() => _gameState = GameState.selectTrack);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Audio file not found. Try downloading the track again.')),
+      );
+      return;
+    }
+
     // Check cache first (memory, then disk)
     final cached = await _chartCache.loadChart(trackId);
     if (!mounted) return;
@@ -655,19 +792,20 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     }
 
     // Generate new chart
-    final chart = await _chartGenerator.generateChart(
+    final result = await _chartGenerator.generateChart(
       audioPath: path,
       trackId: trackId,
       trackName: trackName,
       artistName: artistName,
       durationMs: durationMs,
     );
+    final chart = result.chart;
 
     // Save even if the user left the screen, so the work isn't wasted
     if (chart != null) {
       await _chartCache.saveGeneratedChart(chart);
     }
-    if (!mounted) return;
+    if (!mounted || _analysisTrackId != trackId) return;
 
     if (chart != null) {
       setState(() {
@@ -676,7 +814,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       });
     } else {
       setState(() => _gameState = GameState.selectTrack);
-      final reason = _chartGenerator.lastFailureMessage;
+      final reason = result.failure;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(reason != null
@@ -705,14 +843,19 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       _judge = ChartJudge(_chart!.notes);
       _lastRunPerfect = false;
       _isNewHighScore = false;
+      _usedCheat = false;
+      _audioCompleted = false;
+      _lastFftSyncMs = 0;
+      _hudSignature = null;
 
       // Reset bonus state
-      _activeBonus = null;
-      _bonusExpiryMs = null;
       _shieldCharges = 0;
       _lightningLane = null;
+      _lightningExpiryMs = null;
       _doublePointsActive = false;
+      _doublePointsExpiryMs = null;
       _noteMagnetActive = false;
+      _noteMagnetExpiryMs = null;
       _bonusesCollected = 0;
       _hitFeedbackText = null;
 
@@ -744,6 +887,12 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       if (mainPlayer != null && mainPlayer.isPlaying) {
         await mainPlayer.pause();
       }
+      // If the music is started again (lock screen, AirPods, CarPlay), pause
+      // the game rather than play both at once.
+      await _mainPlayingSubscription?.cancel();
+      _mainPlayingSubscription = mainPlayer?.playingStream.listen((playing) {
+        if (playing && mounted && _gameState == GameState.playing) _pauseGame();
+      });
 
       // Start FFT capture for spectrum visualization
       await _startFFTCapture();
@@ -757,10 +906,21 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       await _gamePlayer.play(DeviceFileSource(_selectedTrackPath!));
       if (!mounted) return;
 
+      _repaintHighway();
       setState(() => _gameState = GameState.playing);
       _lastTickElapsed = Duration.zero;
       if (!_ticker.isActive) _ticker.start();
       _focusNode.requestFocus();
+    } catch (e) {
+      debugPrint('Frets on Fire: failed to start playback: $e');
+      await _mainPlayingSubscription?.cancel();
+      _mainPlayingSubscription = null;
+      _stopFFTCapture();
+      if (!mounted) return;
+      _backToSelect();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't play this track")),
+      );
     } finally {
       _starting = false;
     }
@@ -803,16 +963,29 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
   void _pauseGame() {
     if (_gameState != GameState.playing) return;
-    _gamePlayer.pause();
+    // A finished song must not be paused/resumed (resume would restart it).
+    if (!_audioCompleted) _gamePlayer.pause();
     _ticker.stop();
+    // Nothing shows the pulse while paused; don't keep ticking it.
+    _multiplierPulseController.stop();
+    // Pause the spectrum's shadow player with the game (it would run ahead).
+    if (_fftCaptureStarted) IOSFFTService.instance.stopCapture();
     setState(() => _gameState = GameState.paused);
   }
 
   void _resumeGame() {
     if (_gameState != GameState.paused) return;
-    _gamePlayer.resume();
+    if (!_audioCompleted) _gamePlayer.resume();
     _lastTickElapsed = Duration.zero;
     if (!_ticker.isActive) _ticker.start();
+    if (_showStreakFire) _multiplierPulseController.repeat(reverse: true);
+    if (_fftCaptureStarted && !_audioCompleted) {
+      IOSFFTService.instance.startCapture().then((_) {
+        if (!mounted || _gameState != GameState.playing) return;
+        _lastFftSyncMs = _position.inMilliseconds;
+        IOSFFTService.instance.syncPosition(_position.inMilliseconds / 1000.0);
+      });
+    }
     setState(() => _gameState = GameState.playing);
     _focusNode.requestFocus();
   }
@@ -824,14 +997,22 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     _ticker.stop();
     _gamePlayer.stop();
     _stopFFTCapture();
+    _mainPlayingSubscription?.cancel();
+    _mainPlayingSubscription = null;
+    // The results screen doesn't show the pulse; stop it ticking.
+    _multiplierPulseController.stop();
+    _multiplierPulseController.reset();
 
     // Unjudged notes count as missed (golden bonus notes are optional)
     _missedNotes += _judge?.remainingScorable ?? 0;
 
+    // A run that used the Lightning cheat counts as a play, but can't be
+    // perfect, set a best or unlock the legendary track.
     final scorableNotes = chart.scorableNoteCount;
-    _lastRunPerfect = _chartCache.isPerfectScore(
-        _perfectHits, _goodHits, _missedNotes, scorableNotes);
-    _isNewHighScore = _score > chart.highScore;
+    _lastRunPerfect = !_usedCheat &&
+        _chartCache.isPerfectScore(
+            _perfectHits, _goodHits, _missedNotes, scorableNotes);
+    _isNewHighScore = !_usedCheat && _score > chart.highScore;
 
     // Check for PERFECT score - unlock legendary track!
     if (_lastRunPerfect && !_chartCache.isLegendaryUnlocked) {
@@ -847,6 +1028,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       _score,
       _maxMultiplier,
       notesHit: _perfectHits + _goodHits,
+      recordBest: !_usedCheat,
     );
     if (mounted && updated != null && _chart?.trackId == updated.trackId) {
       setState(() => _chart = updated);
@@ -879,6 +1061,8 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
   void _backToSelect() {
     _gamePlayer.stop();
+    _mainPlayingSubscription?.cancel();
+    _mainPlayingSubscription = null;
     _position = Duration.zero;
     setState(() {
       _gameState = GameState.selectTrack;
@@ -892,31 +1076,39 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: _gameState == GameState.playing
-          ? null
-          : AppBar(
-              backgroundColor: Colors.transparent,
-              title: Text(
-                'FRETS ON FIRE',
-                style: GoogleFonts.raleway(
-                  color: theme.colorScheme.primary,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 3,
-                  fontSize: 20,
+    // No back navigation (including the iOS edge swipe, which starts over
+    // lane 0) mid-song: an attempt pauses the game instead.
+    return PopScope(
+      canPop: _gameState != GameState.playing,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _pauseGame();
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        appBar: _gameState == GameState.playing
+            ? null
+            : AppBar(
+                backgroundColor: Colors.transparent,
+                title: Text(
+                  'FRETS ON FIRE',
+                  style: GoogleFonts.raleway(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 3,
+                    fontSize: 20,
+                  ),
+                ),
+                leading: IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => Navigator.pop(context),
                 ),
               ),
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () => Navigator.pop(context),
-              ),
-            ),
-      body: KeyboardListener(
-        focusNode: _focusNode,
-        autofocus: true,
-        onKeyEvent: _handleKeyEvent,
-        child: _buildBody(theme),
+        body: KeyboardListener(
+          focusNode: _focusNode,
+          autofocus: true,
+          onKeyEvent: _handleKeyEvent,
+          child: _buildBody(theme),
+        ),
       ),
     );
   }
@@ -960,13 +1152,17 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   void _activateFireMode() {
     if (_gameState != GameState.playing) return;
 
-    // Activate lightning lane - auto-hits all notes in one random lane
+    // The run no longer counts for bests or unlocks (see _endGame)
+    _usedCheat = true;
+
+    // Activate lightning lane - auto-hits all notes in one random lane.
+    // Only the lightning timer is set; other active bonuses keep their own.
     _lightningLane = _random.nextInt(5);
-    _activeBonus = BonusType.lightningLane;
-    _bonusExpiryMs = _position.inMilliseconds + 5000;
+    _lightningExpiryMs = _position.inMilliseconds + 5000;
 
     // Also boost to fire mode
     if (_combo < 10) _combo = 10;
+    _maxCombo = max(_maxCombo, _combo);
     if (_multiplier < 2) _multiplier = 2;
     _maxMultiplier = max(_maxMultiplier, _multiplier);
     _showStreakFire = true;
@@ -979,8 +1175,8 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     // Show the message
     _triggerMilestone('LIGHTNING!');
 
-    _repaintToken++;
-    setState(() {});
+    _repaintHighway();
+    _refreshHud();
   }
 
   Widget _buildBody(ThemeData theme) {
@@ -1062,15 +1258,16 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
             style: theme.textTheme.titleLarge?.copyWith(color: Colors.white),
           ),
           const SizedBox(height: 16),
-          ValueListenableBuilder<double>(
-            valueListenable: _chartGenerator.progress,
-            builder: (context, progress, _) {
-              return Text(
-                '${(progress * 100).toInt()}%',
-                style: theme.textTheme.bodyLarge?.copyWith(color: Colors.white54),
-              );
-            },
-          ),
+          if (_analysisTrackId != null)
+            ValueListenableBuilder<double>(
+              valueListenable: _chartGenerator.progressFor(_analysisTrackId!),
+              builder: (context, progress, _) {
+                return Text(
+                  '${(progress * 100).toInt()}%',
+                  style: theme.textTheme.bodyLarge?.copyWith(color: Colors.white54),
+                );
+              },
+            ),
         ],
       ),
     );
@@ -1166,30 +1363,17 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
     return Stack(
       children: [
-        // Note highway with screen shake
-        Transform.translate(
-          offset: _shakeOffset,
+        // Note highway (repaints itself every frame; screen shake is applied
+        // by its painter). Kept clear of the notch in landscape.
+        SafeArea(
+          top: false,
+          bottom: false,
           child: _NoteHighway(
-          chart: _chart!,
-          judge: _judge!,
-          repaintToken: _repaintToken,
-          currentTimeMs: _position.inMilliseconds,
-          leadTimeMs: _noteLeadTime,
-          lanePressed: _lanePressed,
-          laneHitTime: _laneHitTime,
-          primaryColor: theme.colorScheme.primary,
-          onLaneTap: _onLaneTap,
-          showStreakFire: _showStreakFire,
-          combo: _combo,
-          lightningLane: _lightningLane,
-          hitFeedbackText: _hitFeedbackText,
-          hitFeedbackColor: _hitFeedbackColor,
-          hitFeedbackTime: _hitFeedbackTime,
-          hitFeedbackLane: _hitFeedbackLane,
-          spectrumBands: _smoothBands,
-          hitParticles: _hitParticles,
-          fireParticles: _fireParticles,
-        ),
+            model: _highway,
+            repaint: _highwayRepaint,
+            primaryColor: theme.colorScheme.primary,
+            onLaneTap: _onLaneTap,
+          ),
         ),
         // Score display with Nautune font
         Positioned(
@@ -1349,7 +1533,10 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
             },
           ),
         // Active bonus indicator
-        if (_activeBonus != null || _shieldCharges > 0)
+        if (_lightningLane != null ||
+            _doublePointsActive ||
+            _noteMagnetActive ||
+            _shieldCharges > 0)
           Positioned(
             top: MediaQuery.of(context).padding.top + 60,
             left: 16,
@@ -1369,9 +1556,9 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   }
 
   Widget _buildActiveBonusIndicator(Color fireOrange, Color fireYellow, Color lightningBlue) {
-    final remaining = _bonusExpiryMs != null
-        ? ((_bonusExpiryMs! - _position.inMilliseconds) / 1000.0).clamp(0.0, 99.0)
-        : 0.0;
+    // Same tenths the HUD refresh tracks (see _refreshHud)
+    String countdown(int? expiryMs) =>
+        '${(_bonusTenthsLeft(expiryMs) / 10).toStringAsFixed(1)}s';
 
     Widget buildBonusChip(String label, IconData icon, Color color, {String? countdown}) {
       return Container(
@@ -1399,15 +1586,15 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (_activeBonus == BonusType.lightningLane)
+        if (_lightningLane != null)
           buildBonusChip('LIGHTNING', Icons.bolt, lightningBlue,
-              countdown: '${remaining.toStringAsFixed(1)}s'),
-        if (_activeBonus == BonusType.doublePoints)
+              countdown: countdown(_lightningExpiryMs)),
+        if (_doublePointsActive)
           buildBonusChip('2X POINTS', Icons.double_arrow, fireYellow,
-              countdown: '${remaining.toStringAsFixed(1)}s'),
-        if (_activeBonus == BonusType.noteMagnet)
+              countdown: countdown(_doublePointsExpiryMs)),
+        if (_noteMagnetActive)
           buildBonusChip('MAGNET', Icons.track_changes, Colors.purple,
-              countdown: '${remaining.toStringAsFixed(1)}s'),
+              countdown: countdown(_noteMagnetExpiryMs)),
         if (_shieldCharges > 0)
           buildBonusChip('SHIELD x$_shieldCharges', Icons.shield, Colors.cyan),
       ],
@@ -1644,6 +1831,14 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
                   ],
                 ],
               ),
+              if (_usedCheat) ...[
+                const SizedBox(height: 16),
+                Text(
+                  'Lightning cheat used: best score not saved',
+                  style: GoogleFonts.raleway(color: Colors.white54, fontSize: 12),
+                  textAlign: TextAlign.center,
+                ),
+              ],
               const SizedBox(height: 32),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -1750,48 +1945,58 @@ class _StatColumn extends StatelessWidget {
   }
 }
 
-/// Note highway widget - renders falling notes and hit zones
-class _NoteHighway extends StatelessWidget {
-  final ChartData chart;
-  final ChartJudge judge;
-  final int repaintToken;
-  final int currentTimeMs;
-  final int leadTimeMs;
+/// Notifies the highway painter to repaint (one notification per frame).
+class _Repaint extends ChangeNotifier {
+  void repaint() => notifyListeners();
+}
+
+/// Game state the highway painter draws. The screen updates it in place and
+/// calls [_Repaint.repaint], so a frame repaints without rebuilding widgets.
+class _HighwayModel {
+  _HighwayModel({
+    required this.lanePressed,
+    required this.laneHitTime,
+    required this.spectrumBands,
+    required this.hitParticles,
+    required this.fireParticles,
+  });
+
+  ChartData? chart;
+  ChartJudge? judge;
+  int currentTimeMs = 0;
+  int leadTimeMs = 2000;
+
+  /// Late hit window: notes stay drawn while they can still be hit.
+  int lateWindowMs = 100;
+  bool showStreakFire = false;
+  int combo = 0;
+  int? lightningLane;
+  String? hitFeedbackText;
+  Color? hitFeedbackColor;
+  DateTime? hitFeedbackTime;
+  int? hitFeedbackLane;
+  Offset shakeOffset = Offset.zero;
+
+  // Shared with (and mutated by) the screen
   final List<bool> lanePressed;
   final List<DateTime?> laneHitTime;
-  final Color primaryColor;
-  final Function(int) onLaneTap;
-  final bool showStreakFire;
-  final int combo;
-  final int? lightningLane;
-  final String? hitFeedbackText;
-  final Color? hitFeedbackColor;
-  final DateTime? hitFeedbackTime;
-  final int? hitFeedbackLane;
   final List<double> spectrumBands;
   final List<_Particle> hitParticles;
   final List<_Particle> fireParticles;
+}
+
+/// Note highway widget - renders falling notes and hit zones
+class _NoteHighway extends StatelessWidget {
+  final _HighwayModel model;
+  final Listenable repaint;
+  final Color primaryColor;
+  final void Function(int) onLaneTap;
 
   const _NoteHighway({
-    required this.chart,
-    required this.judge,
-    required this.repaintToken,
-    required this.currentTimeMs,
-    required this.leadTimeMs,
-    required this.lanePressed,
-    required this.laneHitTime,
+    required this.model,
+    required this.repaint,
     required this.primaryColor,
     required this.onLaneTap,
-    this.showStreakFire = false,
-    this.combo = 0,
-    this.lightningLane,
-    this.hitFeedbackText,
-    this.hitFeedbackColor,
-    this.hitFeedbackTime,
-    this.hitFeedbackLane,
-    this.spectrumBands = const [0.0, 0.0, 0.0, 0.0, 0.0],
-    this.hitParticles = const [],
-    this.fireParticles = const [],
   });
 
   @override
@@ -1799,49 +2004,21 @@ class _NoteHighway extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final laneWidth = constraints.maxWidth / 5; // 5 lanes
-        // Scale hit line position for portrait mode (more room at bottom on narrow screens)
-        final isPortrait = constraints.maxHeight > constraints.maxWidth;
-        final hitLineOffset = isPortrait ? 100.0 : 120.0;
-        final hitLineY = constraints.maxHeight - hitLineOffset;
 
-        // Visible notes: scan from the first unjudged note (everything
-        // before it is judged) and hide notes already hit or missed.
-        final visibleNotes = <ChartNote>[];
-        final notes = chart.notes;
-        for (int i = judge.cursor; i < notes.length; i++) {
-          final note = notes[i];
-          if (note.timestampMs > currentTimeMs + leadTimeMs) break;
-          if (note.timestampMs >= currentTimeMs - 100 && !judge.isJudged(i)) {
-            visibleNotes.add(note);
-          }
-        }
-
-        return GestureDetector(
-          onTapDown: (details) {
-            final lane = (details.localPosition.dx / laneWidth).floor().clamp(0, 4);
+        // Raw pointer downs, not tap gestures: every finger counts at once
+        // (chords, two thumbs) and fires on contact, with no gesture-arena
+        // delay.
+        return Listener(
+          behavior: HitTestBehavior.opaque,
+          onPointerDown: (event) {
+            final lane = (event.localPosition.dx / laneWidth).floor().clamp(0, 4);
             onLaneTap(lane);
           },
           child: CustomPaint(
             painter: _NoteHighwayPainter(
-              repaintToken: repaintToken,
-              notes: visibleNotes,
-              currentTimeMs: currentTimeMs,
-              leadTimeMs: leadTimeMs,
-              hitLineY: hitLineY,
-              laneWidth: laneWidth,
-              lanePressed: lanePressed,
-              laneHitTime: laneHitTime,
+              model: model,
               primaryColor: primaryColor,
-              showStreakFire: showStreakFire,
-              combo: combo,
-              lightningLane: lightningLane,
-              hitFeedbackText: hitFeedbackText,
-              hitFeedbackColor: hitFeedbackColor,
-              hitFeedbackTime: hitFeedbackTime,
-              hitFeedbackLane: hitFeedbackLane,
-              spectrumBands: spectrumBands,
-              hitParticles: hitParticles,
-              fireParticles: fireParticles,
+              repaint: repaint,
             ),
             size: Size(constraints.maxWidth, constraints.maxHeight),
           ),
@@ -1852,64 +2029,111 @@ class _NoteHighway extends StatelessWidget {
 }
 
 class _NoteHighwayPainter extends CustomPainter {
-  /// Changes whenever game state that affects the picture changes.
-  final int repaintToken;
-  final List<ChartNote> notes;
-  final int currentTimeMs;
-  final int leadTimeMs;
-  final double hitLineY;
-  final double laneWidth;
-  final List<bool> lanePressed;
-  final List<DateTime?> laneHitTime;
-  final Color primaryColor;
-  final bool showStreakFire;
-  final int combo;
-  final int? lightningLane;
-  final String? hitFeedbackText;
-  final Color? hitFeedbackColor;
-  final DateTime? hitFeedbackTime;
-  final int? hitFeedbackLane;
-  final List<double> spectrumBands;
-  final List<_Particle> hitParticles;
-  final List<_Particle> fireParticles;
-
   _NoteHighwayPainter({
-    required this.repaintToken,
-    required this.notes,
-    required this.currentTimeMs,
-    required this.leadTimeMs,
-    required this.hitLineY,
-    required this.laneWidth,
-    required this.lanePressed,
-    required this.laneHitTime,
+    required this.model,
     required this.primaryColor,
-    this.showStreakFire = false,
-    this.combo = 0,
-    this.lightningLane,
-    this.hitFeedbackText,
-    this.hitFeedbackColor,
-    this.hitFeedbackTime,
-    this.hitFeedbackLane,
-    this.spectrumBands = const [0.0, 0.0, 0.0, 0.0, 0.0],
-    this.hitParticles = const [],
-    this.fireParticles = const [],
-  });
+    required Listenable repaint,
+  }) : super(repaint: repaint);
+
+  final _HighwayModel model;
+  final Color primaryColor;
+
+  // Per-frame values, read from the model
+  int get currentTimeMs => model.currentTimeMs;
+  int get leadTimeMs => model.leadTimeMs;
+  List<bool> get lanePressed => model.lanePressed;
+  List<DateTime?> get laneHitTime => model.laneHitTime;
+  bool get showStreakFire => model.showStreakFire;
+  int get combo => model.combo;
+  int? get lightningLane => model.lightningLane;
+  String? get hitFeedbackText => model.hitFeedbackText;
+  Color? get hitFeedbackColor => model.hitFeedbackColor;
+  DateTime? get hitFeedbackTime => model.hitFeedbackTime;
+  int? get hitFeedbackLane => model.hitFeedbackLane;
+  List<double> get spectrumBands => model.spectrumBands;
+  List<_Particle> get hitParticles => model.hitParticles;
+  List<_Particle> get fireParticles => model.fireParticles;
+
+  // Layout, set at the start of each paint
+  double laneWidth = 0;
+  double hitLineY = 0;
+
+  static final Paint _lanePaint = Paint()
+    ..color = Colors.white12
+    ..strokeWidth = 1;
+
+  // Vignette shader, rebuilt only when its size or strength changes
+  static Paint? _vignettePaint;
+  static Size? _vignetteSize;
+  static double? _vignetteAlpha;
+
+  /// Laid-out hit feedback labels by text, colour, size and fade step (the
+  /// fade is quantised to 20 steps so a few dozen layouts cover every frame).
+  static final Map<(String, int, double, int), TextPainter> _feedbackCache = {};
+
+  static TextPainter _feedbackPainter(String text, Color color, double fontSize, double opacity) {
+    final step = (opacity * 20).round().clamp(0, 20);
+    final key = (text, color.toARGB32(), fontSize, step);
+    final cached = _feedbackCache[key];
+    if (cached != null) return cached;
+    if (_feedbackCache.length > 200) _feedbackCache.clear();
+    final alpha = step / 20;
+    return _feedbackCache[key] = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color.withValues(alpha: alpha),
+          fontSize: fontSize,
+          fontWeight: FontWeight.bold,
+          shadows: [
+            Shadow(
+              color: Colors.black.withValues(alpha: alpha * 0.5),
+              blurRadius: 4,
+            ),
+          ],
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
+    laneWidth = size.width / 5; // 5 lanes
+    // Scale hit line position for portrait mode (more room at bottom on narrow screens)
+    final hitLineOffset = size.height > size.width ? 100.0 : 120.0;
+    hitLineY = size.height - hitLineOffset;
+
+    // Visible notes: unjudged, from the late hit window to the lead time
+    final chart = model.chart;
+    final judge = model.judge;
+    final notes = <ChartNote>[
+      if (chart != null && judge != null)
+        for (final i in judge.visible(currentTimeMs, leadTimeMs, model.lateWindowMs))
+          chart.notes[i],
+    ];
+
+    // Screen shake
+    canvas.save();
+    canvas.translate(model.shakeOffset.dx, model.shakeOffset.dy);
+
     // Combo intensity vignette (drawn first, behind everything)
     if (combo >= 10) {
       final vignetteAlpha = ((combo - 10) / 40.0).clamp(0.0, 0.3);
       final vignetteRect = Rect.fromLTWH(0, 0, size.width, size.height);
-      final vignettePaint = Paint()
-        ..shader = RadialGradient(
-          colors: [
-            Colors.transparent,
-            Colors.black.withValues(alpha: vignetteAlpha),
-          ],
-          stops: const [0.5, 1.0],
-        ).createShader(vignetteRect);
-      canvas.drawRect(vignetteRect, vignettePaint);
+      if (_vignettePaint == null || _vignetteSize != size || _vignetteAlpha != vignetteAlpha) {
+        _vignetteSize = size;
+        _vignetteAlpha = vignetteAlpha;
+        _vignettePaint = Paint()
+          ..shader = RadialGradient(
+            colors: [
+              Colors.transparent,
+              Colors.black.withValues(alpha: vignetteAlpha),
+            ],
+            stops: const [0.5, 1.0],
+          ).createShader(vignetteRect);
+      }
+      canvas.drawRect(vignetteRect, _vignettePaint!);
     }
 
     final laneColors = _laneColorsFor(primaryColor);
@@ -1928,15 +2152,11 @@ class _NoteHighwayPainter extends CustomPainter {
     final flashRadius = 20.0 * scaleFactor;
 
     // Draw lane dividers
-    final lanePaint = Paint()
-      ..color = Colors.white12
-      ..strokeWidth = 1;
-
     for (int i = 1; i < 5; i++) {
       canvas.drawLine(
         Offset(i * laneWidth, 0),
         Offset(i * laneWidth, size.height),
-        lanePaint,
+        _lanePaint,
       );
     }
 
@@ -2196,7 +2416,9 @@ class _NoteHighwayPainter extends CustomPainter {
       }
     }
 
-    // Draw notes
+    // Draw notes. Only the rare golden bonus note gets a blurred glow;
+    // regular notes use plain translucent rings (a blur per note per frame
+    // is costly at 120Hz).
     final notePaint = Paint()..style = PaintingStyle.fill;
     final noteGlowPaint = Paint()
       ..maskFilter = MaskFilter.blur(BlurStyle.normal, 6 * scaleFactor);
@@ -2246,8 +2468,10 @@ class _NoteHighwayPainter extends CustomPainter {
         final color = laneColors[lane];
 
         // Glow
-        noteGlowPaint.color = color.withValues(alpha: 0.4);
-        canvas.drawCircle(Offset(noteX, noteY), noteGlowRadius, noteGlowPaint);
+        notePaint.color = color.withValues(alpha: 0.12);
+        canvas.drawCircle(Offset(noteX, noteY), noteGlowRadius * 1.2, notePaint);
+        notePaint.color = color.withValues(alpha: 0.25);
+        canvas.drawCircle(Offset(noteX, noteY), noteGlowRadius, notePaint);
 
         // Note (scales for portrait mode)
         notePaint.color = color;
@@ -2266,24 +2490,12 @@ class _NoteHighwayPainter extends CustomPainter {
         final opacity = 1.0 - (age / 400.0);
         final yOffset = age * 0.08; // Float upward
 
-        final textPainter = TextPainter(
-          text: TextSpan(
-            text: hitFeedbackText,
-            style: TextStyle(
-              color: (hitFeedbackColor ?? Colors.white).withValues(alpha: opacity),
-              fontSize: 16 * scaleFactor,
-              fontWeight: FontWeight.bold,
-              shadows: [
-                Shadow(
-                  color: Colors.black.withValues(alpha: opacity * 0.5),
-                  blurRadius: 4,
-                ),
-              ],
-            ),
-          ),
-          textDirection: TextDirection.ltr,
+        final textPainter = _feedbackPainter(
+          hitFeedbackText!,
+          hitFeedbackColor ?? Colors.white,
+          16 * scaleFactor,
+          opacity,
         );
-        textPainter.layout();
 
         final feedbackX = hitFeedbackLane! * laneWidth + laneWidth / 2 - textPainter.width / 2;
         final feedbackY = hitLineY - 50 - yOffset;
@@ -2310,6 +2522,8 @@ class _NoteHighwayPainter extends CustomPainter {
       particlePaint.color = p.color.withValues(alpha: (p.life * 0.7).clamp(0.0, 1.0));
       canvas.drawCircle(Offset(px, py), p.size * scaleFactor * p.life, particlePaint);
     }
+
+    canvas.restore(); // screen shake
   }
 
   // Lane colors derived from the theme primary, cached across frames.
@@ -2333,14 +2547,10 @@ class _NoteHighwayPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _NoteHighwayPainter old) {
-    // Particles and lane state are mutated in place, so identity checks
-    // can't detect changes; the game bumps repaintToken instead. Rebuilds for
-    // unrelated reasons (e.g. a milestone animation tick) skip the repaint.
-    return old.repaintToken != repaintToken ||
-        old.currentTimeMs != currentTimeMs ||
-        old.laneWidth != laneWidth ||
-        old.hitLineY != hitLineY ||
-        old.primaryColor != primaryColor;
+    // Game state is mutated in place and repaints come from the repaint
+    // listenable; a widget rebuild (e.g. a HUD change) repaints only if the
+    // painter's inputs changed.
+    return !identical(old.model, model) || old.primaryColor != primaryColor;
   }
 }
 

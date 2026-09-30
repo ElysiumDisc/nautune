@@ -41,6 +41,10 @@ class ListenBrainzService {
   /// Listens per `import` request when retrying the queue.
   static const int _retryBatchSize = 100;
 
+  /// Results per library search when matching recommendations: enough for
+  /// the right track to be among them without pulling thousands of items.
+  static const int _matchSearchLimit = 50;
+
   Box? _box;
   ListenBrainzConfig? _config;
   bool _initialized = false;
@@ -154,7 +158,7 @@ class ListenBrainzService {
         headers: {
           'Authorization': 'Token ${_config!.token}',
         },
-      );
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -413,6 +417,12 @@ class ListenBrainzService {
       return const ListenBrainzTokenCheck(ListenBrainzTokenStatus.invalid);
     }
 
+    // Listens queued for another account must never go to this one.
+    if (_config?.username != name && _pendingScrobbles.isNotEmpty) {
+      _pendingScrobbles.clear();
+      await _box?.delete(_pendingScrobblesKey);
+    }
+
     _config = ListenBrainzConfig(
       username: name,
       token: token,
@@ -462,6 +472,12 @@ class ListenBrainzService {
       return false;
     }
 
+    // The account this listen belongs to: if it is disconnected (or
+    // replaced) while the request is in flight, the listen is neither
+    // counted nor queued for whichever account comes next.
+    final config = _config!;
+    bool accountChanged() => !identical(_config, config);
+
     final payload = _buildListenPayload(track, listenedAt);
     final requestBody = jsonEncode({
       'listen_type': 'single',
@@ -475,13 +491,14 @@ class ListenBrainzService {
       final response = await http.post(
         Uri.parse('$_baseUrl/submit-listens'),
         headers: {
-          'Authorization': 'Token ${_config!.token}',
+          'Authorization': 'Token ${config.token}',
           'Content-Type': 'application/json',
         },
         body: requestBody,
       ).timeout(const Duration(seconds: 30));
 
       debugPrint('ListenBrainzService: Response ${response.statusCode}');
+      if (accountChanged()) return false;
 
       if (response.statusCode == 200) {
         // Verify response body indicates success
@@ -524,12 +541,12 @@ class ListenBrainzService {
       }
     } on TimeoutException {
       debugPrint('ListenBrainzService: Scrobble timeout - queuing for retry');
-      _queuePendingScrobble(payload);
+      if (!accountChanged()) _queuePendingScrobble(payload);
       return false;
     } catch (e) {
       debugPrint('ListenBrainzService: Scrobble error: $e');
       // Queue for offline retry
-      _queuePendingScrobble(payload);
+      if (!accountChanged()) _queuePendingScrobble(payload);
       return false;
     }
   }
@@ -585,18 +602,8 @@ class ListenBrainzService {
 
     final additionalInfo = <String, dynamic>{};
 
-    // Add MusicBrainz IDs if available from Jellyfin metadata
-    if (track.providerIds != null) {
-      if (track.providerIds!['MusicBrainzTrack'] != null) {
-        additionalInfo['recording_mbid'] = track.providerIds!['MusicBrainzTrack'];
-      }
-      if (track.providerIds!['MusicBrainzAlbum'] != null) {
-        additionalInfo['release_mbid'] = track.providerIds!['MusicBrainzAlbum'];
-      }
-      if (track.providerIds!['MusicBrainzArtist'] != null) {
-        additionalInfo['artist_mbids'] = [track.providerIds!['MusicBrainzArtist']];
-      }
-    }
+    // MusicBrainz IDs from Jellyfin metadata (see [musicBrainzInfo]).
+    additionalInfo.addAll(musicBrainzInfo(track.providerIds));
 
     // Add duration
     if (track.runTimeTicks != null) {
@@ -617,6 +624,53 @@ class ListenBrainzService {
     }
 
     return payload;
+  }
+
+  static final _mbidPattern = RegExp(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+  );
+
+  /// The valid MBIDs in a Jellyfin provider id value. Multi-artist files
+  /// carry several joined in one string ("id1/id2", "id1; id2").
+  @visibleForTesting
+  static List<String> parseMbids(String? raw) {
+    if (raw == null) return const [];
+    return [
+      for (final part in raw.split(RegExp(r'[/;,\s]+')))
+        if (_mbidPattern.hasMatch(part.toLowerCase())) part.toLowerCase(),
+    ];
+  }
+
+  /// A track's MusicBrainz recording id, when Jellyfin has one.
+  ///
+  /// Jellyfin's `MusicBrainzTrack` is the *release track* id (the
+  /// musicbrainz.org/track/… link, from the "MusicBrainz Release Track Id"
+  /// tag), not a recording id, so only `MusicBrainzRecording` (reported by
+  /// some servers/plugins) is used.
+  static String? recordingMbidOf(JellyfinTrack track) {
+    final ids = parseMbids(track.providerIds?['MusicBrainzRecording']);
+    return ids.isEmpty ? null : ids.first;
+  }
+
+  /// `additional_info` MBID fields for Jellyfin [providerIds]. Only valid
+  /// UUIDs are sent, each under the field it actually is (a release track
+  /// id is `track_mbid`, never `recording_mbid`).
+  @visibleForTesting
+  static Map<String, dynamic> musicBrainzInfo(Map<String, String>? providerIds) {
+    if (providerIds == null) return const {};
+    String? single(String key) {
+      final ids = parseMbids(providerIds[key]);
+      return ids.isEmpty ? null : ids.first;
+    }
+
+    final artists = parseMbids(providerIds['MusicBrainzArtist']);
+    return {
+      'recording_mbid': ?single('MusicBrainzRecording'),
+      'track_mbid': ?single('MusicBrainzTrack'),
+      'release_mbid': ?single('MusicBrainzAlbum'),
+      'release_group_mbid': ?single('MusicBrainzReleaseGroup'),
+      if (artists.isNotEmpty) 'artist_mbids': artists,
+    };
   }
 
   void _queuePendingScrobble(Map<String, dynamic> payload) {
@@ -936,6 +990,7 @@ class ListenBrainzService {
         final tracks = await jellyfin.searchTracks(
           libraryId: libraryId,
           query: rec.trackName!,
+          limit: _matchSearchLimit,
         );
 
         if (tracks.isEmpty) {
@@ -943,13 +998,13 @@ class ListenBrainzService {
         } else {
           // Log first result for debugging
           final first = tracks.first;
-          debugPrint('ListenBrainzService: "${rec.trackName}" -> ${tracks.length} results, first: "${first.name}" by ${first.artists}, MBID: ${first.providerIds?['MusicBrainzTrack']}');
+          debugPrint('ListenBrainzService: "${rec.trackName}" -> ${tracks.length} results, first: "${first.name}" by ${first.artists}, MBID: ${recordingMbidOf(first)}');
         }
 
         // Find best match - prefer MBID match, fallback to name match
         for (final track in tracks) {
           // First priority: MusicBrainz ID match (most reliable)
-          final trackMbid = track.providerIds?['MusicBrainzTrack'];
+          final trackMbid = recordingMbidOf(track);
           final mbidMatch = trackMbid != null && trackMbid == rec.recordingMbid;
 
           if (mbidMatch) {
@@ -1039,6 +1094,7 @@ class ListenBrainzService {
         List<JellyfinTrack> tracks = await jellyfin.searchTracks(
           libraryId: libraryId,
           query: rec.trackName!,
+          limit: _matchSearchLimit,
         );
 
         // If no results by track name and we have album info, try album search
@@ -1046,6 +1102,7 @@ class ListenBrainzService {
           tracks = await jellyfin.searchTracks(
             libraryId: libraryId,
             query: rec.albumName!,
+            limit: _matchSearchLimit,
           );
         }
 
@@ -1054,6 +1111,7 @@ class ListenBrainzService {
           tracks = await jellyfin.searchTracks(
             libraryId: libraryId,
             query: rec.artistName!,
+            limit: _matchSearchLimit,
           );
         }
 
@@ -1062,13 +1120,14 @@ class ListenBrainzService {
           tracks = await jellyfin.searchTracks(
             libraryId: libraryId,
             query: '${rec.artistName!} ${rec.trackName!}',
+            limit: _matchSearchLimit,
           );
         }
 
         bool matched = false;
         for (final track in tracks) {
           // MBID match
-          final trackMbid = track.providerIds?['MusicBrainzTrack'];
+          final trackMbid = recordingMbidOf(track);
           if (trackMbid != null && trackMbid == rec.recordingMbid) {
             allMatched.add(rec.withJellyfinMatch(track.id));
             matched = true;
@@ -1378,12 +1437,14 @@ class ListenBrainzService {
       List<JellyfinTrack> tracks = await jellyfin.searchTracks(
         libraryId: libraryId,
         query: rec.trackName!,
+        limit: _matchSearchLimit,
       );
 
       if (tracks.isEmpty && rec.albumName != null) {
         tracks = await jellyfin.searchTracks(
           libraryId: libraryId,
           query: rec.albumName!,
+          limit: _matchSearchLimit,
         );
       }
 
@@ -1391,13 +1452,14 @@ class ListenBrainzService {
         tracks = await jellyfin.searchTracks(
           libraryId: libraryId,
           query: rec.artistName!,
+          limit: _matchSearchLimit,
         );
       }
 
       bool matched = false;
       for (final track in tracks) {
         // MBID match
-        final trackMbid = track.providerIds?['MusicBrainzTrack'];
+        final trackMbid = recordingMbidOf(track);
         if (trackMbid != null && trackMbid == rec.recordingMbid) {
           matchedLbRadio.add(rec.withJellyfinMatch(track.id));
           matched = true;
@@ -1634,12 +1696,13 @@ class ListenBrainzService {
         final tracks = await jellyfin.searchTracks(
           libraryId: libraryId,
           query: pop.recordingName,
+          limit: _matchSearchLimit,
         );
 
         // Primary match: MBID
         for (final t in tracks) {
-          final trackMbid = t.providerIds?['MusicBrainzTrack'];
-          if (trackMbid == pop.recordingMbid) {
+          final trackMbid = recordingMbidOf(t);
+          if (trackMbid != null && trackMbid == pop.recordingMbid) {
             track = t;
             debugPrint('ListenBrainzService: ✓ MBID match for "${pop.recordingName}"');
             break;

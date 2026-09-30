@@ -93,6 +93,11 @@ class _SpectrumRadialPainter extends CustomPainter {
   late final Paint _peakPaint;
   late final Paint _glowPaint;
   late final Paint _centerPaint;
+  late final Paint _ringGlowPaint;
+
+  // Per-bar colours of the frame being painted, shared by the glow and bar
+  // passes (each was converted from HSL twice per frame).
+  static List<Color> _barColors = const [];
 
   static const MaskFilter _blurFilter4 = MaskFilter.blur(BlurStyle.normal, 4);
   static const MaskFilter _blurFilter8 = MaskFilter.blur(BlurStyle.normal, 8);
@@ -122,6 +127,10 @@ class _SpectrumRadialPainter extends CustomPainter {
     _centerPaint = Paint()
       ..style = PaintingStyle.fill
       ..maskFilter = _blurFilter8;
+    _ringGlowPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 8
+      ..maskFilter = _blurFilter12;
   }
 
   /// Get color based on angle position
@@ -175,6 +184,13 @@ class _SpectrumRadialPainter extends CustomPainter {
     final barCount = bars.length;
     final angleStep = 2 * pi / barCount;
 
+    if (_barColors.length != barCount) {
+      _barColors = List<Color>.filled(barCount, Colors.transparent);
+    }
+    for (int i = 0; i < barCount; i++) {
+      _barColors[i] = _getBarColor(i * angleStep + rotation, bars[i]);
+    }
+
     // Draw glow layer first
     for (int i = 0; i < barCount; i++) {
       final value = bars[i];
@@ -182,7 +198,7 @@ class _SpectrumRadialPainter extends CustomPainter {
 
       final angle = i * angleStep + rotation;
       final barLength = value * maxBarLength;
-      final color = _getBarColor(angle, value);
+      final color = _barColors[i];
 
       final glowX = center.dx + cos(angle) * (innerRadius + barLength);
       final glowY = center.dy + sin(angle) * (innerRadius + barLength);
@@ -198,7 +214,7 @@ class _SpectrumRadialPainter extends CustomPainter {
       final value = bars[i];
       final angle = i * angleStep + rotation;
       final barLength = max(2.0, value * maxBarLength);
-      final color = _getBarColor(angle, value);
+      final color = _barColors[i];
 
       final startX = center.dx + cos(angle) * innerRadius;
       final startY = center.dy + sin(angle) * innerRadius;
@@ -225,11 +241,12 @@ class _SpectrumRadialPainter extends CustomPainter {
       canvas.drawCircle(Offset(peakX, peakY), 2.5, _peakPaint);
     }
 
-    // Draw outer ring glow on bass hits
+    // Draw outer ring glow on bass hits. A stroke: with the fill-style glow
+    // paint this was a disc washing over all the bars.
     if (bass > 0.4) {
       final ringRadius = innerRadius + maxBarLength + 10;
-      _glowPaint.color = primaryColor.withValues(alpha: opacity * (bass - 0.4) * 0.5);
-      canvas.drawCircle(center, ringRadius, _glowPaint);
+      _ringGlowPaint.color = primaryColor.withValues(alpha: opacity * (bass - 0.4) * 0.5);
+      canvas.drawCircle(center, ringRadius, _ringGlowPaint);
     }
 
     // Draw inner pulsing ring

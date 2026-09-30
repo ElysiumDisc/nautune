@@ -22,10 +22,27 @@ class LocalCacheService {
   final Box<dynamic> _box;
 
   /// Ensures Hive is ready and returns a cache service instance.
+  ///
+  /// Never throws: main awaits this before the first frame, and the box only
+  /// holds data that can be fetched again. A box that can't be opened is
+  /// deleted and recreated; failing that, the cache lives in memory for
+  /// this run.
   static Future<LocalCacheService> create() async {
     await ensureHiveInitialized();
-    final box = await Hive.openBox<dynamic>(_boxName);
-    return LocalCacheService._(box);
+    try {
+      return LocalCacheService._(await Hive.openBox<dynamic>(_boxName));
+    } catch (error) {
+      debugPrint('LocalCacheService: cache box unreadable, recreating: $error');
+    }
+    try {
+      await Hive.deleteBoxFromDisk(_boxName);
+      return LocalCacheService._(await Hive.openBox<dynamic>(_boxName));
+    } catch (error) {
+      debugPrint('LocalCacheService: using an in-memory cache: $error');
+      return LocalCacheService._(
+        await Hive.openBox<dynamic>(_boxName, bytes: Uint8List(0)),
+      );
+    }
   }
 
   String cacheKeyForSession(JellyfinSession session) {

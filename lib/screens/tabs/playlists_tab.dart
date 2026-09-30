@@ -24,6 +24,22 @@ class _PlaylistsTab extends StatefulWidget {
 class _PlaylistsTabState extends State<_PlaylistsTab> {
   Mood? _loadingMood;
 
+  // Sorted list, recomputed only when the list or the sort changes (not on
+  // every library rebuild).
+  List<JellyfinPlaylist>? _sortedSource;
+  PlaylistSort? _sortedBy;
+  List<JellyfinPlaylist> _sorted = const [];
+
+  List<JellyfinPlaylist> _sortedFor(
+      List<JellyfinPlaylist> source, PlaylistSort sort) {
+    if (!identical(source, _sortedSource) || sort != _sortedBy) {
+      _sortedSource = source;
+      _sortedBy = sort;
+      _sorted = sortPlaylists(source, sort);
+    }
+    return _sorted;
+  }
+
   // Convenience getters
   List<JellyfinPlaylist>? get playlists => widget.playlists;
   bool get isLoading => widget.isLoading;
@@ -60,8 +76,8 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
           );
         }
       } else {
-        // Play the mood mix
-        appState.audioService.playTrack(
+        // Play the mood mix (a failure is reported below, not as success)
+        await appState.audioService.playTrack(
           tracks.first,
           queueContext: tracks,
           fromShuffle: true,
@@ -170,14 +186,14 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
       );
     }
     final uiState = context.watch<UIStateProvider>();
-    final sortedPlaylists = sortPlaylists(playlists!, uiState.playlistSort);
+    final sortedPlaylists = _sortedFor(playlists!, uiState.playlistSort);
     return RefreshIndicator(
       onRefresh: onRefresh,
       child: ListView.builder(
         controller: scrollController,
         scrollCacheExtent: ScrollCacheExtent.pixels(500), // Pre-render items above/below viewport for smoother scrolling
         padding: const EdgeInsets.all(16),
-        itemCount: playlists!.length + (isLoading ? 1 : 0) + 1, // +1 for header button
+        itemCount: sortedPlaylists.length + (isLoading ? 1 : 0) + 1, // +1 for header button
         itemBuilder: (context, index) {
           // Add header buttons as first items
           if (index == 0) {
@@ -261,7 +277,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
           }
 
           final listIndex = index - 1;
-          if (listIndex >= playlists!.length) {
+          if (listIndex >= sortedPlaylists.length) {
             return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
           }
           final playlist = sortedPlaylists[listIndex];
@@ -419,39 +435,15 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
     required String title,
     required String action,
     String initial = '',
-  }) async {
-    final nameController = TextEditingController(text: initial);
-    try {
-      final result = await showDialog<bool>(
+  }) =>
+      showDialog<String>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: Text(title),
-          content: TextField(
-            controller: nameController,
-            decoration: const InputDecoration(
-              labelText: 'Playlist Name',
-              border: OutlineInputBorder(),
-            ),
-            autofocus: true,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: Text(action),
-            ),
-          ],
+        builder: (_) => _PlaylistNameDialog(
+          title: title,
+          action: action,
+          initial: initial,
         ),
       );
-      final name = nameController.text.trim();
-      return result == true && name.isNotEmpty ? name : null;
-    } finally {
-      nameController.dispose();
-    }
-  }
 
   // Dialogs and snackbars use this State's context: a row's context is gone
   // once the list refreshes (e.g. the deleted playlist's row).
@@ -533,5 +525,66 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
         queued: 'Offline: "${playlist.name}" will be deleted when you\'re online',
         failed: 'Failed to delete',
         error: error);
+  }
+}
+
+/// Asks for a playlist name; pops the trimmed name, or null when cancelled
+/// or left empty. Owns (and disposes) its text controller, so the field
+/// never outlives it during the closing animation.
+class _PlaylistNameDialog extends StatefulWidget {
+  const _PlaylistNameDialog({
+    required this.title,
+    required this.action,
+    this.initial = '',
+  });
+
+  final String title;
+  final String action;
+  final String initial;
+
+  @override
+  State<_PlaylistNameDialog> createState() => _PlaylistNameDialogState();
+}
+
+class _PlaylistNameDialogState extends State<_PlaylistNameDialog> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final name = _controller.text.trim();
+    Navigator.pop(context, name.isEmpty ? null : name);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _controller,
+        decoration: const InputDecoration(
+          labelText: 'Playlist Name',
+          border: OutlineInputBorder(),
+        ),
+        autofocus: true,
+        textInputAction: TextInputAction.done,
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: Text(widget.action),
+        ),
+      ],
+    );
   }
 }

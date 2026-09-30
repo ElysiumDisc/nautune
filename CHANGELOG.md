@@ -1,3 +1,157 @@
+### v9.1.5 - Bug Hunt: Library, Offline, CarPlay and Easter Eggs
+
+A second full audit. Genre pages work again, offline mode now really
+means offline, downloads survive interruptions and device restores,
+scrobbles are no longer lost, and every Easter egg got a pass. The player,
+visualizers and Frets on Fire use far less battery on 120 Hz iPhones.
+
+**Fixes: library and search**
+- Genre pages show their albums again (they were always empty online), with
+  a Retry button if loading fails.
+- The A-Z index files "The Beatles" under B, matching the server's order,
+  and no longer jumps to the wrong letter after loading the rest of the
+  library.
+- Artist pages list the artist's whole catalogue (it was a random 500
+  songs), so Most Listened, Play All and Download cover every song.
+- Pull to refresh on Genres and the Recently Added refresh button work.
+- The ListenBrainz shelf appears right after connecting, without a
+  restart.
+- Removing a song from a playlist keeps your place in the list.
+- The Easter egg card shows at once instead of waiting behind the search
+  spinner.
+- Offline, songs with several artists are listed and searchable under
+  each artist's own name, and albums without an album ID open.
+- Album and artist sort orders are remembered across launches.
+- Home shelves never show another library's or account's songs after a
+  quick switch.
+
+**Fixes: playback**
+- Pausing or unplugging headphones while a track is still loading keeps it
+  paused.
+- Skipping in the last second of a song no longer lands one track past
+  your choice, and starting an album while Infinite Radio tops up the
+  queue no longer stops it.
+- A track that failed to load, or was restored at launch, resumes where it
+  was instead of from 0:00.
+- Editing the queue near the end of a song no longer restarts the next
+  song.
+- Seeking during a crossfade cancels it; an A-B loop no longer triggers a
+  crossfade.
+- Removing the last song in the queue no longer replays the one before.
+- Lock screen and CarPlay show the right elapsed time at other playback
+  speeds, and the right length after gapless changes.
+- The Essential Mix in a saved queue still plays after an app update.
+
+**Fixes: player**
+- Full Art is readable in light mode, and text and icons follow the
+  artwork's brightness in Classic, Gradient and Blur.
+- The A-B loop bar and the sleep timer sheet fit small iPhones, landscape
+  and large text.
+- Playback errors show once instead of once per open page.
+- Tapping the artist or album in the player shows a cancellable spinner,
+  skips the server offline and can't open the page twice.
+- The mini player's artwork only flies to and from the player it opened.
+- VoiceOver: labels on remaining buttons, the mini player's waveform is a
+  slider, and seeking stops at the end of the track.
+
+**Fixes: offline and downloads**
+- **Go offline** now also pauses downloads, artwork and home-shelf
+  requests. Downloads resume when you go back online.
+- Offline albums play in track order after a relaunch (downloads now keep
+  track numbers, genres, favorites and ReplayGain; older downloads are
+  filled in automatically).
+- Interrupted downloads continue where they stopped when the server
+  allows it, instead of starting over.
+- After restoring an iPhone from a backup, missing downloads show as
+  "File missing" so they can be retried, instead of vanishing.
+- Removing an album or artist (Downloads or Settings → Storage) keeps
+  songs a downloaded playlist still needs.
+- Downloads started at launch respect Wi-Fi-only and the concurrency
+  setting, and the storage limit counts downloads in progress.
+- Changing your server's address keeps your downloads.
+- Another account's downloads no longer show in your library.
+- Download-complete notifications appear.
+- Artwork is cached for large libraries (up to 4,000 images instead of
+  200) and downloaded artwork no longer flickers in from the server.
+- Storage cleanups ask before deleting.
+
+**Fixes: accounts and privacy**
+- Your Jellyfin token no longer ends up in saved download errors or device
+  logs.
+- Logging out clears search history, and a different account no longer
+  inherits the previous one's queue, Last.fm or ListenBrainz links, or
+  "Go offline".
+- The app's data files are no longer exposed in the Files app.
+- Passwordless Jellyfin accounts can sign in, sign-in errors are readable,
+  and iOS offers to save your password.
+
+**Fixes: scrobbling and stats**
+- Offline and Low Power Mode plays are scrobbled again (they were
+  silently dropped).
+- Songs of 30 seconds or less aren't sent to Last.fm, and Last.fm gets the
+  primary artist instead of a combined "A, B" artist.
+- ListenBrainz receives correct MusicBrainz IDs.
+- Adding songs to a playlist offline no longer adds them twice when the
+  sync is retried.
+- Listening time no longer counts paused time, and skips don't count as
+  plays. Week, month and year comparisons use the same span of the
+  previous period, and last year is kept whole.
+- Synced lyrics keep instrumental breaks and read every timestamp format.
+- Mood mixes match whole words ("funeral doom" is no longer Upbeat).
+
+**Fixes: CarPlay and iOS**
+- Albums and Artists A-Z load each letter from the server, so large
+  libraries are complete and letters open quickly.
+- Artist pages page past 100 albums.
+- Shuffle and repeat buttons show the app's state.
+- Pages no longer open on top of Now Playing, or after switching account
+  or going offline.
+- Rows without artwork no longer request it.
+- Low Power Mode at launch turns on the battery saver straight away.
+- The chosen app icon no longer triggers "You have changed the icon" at
+  launch.
+
+**Fixes: Easter eggs**
+- The Network:
+  - Channels 7, 162, 170, 178 and 237 play again. Channels whose audio is
+    gone from Other People (including 333 and 999) show "Signal lost", and
+    Download All can finish.
+  - A play/pause button, a download button per channel, and Download All
+    asks first, shows the size and respects Wi-Fi-only.
+  - Recovers after calls and Siri, and cancelling a download never leaves
+    files behind.
+- Essential Mix: the download sheet updates live, a failed download can
+  be resumed or discarded, the size reads 233.6 MB, and a paused mix no
+  longer counts listening time or animates.
+- The Easter egg hub opens The Network and Essential Mix offline when
+  they're downloaded, and its labels no longer get cut off.
+- Relax Mode: sounds recover after calls, a quick slider flick can't leave
+  a sound stuck, and the haptic only ticks on and off.
+- Healing Frequencies: gapless loops (no dropout every 30 s), recovery
+  after calls, and pills with the same frequency no longer light up
+  together.
+- Frets on Fire:
+  - Chords and two-thumb play register every finger.
+  - Bonus notes no longer steal taps, notes stay visible until they can no
+    longer be hit, and the last note keeps its full timing window.
+  - Charts line up with the beat better; existing charts are regenerated.
+  - Analyzing long tracks uses far less memory, and one analysis runs at a
+    time.
+  - A swipe-back mid-song pauses instead of leaving; the cheat no longer
+    counts toward records; results add up.
+- Piano: repeated notes no longer click or go silent, octave changes are
+  instant, and AZERTY/QWERTZ keyboards play the right notes.
+
+**Performance**
+- The screen under the full player is no longer redrawn while the player
+  is open.
+- Visualizers render at 30 fps instead of every display refresh, and stop
+  when hidden, paused or in the background.
+- Frets on Fire redraws only the note highway each frame.
+- Loading skeletons share one animation, and progress bars repaint on
+  their own.
+- Brief connection drops no longer reload the whole library.
+
 ### v9.1.2 - Bug Hunt: Playback, Privacy, Scrobbling and Easter Eggs
 
 A full audit of the app. It fixes crashes in the player, plays counted

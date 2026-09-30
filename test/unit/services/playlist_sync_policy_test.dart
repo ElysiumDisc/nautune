@@ -119,4 +119,59 @@ void main() {
       isFalse,
     );
   });
+
+  group('resuming a queued add', () {
+    test('skips the ids an earlier attempt got accepted', () {
+      final ids = [for (var i = 0; i < 250; i++) 'id$i'];
+      expect(remainingAddIds({'itemIds': ids}), hasLength(250));
+      final rest = remainingAddIds({'itemIds': ids, kAddActionSentCountKey: 100});
+      expect(rest.first, 'id100');
+      expect(rest, hasLength(150));
+      // Out-of-range progress can't throw.
+      expect(remainingAddIds({'itemIds': ids, kAddActionSentCountKey: 999}),
+          isEmpty);
+    });
+
+    test('drops the in-flight chunk only when the server has all of it', () {
+      final remaining = [for (var i = 0; i < 150; i++) 'id$i'];
+      final firstChunk = remaining.take(100).toSet();
+      expect(
+        appliedLeadingChunk(
+          maybeApplied: true,
+          remaining: remaining,
+          playlistItemIds: firstChunk,
+        ),
+        100,
+      );
+      expect(
+        appliedLeadingChunk(
+          maybeApplied: true,
+          remaining: remaining,
+          playlistItemIds: firstChunk.skip(1).toSet(),
+        ),
+        0,
+      );
+      expect(
+        appliedLeadingChunk(
+          maybeApplied: false,
+          remaining: remaining,
+          playlistItemIds: firstChunk,
+        ),
+        0,
+      );
+    });
+
+    test('copyWith keeps or replaces the payload', () {
+      final a = PendingPlaylistAction(
+        type: 'add',
+        payload: {'playlistId': 'p', 'itemIds': ['a']},
+        timestamp: queuedAt,
+      );
+      expect(a.copyWith(attempts: 1).payload, same(a.payload));
+      final b = a.copyWith(payload: {...a.payload, kAddActionSentCountKey: 1});
+      expect(b.id, a.id);
+      expect(PendingPlaylistAction.fromJson(b.toJson())
+          .payload[kAddActionSentCountKey], 1);
+    });
+  });
 }

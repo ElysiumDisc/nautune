@@ -133,8 +133,10 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
             _isEssentialMixActive = isEssentialMix;
           });
           if (isEssentialMix) {
-            _playStartTime = DateTime.now();
-            _startFFTListener();
+            if (_audioService.isPlaying) {
+              _playStartTime ??= DateTime.now();
+              _startFFTListener();
+            }
           } else {
             _recordListenTime();
             _stopFFTListener();
@@ -172,12 +174,17 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
         }
       });
 
-      // Check if Essential Mix is already playing
+      // Check if Essential Mix is already loaded. Listening time and the
+      // visualizer only start if it is actually playing (reopening the
+      // screen on a paused mix must not count or animate).
       final currentTrack = _audioService.currentTrack;
       if (currentTrack?.id == _trackId) {
         _isEssentialMixActive = true;
-        _playStartTime = DateTime.now();
-        _startFFTListener();
+        _playingNotifier.value = _audioService.isPlaying;
+        if (_audioService.isPlaying) {
+          _playStartTime = DateTime.now();
+          _startFFTListener();
+        }
       }
     }
   }
@@ -405,17 +412,24 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     } else {
       // Check if downloaded - archive.org blocks direct streaming
       if (!_service.isPlayingOffline) {
-        final connectivity = context.read<ConnectivityProvider>();
         final demoMode = context.read<DemoModeProvider>();
-        final isOffline = !connectivity.networkAvailable || demoMode.isDemoMode;
 
-        if (isOffline) {
+        if (_isOffline(context)) {
           setState(() {
             _errorMessage = demoMode.isDemoMode
                 ? 'Download the Essential Mix while online to listen in demo mode'
                 : 'Download required - connect to internet to download';
           });
           return;
+        }
+
+        if (!_service.isDownloading) {
+          final blocked = await _wifiOnlyBlocks();
+          if (!mounted) return;
+          if (blocked) {
+            setState(() => _errorMessage = _wifiOnlyMessage);
+            return;
+          }
         }
 
         setState(() {
@@ -475,6 +489,46 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     }
   }
 
+  static const _wifiOnlyMessage =
+      'Wi-Fi-only downloads is on - connect to Wi-Fi to download';
+
+  /// No network, demo mode, or the user chose "Go offline".
+  bool _isOffline(BuildContext context) =>
+      !context.read<ConnectivityProvider>().networkAvailable ||
+      context.read<DemoModeProvider>().isDemoMode ||
+      context.read<NautuneAppState>().isOfflineMode;
+
+  /// The app's Wi-Fi-only download setting applies to the mix (~245 MB).
+  Future<bool> _wifiOnlyBlocks() async {
+    final downloads = context.read<NautuneAppState>().downloadService;
+    return downloads.wifiOnlyDownloads && await downloads.isOnCellular();
+  }
+
+  Future<void> _startDownloadFromSheet() async {
+    if (await _wifiOnlyBlocks()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(_wifiOnlyMessage)),
+      );
+      return;
+    }
+    unawaited(_service.startDownload());
+  }
+
+  // Size of a leftover partial download, looked up once per download state
+  // (the sheet rebuilds on every progress notification).
+  Future<int>? _partialBytes;
+  EssentialMixDownloadStatus? _partialBytesFor;
+
+  Future<int> _partialBytesFuture() {
+    final status = _service.state.status;
+    if (_partialBytes == null || _partialBytesFor != status) {
+      _partialBytesFor = status;
+      _partialBytes = _service.partialDownloadBytes();
+    }
+    return _partialBytes!;
+  }
+
   // Listener that auto-plays once a Play-triggered download finishes.
   VoidCallback? _downloadWaiter;
 
@@ -488,12 +542,17 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
 
   void _waitForDownloadAndPlay() {
     _removeDownloadWaiter();
+    // startDownload() first waits for the saved state to load; ignore what
+    // is reported before this download has actually started.
+    var started = false;
 
     void listener() {
       if (!mounted) {
         _removeDownloadWaiter();
         return;
       }
+      if (_service.isDownloading) started = true;
+      if (!started && !_service.isDownloaded) return;
 
       if (_service.isDownloaded) {
         _removeDownloadWaiter();
@@ -563,7 +622,12 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (context) => _buildDownloadSheet(),
+      // Rebuild on every service change: progress, completion and cancel
+      // (the screen's own setState doesn't reach a modal route).
+      builder: (context) => ListenableBuilder(
+        listenable: _service,
+        builder: (context, _) => _buildDownloadSheet(),
+      ),
     );
   }
 
@@ -1256,7 +1320,13 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
                   builder: (context) {
                     final connectivity = context.watch<ConnectivityProvider>();
                     final demoMode = context.watch<DemoModeProvider>();
-                    final isOffline = !connectivity.networkAvailable || demoMode.isDemoMode;
+                    final userOffline = context
+                        .select<NautuneAppState, bool>((s) => s.isOfflineMode);
+                    final isOffline = !connectivity.networkAvailable ||
+                        demoMode.isDemoMode ||
+                        userOffline;
+                    final failed = _service.state.status ==
+                        EssentialMixDownloadStatus.failed;
 
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1273,14 +1343,13 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton.icon(
-                            onPressed: isOffline
-                                ? null
-                                : () async {
-                                    _service.startDownload();
-                                    setSheetState(() {});
-                                  },
+                            onPressed: isOffline ? null : _startDownloadFromSheet,
                             icon: const Icon(Icons.download),
-                            label: Text(isOffline ? 'Offline' : 'Download'),
+                            label: Text(isOffline
+                                ? 'Offline'
+                                : failed
+                                    ? 'Resume Download'
+                                    : 'Download'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: theme.colorScheme.primary,
                               foregroundColor: theme.colorScheme.onPrimary,
@@ -1288,6 +1357,29 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
                               disabledForegroundColor: theme.colorScheme.onPrimary.withValues(alpha: 0.5),
                             ),
                           ),
+                        ),
+                        // A failed attempt keeps its partial file to resume;
+                        // let it be thrown away instead.
+                        FutureBuilder<int>(
+                          future: _partialBytesFuture(),
+                          builder: (context, snapshot) {
+                            final bytes = snapshot.data ?? 0;
+                            if (bytes <= 0) return const SizedBox.shrink();
+                            final mb = bytes / (1024 * 1024);
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: TextButton(
+                                onPressed: () async {
+                                  await _service.discardPartialDownload();
+                                  _partialBytes = null;
+                                },
+                                child: Text(
+                                  'Discard partial download (${mb.toStringAsFixed(1)} MB)',
+                                  style: TextStyle(color: theme.colorScheme.error),
+                                ),
+                              ),
+                            );
+                          },
                         ),
                       ],
                     );
@@ -1541,4 +1633,16 @@ class _FFTData {
   final double rotation;
 
   const _FFTData(this.bass, this.mid, this.treble, this.rotation);
+
+  // Value equality, so an unchanged frame doesn't notify the visualizer.
+  @override
+  bool operator ==(Object other) =>
+      other is _FFTData &&
+      other.bass == bass &&
+      other.mid == mid &&
+      other.treble == treble &&
+      other.rotation == rotation;
+
+  @override
+  int get hashCode => Object.hash(bass, mid, treble, rotation);
 }

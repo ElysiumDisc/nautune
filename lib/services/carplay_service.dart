@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_carplay/flutter_carplay.dart';
 import 'package:flutter_carplay/controllers/carplay_controller.dart';
 
@@ -30,6 +31,9 @@ import '../jellyfin/jellyfin_track.dart';
 /// * List taps are resolved by element id against
 ///   `FlutterCarPlayController.templateHistory`; a template missing from it
 ///   has dead rows.
+/// * Now Playing is never in that history: neither the one
+///   `showSharedNowPlaying` pushes nor the one CarPlay's own Now Playing
+///   button shows. [_nativeNavigation] asks AppDelegate for the real stack.
 class CarPlayService {
   final NautuneAppState appState;
   final FlutterCarplay _carplay = FlutterCarplay();
@@ -70,8 +74,14 @@ class CarPlayService {
   String? _sessionKey;
   bool _sessionKeyHadSession = false;
 
-  _NameIndex<JellyfinAlbum>? _albumIndex;
-  _NameIndex<JellyfinArtist>? _artistIndex;
+  /// Offline mode at the last state check; see [_handleOfflineChange].
+  bool _wasOffline = false;
+
+  /// Invalidates in-flight row actions; see [CarPlayNavGate].
+  final CarPlayNavGate _nav = CarPlayNavGate();
+
+  static const MethodChannel _navigationChannel =
+      MethodChannel('nautune/carplay_navigation');
 
   /// Upper bound per list page. The real budget also honours
   /// `CPListTemplate.maximumItemCount` (see [_pageSize]).
@@ -89,11 +99,11 @@ class CarPlayService {
   /// Longest time a tapped row keeps CarPlay's loading spinner.
   static const Duration _spinnerCap = Duration(seconds: 10);
 
-  /// A–Z index: fetched in chunks, capped, cached briefly.
-  static const int _indexChunk = 500;
-  static const int _indexMaxItems = 10000;
-  static const Duration _indexTtl = Duration(minutes: 10);
-  static const Duration _indexTimeout = Duration(seconds: 45);
+  /// A–Z buckets: "#" (digits, symbols) then A–Z.
+  static final List<String> _letters = [
+    '#',
+    for (var c = 65; c <= 90; c++) String.fromCharCode(c),
+  ];
 
   /// Root layout. Defaults to a single root list with sections (one
   /// navigation stack). A tab bar root is supported but off: CarPlay keeps a
@@ -115,6 +125,7 @@ class CarPlayService {
     try {
       _sessionKey = _computeSessionKey();
       _sessionKeyHadSession = appState.session != null;
+      _wasOffline = appState.isOfflineMode;
       _setupListeners();
       await _setupRootTemplate();
     } catch (e) {
@@ -171,6 +182,7 @@ class CarPlayService {
   void _onCarPlayDisconnect() {
     _isConnected = false;
     _rebuildRootOnConnect = true;
+    _nav.invalidate();
     _updateThrottleTimer?.cancel();
     _updateThrottleTimer = null;
     // The next session starts at the root; drop pushed pages from Dart's
@@ -289,9 +301,14 @@ class CarPlayService {
       return CPListTemplate(
         title: 'Nautune',
         sections: [
-          CPListSection(header: 'Library', items: libraryRows),
-          CPListSection(header: 'Listening', items: recentRows),
-          CPListSection(header: 'Offline', items: downloadRows),
+          // No index titles: CarPlay would put the whole header words in
+          // the trailing index bar.
+          CPListSection(
+              header: 'Library', sectionIndexEnabled: false, items: libraryRows),
+          CPListSection(
+              header: 'Listening', sectionIndexEnabled: false, items: recentRows),
+          CPListSection(
+              header: 'Offline', sectionIndexEnabled: false, items: downloadRows),
         ],
         systemIcon: 'music.note.house',
       );
@@ -328,6 +345,7 @@ class CarPlayService {
     _updateThrottleTimer ??= Timer(const Duration(milliseconds: 500), () {
       _updateThrottleTimer = null;
       _handleSessionChange();
+      _handleOfflineChange();
       if (_rootTemplateSet) {
         _updateRootRowsInPlace();
       } else if (DateTime.now().difference(_lastRootSetupAttempt) >
@@ -355,8 +373,8 @@ class CarPlayService {
     final hadSession = _sessionKeyHadSession;
     _sessionKey = key;
     _sessionKeyHadSession = appState.session != null;
-    _albumIndex = null;
-    _artistIndex = null;
+    // Results still loading for the previous account must not be pushed.
+    _nav.invalidate();
     // Pages built for the previous account/library are stale after logout or
     // an account/library switch. A session merely *arriving* (sign-in, or the
     // keychain unlocking after a locked cold start) leaves the stack alone so
@@ -366,6 +384,31 @@ class CarPlayService {
         debugPrint('⚠️ CarPlay popToRoot failed: $e');
         return false;
       }));
+    }
+  }
+
+  /// Offline mode flipped (by the user, or the network dropping). Loads in
+  /// flight were made for the other mode and are dropped. Going offline also
+  /// pops server pages back to the root: their albums and playlists mostly
+  /// aren't downloaded and would open as empty. Offline pages are kept when
+  /// going online (their music still plays), and Now Playing is never popped.
+  void _handleOfflineChange() {
+    final offline = appState.isOfflineMode;
+    if (offline == _wasOffline) return;
+    _wasOffline = offline;
+    _nav.invalidate();
+    if (offline && FlutterCarPlayController.templateHistory.length > 1) {
+      unawaited(_popToRootUnlessNowPlaying());
+    }
+  }
+
+  Future<void> _popToRootUnlessNowPlaying() async {
+    final native = await _nativeNavigation();
+    if (native != null && native.nowPlayingOnTop) return;
+    try {
+      await FlutterCarplay.popToRoot(animated: false);
+    } catch (e) {
+      debugPrint('⚠️ CarPlay popToRoot failed: $e');
     }
   }
 
@@ -453,15 +496,16 @@ class CarPlayService {
 
   /// Wraps a row action. The spinner stays on the tapped row until the
   /// action finishes (content loaded and pushed) or [_spinnerCap] elapses.
-  /// [origin] is the page the tap came from; actions only push if it is
-  /// still on top afterwards (the driver didn't go back or tap elsewhere).
+  /// [origin] records the page the tap came from; actions only push if it
+  /// is still on top and nothing superseded the tap meanwhile (another tap,
+  /// Now Playing, an account/offline switch, a disconnect).
   Function(Function() complete, CPListItem self) _tap(
-    Future<void> Function(CPTemplate? origin) action, {
+    Future<void> Function(CarPlayNavOrigin? origin) action, {
     bool completeImmediately = false,
   }) {
     return (complete, self) async {
       _noteInteraction();
-      final origin = _topTemplate();
+      final origin = _nav.begin(_topTemplate());
       var completed = false;
       void finish() {
         if (completed) return;
@@ -492,15 +536,36 @@ class CarPlayService {
     return history.isEmpty ? null : history.last;
   }
 
-  bool _stillAt(CPTemplate? origin) {
-    if (origin == null) return true;
-    return identical(_topTemplate(), origin);
+  bool _stillAt(CarPlayNavOrigin? origin) =>
+      _nav.isCurrent(origin, _topTemplate());
+
+  /// CarPlay's real template stack (AppDelegate channel
+  /// "nautune/carplay_navigation"), or null when unavailable. Unlike
+  /// `templateHistory` it counts Now Playing.
+  Future<({int depth, bool nowPlayingOnTop})?> _nativeNavigation() async {
+    try {
+      final state = await _navigationChannel
+          .invokeMapMethod<String, Object?>('state');
+      final depth = state?['depth'];
+      final nowPlayingOnTop = state?['nowPlayingOnTop'];
+      if (depth is! int || nowPlayingOnTop is! bool) return null;
+      return (depth: depth, nowPlayingOnTop: nowPlayingOnTop);
+    } catch (e) {
+      debugPrint('⚠️ CarPlay navigation state unavailable: $e');
+      return null;
+    }
   }
 
   /// Push [template], keeping the stack within [_maxTemplateDepth].
   /// With [replaceTop] (Load More) the current page is swapped out.
   Future<bool> _push(CPListTemplate template, {bool replaceTop = false}) async {
-    final depth = FlutterCarPlayController.templateHistory.length;
+    final native = await _nativeNavigation();
+    // The driver went to Now Playing (ours, or CarPlay's own button) while
+    // this page loaded. Don't cover it, and never pop it in place of the
+    // page a Load More replaces.
+    if (native != null && native.nowPlayingOnTop) return false;
+    final depth =
+        native?.depth ?? FlutterCarPlayController.templateHistory.length;
     if ((replaceTop && depth > 1) || depth >= _maxTemplateDepth) {
       await FlutterCarplay.pop(animated: false);
     }
@@ -508,11 +573,15 @@ class CarPlayService {
   }
 
   Future<void> _showNowPlaying() async {
+    // Starting playback supersedes anything still loading.
+    _nav.invalidate();
+    final native = await _nativeNavigation();
+    if (native != null && native.nowPlayingOnTop) return;
     // Now Playing is itself a pushed template; skip it at the depth limit
     // (CarPlay's own "Now Playing" button still reaches it).
-    if (FlutterCarPlayController.templateHistory.length >= _maxTemplateDepth) {
-      return;
-    }
+    final depth =
+        native?.depth ?? FlutterCarPlayController.templateHistory.length;
+    if (depth >= _maxTemplateDepth) return;
     try {
       await FlutterCarplay.showSharedNowPlaying(animated: true);
     } catch (e) {
@@ -537,7 +606,7 @@ class CarPlayService {
     String title,
     String message, {
     String? detail,
-    CPTemplate? origin,
+    CarPlayNavOrigin? origin,
     bool replaceTop = false,
   }) async {
     if (!_stillAt(origin)) return;
@@ -561,7 +630,7 @@ class CarPlayService {
       ? 'You are offline. Downloaded music is available.'
       : 'Check your connection and try again.';
 
-  Future<void> _showLoadError(String title, Object error, CPTemplate? origin) {
+  Future<void> _showLoadError(String title, Object error, CarPlayNavOrigin? origin) {
     debugPrint('⚠️ CarPlay load "$title" failed: $error');
     return _showMessage(
       title,
@@ -574,7 +643,7 @@ class CarPlayService {
   }
 
   Future<void> _showPlaybackError(
-      JellyfinTrack? track, Object error, CPTemplate? origin) {
+      JellyfinTrack? track, Object error, CarPlayNavOrigin? origin) {
     debugPrint('⚠️ CarPlay playback failed: $error');
     return _showMessage(
       'Playback',
@@ -588,7 +657,7 @@ class CarPlayService {
 
   /// Returns true (after showing a message) when the online library can't
   /// be browsed right now.
-  Future<bool> _blockedByNoLibrary(String title, CPTemplate? origin) async {
+  Future<bool> _blockedByNoLibrary(String title, CarPlayNavOrigin? origin) async {
     final reason = _libraryUnavailableReason();
     if (reason == null) return false;
     await _showMessage(
@@ -643,58 +712,41 @@ class CarPlayService {
         .timeout(_fetchTimeout);
   }
 
-  Future<List<T>> _fetchAll<T>(
-      Future<List<T>> Function(int start, int limit) fetchPage) async {
-    final all = <T>[];
-    while (all.length < _indexMaxItems) {
-      final page = await fetchPage(all.length, _indexChunk);
-      all.addAll(page);
-      if (page.length < _indexChunk) break;
-    }
-    return all;
+  /// A–Z browses local data (downloads, demo library) in memory; the online
+  /// library is filtered per letter on the server.
+  bool get _browsesLocally => appState.isDemoMode || appState.isOfflineMode;
+
+  Future<List<JellyfinAlbum>> _localAlbums() async {
+    if (appState.isDemoMode) return appState.albums ?? const <JellyfinAlbum>[];
+    return appState.repository
+        .getAlbums(libraryId: 'offline_downloads', limit: 100000);
   }
 
-  String get _indexKey => '$_sessionKey|${appState.isOfflineMode}';
-
-  Future<List<JellyfinAlbum>> _albumNameIndex() async {
-    final cached = _albumIndex;
-    if (cached != null && cached.isValidFor(_indexKey, _indexTtl)) {
-      return cached.items;
+  Future<List<JellyfinArtist>> _localArtists() async {
+    if (appState.isDemoMode) {
+      return appState.artists ?? const <JellyfinArtist>[];
     }
-    final key = _indexKey;
-    final items = await _fetchAll(_fetchAlbumPage).timeout(_indexTimeout);
-    _albumIndex = _NameIndex(key, items);
-    return items;
+    return appState.repository
+        .getArtists(libraryId: 'offline_downloads', limit: 100000);
   }
 
-  Future<List<JellyfinArtist>> _artistNameIndex() async {
-    final cached = _artistIndex;
-    if (cached != null && cached.isValidFor(_indexKey, _indexTtl)) {
-      return cached.items;
-    }
-    final key = _indexKey;
-    final items = await _fetchAll(_fetchArtistPage).timeout(_indexTimeout);
-    _artistIndex = _NameIndex(key, items);
-    return items;
-  }
-
-  String? _albumImage(JellyfinAlbum album) {
-    if (appState.isOfflineMode) return null; // local art resolved separately
+  /// Server artwork URL, or null when the item has no image (a request
+  /// would only 404, over cellular, with the token in the URL) or offline.
+  String? _serverImage(String itemId, String? tag) {
+    if (appState.isOfflineMode || tag == null) return null;
     return appState.jellyfinService.buildSelfContainedImageUrl(
-      itemId: album.id,
-      tag: album.primaryImageTag,
+      itemId: itemId,
+      tag: tag,
       maxWidth: 200,
     );
   }
 
-  String? _artistImage(JellyfinArtist artist) {
-    if (appState.isOfflineMode) return null;
-    return appState.jellyfinService.buildSelfContainedImageUrl(
-      itemId: artist.id,
-      tag: artist.primaryImageTag,
-      maxWidth: 200,
-    );
-  }
+  // Offline, local album art is resolved separately (_localAlbumArt).
+  String? _albumImage(JellyfinAlbum album) =>
+      _serverImage(album.id, album.primaryImageTag);
+
+  String? _artistImage(JellyfinArtist artist) =>
+      _serverImage(artist.id, artist.primaryImageTag);
 
   /// `file://` artwork for downloaded tracks, keyed by track id. The plugin
   /// strips `file://` and loads the raw path (spaces are fine).
@@ -758,7 +810,7 @@ class CarPlayService {
     );
   }
 
-  CPListItem _loadMoreRow(String detail, Future<void> Function(CPTemplate? origin) next) {
+  CPListItem _loadMoreRow(String detail, Future<void> Function(CarPlayNavOrigin? origin) next) {
     return CPListItem(
       text: 'Load More…',
       detailText: detail,
@@ -856,7 +908,7 @@ class CarPlayService {
     required List<JellyfinTrack> tracks,
     required String systemIcon,
     required String Function(JellyfinTrack) detail,
-    required CPTemplate? origin,
+    required CarPlayNavOrigin? origin,
     int offset = 0,
     bool replaceTop = false,
     bool localArtwork = false,
@@ -913,7 +965,7 @@ class CarPlayService {
 
   // ============ Pages ============
 
-  Future<void> _showAlbums({int offset = 0, CPTemplate? origin, bool replaceTop = false}) async {
+  Future<void> _showAlbums({int offset = 0, CarPlayNavOrigin? origin, bool replaceTop = false}) async {
     if (await _blockedByNoLibrary('Albums', origin)) return;
     List<JellyfinAlbum> albums;
     int pageSize;
@@ -960,7 +1012,7 @@ class CarPlayService {
     );
   }
 
-  Future<void> _showArtists({int offset = 0, CPTemplate? origin, bool replaceTop = false}) async {
+  Future<void> _showArtists({int offset = 0, CarPlayNavOrigin? origin, bool replaceTop = false}) async {
     if (await _blockedByNoLibrary('Artists', origin)) return;
     List<JellyfinArtist> artists;
     int pageSize;
@@ -1003,7 +1055,7 @@ class CarPlayService {
     );
   }
 
-  Future<void> _showPlaylists({int offset = 0, CPTemplate? origin, bool replaceTop = false}) async {
+  Future<void> _showPlaylists({int offset = 0, CarPlayNavOrigin? origin, bool replaceTop = false}) async {
     if (await _blockedByNoLibrary('Playlists', origin)) return;
     List<JellyfinPlaylist> all;
     try {
@@ -1044,13 +1096,7 @@ class CarPlayService {
         CPListItem(
           text: playlist.name,
           detailText: '${playlist.trackCount} tracks',
-          image: appState.isOfflineMode
-              ? null
-              : appState.jellyfinService.buildSelfContainedImageUrl(
-                  itemId: playlist.id,
-                  tag: playlist.primaryImageTag,
-                  maxWidth: 200,
-                ),
+          image: _serverImage(playlist.id, playlist.primaryImageTag),
           accessoryType: CPListItemAccessoryType.disclosureIndicator,
           onPress: _tap((o) =>
               _showPlaylistTracks(playlist.id, playlist.name, origin: o)),
@@ -1077,7 +1123,7 @@ class CarPlayService {
   }
 
   Future<void> _showAlbumTracks(String albumId, String albumName,
-      {CPTemplate? origin}) async {
+      {CarPlayNavOrigin? origin}) async {
     List<JellyfinTrack> tracks;
     try {
       tracks = await appState.getAlbumTracks(albumId).timeout(_fetchTimeout);
@@ -1086,7 +1132,13 @@ class CarPlayService {
       return;
     }
     if (tracks.isEmpty) {
-      await _showMessage(albumName, 'No tracks in this album', origin: origin);
+      await _showMessage(
+        albumName,
+        appState.isOfflineMode
+            ? 'This album isn’t downloaded'
+            : 'No tracks in this album',
+        origin: origin,
+      );
       return;
     }
     await _pushTrackList(
@@ -1099,7 +1151,7 @@ class CarPlayService {
   }
 
   Future<void> _showArtistAlbums(String artistId, String artistName,
-      {CPTemplate? origin}) async {
+      {CarPlayNavOrigin? origin}) async {
     List<JellyfinAlbum> albums;
     try {
       if (appState.isDemoMode) {
@@ -1127,25 +1179,49 @@ class CarPlayService {
       return;
     }
 
-    final pageSize = await _pageSize(reserved: 0);
-    final page = albums.take(pageSize).toList();
+    await _pushArtistAlbumPage(artistName, albums, origin: origin);
+  }
+
+  /// One page of an artist's albums, with Load More past the page size.
+  Future<void> _pushArtistAlbumPage(
+    String artistName,
+    List<JellyfinAlbum> albums, {
+    int offset = 0,
+    CarPlayNavOrigin? origin,
+    bool replaceTop = false,
+  }) async {
+    final pageSize = await _pageSize();
+    final page = albums.skip(offset).take(pageSize).toList();
+    final hasMore = offset + page.length < albums.length;
     final art = appState.isOfflineMode
         ? await _localAlbumArt(page)
         : const <String, String>{};
+
+    final items = <CPListTemplateItem>[
+      for (final album in page) _albumRow(album, imageOverride: art[album.id]),
+      if (hasMore)
+        _loadMoreRow(
+          '${albums.length - offset - page.length} more albums',
+          (o) => _pushArtistAlbumPage(artistName, albums,
+              offset: offset + page.length, origin: o, replaceTop: true),
+        ),
+    ];
+
     if (!_stillAt(origin)) return;
-    await _push(CPListTemplate(
-      title: artistName,
-      sections: [
-        CPListSection(items: [
-          for (final album in page) _albumRow(album, imageOverride: art[album.id]),
-        ]),
-      ],
-      systemIcon: 'music.note.list',
-    ));
+    await _push(
+      CPListTemplate(
+        title: offset > 0
+            ? '$artistName (${offset + 1}–${offset + page.length})'
+            : artistName,
+        sections: [CPListSection(items: items)],
+        systemIcon: 'music.note.list',
+      ),
+      replaceTop: replaceTop,
+    );
   }
 
   Future<void> _showPlaylistTracks(String playlistId, String playlistName,
-      {CPTemplate? origin}) async {
+      {CarPlayNavOrigin? origin}) async {
     List<JellyfinTrack> tracks;
     try {
       tracks =
@@ -1173,7 +1249,7 @@ class CarPlayService {
     );
   }
 
-  Future<void> _showFavorites({CPTemplate? origin}) async {
+  Future<void> _showFavorites({CarPlayNavOrigin? origin}) async {
     if (await _blockedByNoLibrary('Favorites', origin)) return;
     List<JellyfinTrack> favorites;
     try {
@@ -1210,7 +1286,7 @@ class CarPlayService {
     );
   }
 
-  Future<void> _showRecentlyPlayed({CPTemplate? origin}) async {
+  Future<void> _showRecentlyPlayed({CarPlayNavOrigin? origin}) async {
     if (appState.isOfflineMode) {
       await _showMessage('Recently Played', 'Not available offline', origin: origin);
       return;
@@ -1244,7 +1320,7 @@ class CarPlayService {
     );
   }
 
-  Future<void> _showDownloads({CPTemplate? origin}) async {
+  Future<void> _showDownloads({CarPlayNavOrigin? origin}) async {
     final downloads = appState.downloadService.completedDownloads;
     if (downloads.isEmpty) {
       await _showMessage(
@@ -1267,41 +1343,56 @@ class CarPlayService {
 
   // ============ Browse A–Z (search alternative) ============
 
-  static String _letterOf(String name) {
+  /// Bucket of a (sort) name for local browsing: "A"–"Z", or "#".
+  @visibleForTesting
+  static String letterOf(String name) {
     if (name.isEmpty) return '#';
     final c = name[0].toUpperCase();
     final code = c.codeUnitAt(0);
     return (code >= 65 && code <= 90) ? c : '#';
   }
 
+  /// Server filter for a bucket. Jellyfin matches both parameters against
+  /// the item's SortName, which it stores lowercased; "#" is everything that
+  /// sorts before "a" (digits, symbols), like Jellyfin's own alphabet picker.
+  @visibleForTesting
+  static ({String? nameStartsWith, String? nameLessThan}) letterFilter(
+          String letter) =>
+      letter == '#'
+          ? (nameStartsWith: null, nameLessThan: 'a')
+          : (nameStartsWith: letter.toLowerCase(), nameLessThan: null);
+
   Future<void> _showAlphabeticalLetters(
-      {required bool forArtists, CPTemplate? origin}) async {
+      {required bool forArtists, CarPlayNavOrigin? origin}) async {
     final title = forArtists ? 'Artists A–Z' : 'Albums A–Z';
     if (await _blockedByNoLibrary(title, origin)) return;
-    List<String> names;
-    try {
-      names = forArtists
-          ? (await _artistNameIndex()).map((a) => a.groupingName).toList()
-          : (await _albumNameIndex()).map((a) => a.groupingName).toList();
-    } catch (e) {
-      await _showLoadError(title, e, origin);
-      return;
-    }
-    if (names.isEmpty) {
-      await _showMessage(title, 'Nothing to browse yet', origin: origin);
-      return;
-    }
 
-    final buckets = <String, int>{};
-    for (final n in names) {
-      buckets.update(_letterOf(n), (v) => v + 1, ifAbsent: () => 1);
+    // Online the buckets are fetched per letter from the server, whatever
+    // the library size; counting them would take 27 requests, so the online
+    // page lists every letter without counts. Local data is counted.
+    List<String> letters = _letters;
+    Map<String, int>? counts;
+    if (_browsesLocally) {
+      List<String> names;
+      try {
+        names = forArtists
+            ? (await _localArtists()).map((a) => a.groupingName).toList()
+            : (await _localAlbums()).map((a) => a.groupingName).toList();
+      } catch (e) {
+        await _showLoadError(title, e, origin);
+        return;
+      }
+      if (names.isEmpty) {
+        await _showMessage(title, 'Nothing to browse yet', origin: origin);
+        return;
+      }
+      final buckets = <String, int>{};
+      for (final n in names) {
+        buckets.update(letterOf(n), (v) => v + 1, ifAbsent: () => 1);
+      }
+      counts = buckets;
+      letters = _letters.where(buckets.containsKey).toList();
     }
-    final letters = buckets.keys.toList()
-      ..sort((a, b) {
-        if (a == '#') return -1;
-        if (b == '#') return 1;
-        return a.compareTo(b);
-      });
 
     if (!_stillAt(origin)) return;
     await _push(CPListTemplate(
@@ -1311,7 +1402,9 @@ class CarPlayService {
           for (final letter in letters)
             CPListItem(
               text: letter,
-              detailText: '${buckets[letter]} ${forArtists ? 'artists' : 'albums'}',
+              detailText: counts == null
+                  ? null
+                  : '${counts[letter]} ${forArtists ? 'artists' : 'albums'}',
               accessoryType: CPListItemAccessoryType.disclosureIndicator,
               onPress: _tap((o) =>
                   _showLetterBucket(letter, forArtists: forArtists, origin: o)),
@@ -1322,33 +1415,70 @@ class CarPlayService {
     ));
   }
 
+  /// One page of a letter's artists or albums, fetched from the server
+  /// per page (online) or filtered from local data.
   Future<void> _showLetterBucket(String letter,
       {required bool forArtists,
       int offset = 0,
-      CPTemplate? origin,
+      CarPlayNavOrigin? origin,
       bool replaceTop = false}) async {
     final title = forArtists ? 'Artists · $letter' : 'Albums · $letter';
-    List<Object> matching;
+    if (await _blockedByNoLibrary(title, origin)) return;
+    List<Object> page;
+    bool hasMore;
+    String moreDetail;
     try {
-      matching = forArtists
-          ? (await _artistNameIndex())
-              .where((a) => _letterOf(a.groupingName) == letter)
-              .toList()
-          : (await _albumNameIndex())
-              .where((a) => _letterOf(a.groupingName) == letter)
-              .toList();
+      final pageSize = await _pageSize();
+      if (_browsesLocally) {
+        final List<Object> matching = forArtists
+            ? (await _localArtists())
+                .where((a) => letterOf(a.groupingName) == letter)
+                .toList()
+            : (await _localAlbums())
+                .where((a) => letterOf(a.groupingName) == letter)
+                .toList();
+        page = matching.skip(offset).take(pageSize).toList();
+        hasMore = offset + page.length < matching.length;
+        moreDetail = '${matching.length - offset - page.length} more';
+      } else {
+        final libraryId = appState.selectedLibraryId;
+        if (libraryId == null) return;
+        final filter = letterFilter(letter);
+        // One extra to learn whether another page exists.
+        final List<Object> fetched = forArtists
+            ? await appState.jellyfinService
+                .loadArtistsByNamePrefix(
+                  libraryId: libraryId,
+                  nameStartsWith: filter.nameStartsWith,
+                  nameLessThan: filter.nameLessThan,
+                  startIndex: offset,
+                  limit: pageSize + 1,
+                )
+                .timeout(_fetchTimeout)
+            : await appState.jellyfinService
+                .loadAlbumsByNamePrefix(
+                  libraryId: libraryId,
+                  nameStartsWith: filter.nameStartsWith,
+                  nameLessThan: filter.nameLessThan,
+                  startIndex: offset,
+                  limit: pageSize + 1,
+                )
+                .timeout(_fetchTimeout);
+        hasMore = fetched.length > pageSize;
+        page = fetched.take(pageSize).toList();
+        moreDetail = forArtists ? 'More artists' : 'More albums';
+      }
     } catch (e) {
       await _showLoadError(title, e, origin);
       return;
     }
-    if (matching.isEmpty) {
-      await _showMessage(title, 'Nothing under $letter', origin: origin);
+    if (page.isEmpty) {
+      await _showMessage(
+          title, offset == 0 ? 'Nothing under $letter' : 'Nothing more under $letter',
+          origin: origin);
       return;
     }
 
-    final pageSize = await _pageSize();
-    final page = matching.skip(offset).take(pageSize).toList();
-    final hasMore = offset + page.length < matching.length;
     final albumArt = (!forArtists && appState.isOfflineMode)
         ? await _localAlbumArt(page.whereType<JellyfinAlbum>())
         : const <String, String>{};
@@ -1361,7 +1491,7 @@ class CarPlayService {
           _albumRow(entry, imageOverride: albumArt[entry.id]),
       if (hasMore)
         _loadMoreRow(
-          '${matching.length - offset - page.length} more',
+          moreDetail,
           (o) => _showLetterBucket(letter,
               forArtists: forArtists,
               offset: offset + page.length,
@@ -1391,13 +1521,33 @@ class CarPlayService {
   }
 }
 
-class _NameIndex<T> {
-  _NameIndex(this.key, this.items) : createdAt = DateTime.now();
+/// Where a CarPlay row action started: the page it was tapped on and the
+/// navigation generation at that moment.
+@visibleForTesting
+class CarPlayNavOrigin {
+  const CarPlayNavOrigin(this.page, this.generation);
 
-  final String key;
-  final List<T> items;
-  final DateTime createdAt;
+  final Object? page;
+  final int generation;
+}
 
-  bool isValidFor(String currentKey, Duration ttl) =>
-      key == currentKey && DateTime.now().difference(createdAt) < ttl;
+/// Decides whether a row action that loaded asynchronously may still show
+/// its result. Every tap starts a new generation, and [invalidate] starts
+/// one for events that make in-flight results unwanted (Now Playing shown,
+/// account or offline switch, CarPlay disconnect). An action may push only
+/// while its generation is current and its page is still on top.
+@visibleForTesting
+class CarPlayNavGate {
+  int _generation = 0;
+
+  int get generation => _generation;
+
+  void invalidate() => _generation++;
+
+  /// A new tap on [top]; supersedes every earlier in-flight action.
+  CarPlayNavOrigin begin(Object? top) => CarPlayNavOrigin(top, ++_generation);
+
+  bool isCurrent(CarPlayNavOrigin? origin, Object? top) =>
+      origin == null ||
+      (origin.generation == _generation && identical(origin.page, top));
 }

@@ -92,7 +92,10 @@ class _GenreDetailScreenState extends State<GenreDetailScreen> {
       }
 
       // Use repository instead of direct client call to support offline mode
-      albums = await _appState!.repository.getGenreAlbums(widget.genre.id);
+      albums = await _appState!.repository.getGenreAlbums(
+        widget.genre.id,
+        libraryId: libraryId,
+      );
     } catch (e) {
       error = e;
     }
@@ -117,11 +120,13 @@ class _GenreDetailScreenState extends State<GenreDetailScreen> {
   }
 
   Widget _buildBody(ThemeData theme) {
-    if (_isLoading) {
+    final hasAlbums = _albums != null && _albums!.isNotEmpty;
+    if (_isLoading && !hasAlbums) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_error != null) {
+    // A failed reload keeps the albums already shown.
+    if (_error != null && !hasAlbums) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -131,6 +136,11 @@ class _GenreDetailScreenState extends State<GenreDetailScreen> {
             Text('Failed to load albums', style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
             Text(_error.toString(), textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: () => unawaited(_loadAlbums()),
+              child: const Text('Retry'),
+            ),
           ],
         ),
       );

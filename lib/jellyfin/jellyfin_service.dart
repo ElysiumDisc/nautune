@@ -444,6 +444,89 @@ class JellyfinService {
     }
   }
 
+  /// Every album in [libraryId] tagged with [genreId], paged in name order.
+  Future<List<JellyfinAlbum>> loadGenreAlbums({
+    required String libraryId,
+    required String genreId,
+  }) async {
+    final client = _client;
+    final session = _session;
+    if (client == null || session == null) {
+      throw StateError('Authenticate before requesting genre albums.');
+    }
+
+    const pageSize = 200;
+    const maxPages = 50; // 10,000 albums: a guard against a looping server.
+    final seen = <String>{};
+    final albums = <JellyfinAlbum>[];
+    for (var page = 0; page < maxPages; page++) {
+      final batch = await client.fetchAlbums(
+        credentials: session.credentials,
+        libraryId: libraryId,
+        genreIds: genreId,
+        startIndex: page * pageSize,
+        limit: pageSize,
+      );
+      var added = 0;
+      for (final album in batch) {
+        if (seen.add(album.id)) {
+          albums.add(album);
+          added++;
+        }
+      }
+      if (batch.length < pageSize || added == 0) break;
+    }
+    return albums;
+  }
+
+  /// One uncached page of albums filtered by sort-name prefix (see
+  /// [JellyfinClient.fetchAlbumsByNamePrefix]). Used by CarPlay's A–Z browse.
+  Future<List<JellyfinAlbum>> loadAlbumsByNamePrefix({
+    required String libraryId,
+    String? nameStartsWith,
+    String? nameLessThan,
+    int startIndex = 0,
+    int limit = 50,
+  }) async {
+    final client = _client;
+    final session = _session;
+    if (client == null || session == null) {
+      throw StateError('Authenticate before requesting albums.');
+    }
+    return client.fetchAlbumsByNamePrefix(
+      credentials: session.credentials,
+      libraryId: libraryId,
+      nameStartsWith: nameStartsWith,
+      nameLessThan: nameLessThan,
+      startIndex: startIndex,
+      limit: limit,
+    );
+  }
+
+  /// One uncached page of artists filtered by sort-name prefix (see
+  /// [JellyfinClient.fetchArtistsByNamePrefix]). Used by CarPlay's A–Z browse.
+  Future<List<JellyfinArtist>> loadArtistsByNamePrefix({
+    required String libraryId,
+    String? nameStartsWith,
+    String? nameLessThan,
+    int startIndex = 0,
+    int limit = 50,
+  }) async {
+    final client = _client;
+    final session = _session;
+    if (client == null || session == null) {
+      throw StateError('Authenticate before requesting artists.');
+    }
+    return client.fetchArtistsByNamePrefix(
+      credentials: session.credentials,
+      libraryId: libraryId,
+      nameStartsWith: nameStartsWith,
+      nameLessThan: nameLessThan,
+      startIndex: startIndex,
+      limit: limit,
+    );
+  }
+
   Future<List<JellyfinAlbum>> loadAlbumsByArtist({
     required String artistId,
   }) async {
@@ -864,10 +947,13 @@ class JellyfinService {
 
   /// `POST /Playlists/{playlistId}/Items`. [position] (0-based insert
   /// index; omitted = append) exists since 12.0; 10.11 ignores it and appends.
+  /// [onChunkSent] gets the number of ids added so far after each chunk, so
+  /// a replay that fails part-way can resume without re-adding them.
   Future<void> addItemsToPlaylist({
     required String playlistId,
     required List<String> itemIds,
     int? position,
+    void Function(int sentCount)? onChunkSent,
   }) async {
     final client = _client;
     if (client == null) throw StateError('Not connected');
@@ -890,6 +976,7 @@ class JellyfinService {
           },
         );
         offset += chunk.length;
+        onChunkSent?.call(offset);
       }
     } finally {
       _clearPlaylistCache();
@@ -959,7 +1046,7 @@ class JellyfinService {
       queryParams: {
         'userId': session.credentials.userId,
         'fields':
-            'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams',
+            'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Genres,ProviderIds',
         'enableImageTypes': 'Primary,Thumb',
         'enableUserData': 'true',
       },
@@ -1113,7 +1200,7 @@ class JellyfinService {
         'filters': 'IsFavorite',
         'sortBy': 'SortName',
         'fields':
-            'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams',
+            'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Genres,ProviderIds',
         'enableImageTypes': 'Primary,Thumb',
         'enableUserData': 'true',
       },
@@ -1131,6 +1218,38 @@ class JellyfinService {
           ),
         )
         .toList();
+  }
+
+  /// Number of the user's favorite items of [itemTypes] (e.g. `Audio`,
+  /// `MusicAlbum`), in [libraryId] when given, without downloading them:
+  /// a `Limit=0` query that only reads `TotalRecordCount`.
+  Future<int> countFavorites({
+    required String itemTypes,
+    String? libraryId,
+  }) async {
+    final session = _session;
+    if (session == null) return 0;
+    final activeClient = _client;
+    if (activeClient == null) return 0;
+
+    final response = await activeClient.request(
+      method: 'GET',
+      path: '/Items',
+      credentials: session.credentials,
+      queryParams: {
+        'userId': session.credentials.userId,
+        'includeItemTypes': itemTypes,
+        'recursive': 'true',
+        'filters': 'IsFavorite',
+        'parentId': ?libraryId,
+        'limit': '0',
+        'enableTotalRecordCount': 'true',
+        'enableImages': 'false',
+        'enableUserData': 'false',
+      },
+    );
+    final total = response['TotalRecordCount'];
+    return total is num ? total.toInt() : 0;
   }
 
   /// Load genres for a library
@@ -1226,6 +1345,58 @@ class JellyfinService {
     )).toList();
   }
 
+  /// Every track by [artistId] in [libraryId] (up to [limit]), paged in a
+  /// stable order. Unlike [getArtistMix] this is the artist's catalogue, not
+  /// a random sample, so sorting, "Play All" and downloads see every song.
+  Future<List<JellyfinTrack>> getAllArtistTracks({
+    required String artistId,
+    String? libraryId,
+    int limit = 5000,
+  }) async {
+    final client = _client;
+    if (client == null) throw StateError('Not connected');
+    final session = _session;
+    if (session == null) throw StateError('No session');
+
+    return collectStablePages<JellyfinTrack>(
+      idOf: (t) => t.id,
+      limit: limit,
+      pageSize: 500,
+      fetchPage: ({required int startIndex, required int limit}) async {
+        final page = await client.fetchItemsPage(
+          session.credentials,
+          query: {
+            'userId': session.credentials.userId,
+            'ArtistIds': artistId,
+            'ParentId': ?libraryId,
+            'IncludeItemTypes': 'Audio',
+            'Recursive': 'true',
+            'SortBy': 'PlayCount,SortName',
+            'SortOrder': 'Descending,Ascending',
+            'StartIndex': '$startIndex',
+            'Limit': '$limit',
+            'Fields':
+                'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags,DateCreated,Genres,ProviderIds',
+            'EnableUserData': 'true',
+          },
+          timeout: const Duration(seconds: 45),
+          errorLabel: 'artist tracks',
+        );
+        return (
+          items: page.items
+              .map((json) => JellyfinTrack.fromJson(
+                    json,
+                    serverUrl: session.serverUrl,
+                    token: session.credentials.accessToken,
+                    userId: session.credentials.userId,
+                  ))
+              .toList(),
+          totalRecordCount: page.totalRecordCount,
+        );
+      },
+    );
+  }
+
   /// Get most played tracks for a library
   Future<List<JellyfinTrack>> getMostPlayedTracks({
     required String libraryId,
@@ -1280,7 +1451,7 @@ class JellyfinService {
             'SortOrder': 'Descending,Ascending',
             'StartIndex': '$startIndex',
             'Limit': '$limit',
-            'Fields': 'MediaStreams,Genres,Tags',
+            'Fields': 'MediaStreams,Genres,Tags,ProviderIds',
             'EnableImageTypes': 'Primary,Thumb',
             'EnableUserData': 'true',
           },

@@ -81,6 +81,9 @@ class _IndexedCollectionViewState<T> extends State<IndexedCollectionView<T>> {
   bool? _sectionsAscending;
   bool _loadingAll = false;
 
+  /// Latest letter picked on the index strip.
+  String? _requestedLetter;
+
   List<LetterSection<T>> get _currentSections {
     if (!identical(_sectionsItems, widget.items) ||
         _sectionsAscending != widget.ascending ||
@@ -126,6 +129,7 @@ class _IndexedCollectionViewState<T> extends State<IndexedCollectionView<T>> {
   }
 
   Future<void> _jumpToLetter(String letter, double width) async {
+    _requestedLetter = letter;
     final controller = widget.controller;
     var sections = _currentSections;
     var present = [for (final s in sections) s.letter];
@@ -146,10 +150,13 @@ class _IndexedCollectionViewState<T> extends State<IndexedCollectionView<T>> {
       if (!mounted) return;
       sections = _currentSections;
       present = [for (final s in sections) s.letter];
+      // The finger kept moving while the pages loaded: go to the letter it
+      // is on (or was released on) now, not the one that started the load.
     }
+    final wanted = _requestedLetter ?? letter;
 
     final resolved =
-        resolveIndexLetter(letter, present, ascending: widget.ascending);
+        resolveIndexLetter(wanted, present, ascending: widget.ascending);
     if (resolved == null || !controller.hasClients) return;
     final offsets =
         sectionOffsets(sections, _geometry(width, true), leading: _leading);

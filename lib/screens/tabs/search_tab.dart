@@ -191,35 +191,28 @@ class _SearchTabState extends State<_SearchTab>
           );
         }).toList();
 
-        // Build artist groups for artist search
-        final Map<String, List<DownloadItem>> artistGroups = {};
+        // Every credited artist, by their own name (a collaboration's
+        // second artist is searchable too).
+        final Map<String, JellyfinArtist> artistsById = {};
         for (final download in downloads) {
-          final artistName = download.track.displayArtist;
-          if (!artistGroups.containsKey(artistName)) {
-            artistGroups[artistName] = [];
+          for (final artist in offlineTrackArtists(download.track)) {
+            artistsById.putIfAbsent(
+              artist.id,
+              () => JellyfinArtist(id: artist.id, name: artist.name),
+            );
           }
-          artistGroups[artistName]!.add(download);
         }
 
         // Filter artists by query
-        final matchingArtists = artistGroups.keys
-            .where((name) => name.toLowerCase().contains(lowerQuery))
+        final matchingArtists = artistsById.values
+            .where((artist) => artist.name.toLowerCase().contains(lowerQuery))
             .take(50)
-            .map((name) => JellyfinArtist(
-              id: 'offline_$name',
-              name: name,
-            ))
             .toList();
 
         // Filter tracks by query
         final matchingTracks = downloads
+            .where((download) => offlineItemMatches(download, trimmed))
             .map((download) => download.track)
-            .where((track) {
-              final albumName = track.album?.toLowerCase() ?? '';
-              return track.name.toLowerCase().contains(lowerQuery) ||
-                  track.displayArtist.toLowerCase().contains(lowerQuery) ||
-                  albumName.contains(lowerQuery);
-            })
             .take(100)
             .toList();
 
@@ -346,6 +339,13 @@ class _SearchTabState extends State<_SearchTab>
                 ),
               ],
             ),
+          ),
+        // The Easter egg card is known from the query alone: show it right
+        // away instead of behind the spinner until the server answers.
+        if (_isLoading && _easterEgg != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: _buildEasterEggCard(theme, _easterEgg!),
           ),
         Expanded(
           child: _isLoading

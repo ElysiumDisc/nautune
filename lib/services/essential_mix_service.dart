@@ -110,6 +110,22 @@ class EssentialMixStorageStats {
   }
 }
 
+/// What to do with a (possibly partial) download given the server's answer.
+enum EssentialMixResumeAction {
+  /// 206 from the offset we asked for: append to the partial file.
+  append,
+
+  /// 200: the whole file is coming; write it from the start.
+  restart,
+
+  /// The partial file can't be continued (416, or a 206 from another
+  /// offset): delete it.
+  discardPartial,
+
+  /// Any other status: fail, keeping the partial for the next attempt.
+  fail,
+}
+
 /// Thrown inside a download when the user cancels it.
 class _EssentialMixCancelled implements Exception {
   const _EssentialMixCancelled();
@@ -123,7 +139,27 @@ class EssentialMixService extends ChangeNotifier {
   static EssentialMixService get instance => _instance ??= EssentialMixService._();
 
   EssentialMixService._() {
-    _initializeAndLoad();
+    _initFuture = _initializeAndLoad();
+  }
+
+  late final Future<void> _initFuture;
+
+  /// Completes once the saved download state is loaded (and verified).
+  Future<void> initialize() => _initFuture;
+
+  /// Whether [trackId] is the Essential Mix's virtual track.
+  static bool isEssentialMixTrackId(String trackId) =>
+      trackId.startsWith('essential-mix');
+
+  /// For a track restored from a saved queue: the Essential Mix's virtual
+  /// track rebuilt against today's download (its stored file path is absolute
+  /// and goes stale when iOS moves the app container on update), or null if
+  /// the mix is no longer downloaded, so the caller can drop it. Any other
+  /// track is returned unchanged.
+  Future<JellyfinTrack?> resolveRestoredTrack(JellyfinTrack track) async {
+    if (!isEssentialMixTrackId(track.id)) return track;
+    await _initFuture;
+    return getVirtualTrack();
   }
 
   final http.Client _httpClient = http.Client();
@@ -362,6 +398,8 @@ class EssentialMixService extends ChangeNotifier {
   /// Range request instead of starting the 234 MB over. Stalls time out, and
   /// [cancelDownload] aborts the transfer immediately.
   Future<void> startDownload() async {
+    // The saved state must be loaded first, or it would overwrite this run's.
+    await _initFuture;
     if (_state.isDownloading) return;
     if (_state.isDownloaded) return;
 
@@ -451,8 +489,47 @@ class EssentialMixService extends ChangeNotifier {
     }
   }
 
-  /// Delete downloaded files.
+  /// Size of a partial download left by a failed attempt (resumed by the
+  /// next [startDownload]), or 0.
+  Future<int> partialDownloadBytes() async {
+    if (_state.isDownloading) return 0;
+    try {
+      final part = File('${(await _getAudioDirectory()).path}/$_audioFileName.part');
+      return await part.exists() ? await part.length() : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// Delete the partial download (and any failed state) so it no longer
+  /// takes up space.
+  Future<void> discardPartialDownload() async {
+    if (_state.isDownloading) return;
+    await _deletePartials();
+    if (_state.status == EssentialMixDownloadStatus.failed) {
+      _state = const EssentialMixDownloadState(
+        status: EssentialMixDownloadStatus.notDownloaded,
+      );
+      await _saveState();
+    }
+    notifyListeners();
+  }
+
+  Future<void> _deletePartials() async {
+    try {
+      final audio = File('${(await _getAudioDirectory()).path}/$_audioFileName.part');
+      if (await audio.exists()) await audio.delete();
+      final art = File('${(await _getArtworkDirectory()).path}/$_artworkFileName.part');
+      if (await art.exists()) await art.delete();
+    } catch (e) {
+      debugPrint('EssentialMixService: partial cleanup failed: $e');
+    }
+  }
+
+  /// Delete downloaded files (and any leftover partial download).
   Future<void> deleteDownload() async {
+    if (_state.isDownloading) return;
+    await _deletePartials();
     // Delete audio file
     if (_state.audioPath != null) {
       try {
@@ -525,6 +602,29 @@ class EssentialMixService extends ChangeNotifier {
     return _cachedStats!;
   }
 
+  /// Decide how to continue a download that already has [existingBytes] in
+  /// its `.part` file, from the response [statusCode] and `Content-Range`.
+  @visibleForTesting
+  static EssentialMixResumeAction resumeActionFor({
+    required int statusCode,
+    required int existingBytes,
+    String? contentRange,
+  }) {
+    if (statusCode == 200) return EssentialMixResumeAction.restart;
+    if (statusCode == 206 && existingBytes > 0) {
+      // "bytes <start>-<end>/<total>": the server must resume where we are.
+      final start = RegExp(r'bytes\s+(\d+)-').firstMatch(contentRange ?? '');
+      if (start != null && int.parse(start.group(1)!) != existingBytes) {
+        return EssentialMixResumeAction.discardPartial;
+      }
+      return EssentialMixResumeAction.append;
+    }
+    if (statusCode == 416 && existingBytes > 0) {
+      return EssentialMixResumeAction.discardPartial;
+    }
+    return EssentialMixResumeAction.fail;
+  }
+
   /// Download [url] to [savePath] through `savePath.part`, renamed into
   /// place only once the whole body arrived.
   ///
@@ -569,19 +669,28 @@ class EssentialMixService extends ChangeNotifier {
       ]);
 
       final bool append;
-      if (response.statusCode == 206 && existing > 0) {
-        append = true;
-      } else if (response.statusCode == 200) {
-        append = false;
-        existing = 0;
-      } else if (response.statusCode == 416 && existing > 0) {
-        // Our partial is unusable (e.g. file changed upstream): start over.
-        unawaited(response.stream.drain<void>().catchError((_) {}));
-        await part.delete();
-        throw HttpException('HTTP 416 (restarting)', uri: request.url);
-      } else {
-        unawaited(response.stream.drain<void>().catchError((_) {}));
-        throw HttpException('HTTP ${response.statusCode}', uri: request.url);
+      switch (resumeActionFor(
+        statusCode: response.statusCode,
+        existingBytes: existing,
+        contentRange: response.headers['content-range'],
+      )) {
+        case EssentialMixResumeAction.append:
+          append = true;
+        case EssentialMixResumeAction.restart:
+          append = false;
+          existing = 0;
+        case EssentialMixResumeAction.discardPartial:
+          // Our partial is unusable (e.g. file changed upstream, or the
+          // server resumed from the wrong offset): start over next time.
+          unawaited(response.stream.drain<void>().catchError((_) {}));
+          await part.delete();
+          throw HttpException(
+            'HTTP ${response.statusCode} (restarting)',
+            uri: request.url,
+          );
+        case EssentialMixResumeAction.fail:
+          unawaited(response.stream.drain<void>().catchError((_) {}));
+          throw HttpException('HTTP ${response.statusCode}', uri: request.url);
       }
 
       final bodyLength = response.contentLength ?? 0;

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../app_state.dart';
 import '../providers/connectivity_provider.dart';
+import '../services/essential_mix_service.dart';
+import '../services/network_download_service.dart';
 import 'essential_mix_screen.dart';
 import 'frets_on_fire_screen.dart';
 import 'healing_frequencies_screen.dart';
@@ -10,15 +13,40 @@ import 'piano_screen.dart';
 import 'relax_mode_screen.dart';
 
 /// A discoverable hub listing every Easter egg, with quick descriptions and
-/// offline-capability chips. Reached from Settings → Your Music → Easter Eggs.
+/// offline-capability chips. Reached from Settings → About → Easter Eggs.
 class EasterEggsScreen extends StatelessWidget {
   const EasterEggsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // No network, or the user chose "Go offline".
     final isOffline =
-        context.watch<ConnectivityProvider>().networkAvailable == false;
+        context.watch<ConnectivityProvider>().networkAvailable == false ||
+            context.select<NautuneAppState, bool>((s) => s.isOfflineMode);
+    final network = NetworkDownloadService.instance;
+    final essentialMix = EssentialMixService.instance;
+
+    // Download state loads asynchronously; rebuild when it arrives.
+    return ListenableBuilder(
+      listenable: Listenable.merge([network, essentialMix]),
+      builder: (context, _) => _buildList(
+        context,
+        theme,
+        isOffline: isOffline,
+        networkDownloaded: network.downloadedCount > 0,
+        essentialMixDownloaded: essentialMix.isDownloaded,
+      ),
+    );
+  }
+
+  Widget _buildList(
+    BuildContext context,
+    ThemeData theme, {
+    required bool isOffline,
+    required bool networkDownloaded,
+    required bool essentialMixDownloaded,
+  }) {
 
     final eggs = <_EasterEggEntry>[
       _EasterEggEntry(
@@ -40,6 +68,7 @@ class EasterEggsScreen extends StatelessWidget {
         background: Colors.black,
         keyword: 'network',
         offlineCapable: false,
+        hasDownloads: networkDownloaded,
         builder: (_) => const NetworkScreen(),
       ),
       _EasterEggEntry(
@@ -50,6 +79,7 @@ class EasterEggsScreen extends StatelessWidget {
         background: const Color(0xFF1A1A2E),
         keyword: 'essential',
         offlineCapable: false,
+        hasDownloads: essentialMixDownloaded,
         builder: (_) => const EssentialMixScreen(),
       ),
       _EasterEggEntry(
@@ -129,7 +159,9 @@ class EasterEggsScreen extends StatelessWidget {
     _EasterEggEntry egg,
     bool isOffline,
   ) {
-    final disabledByOffline = isOffline && !egg.offlineCapable;
+    // Download-based eggs play what's saved offline.
+    final worksOffline = egg.offlineCapable || egg.hasDownloads;
+    final disabledByOffline = isOffline && !worksOffline;
     final tile = Card(
       color: egg.background,
       margin: const EdgeInsets.only(bottom: 10),
@@ -160,14 +192,20 @@ class EasterEggsScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 6),
-              Row(
+              // Wrap: both chips don't fit on one line on most iPhones.
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
                 children: [
                   _chip(
                     theme,
-                    egg.offlineCapable ? 'Works offline' : 'Needs downloads',
-                    egg.offlineCapable ? Colors.green : Colors.amber,
+                    egg.offlineCapable
+                        ? 'Works offline'
+                        : egg.hasDownloads
+                            ? 'Downloads play offline'
+                            : 'Needs downloads',
+                    worksOffline ? Colors.green : Colors.amber,
                   ),
-                  const SizedBox(width: 6),
                   _chip(
                     theme,
                     'Search: "${egg.keyword}"',
@@ -189,7 +227,7 @@ class EasterEggsScreen extends StatelessWidget {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text(
-                  'Offline — this egg needs downloads. Go online to download first.',
+                  'Offline — nothing downloaded yet. Go online to download first.',
                 ),
                 duration: Duration(seconds: 3),
               ),
@@ -236,6 +274,9 @@ class _EasterEggEntry {
   final Color? background;
   final String keyword;
   final bool offlineCapable;
+
+  /// Something is downloaded, so the egg is usable offline.
+  final bool hasDownloads;
   final WidgetBuilder builder;
 
   const _EasterEggEntry({
@@ -247,5 +288,6 @@ class _EasterEggEntry {
     required this.offlineCapable,
     required this.builder,
     this.background,
+    this.hasDownloads = false,
   });
 }

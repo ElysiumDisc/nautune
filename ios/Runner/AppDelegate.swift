@@ -1,11 +1,15 @@
 import UIKit
 import Flutter
+import CarPlay
+import MediaPlayer
 
 let flutterEngine = FlutterEngine(name: "SharedEngine", project: nil, allowHeadlessExecution: true)
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
   private var fileAttributesChannel: FlutterMethodChannel?
+  private var nowPlayingModesChannel: FlutterMethodChannel?
+  private var carPlayNavigationChannel: FlutterMethodChannel?
 
   override func application(
     _ application: UIApplication,
@@ -32,6 +36,11 @@ let flutterEngine = FlutterEngine(name: "SharedEngine", project: nil, allowHeadl
     // File attributes channel: lets Dart exclude the offline downloads
     // directory from iCloud/iTunes backup (App Review 2.23).
     registerFileAttributesChannel(messenger: flutterEngine.binaryMessenger)
+
+    // Shuffle/repeat state for CarPlay's Now Playing buttons (audio_service
+    // doesn't set it), and CarPlay's real navigation stack for Dart.
+    registerNowPlayingModesChannel(messenger: flutterEngine.binaryMessenger)
+    registerCarPlayNavigationChannel(messenger: flutterEngine.binaryMessenger)
 
     // Background-time for saving playback state is requested in
     // SceneDelegate.sceneDidEnterBackground (scene-based lifecycle).
@@ -66,5 +75,70 @@ let flutterEngine = FlutterEngine(name: "SharedEngine", project: nil, allowHeadl
       }
     }
     fileAttributesChannel = channel
+  }
+
+  /// Channel "nautune/now_playing_modes"
+  ///   setModes({shuffle: Bool, repeat: "none" | "one" | "all"}) -> Bool
+  /// audio_service enables the shuffle/repeat remote commands but never sets
+  /// their current type, so CarPlay's Now Playing buttons always showed "off"
+  /// and cycled from the wrong state. Method-channel handlers run on the main
+  /// thread, which MPRemoteCommandCenter expects.
+  private func registerNowPlayingModesChannel(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(name: "nautune/now_playing_modes", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "setModes":
+        guard let args = call.arguments as? [String: Any],
+              let shuffle = args["shuffle"] as? Bool,
+              let repeatMode = args["repeat"] as? String else {
+          result(FlutterError(code: "INVALID_ARGS", message: "shuffle and repeat required", details: nil))
+          return
+        }
+        let center = MPRemoteCommandCenter.shared()
+        center.changeShuffleModeCommand.currentShuffleType = shuffle ? .items : .off
+        switch repeatMode {
+        case "one":
+          center.changeRepeatModeCommand.currentRepeatType = .one
+        case "all":
+          center.changeRepeatModeCommand.currentRepeatType = .all
+        default:
+          center.changeRepeatModeCommand.currentRepeatType = .off
+        }
+        result(true)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    nowPlayingModesChannel = channel
+  }
+
+  /// Channel "nautune/carplay_navigation"
+  ///   state() -> {depth: Int, nowPlayingOnTop: Bool} or nil (no CarPlay)
+  /// The real CarPlay template stack. flutter_carplay's Dart history doesn't
+  /// include the Now Playing template (neither the one it pushes nor the one
+  /// CarPlay's own Now Playing button shows), so Dart asks here before
+  /// pushing a page.
+  private func registerCarPlayNavigationChannel(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(name: "nautune/carplay_navigation", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "state":
+        let carPlayScene = UIApplication.shared.connectedScenes
+          .compactMap { $0 as? CPTemplateApplicationScene }
+          .first
+        guard let controller = carPlayScene?.interfaceController else {
+          result(nil)
+          return
+        }
+        let state: [String: Any] = [
+          "depth": controller.templates.count,
+          "nowPlayingOnTop": controller.topTemplate is CPNowPlayingTemplate,
+        ]
+        result(state)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    carPlayNavigationChannel = channel
   }
 }

@@ -2,9 +2,31 @@ import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+
+/// Disk cache for server artwork. The default cache of
+/// `cached_network_image` keeps only 200 files; with a few pixel sizes per
+/// album that is under 100 albums, so a larger library kept evicting and
+/// re-downloading its artwork (and lost it offline). Pass it as
+/// `cacheManager:` to any `CachedNetworkImage` / `CachedNetworkImageProvider`
+/// that shows Jellyfin artwork.
+class NautuneArtworkCacheManager extends CacheManager with ImageCacheManager {
+  factory NautuneArtworkCacheManager() => _instance;
+
+  NautuneArtworkCacheManager._()
+      : super(Config(
+          key,
+          stalePeriod: const Duration(days: 60),
+          maxNrOfCacheObjects: 4000,
+        ));
+
+  static const key = 'nautune_artwork';
+  static final NautuneArtworkCacheManager _instance =
+      NautuneArtworkCacheManager._();
+}
 
 /// Artwork from Jellyfin (or its downloaded copy), decoded at the size it's
 /// shown at.
@@ -73,40 +95,63 @@ class JellyfinImage extends StatefulWidget {
 }
 
 class _JellyfinImageState extends State<JellyfinImage> {
-  Future<File?>? _artistImageFuture;
-  Future<File?>? _albumArtworkFuture;
-  Future<File?>? _artworkFuture;
+  // Async lookups, used only while the download service's image index is
+  // still being built (early startup); afterwards lookups are synchronous.
+  Future<File?>? _localFuture;
 
   @override
   void initState() {
     super.initState();
-    _initFutures();
+    _initFuture();
   }
 
   @override
   void didUpdateWidget(JellyfinImage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Only recreate futures if the relevant IDs change
     if (oldWidget.itemId != widget.itemId ||
         oldWidget.imageTag != widget.imageTag ||
         oldWidget.artistId != widget.artistId ||
         oldWidget.albumId != widget.albumId ||
         oldWidget.trackId != widget.trackId) {
-      _initFutures();
+      _initFuture();
     }
   }
 
-  void _initFutures() {
-    final appState = Provider.of<NautuneAppState>(context, listen: false);
+  bool get _hasLocalCandidate =>
+      widget.artistId != null || widget.albumId != null || widget.trackId != null;
+
+  void _initFuture() {
+    _localFuture = null;
+    if (!_hasLocalCandidate) return;
+    final downloads =
+        Provider.of<NautuneAppState>(context, listen: false).downloadService;
+    if (downloads.imageIndexReady) return;
     if (widget.artistId != null) {
-      _artistImageFuture = appState.downloadService.getArtistImageFile(widget.artistId!);
+      _localFuture = downloads.getArtistImageFile(widget.artistId!);
+    } else if (widget.albumId != null) {
+      _localFuture = downloads.getArtworkFileByAlbumId(widget.albumId!);
+    } else {
+      _localFuture = downloads.getArtworkFile(widget.trackId!);
     }
-    if (widget.albumId != null) {
-      _albumArtworkFuture = appState.downloadService.getArtworkFileByAlbumId(widget.albumId!);
+  }
+
+  /// Downloaded image for this widget, looked up synchronously in the
+  /// download service's index (no file-system calls per widget). Evaluated
+  /// on every build, so artwork downloaded meanwhile shows up on the next
+  /// rebuild.
+  File? _localFileSync(NautuneAppState appState) {
+    final downloads = appState.downloadService;
+    final String? path;
+    if (widget.artistId != null) {
+      path = downloads.localArtistImagePath(widget.artistId!);
+    } else if (widget.albumId != null) {
+      path = downloads.localArtworkPathForAlbum(widget.albumId!);
+    } else if (widget.trackId != null) {
+      path = downloads.localArtworkPathForTrack(widget.trackId!);
+    } else {
+      path = null;
     }
-    if (widget.trackId != null) {
-      _artworkFuture = appState.downloadService.getArtworkFile(widget.trackId!);
-    }
+    return path == null ? null : File(path);
   }
 
   @override
@@ -116,82 +161,58 @@ class _JellyfinImageState extends State<JellyfinImage> {
     }
 
     final appState = Provider.of<NautuneAppState>(context, listen: false);
+    if (!_hasLocalCandidate) return _buildNetworkImage(context, appState);
 
-    // If artistId is provided, try to load downloaded artist image first
-    if (widget.artistId != null) {
-      final isOfflineMarker = widget.imageTag == 'offline';
-      return FutureBuilder<File?>(
-        future: _artistImageFuture,
-        builder: (context, snapshot) {
-          if (snapshot.hasData && snapshot.data != null) {
-            // Offline artist image found - use it!
-            return _buildFileImage(
-              context,
-              snapshot.data!,
-              (context, error, stackTrace) {
-                if (isOfflineMarker) {
-                  if (widget.errorBuilder != null) {
-                    return widget.errorBuilder!(context, '', error);
-                  }
-                  return _buildError(context, error);
-                }
-                return _buildNetworkImage(context, appState);
-              },
-            );
-          }
-          // No offline artist image - fall back to network image (unless offline marker)
-          if (isOfflineMarker) {
-            if (widget.errorBuilder != null) {
-              return widget.errorBuilder!(context, '', 'No offline image available');
-            }
-            return _buildError(context, 'No offline image available');
-          }
-          return _buildNetworkImage(context, appState);
-        },
-      );
+    final pending = _localFuture;
+    if (pending == null || appState.downloadService.imageIndexReady) {
+      return _buildLocalOrNetwork(context, appState, _localFileSync(appState));
+    }
+    // Early startup (image index not built yet): wait for the lookup with a
+    // placeholder instead of starting a network request that a downloaded
+    // file would replace a moment later.
+    return FutureBuilder<File?>(
+      future: pending,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return _buildPlaceholder(context);
+        }
+        return _buildLocalOrNetwork(context, appState, snapshot.data);
+      },
+    );
+  }
+
+  Widget _buildLocalOrNetwork(
+    BuildContext context,
+    NautuneAppState appState,
+    File? local,
+  ) {
+    // An artist marked 'offline' has no server image to fall back to.
+    final offlineOnly = widget.artistId != null && widget.imageTag == 'offline';
+    Widget fallback(BuildContext context, Object? error) {
+      if (!offlineOnly) return _buildNetworkImage(context, appState);
+      if (widget.errorBuilder != null) {
+        return widget.errorBuilder!(context, '', error ?? 'No offline image available');
+      }
+      return _buildError(context, error ?? 'No offline image available');
     }
 
-    // If albumId is provided, try to load downloaded album artwork by album ID
-    if (widget.albumId != null) {
-      return FutureBuilder<File?>(
-        future: _albumArtworkFuture,
-        builder: (context, snapshot) {
-          if (snapshot.hasData && snapshot.data != null) {
-            return _buildFileImage(
-              context,
-              snapshot.data!,
-              (context, error, stackTrace) =>
-                  _buildNetworkImage(context, appState),
-            );
-          }
-          // No offline album artwork - fall back to network image
-          return _buildNetworkImage(context, appState);
-        },
-      );
-    }
+    if (local == null) return fallback(context, null);
+    return _buildFileImage(
+      context,
+      local,
+      (context, error, stackTrace) => fallback(context, error),
+    );
+  }
 
-    // If trackId is provided, try to load downloaded album artwork first
-    if (widget.trackId != null) {
-      return FutureBuilder<File?>(
-        future: _artworkFuture,
-        builder: (context, snapshot) {
-          if (snapshot.hasData && snapshot.data != null) {
-            // Offline artwork found - use it!
-            return _buildFileImage(
-              context,
-              snapshot.data!,
-              (context, error, stackTrace) =>
-                  _buildNetworkImage(context, appState),
-            );
-          }
-          // No offline artwork - fall back to network image
-          return _buildNetworkImage(context, appState);
-        },
-      );
+  Widget _buildPlaceholder(BuildContext context) {
+    if (widget.placeholderBuilder != null) {
+      return widget.placeholderBuilder!(context, '');
     }
-
-    // No trackId or artistId provided - use network image directly
-    return _buildNetworkImage(context, appState);
+    return Container(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      width: widget.width,
+      height: widget.height,
+    );
   }
 
   /// Pixel size to request/decode: width always, height only when a caller
@@ -241,17 +262,12 @@ class _JellyfinImageState extends State<JellyfinImage> {
 
     return CachedNetworkImage(
       imageUrl: imageUrl,
+      cacheManager: NautuneArtworkCacheManager(),
       httpHeaders: appState.jellyfinService.imageHeaders(),
       width: widget.width,
       height: widget.height,
       fit: widget.boxFit,
-      placeholder: widget.placeholderBuilder != null
-          ? (context, url) => widget.placeholderBuilder!(context, url)
-          : (context, url) => Container(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                width: widget.width,
-                height: widget.height,
-              ),
+      placeholder: (context, url) => _buildPlaceholder(context),
       errorWidget: widget.errorBuilder != null
           ? (context, url, error) => widget.errorBuilder!(context, url, error)
           : (context, url, error) => _buildError(context, error),

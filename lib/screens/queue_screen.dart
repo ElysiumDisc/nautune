@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -205,7 +207,9 @@ class _QueueScreenState extends State<QueueScreen> {
 
               return ReorderableListView.builder(
                 itemCount: queue.length,
-                itemExtent: 72, // Fixed height improves scroll calculation performance
+                // Fixed height improves scroll performance; it grows with
+                // the text size so rows never overlap.
+                itemExtent: _rowExtent(context),
                 onReorderItem: (oldIndex, newIndex) {
                   audioService.reorderQueue(oldIndex, newIndex);
                 },
@@ -291,7 +295,7 @@ class _QueueScreenState extends State<QueueScreen> {
                               ),
                           ],
                         ),
-                        // Rows have a fixed 72 pt extent: keep to one line each
+                        // Rows have a fixed extent: keep to one line each
                         // so long names don't draw over the next row.
                         title: Text(
                           track.name,
@@ -332,6 +336,7 @@ class _QueueScreenState extends State<QueueScreen> {
                               const SizedBox(width: 8),
                               IconButton(
                                 icon: const Icon(Icons.close),
+                                tooltip: 'Remove from queue',
                                 onPressed: () {
                                   if (queue.length > 1) {
                                     audioService.removeFromQueue(index);
@@ -354,6 +359,14 @@ class _QueueScreenState extends State<QueueScreen> {
         },
       ),
     );
+  }
+
+  /// Row height: a two-line ListTile (16 pt title, 14 pt subtitle) at the
+  /// user's text size, never below the 72 pt it has at the default size.
+  static double _rowExtent(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
+    final lines = scaler.scale(16) * 1.5 + scaler.scale(14) * 1.45;
+    return math.max(72, lines + 28);
   }
 
   String _formatDuration(Duration duration) {

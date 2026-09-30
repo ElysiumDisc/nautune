@@ -1,3 +1,7 @@
+import 'dart:async';
+
+import 'package:audio_session/audio_session.dart'
+    show AudioInterruptionType, AudioSession;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 
@@ -30,6 +34,11 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
   // Track initialization state
   bool _initialized = false;
 
+  // iOS interruptions (calls, Siri, alarms) pause the loops behind
+  // audioplayers' back; these put them back.
+  StreamSubscription<Object?>? _interruptionSub;
+  bool _interrupted = false;
+
   // Analytics tracking — fully event-driven. Each sound has an optional
   // start timestamp set when its volume transitions 0 → >0 and cleared
   // (with accumulated time flushed) on >0 → 0 or on dispose. Active-listening
@@ -53,6 +62,44 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
   void initState() {
     super.initState();
     _initAudio();
+    unawaited(_listenForInterruptions());
+  }
+
+  List<(AudioPlayer, double)> get _loops => [
+        (_rainPlayer, _rainVolume),
+        (_thunderPlayer, _thunderVolume),
+        (_campfirePlayer, _campfireVolume),
+        (_wavePlayer, _waveVolume),
+        (_loonPlayer, _loonVolume),
+      ];
+
+  Future<void> _listenForInterruptions() async {
+    try {
+      final session = await AudioSession.instance;
+      if (!mounted) return;
+      _interruptionSub = session.interruptionEventStream.listen((event) {
+        if (!mounted || !_initialized) return;
+        if (event.begin) {
+          _interrupted = _isAnySoundActive;
+          // Keep audioplayers' state in step with what iOS did.
+          for (final (player, _) in _loops) {
+            unawaited(player.pause());
+          }
+        } else if (_interrupted && event.type == AudioInterruptionType.pause) {
+          _resumeActiveLoops();
+        }
+        // Otherwise the next slider move resumes them (see _applyVolume).
+      });
+    } catch (e) {
+      debugPrint('RelaxMode: audio session unavailable: $e');
+    }
+  }
+
+  void _resumeActiveLoops() {
+    _interrupted = false;
+    for (final (player, volume) in _loops) {
+      if (volume > 0) unawaited(player.resume());
+    }
   }
 
   bool get _isAnySoundActive =>
@@ -118,6 +165,7 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
 
   @override
   void dispose() {
+    _interruptionSub?.cancel();
     // Flush any still-open per-sound intervals so the final session reflects
     // listening up to the moment the user leaves the screen.
     _flushSound(_rainStartedAt, (ms) => _rainUsageMs += ms);
@@ -152,11 +200,19 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
 
   /// Set a loop's volume; a silent loop is paused rather than left decoding
   /// at volume 0 (which would keep the app playing audio in the background).
-  void _applyVolume(AudioPlayer player, double value) {
+  ///
+  /// Start/stop follow the slider's 0 <-> >0 transitions instead of
+  /// `player.state`, which only changes once the platform call returns: a
+  /// quick 0 -> >0 -> 0 drag used to skip the pause (loop kept playing
+  /// silently) or the resume (slider up, no sound). audioplayers applies
+  /// the last requested state, so overlapping calls settle correctly.
+  void _applyVolume(AudioPlayer player, double value, {required bool wasOn}) {
+    if (_interrupted) _resumeActiveLoops();
     player.setVolume(value);
-    if (value > 0) {
-      if (player.state != PlayerState.playing) player.resume();
-    } else if (player.state == PlayerState.playing) {
+    final isOn = value > 0;
+    if (isOn && !wasOn) {
+      player.resume();
+    } else if (!isOn && wasOn) {
       player.pause();
     }
   }
@@ -165,7 +221,7 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
     final wasOn = _rainVolume > 0;
     final isOn = value > 0;
     setState(() => _rainVolume = value);
-    _applyVolume(_rainPlayer, value);
+    _applyVolume(_rainPlayer, value, wasOn: wasOn);
     if (isOn && !wasOn) {
       _rainStartedAt = DateTime.now();
     } else if (!isOn && wasOn) {
@@ -173,14 +229,15 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
       _rainStartedAt = null;
     }
     _refreshAnyActiveTracking();
-    HapticService.selectionClick();
+    // A click on/off only: onChanged fires on every pointer move.
+    if (isOn != wasOn) HapticService.selectionClick();
   }
 
   void _onThunderVolumeChanged(double value) {
     final wasOn = _thunderVolume > 0;
     final isOn = value > 0;
     setState(() => _thunderVolume = value);
-    _applyVolume(_thunderPlayer, value);
+    _applyVolume(_thunderPlayer, value, wasOn: wasOn);
     if (isOn && !wasOn) {
       _thunderStartedAt = DateTime.now();
     } else if (!isOn && wasOn) {
@@ -188,14 +245,15 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
       _thunderStartedAt = null;
     }
     _refreshAnyActiveTracking();
-    HapticService.selectionClick();
+    // A click on/off only: onChanged fires on every pointer move.
+    if (isOn != wasOn) HapticService.selectionClick();
   }
 
   void _onCampfireVolumeChanged(double value) {
     final wasOn = _campfireVolume > 0;
     final isOn = value > 0;
     setState(() => _campfireVolume = value);
-    _applyVolume(_campfirePlayer, value);
+    _applyVolume(_campfirePlayer, value, wasOn: wasOn);
     if (isOn && !wasOn) {
       _campfireStartedAt = DateTime.now();
     } else if (!isOn && wasOn) {
@@ -203,14 +261,15 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
       _campfireStartedAt = null;
     }
     _refreshAnyActiveTracking();
-    HapticService.selectionClick();
+    // A click on/off only: onChanged fires on every pointer move.
+    if (isOn != wasOn) HapticService.selectionClick();
   }
 
   void _onWaveVolumeChanged(double value) {
     final wasOn = _waveVolume > 0;
     final isOn = value > 0;
     setState(() => _waveVolume = value);
-    _applyVolume(_wavePlayer, value);
+    _applyVolume(_wavePlayer, value, wasOn: wasOn);
     if (isOn && !wasOn) {
       _waveStartedAt = DateTime.now();
     } else if (!isOn && wasOn) {
@@ -218,14 +277,15 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
       _waveStartedAt = null;
     }
     _refreshAnyActiveTracking();
-    HapticService.selectionClick();
+    // A click on/off only: onChanged fires on every pointer move.
+    if (isOn != wasOn) HapticService.selectionClick();
   }
 
   void _onLoonVolumeChanged(double value) {
     final wasOn = _loonVolume > 0;
     final isOn = value > 0;
     setState(() => _loonVolume = value);
-    _applyVolume(_loonPlayer, value);
+    _applyVolume(_loonPlayer, value, wasOn: wasOn);
     if (isOn && !wasOn) {
       _loonStartedAt = DateTime.now();
     } else if (!isOn && wasOn) {
@@ -233,7 +293,8 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
       _loonStartedAt = null;
     }
     _refreshAnyActiveTracking();
-    HapticService.selectionClick();
+    // A click on/off only: onChanged fires on every pointer move.
+    if (isOn != wasOn) HapticService.selectionClick();
   }
 
   @override

@@ -486,13 +486,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 const SizedBox(width: NautuneSpacing.xs),
                 Flexible(
                   child: InkWell(
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (context) => const SettingsScreen(),
-                        ),
-                      );
-                    },
+                    onTap: _openSettings,
                     borderRadius: NautuneRadius.allSm,
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
@@ -541,13 +535,7 @@ class _LibraryScreenState extends State<LibraryScreen>
               IconButton(
                 icon: const Icon(Icons.settings_outlined),
                 tooltip: 'Settings',
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => const SettingsScreen(),
-                    ),
-                  );
-                },
+                onPressed: _openSettings,
               ),
               PopupMenuButton<_LibraryMenuAction>(
                 tooltip: 'More',
@@ -704,6 +692,16 @@ class _LibraryScreenState extends State<LibraryScreen>
         ),
       ),
     );
+  }
+
+  /// Opens Settings, then rebuilds the tabs: some settings live outside
+  /// [NautuneAppState] (e.g. connecting ListenBrainz, which the Home shelf
+  /// checks when it builds).
+  Future<void> _openSettings() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => const SettingsScreen()),
+    );
+    if (mounted) setState(() {});
   }
 
   /// iPad and other wide windows use a sidebar instead of the tab bar.
@@ -1032,21 +1030,56 @@ class _LibraryTabState extends State<_LibraryTab>
   @override
   bool get wantKeepAlive => true;
 
+  /// After a page fails to load, scrolling doesn't retry before this time
+  /// (it used to send a request on every scroll event near the end).
+  static const Duration _pageRetryDelay = Duration(seconds: 5);
+  DateTime? _albumsRetryAfter;
+  DateTime? _artistsRetryAfter;
+
   // Offline the lists are the downloads, all loaded: never page the server.
   void _onAlbumsScroll() {
-    if (widget.appState.isOfflineMode) return;
-    if (_albumsScrollController.position.pixels >=
+    final appState = widget.appState;
+    if (appState.isOfflineMode) return;
+    if (_albumsScrollController.position.pixels <
         _albumsScrollController.position.maxScrollExtent - 200) {
-      widget.appState.loadMoreAlbums();
+      return;
     }
+    final retryAfter = _albumsRetryAfter;
+    if (retryAfter != null && DateTime.now().isBefore(retryAfter)) return;
+    // Only a call that will actually request a page can tell a failure.
+    final willRequest = appState.hasMoreAlbums &&
+        !appState.isLoadingAlbums &&
+        !appState.isLoadingMoreAlbums &&
+        appState.albums != null;
+    final before = appState.albums;
+    unawaited(appState.loadMoreAlbums().then((_) {
+      if (!willRequest) return;
+      // Same list and still more to load: the page failed.
+      final failed = identical(appState.albums, before) && appState.hasMoreAlbums;
+      _albumsRetryAfter = failed ? DateTime.now().add(_pageRetryDelay) : null;
+    }));
   }
 
   void _onArtistsScroll() {
-    if (widget.appState.isOfflineMode) return;
-    if (_artistsScrollController.position.pixels >=
+    final appState = widget.appState;
+    if (appState.isOfflineMode) return;
+    if (_artistsScrollController.position.pixels <
         _artistsScrollController.position.maxScrollExtent - 200) {
-      widget.appState.loadMoreArtists();
+      return;
     }
+    final retryAfter = _artistsRetryAfter;
+    if (retryAfter != null && DateTime.now().isBefore(retryAfter)) return;
+    final willRequest = appState.hasMoreArtists &&
+        !appState.isLoadingArtists &&
+        !appState.isLoadingMoreArtists &&
+        appState.artists != null;
+    final before = appState.artists;
+    unawaited(appState.loadMoreArtists().then((_) {
+      if (!willRequest) return;
+      final failed =
+          identical(appState.artists, before) && appState.hasMoreArtists;
+      _artistsRetryAfter = failed ? DateTime.now().add(_pageRetryDelay) : null;
+    }));
   }
 
   /// The view to show: Genres isn't offered offline, so it falls back to
@@ -1161,20 +1194,18 @@ class _LibraryTabState extends State<_LibraryTab>
     } else {
       var offlineArtists = _cachedOfflineArtists;
       if (offlineArtists == null) {
+        // Every credited artist gets a tile under their own name, so a
+        // collaboration doesn't hide its second artist or rename the first.
         final Map<String, JellyfinArtist> artistsMap = {};
         for (final download in downloads) {
-          final track = download.track;
-          final artistName = track.displayArtist;
-          // Use actual artist ID if available, otherwise fall back to artist name
-          final artistId = track.artistIds.isNotEmpty
-              ? track.artistIds.first
-              : artistName;
-
-          if (!artistsMap.containsKey(artistId)) {
-            artistsMap[artistId] = JellyfinArtist(
-              id: artistId,
-              name: artistName,
-              primaryImageTag: 'offline', // Marker for offline image availability
+          for (final artist in offlineTrackArtists(download.track)) {
+            artistsMap.putIfAbsent(
+              artist.id,
+              () => JellyfinArtist(
+                id: artist.id,
+                name: artist.name,
+                primaryImageTag: 'offline', // Marker for offline image availability
+              ),
             );
           }
         }

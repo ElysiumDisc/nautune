@@ -9,6 +9,7 @@ import '../models/download_item.dart';
 import '../services/download_service.dart';
 import '../services/listening_analytics_service.dart';
 import '../services/playlist_membership_store.dart';
+import '../utils/download_library.dart';
 import 'music_repository.dart';
 
 /// Looks up a playlist's cached track ids (playlist order), or null when the
@@ -47,7 +48,8 @@ List<DownloadItem> offlinePlaylistDownloads({
 /// Queries downloaded content from local Hive database.
 /// Used when the app is in offline mode (no network connectivity).
 ///
-/// Returns only tracks/albums/artists that have been downloaded.
+/// Returns only tracks/albums/artists that have been downloaded by the
+/// signed-in account ([DownloadService.completedDownloads]).
 /// Builds synthetic objects when necessary (e.g., albums from tracks).
 class OfflineRepository implements MusicRepository {
   OfflineRepository({
@@ -113,7 +115,7 @@ class OfflineRepository implements MusicRepository {
         albums[albumId] = JellyfinAlbum(
           id: albumId,
           name: albumName,
-          artists: [track.displayArtist],
+          artists: _artistNames(track),
           primaryImageTag: track.albumPrimaryImageTag,
           productionYear: track.productionYear,
         );
@@ -161,20 +163,18 @@ class OfflineRepository implements MusicRepository {
     final downloads = _downloadService.completedDownloads;
     final artists = <String, JellyfinArtist>{};
 
-    // Group tracks by artist - use actual artist IDs when available
+    // One entry per credited artist (a collaboration is listed under each
+    // of its artists, by the artist's own name rather than displayArtist's
+    // "A & 1 more"); the Jellyfin artist id when known, else the name.
     for (final download in downloads) {
-      final track = download.track;
-      final artistName = track.displayArtist;
-      // Use actual artist ID if available, otherwise fall back to artist name
-      final artistId = track.artistIds.isNotEmpty
-          ? track.artistIds.first
-          : (track.artists.isNotEmpty ? track.artists.first : artistName);
-
-      if (!artists.containsKey(artistId)) {
-        artists[artistId] = JellyfinArtist(
-          id: artistId,
-          name: artistName,
-          primaryImageTag: 'offline', // Marker that offline image may be available
+      for (final artist in offlineTrackArtists(download.track)) {
+        artists.putIfAbsent(
+          artist.id,
+          () => JellyfinArtist(
+            id: artist.id,
+            name: artist.name,
+            primaryImageTag: 'offline', // Marker that offline image may be available
+          ),
         );
       }
     }
@@ -264,11 +264,13 @@ class OfflineRepository implements MusicRepository {
         .map((d) => d.track)
         .toList();
 
-    // Sort by disc and track number
+    // Sort by disc and track number (then name, for records without them).
     tracks.sort((a, b) {
       final discCompare = (a.parentIndexNumber ?? 0).compareTo(b.parentIndexNumber ?? 0);
       if (discCompare != 0) return discCompare;
-      return (a.indexNumber ?? 0).compareTo(b.indexNumber ?? 0);
+      final trackCompare = (a.indexNumber ?? 0).compareTo(b.indexNumber ?? 0);
+      if (trackCompare != 0) return trackCompare;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
     });
 
     return tracks;
@@ -290,7 +292,7 @@ class OfflineRepository implements MusicRepository {
           albums[albumId] = JellyfinAlbum(
             id: albumId,
             name: albumName,
-            artists: [track.displayArtist],
+            artists: _artistNames(track),
             primaryImageTag: track.albumPrimaryImageTag,
             productionYear: track.productionYear,
           );
@@ -357,7 +359,7 @@ class OfflineRepository implements MusicRepository {
           album: JellyfinAlbum(
             id: albumId,
             name: albumName,
-            artists: [track.displayArtist],
+            artists: _artistNames(track),
             primaryImageTag: track.albumPrimaryImageTag,
             productionYear: track.productionYear,
           ),
@@ -443,17 +445,18 @@ class OfflineRepository implements MusicRepository {
     final downloads = _downloadService.completedDownloads;
     final lowerQuery = query.toLowerCase();
 
+    // Every credited artist, not only the first (displayArtist).
     return downloads
-        .where((d) =>
-            d.track.name.toLowerCase().contains(lowerQuery) ||
-            d.track.displayArtist.toLowerCase().contains(lowerQuery) ||
-            (d.track.album?.toLowerCase().contains(lowerQuery) ?? false))
+        .where((d) => offlineItemMatches(d, lowerQuery))
         .map((d) => d.track)
         .toList();
   }
 
   @override
-  Future<List<JellyfinAlbum>> getGenreAlbums(String genreId) async {
+  Future<List<JellyfinAlbum>> getGenreAlbums(
+    String genreId, {
+    required String libraryId,
+  }) async {
     final downloads = _downloadService.completedDownloads;
     final albums = <String, JellyfinAlbum>{};
     
@@ -478,7 +481,7 @@ class OfflineRepository implements MusicRepository {
             albums[albumId] = JellyfinAlbum(
               id: albumId,
               name: track.album ?? 'Unknown Album',
-              artists: [track.displayArtist],
+              artists: _artistNames(track),
               primaryImageTag: track.albumPrimaryImageTag,
               productionYear: track.productionYear,
             );
@@ -493,7 +496,12 @@ class OfflineRepository implements MusicRepository {
   }
 
   @override
-  bool get isAvailable => _downloadService.completedCount > 0;
+  bool get isAvailable => _downloadService.completedDownloads.isNotEmpty;
+
+  /// Artist credit of an offline album built from [track]: every artist,
+  /// not displayArtist's "A & 1 more".
+  static List<String> _artistNames(JellyfinTrack track) =>
+      track.artists.isNotEmpty ? track.artists : [track.displayArtist];
 
   @override
   String get typeName => 'OfflineRepository';

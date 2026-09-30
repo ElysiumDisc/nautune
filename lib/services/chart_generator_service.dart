@@ -1,11 +1,16 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate' show TransferableTypedData;
 import 'dart:math' show Random, cos, log, max, min, pi, sqrt;
 import 'dart:typed_data' show Float64x2, Float64x2List;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:fftea/fftea.dart';
 import '../models/chart_data.dart';
+
+/// Outcome of [ChartGeneratorService.generateChart]: the chart, or the
+/// human-readable reason it failed.
+typedef ChartGenerationResult = ({ChartData? chart, String? failure});
 
 /// Service for generating rhythm game charts from audio files.
 /// Uses SuperFlux-inspired spectral flux onset detection with pitch tracking.
@@ -43,15 +48,31 @@ class ChartGeneratorService {
   // Maximum track duration for analysis (in minutes) - prevents memory crashes
   static const int _maxDurationMinutesIOS = 15;      // iOS: strict limit due to memory
 
-  /// Progress callback for UI updates (0.0 - 1.0)
-  ValueNotifier<double> progress = ValueNotifier(0.0);
+  /// Progress (0.0 - 1.0) per track ID, so two screens or a queued request
+  /// never show another track's progress.
+  final Map<String, ValueNotifier<double>> _progress = {};
 
-  /// Human-readable reason for the most recent failed generation, if any.
-  String? lastFailureMessage;
+  /// Generations requested or running, keyed by track ID, so the same track
+  /// is never decoded twice at once.
+  final Map<String, Future<ChartGenerationResult>> _inFlight = {};
 
-  /// Generations in progress, keyed by track ID, so the same track is never
-  /// decoded twice at once.
-  final Map<String, Future<ChartData?>> _inFlight = {};
+  /// Track IDs whose generation was cancelled (see [cancel]).
+  final Set<String> _cancelled = {};
+
+  /// Generations run one at a time: each holds a whole decoded track in
+  /// memory, so two at once could exhaust it on long tracks.
+  Future<void> _queueTail = Future<void>.value();
+
+  /// Progress of the generation for [trackId] (0.0 - 1.0).
+  ValueListenable<double> progressFor(String trackId) =>
+      _progress.putIfAbsent(trackId, () => ValueNotifier(0.0));
+
+  /// Stop the generation for [trackId] at its next checkpoint (before
+  /// decoding and before analysis). A request that is already analysing
+  /// finishes; one still waiting in the queue never starts.
+  void cancel(String trackId) {
+    if (_inFlight.containsKey(trackId)) _cancelled.add(trackId);
+  }
 
   /// Check if track duration is within safe limits for current platform
   /// Returns error message if too long, null if OK
@@ -108,8 +129,9 @@ class ChartGeneratorService {
 
     // Create bonus notes at these timestamps
     for (final timestamp in bonusTimestamps) {
-      // Pick a random lane and bonus type
-      final lane = random.nextInt(5);
+      // A lane clear of regular notes, so the bonus can't take a tap meant
+      // for one (or hide under it). Random type.
+      final lane = pickBonusLane(notes, timestamp, random);
       final bonusType = bonusTypes[random.nextInt(bonusTypes.length)];
 
       result.add(ChartNote(
@@ -129,38 +151,53 @@ class ChartGeneratorService {
 
   /// Generate a chart from an audio file.
   ///
-  /// Concurrent calls for the same [trackId] share one generation. On failure
-  /// returns null and sets [lastFailureMessage].
-  Future<ChartData?> generateChart({
+  /// Concurrent calls for the same [trackId] share one generation; calls for
+  /// different tracks run one after another. Never throws: on failure the
+  /// result has no chart and a reason.
+  Future<ChartGenerationResult> generateChart({
     required String audioPath,
     required String trackId,
     required String trackName,
     required String artistName,
     required int durationMs,
   }) {
+    // Asking again means the caller wants it after all.
+    _cancelled.remove(trackId);
     final pending = _inFlight[trackId];
     if (pending != null) return pending;
 
-    final future = _generateChart(
-      audioPath: audioPath,
-      trackId: trackId,
-      trackName: trackName,
-      artistName: artistName,
-      durationMs: durationMs,
-    ).whenComplete(() => _inFlight.remove(trackId));
+    final progress = _progress.putIfAbsent(trackId, () => ValueNotifier(0.0))
+      ..value = 0.0;
+    final future = _queueTail
+        .then((_) => _generateChart(
+              audioPath: audioPath,
+              trackId: trackId,
+              trackName: trackName,
+              artistName: artistName,
+              durationMs: durationMs,
+              progress: progress,
+            ))
+        .whenComplete(() {
+      _inFlight.remove(trackId);
+      _cancelled.remove(trackId);
+      _progress.remove(trackId);
+    });
+    _queueTail = future.then<void>((_) {}, onError: (Object _) {});
     _inFlight[trackId] = future;
     return future;
   }
 
-  Future<ChartData?> _generateChart({
+  Future<ChartGenerationResult> _generateChart({
     required String audioPath,
     required String trackId,
     required String trackName,
     required String artistName,
     required int durationMs,
+    required ValueNotifier<double> progress,
   }) async {
-    lastFailureMessage = null;
+    const cancelled = (chart: null, failure: 'Cancelled');
     try {
+      if (_cancelled.contains(trackId)) return cancelled;
       progress.value = 0.0;
 
       // Check duration limit to prevent memory crashes. The metadata may be
@@ -168,47 +205,40 @@ class ChartGeneratorService {
       final durationError = checkDurationLimit(durationMs);
       if (durationError != null) {
         debugPrint('🎮 ChartGenerator: $durationError');
-        lastFailureMessage = durationError;
-        return null;
+        return (chart: null, failure: durationError);
       }
 
       // Read audio file
-      final audioData = await _readAudioFile(audioPath);
+      Float32List? audioData;
+      String? decodeFailure;
+      (samples: audioData, failure: decodeFailure) = await _readAudioFile(audioPath);
       if (audioData == null || audioData.isEmpty) {
         debugPrint('🎮 ChartGenerator: Failed to read audio file');
-        lastFailureMessage ??= 'Could not decode this audio file';
-        return null;
+        return (
+          chart: null,
+          failure: decodeFailure ?? 'Could not decode this audio file',
+        );
       }
+      if (_cancelled.contains(trackId)) return cancelled;
 
       // Use the real decoded length rather than (possibly missing) metadata.
       final decodedDurationMs = audioData.length * 1000 ~/ _sampleRate;
 
       progress.value = 0.1;
 
-      // Run onset detection in isolate
-      final result = await compute(_processAudioAdvanced, _AudioProcessingParams(
-        samples: audioData,
-        sampleRate: _sampleRate,
-        windowSize: _windowSize,
-        hopSize: _hopSize,
-        maxFilterSize: _maxFilterSize,
-        avgFilterPast: _avgFilterPast,
-        avgFilterFuture: _avgFilterFuture,
-        threshold: _threshold,
-        minOnsetGapMs: _minOnsetGapMs,
-        maxNotes: _maxNotes,
-        subBassMaxFreq: _subBassMaxFreq,
-        bassMaxFreq: _bassMaxFreq,
-        lowMidMaxFreq: _lowMidMaxFreq,
-        highMidMaxFreq: _highMidMaxFreq,
-      ));
+      // Run onset detection in an isolate. The samples are handed over as
+      // transferable data (materialised in the isolate without another
+      // copy), and the reference here is dropped so the decoded buffer can
+      // be freed while the analysis runs.
+      final transferable = TransferableTypedData.fromList([audioData]);
+      audioData = null;
+      final result = await compute(_processTransferredAudio, transferable);
 
       progress.value = 0.9;
 
       if (result.notes.isEmpty) {
         debugPrint('🎮 ChartGenerator: No notes detected');
-        lastFailureMessage = 'No beats detected (track too short or quiet)';
-        return null;
+        return (chart: null, failure: 'No beats detected (track too short or quiet)');
       }
 
       // Insert bonus notes (approximately 1 per 30-60 seconds)
@@ -218,21 +248,23 @@ class ChartGeneratorService {
 
       debugPrint('🎮 ChartGenerator: Generated ${notesWithBonuses.length} notes (${notesWithBonuses.where((n) => n.isBonus).length} bonus), BPM: ${result.bpm.round()}');
 
-      return ChartData(
-        id: '${trackId}_chart',
-        trackId: trackId,
-        trackName: trackName,
-        artistName: artistName,
-        notes: notesWithBonuses,
-        bpm: result.bpm,
-        durationMs: decodedDurationMs,
-        generatedAt: DateTime.now(),
+      return (
+        chart: ChartData(
+          id: '${trackId}_chart',
+          trackId: trackId,
+          trackName: trackName,
+          artistName: artistName,
+          notes: notesWithBonuses,
+          bpm: result.bpm,
+          durationMs: decodedDurationMs,
+          generatedAt: DateTime.now(),
+        ),
+        failure: null,
       );
     } catch (e, stack) {
       debugPrint('🎮 ChartGenerator: Error - $e');
       debugPrint('$stack');
-      lastFailureMessage = 'Analysis failed';
-      return null;
+      return (chart: null, failure: 'Analysis failed');
     }
   }
 
@@ -240,24 +272,23 @@ class ChartGeneratorService {
   static const _iosChannel = MethodChannel('com.elysiumdisc.nautune/audio_decoder');
 
   /// Read raw PCM samples from audio file
-  Future<Float32List?> _readAudioFile(String path) async {
+  Future<({Float32List? samples, String? failure})> _readAudioFile(String path) async {
     try {
       final file = File(path);
       if (!await file.exists()) {
         debugPrint('🎮 ChartGenerator: File not found: $path');
-        lastFailureMessage = 'Audio file not found';
-        return null;
+        return (samples: null, failure: 'Audio file not found');
       }
 
       return await _readAudioFileIOS(path);
     } catch (e) {
       debugPrint('🎮 ChartGenerator: Error reading audio: $e');
-      return null;
+      return (samples: null, failure: null);
     }
   }
 
   /// iOS: Decode audio to mono float32 PCM using native AVFoundation
-  Future<Float32List?> _readAudioFileIOS(String path) async {
+  Future<({Float32List? samples, String? failure})> _readAudioFileIOS(String path) async {
     try {
       debugPrint('🎮 ChartGenerator: Decoding audio with AVFoundation (iOS)...');
 
@@ -269,7 +300,7 @@ class ChartGeneratorService {
 
       if (result == null) {
         debugPrint('🎮 ChartGenerator: iOS decoder returned null');
-        return null;
+        return (samples: null, failure: null);
       }
 
       // The decoder sends a typed float32 buffer (arrives as Float32List,
@@ -277,24 +308,87 @@ class ChartGeneratorService {
       final rawSamples = result['samples'];
       if (rawSamples is! Float32List) {
         debugPrint('🎮 ChartGenerator: Unexpected samples type: ${rawSamples.runtimeType}');
-        return null;
+        return (samples: null, failure: null);
       }
 
       if (rawSamples.isEmpty) {
         debugPrint('🎮 ChartGenerator: No samples decoded');
-        return null;
+        return (samples: null, failure: null);
       }
 
       debugPrint('🎮 ChartGenerator: Decoded ${rawSamples.length} samples (${(rawSamples.length / _sampleRate).toStringAsFixed(1)}s)');
-      return rawSamples;
+      return (samples: rawSamples, failure: null);
     } on PlatformException catch (e) {
       debugPrint('🎮 ChartGenerator: iOS decode error: ${e.message}');
-      lastFailureMessage = e.code == 'TOO_LONG'
-          ? 'Track is longer than $_maxDurationMinutesIOS minutes'
-          : 'Unsupported or unreadable audio format';
-      return null;
+      return (
+        samples: null,
+        failure: e.code == 'TOO_LONG'
+            ? 'Track is longer than $_maxDurationMinutesIOS minutes'
+            : 'Unsupported or unreadable audio format',
+      );
     }
   }
+}
+
+/// Production analysis parameters for 44.1kHz mono [samples].
+_AudioProcessingParams _productionParams(Float32List samples) => _AudioProcessingParams(
+      samples: samples,
+      sampleRate: ChartGeneratorService._sampleRate,
+      windowSize: ChartGeneratorService._windowSize,
+      hopSize: ChartGeneratorService._hopSize,
+      maxFilterSize: ChartGeneratorService._maxFilterSize,
+      avgFilterPast: ChartGeneratorService._avgFilterPast,
+      avgFilterFuture: ChartGeneratorService._avgFilterFuture,
+      threshold: ChartGeneratorService._threshold,
+      minOnsetGapMs: ChartGeneratorService._minOnsetGapMs,
+      maxNotes: ChartGeneratorService._maxNotes,
+      subBassMaxFreq: ChartGeneratorService._subBassMaxFreq,
+      bassMaxFreq: ChartGeneratorService._bassMaxFreq,
+      lowMidMaxFreq: ChartGeneratorService._lowMidMaxFreq,
+      highMidMaxFreq: ChartGeneratorService._highMidMaxFreq,
+    );
+
+/// Isolate entry point: materialise the transferred samples and analyse them.
+_ProcessingResult _processTransferredAudio(TransferableTypedData data) =>
+    _processAudioAdvanced(_productionParams(data.materialize().asFloat32List()));
+
+/// Lane for a golden bonus note at [timestampMs]: a random lane with no
+/// regular note within [clearanceMs], so the bonus never sits on (or takes a
+/// tap meant for) a regular note. If every lane is busy, the lane whose
+/// nearest note is furthest away. [notes] must be sorted by time.
+@visibleForTesting
+int pickBonusLane(
+  List<ChartNote> notes,
+  int timestampMs,
+  Random random, {
+  int clearanceMs = 300,
+}) {
+  // Distance to the nearest regular note per lane (clearanceMs + 1 = none).
+  final nearest = List<int>.filled(5, clearanceMs + 1);
+  // First note at or after timestampMs - clearanceMs.
+  int lo = 0, hi = notes.length;
+  while (lo < hi) {
+    final mid = (lo + hi) >> 1;
+    if (notes[mid].timestampMs < timestampMs - clearanceMs) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  for (int i = lo; i < notes.length && notes[i].timestampMs <= timestampMs + clearanceMs; i++) {
+    final note = notes[i];
+    if (note.isBonus) continue;
+    final lane = note.lane.clamp(0, 4);
+    final d = (note.timestampMs - timestampMs).abs();
+    if (d < nearest[lane]) nearest[lane] = d;
+  }
+  final clear = [for (int l = 0; l < 5; l++) if (nearest[l] > clearanceMs) l];
+  if (clear.isNotEmpty) return clear[random.nextInt(clear.length)];
+  int best = 0;
+  for (int l = 1; l < 5; l++) {
+    if (nearest[l] > nearest[best]) best = l;
+  }
+  return best;
 }
 
 /// Parameters for audio processing
@@ -490,13 +584,15 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
 
   debugPrint('🎮 Adaptive Thresholds: Mean=${meanCentroid.round()}, Std=${stdDevCentroid.round()}, Thresh=[${thresh0.round()}, ${thresh1.round()}, ${thresh2.round()}, ${thresh3.round()}]');
 
-  // STEP 1: Estimate BPM first (before onset detection)
-  // This allows proper beat-grid quantization
-  final bpm = _estimateBpmFromFlux(spectralFlux, hopSize, sampleRate);
-  final beatIntervalMs = (60000.0 / bpm).round();
-  final sixteenthNoteMs = beatIntervalMs ~/ 4; // 16th note grid
+  // STEP 1: Estimate the beat period first (before onset detection).
+  // The unclamped, sub-frame period drives the snapping grid; the clamped
+  // BPM only sets the hit window and the displayed tempo.
+  final beatMs = _estimateBeatMsFromFlux(spectralFlux, hopSize, sampleRate);
+  final bpm = (60000.0 / beatMs).clamp(70.0, 180.0);
+  final beatIntervalMs = beatMs.round();
+  final sixteenthMs = beatMs / 4; // 16th note grid
 
-  debugPrint('🎮 Estimated BPM: ${bpm.round()}, beat interval: ${beatIntervalMs}ms, 16th: ${sixteenthNoteMs}ms');
+  debugPrint('🎮 Estimated BPM: ${bpm.round()}, beat interval: ${beatMs.toStringAsFixed(1)}ms, 16th: ${sixteenthMs.toStringAsFixed(1)}ms');
 
   // STEP 2: Peak picking with moving average threshold
   final avgPast = params.avgFilterPast;
@@ -552,12 +648,17 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
 
   debugPrint('🎮 Detected ${onsetFrames.length} raw onsets');
 
-  // Align the 16th-note grid to where the onsets actually fall.
+  // Snap onsets to a 16th-note grid fitted locally (per few seconds), and
+  // only where the onsets there agree with it: one global grid drifts away
+  // from the music within seconds. Moves are capped at about one analysis
+  // hop, and no note is placed past the end of the audio.
   final onsetTimes = [for (final f in onsetFrames) frameToMs(f)];
-  final gridPhaseMs = estimateGridPhaseMs(onsetTimes, sixteenthNoteMs);
-  // Only snap onsets that are already close to the grid, so tempo drift or
-  // off-grid notes are never moved further than this.
-  final maxSnapMs = sixteenthNoteMs ~/ 4;
+  final snappedTimes = snapToLocalGrid(
+    onsetTimes,
+    sixteenthMs,
+    maxSnapMs: min(12, sixteenthMs ~/ 4),
+  );
+  final lastMs = samples.length * 1000 ~/ sampleRate;
 
   // STEP 3: Create notes with beat-quantized timing and pitch-based lanes
   final notes = <ChartNote>[];
@@ -568,13 +669,7 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
     final frame = onsetFrames[i];
     final rawTimestampMs = onsetTimes[i];
 
-    // Quantize to the phase-aligned 16th note grid
-    final quantizedMs = quantizeToGrid(
-      rawTimestampMs,
-      sixteenthNoteMs,
-      gridPhaseMs,
-      maxSnapMs: maxSnapMs,
-    );
+    final quantizedMs = min(snappedTimes[i], lastMs);
 
     // Determine lane based on BOTH spectral centroid (pitch) and band flux
     // The centroid tells us the "pitch feel" of this moment in the song
@@ -683,22 +778,7 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
 /// the production parameters. Returns the notes and estimated BPM.
 @visibleForTesting
 ({List<ChartNote> notes, double bpm}) analyzeSamplesForTesting(Float32List samples) {
-  final result = _processAudioAdvanced(_AudioProcessingParams(
-    samples: samples,
-    sampleRate: ChartGeneratorService._sampleRate,
-    windowSize: ChartGeneratorService._windowSize,
-    hopSize: ChartGeneratorService._hopSize,
-    maxFilterSize: ChartGeneratorService._maxFilterSize,
-    avgFilterPast: ChartGeneratorService._avgFilterPast,
-    avgFilterFuture: ChartGeneratorService._avgFilterFuture,
-    threshold: ChartGeneratorService._threshold,
-    minOnsetGapMs: ChartGeneratorService._minOnsetGapMs,
-    maxNotes: ChartGeneratorService._maxNotes,
-    subBassMaxFreq: ChartGeneratorService._subBassMaxFreq,
-    bassMaxFreq: ChartGeneratorService._bassMaxFreq,
-    lowMidMaxFreq: ChartGeneratorService._lowMidMaxFreq,
-    highMidMaxFreq: ChartGeneratorService._highMidMaxFreq,
-  ));
+  final result = _processAudioAdvanced(_productionParams(samples));
   return (notes: result.notes, bpm: result.bpm);
 }
 
@@ -732,6 +812,97 @@ int quantizeToGrid(int ms, int gridMs, int phaseMs, {int? maxSnapMs}) {
   final snapped = max(0, phaseMs + steps * gridMs);
   if (maxSnapMs != null && (snapped - ms).abs() > maxSnapMs) return ms;
   return snapped;
+}
+
+/// Snap [onsetMs] (sorted) to a 16th-note grid fitted per [segmentMs]
+/// stretch of onsets, so tempo drift and small errors in the estimated
+/// period ([gridMs]) never carry across the song.
+///
+/// Per stretch: the phase that best fits [gridMs] assigns each onset a grid
+/// line, then a least-squares line through (grid line, onset time) gives the
+/// local period and offset, so an estimated period that is slightly off
+/// doesn't pull notes away from the beat. A stretch is snapped only when it
+/// has at least [minOnsets] onsets, its local period is within 3% of
+/// [gridMs] and the onsets sit close to its grid (mean distance at most 1/8
+/// of the grid; onsets unrelated to the grid average 1/4). Each onset moves
+/// at most [maxSnapMs]. Everything else is returned unchanged.
+@visibleForTesting
+List<int> snapToLocalGrid(
+  List<int> onsetMs,
+  double gridMs, {
+  int segmentMs = 4000,
+  int maxSnapMs = 12,
+  int minOnsets = 4,
+}) {
+  final result = List<int>.of(onsetMs);
+  if (gridMs <= 1 || onsetMs.isEmpty || maxSnapMs <= 0) return result;
+
+  double distance(int t, double phase) {
+    final r = (t - phase) % gridMs; // non-negative for a positive divisor
+    return r < gridMs - r ? r : gridMs - r;
+  }
+
+  int start = 0;
+  while (start < onsetMs.length) {
+    final segmentEnd = onsetMs[start] + segmentMs;
+    int end = start;
+    while (end < onsetMs.length && onsetMs[end] < segmentEnd) {
+      end++;
+    }
+    final count = end - start;
+    if (count >= minOnsets) {
+      double bestPhase = 0;
+      double bestCost = double.infinity;
+      for (double phase = 0; phase < gridMs; phase += 1) {
+        double cost = 0;
+        for (int i = start; i < end; i++) {
+          cost += distance(onsetMs[i], phase);
+        }
+        if (cost < bestCost) {
+          bestCost = cost;
+          bestPhase = phase;
+        }
+      }
+      // Local grid: least squares through (grid line index, onset time).
+      final steps = [
+        for (int i = start; i < end; i++) ((onsetMs[i] - bestPhase) / gridMs).round(),
+      ];
+      double meanK = 0, meanT = 0;
+      for (int j = 0; j < count; j++) {
+        meanK += steps[j];
+        meanT += onsetMs[start + j];
+      }
+      meanK /= count;
+      meanT /= count;
+      double covKT = 0, varK = 0;
+      for (int j = 0; j < count; j++) {
+        final dk = steps[j] - meanK;
+        covKT += dk * (onsetMs[start + j] - meanT);
+        varK += dk * dk;
+      }
+      if (varK > 0) {
+        final period = covKT / varK;
+        final offset = meanT - period * meanK;
+        if ((period - gridMs).abs() <= gridMs * 0.03) {
+          double residual = 0;
+          for (int j = 0; j < count; j++) {
+            residual += (onsetMs[start + j] - (offset + period * steps[j])).abs();
+          }
+          if (residual / count <= gridMs / 8) {
+            for (int j = 0; j < count; j++) {
+              final t = onsetMs[start + j];
+              final snapped = (offset + period * steps[j]).round();
+              if (snapped >= 0 && (snapped - t).abs() <= maxSnapMs) {
+                result[start + j] = snapped;
+              }
+            }
+          }
+        }
+      }
+    }
+    start = end;
+  }
+  return result;
 }
 
 /// Reduce [notes] (sorted by time) to at most [maxNotes], spread evenly over
@@ -779,8 +950,10 @@ List<ChartNote> thinNotesEvenly(List<ChartNote> notes, int maxNotes) {
   ];
 }
 
-/// Estimate BPM from spectral flux using autocorrelation
-double _estimateBpmFromFlux(Float64List flux, int hopSize, int sampleRate) {
+/// Beat period in ms estimated from spectral flux by autocorrelation, refined
+/// between analysis frames by fitting a parabola around the best lag (a
+/// whole-frame lag is up to 5ms off per beat, which a grid accumulates).
+double _estimateBeatMsFromFlux(Float64List flux, int hopSize, int sampleRate) {
   // Look for periodicities in flux corresponding to 60-200 BPM
   // At 44100Hz and 441 hop, each frame is ~10ms
   // 60 BPM = 1000ms per beat = 100 frames
@@ -804,6 +977,7 @@ double _estimateBpmFromFlux(Float64List flux, int hopSize, int sampleRate) {
   // Compute autocorrelation for different lags
   double bestCorr = 0;
   int bestLag = 50; // default to ~120 BPM
+  final corrs = Float64List(maxLag + 1);
 
   for (int lag = minLag; lag <= maxLag; lag++) {
     double corr = 0;
@@ -816,6 +990,7 @@ double _estimateBpmFromFlux(Float64List flux, int hopSize, int sampleRate) {
 
     if (count > 0) {
       corr /= count;
+      corrs[lag] = corr;
       if (corr > bestCorr) {
         bestCorr = corr;
         bestLag = lag;
@@ -823,10 +998,19 @@ double _estimateBpmFromFlux(Float64List flux, int hopSize, int sampleRate) {
     }
   }
 
-  // Convert lag to BPM
-  final lagMs = bestLag * hopSize * 1000.0 / sampleRate;
-  final bpm = 60000.0 / lagMs;
+  // Sub-frame refinement: vertex of the parabola through the peak and its
+  // neighbours (only for a real interior peak).
+  double lag = bestLag.toDouble();
+  if (bestCorr > 0 && bestLag > minLag && bestLag < maxLag) {
+    final a = corrs[bestLag - 1];
+    final b = corrs[bestLag];
+    final c = corrs[bestLag + 1];
+    final denom = a - 2 * b + c;
+    if (denom < 0) {
+      final delta = 0.5 * (a - c) / denom;
+      if (delta.abs() <= 0.5) lag += delta;
+    }
+  }
 
-  // Clamp to reasonable range
-  return bpm.clamp(70.0, 180.0);
+  return lag * hopSize * 1000.0 / sampleRate;
 }

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:audio_session/audio_session.dart'
+    show AudioInterruptionType, AudioSession;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -36,6 +38,16 @@ class _NetworkScreenState extends State<NetworkScreen>
   bool _isLoading = false;
   String? _errorMessage;
 
+  /// The tuned channel's recording is gone from the server (and not saved on
+  /// this device): the dial shows "signal lost" instead of playing.
+  bool _signalLost = false;
+
+  // iOS interruptions (calls, Siri, alarms) and route loss. audioplayers
+  // doesn't observe them itself, so the radio would go silent while the UI
+  // still says it is playing.
+  final List<StreamSubscription<Object?>> _sessionSubs = [];
+  bool _resumeAfterInterruption = false;
+
   // Download service (app-wide singleton, so downloads outlive this screen)
   final NetworkDownloadService _downloadService =
       NetworkDownloadService.instance;
@@ -59,8 +71,9 @@ class _NetworkScreenState extends State<NetworkScreen>
   // Listening time tracking
   DateTime? _playStartTime;
 
-  // Ticker animation for scrolling text (runs only while a channel is shown)
+  // Ticker animation for scrolling text (runs only while a channel plays)
   late AnimationController _tickerController;
+  final Map<String, double> _tickerWidths = {};
 
   @override
   void initState() {
@@ -87,6 +100,7 @@ class _NetworkScreenState extends State<NetworkScreen>
       } else if (!_isPlaying && wasPlaying) {
         _recordListenTime();
       }
+      _syncTicker();
     }));
 
     // Listen for errors (only log actual errors, not spam)
@@ -106,6 +120,41 @@ class _NetworkScreenState extends State<NetworkScreen>
 
     // Listen to download service changes
     _downloadService.addListener(_onDownloadServiceChanged);
+
+    // The app's Wi-Fi-only download setting applies to channel downloads
+    // too; the service asks before each channel (downloads outlive this
+    // screen, and the app's DownloadService lives as long as the app).
+    final appDownloads = context.read<NautuneAppState>().downloadService;
+    _downloadService.transferAllowed = () async =>
+        !(appDownloads.wifiOnlyDownloads && await appDownloads.isOnCellular());
+
+    unawaited(_listenToAudioSession());
+  }
+
+  Future<void> _listenToAudioSession() async {
+    try {
+      final session = await AudioSession.instance;
+      if (!mounted) return;
+      _sessionSubs.add(session.interruptionEventStream.listen((event) {
+        if (!mounted) return;
+        if (event.begin) {
+          _resumeAfterInterruption = _isPlaying;
+          if (_isPlaying) unawaited(_audioPlayer.pause());
+        } else {
+          final resume = _resumeAfterInterruption &&
+              event.type == AudioInterruptionType.pause &&
+              !_mainPlayer.isPlaying;
+          _resumeAfterInterruption = false;
+          if (resume) unawaited(_audioPlayer.resume());
+        }
+      }));
+      // Headphones unplugged: don't carry on out of the speaker.
+      _sessionSubs.add(session.becomingNoisyEventStream.listen((_) {
+        if (mounted && _isPlaying) unawaited(_audioPlayer.pause());
+      }));
+    } catch (e) {
+      debugPrint('Network radio: audio session unavailable: $e');
+    }
   }
 
   void _onDownloadServiceChanged() {
@@ -122,6 +171,9 @@ class _NetworkScreenState extends State<NetworkScreen>
     for (final sub in _playerSubs) {
       sub.cancel();
     }
+    for (final sub in _sessionSubs) {
+      sub.cancel();
+    }
     _mainPlayingSub?.cancel();
     _audioPlayer.dispose();
     if (_pausedMainPlayer && !_mainPlayer.isPlaying) {
@@ -133,8 +185,10 @@ class _NetworkScreenState extends State<NetworkScreen>
     super.dispose();
   }
 
+  /// The ticker scrolls only while the radio plays; a paused or finished
+  /// channel keeps its text still instead of redrawing every frame.
   void _syncTicker() {
-    if (_currentChannel != null) {
+    if (_currentChannel != null && _isPlaying) {
       if (!_tickerController.isAnimating) _tickerController.repeat();
     } else if (_tickerController.isAnimating) {
       _tickerController.stop();
@@ -145,6 +199,10 @@ class _NetworkScreenState extends State<NetworkScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.paused:
+        // Muted radio in the background would only burn data and battery.
+        if (_isMuted && _isPlaying) unawaited(_audioPlayer.pause());
+        if (_tickerController.isAnimating) _tickerController.stop();
+        break;
       case AppLifecycleState.inactive:
       case AppLifecycleState.hidden:
         if (_tickerController.isAnimating) _tickerController.stop();
@@ -176,15 +234,34 @@ class _NetworkScreenState extends State<NetworkScreen>
     return _tuneToChannel(channel);
   }
 
+  /// No network, or the user chose "Go offline" (nothing is streamed then).
+  bool _offlineNow() =>
+      !context.read<ConnectivityProvider>().networkAvailable ||
+      context.read<NautuneAppState>().isOfflineMode;
+
   Future<void> _tuneToChannel(NetworkChannel channel) async {
     // Record listening time for previous channel before switching
     _recordListenTime();
 
+    final isDownloaded = _downloadService.isChannelDownloaded(channel.number);
+
+    // The recording is gone from the server: the dial lands on dead air.
+    if (!channel.available && !isDownloaded) {
+      ++_tuneRequest;
+      unawaited(_audioPlayer.stop());
+      setState(() {
+        _currentChannel = channel;
+        _signalLost = true;
+        _isLoading = false;
+        _errorMessage = null;
+      });
+      _syncTicker();
+      return;
+    }
+
     // Offline guard: if we're offline and this channel isn't downloaded,
     // surface a clear message instead of silently failing the stream attempt.
-    final connectivity = context.read<ConnectivityProvider>();
-    final isOffline = !connectivity.networkAvailable;
-    final isDownloaded = _downloadService.isChannelDownloaded(channel.number);
+    final isOffline = _offlineNow();
     if (isOffline && !isDownloaded) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -243,6 +320,7 @@ class _NetworkScreenState extends State<NetworkScreen>
 
       setState(() {
         _currentChannel = channel;
+        _signalLost = false;
         _isLoading = false;
       });
       _syncTicker();
@@ -261,6 +339,88 @@ class _NetworkScreenState extends State<NetworkScreen>
       _isMuted = !_isMuted;
     });
     _audioPlayer.setVolume(_isMuted ? 0.0 : 1.0);
+  }
+
+  /// Pause or resume the tuned channel (resuming pauses the music again).
+  Future<void> _togglePlayPause() async {
+    if (_currentChannel == null || _signalLost || _isLoading) return;
+    if (_isPlaying) {
+      await _audioPlayer.pause();
+      return;
+    }
+    if (_mainPlayer.isPlaying) {
+      _pausedMainPlayer = true;
+      await _mainPlayer.pause();
+    }
+    if (!mounted) return;
+    await _audioPlayer.resume();
+  }
+
+  /// Why a download can't start right now, or null if it can.
+  Future<String?> _downloadBlockedReason() async {
+    if (_offlineNow()) return 'Offline — connect to download channels.';
+    final allowed = _downloadService.transferAllowed;
+    if (allowed != null && !await allowed()) {
+      return 'Wi-Fi-only downloads is on. Connect to Wi-Fi to download.';
+    }
+    return null;
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+    );
+  }
+
+  Future<void> _downloadOne(NetworkChannel channel) async {
+    final blocked = await _downloadBlockedReason();
+    if (blocked != null) return _showSnack(blocked);
+    await _downloadService.downloadChannel(channel);
+  }
+
+  /// "Download All" is gigabytes: confirm with the size (and the connection
+  /// type) first.
+  Future<void> _confirmDownloadAll(BuildContext sheetContext) async {
+    final appDownloads = context.read<NautuneAppState>().downloadService;
+    final blocked = await _downloadBlockedReason();
+    if (blocked != null) return _showSnack(blocked);
+    if (!sheetContext.mounted) return;
+
+    final remaining = _downloadService.remainingDownloadCount;
+    final available = availableNetworkChannels.length;
+    final approxGb = available == 0
+        ? 0.0
+        : networkAllChannelsApproxBytes * remaining / available / 1e9;
+    final onCellular = await appDownloads.isOnCellular();
+    if (!sheetContext.mounted) return;
+
+    final confirm = await showDialog<bool>(
+      context: sheetContext,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: const Text(
+          'Download All Channels?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          '$remaining channels, about ${approxGb.toStringAsFixed(1)} GB.'
+          '${onCellular ? '\n\nYou are on cellular data.' : ''}',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Download'),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) await _downloadService.downloadAllChannels();
   }
 
   void _onSubmitChannel() {
@@ -303,7 +463,10 @@ class _NetworkScreenState extends State<NetworkScreen>
   Widget build(BuildContext context) {
     final connectivity = context.watch<ConnectivityProvider>();
     final demoMode = context.watch<DemoModeProvider>();
-    final isOffline = !connectivity.networkAvailable || demoMode.isDemoMode;
+    final userOffline =
+        context.select<NautuneAppState, bool>((s) => s.isOfflineMode);
+    final isOffline =
+        !connectivity.networkAvailable || userOffline || demoMode.isDemoMode;
     final hasDownloads = _downloadService.downloadedCount > 0;
     // Mute the ticker animation when this screen isn't the topmost route, so
     // the controller doesn't keep spending frames while another screen covers it.
@@ -313,7 +476,7 @@ class _NetworkScreenState extends State<NetworkScreen>
     if (isOffline && !hasDownloads) {
       final message = demoMode.isDemoMode
           ? 'DEMO MODE\n\nDownload channels while online\nto access them in demo mode'
-          : 'THE NETWORK REQUIRES\nAN INTERNET CONNECTION\n\nDownload channels from Settings\nto access them offline';
+          : 'THE NETWORK REQUIRES\nAN INTERNET CONNECTION\n\nDownload channels while online\nto access them offline';
       return TickerMode(
         enabled: routeIsCurrent,
         child: Scaffold(
@@ -403,7 +566,8 @@ class _NetworkScreenState extends State<NetworkScreen>
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    '${_downloadService.downloadedCount}/${networkChannels.length}',
+                    '${availableNetworkChannels.length - _downloadService.remainingDownloadCount}'
+                    '/${availableNetworkChannels.length}',
                     style: TextStyle(
                       color: _downloadService.isDownloadingAny
                           ? Colors.blue
@@ -448,9 +612,11 @@ class _NetworkScreenState extends State<NetworkScreen>
   Widget _buildSettingsSheet() {
     return Builder(
       builder: (context) {
-        // Calculate download progress
-        final totalChannels = networkChannels.length;
-        final downloadedCount = _downloadService.downloadedCount;
+        // Calculate download progress. Channels whose recording is gone from
+        // the server can't be downloaded, so they don't count.
+        final totalChannels = availableNetworkChannels.length;
+        final downloadedCount =
+            totalChannels - _downloadService.remainingDownloadCount;
         final isDownloading = _downloadService.isDownloadingAny;
         final downloadingCount = _downloadService.downloadingCount;
         final progress = totalChannels > 0 ? downloadedCount / totalChannels : 0.0;
@@ -528,6 +694,16 @@ class _NetworkScreenState extends State<NetworkScreen>
                           fontSize: 11,
                         ),
                       ),
+                    ] else if (_downloadService.stoppedByPolicy) ...[
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Stopped: Wi-Fi-only downloads is on.',
+                        style: TextStyle(
+                          color: Colors.amber,
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                        ),
+                      ),
                     ],
                     const SizedBox(height: 16),
                     Row(
@@ -536,11 +712,9 @@ class _NetworkScreenState extends State<NetworkScreen>
                           child: ElevatedButton.icon(
                             onPressed: downloadedCount >= totalChannels
                                 ? null
-                                : () async {
-                                    // The sheet and screen listen to the
-                                    // service, so no manual refresh.
-                                    await _downloadService.downloadAllChannels();
-                                  },
+                                // The sheet and screen listen to the
+                                // service, so no manual refresh.
+                                : () => _confirmDownloadAll(context),
                             icon: Icon(
                               downloadedCount >= totalChannels
                                   ? Icons.check_circle
@@ -792,11 +966,11 @@ class _NetworkScreenState extends State<NetworkScreen>
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
       child: Column(
         children: [
-          // "YOU ARE NOW LISTENING TO"
-          const Text(
-            'YOU ARE NOW LISTENING TO',
+          // "YOU ARE NOW LISTENING TO" (or dead air on a lost channel)
+          Text(
+            _signalLost ? 'SIGNAL LOST' : 'YOU ARE NOW LISTENING TO',
             style: TextStyle(
-              color: Colors.white54,
+              color: _signalLost ? Colors.redAccent : Colors.white54,
               fontFamily: 'monospace',
               fontSize: 10,
               letterSpacing: 3,
@@ -819,7 +993,9 @@ class _NetworkScreenState extends State<NetworkScreen>
 
           // Artist ticker
           _buildTickerText(
-            '${_currentChannel!.artist.toUpperCase()} ',
+            _signalLost
+                ? 'THIS TRANSMISSION HAS ENDED '
+                : '${_currentChannel!.artist.toUpperCase()} ',
             style: const TextStyle(
               color: Colors.white70,
               fontFamily: 'monospace',
@@ -849,14 +1025,21 @@ class _NetworkScreenState extends State<NetworkScreen>
     // per cycle so the wrap from 1.0 back to 0.0 is seamless (no jump).
     final repeated = text * 10;
     final textScaler = MediaQuery.textScalerOf(context);
-    final painter = TextPainter(
-      text: TextSpan(text: text, style: style),
-      textDirection: TextDirection.ltr,
-      textScaler: textScaler,
-      maxLines: 1,
-    )..layout();
-    final unitWidth = painter.width;
-    painter.dispose();
+    // Measured once per text/size: the screen rebuilds on every download
+    // progress tick, and three layouts per rebuild add up.
+    final key = '$text|${style.fontSize}|${style.letterSpacing}|'
+        '${textScaler.scale(style.fontSize!)}';
+    final unitWidth = _tickerWidths[key] ??= () {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: TextDirection.ltr,
+        textScaler: textScaler,
+        maxLines: 1,
+      )..layout();
+      final width = painter.width;
+      painter.dispose();
+      return width;
+    }();
 
     return SizedBox(
       height: style.fontSize! * 1.5,
@@ -1097,6 +1280,32 @@ class _NetworkScreenState extends State<NetworkScreen>
           ),
         ],
 
+        // Pause / resume the tuned channel
+        if (_currentChannel != null && !_signalLost) ...[
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            height: 36,
+            child: OutlinedButton.icon(
+              onPressed: _isLoading ? null : _togglePlayPause,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: const BorderSide(color: Colors.white54),
+                shape: const RoundedRectangleBorder(),
+              ),
+              icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, size: 18),
+              label: Text(
+                _isPlaying ? 'PAUSE' : 'PLAY',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  letterSpacing: 4,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        ],
+
         // Playing indicator
         if (_isPlaying) ...[
           const SizedBox(height: 8),
@@ -1179,7 +1388,7 @@ class _NetworkScreenState extends State<NetworkScreen>
             child: channels.isEmpty
                 ? const Center(
                     child: Text(
-                      'No channels saved yet.\nPlay a channel with "Save for Offline" enabled.',
+                      'No channels saved yet.\nDownload channels while online.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: Colors.white38,
@@ -1236,7 +1445,11 @@ class _NetworkScreenState extends State<NetworkScreen>
                                 child: Text(
                                   channel.name.toUpperCase(),
                                   style: TextStyle(
-                                    color: isSelected ? Colors.white : Colors.white70,
+                                    color: isSelected
+                                        ? Colors.white
+                                        : (channel.available || isDownloaded)
+                                            ? Colors.white70
+                                            : Colors.white30,
                                     fontFamily: 'monospace',
                                     fontSize: 11,
                                     letterSpacing: 1,
@@ -1260,6 +1473,27 @@ class _NetworkScreenState extends State<NetworkScreen>
                                   Icons.download_done,
                                   color: Colors.green,
                                   size: 14,
+                                )
+                              else if (!channel.available)
+                                // Recording gone from the server.
+                                const Icon(
+                                  Icons.signal_cellular_off,
+                                  color: Colors.white24,
+                                  size: 14,
+                                )
+                              else if (!isOffline)
+                                // Download just this channel.
+                                InkResponse(
+                                  onTap: () => _downloadOne(channel),
+                                  radius: 18,
+                                  child: const Padding(
+                                    padding: EdgeInsets.symmetric(horizontal: 4),
+                                    child: Icon(
+                                      Icons.download_outlined,
+                                      color: Colors.white38,
+                                      size: 16,
+                                    ),
+                                  ),
                                 ),
                               // Playing indicator
                               if (isSelected && _isPlaying) ...[

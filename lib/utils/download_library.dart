@@ -62,15 +62,39 @@ class OfflineArtistGroup {
       .reduce((a, b) => a.isAfter(b) ? a : b);
 }
 
-/// Case-insensitive match of [query] against track, album and artist names.
-/// An empty query matches everything.
+/// Case-insensitive match of [query] against track, album and artist names
+/// (every credited artist, not just the first). An empty query matches
+/// everything.
 bool offlineItemMatches(DownloadItem item, String query) {
   final q = query.trim().toLowerCase();
   if (q.isEmpty) return true;
   final track = item.track;
   return track.name.toLowerCase().contains(q) ||
       (track.album ?? '').toLowerCase().contains(q) ||
-      track.displayArtist.toLowerCase().contains(q);
+      track.displayArtist.toLowerCase().contains(q) ||
+      track.artists.any((a) => a.toLowerCase().contains(q));
+}
+
+/// Every credited artist of [track] as (id, name), for building offline
+/// artist lists: a collaboration belongs to each of its artists, under the
+/// artist's own name (not `displayArtist`'s "A & 1 more"). The id is the
+/// Jellyfin artist id when the server sent one per artist, else the name.
+List<({String id, String name})> offlineTrackArtists(JellyfinTrack track) {
+  final names = track.artists;
+  final ids = track.artistIds;
+  if (names.isEmpty) {
+    const unknown = 'Unknown Artist';
+    return [(id: ids.isNotEmpty ? ids.first : unknown, name: unknown)];
+  }
+  return [
+    for (var i = 0; i < names.length; i++)
+      (
+        id: ids.length == names.length
+            ? ids[i]
+            : (i == 0 && ids.isNotEmpty ? ids.first : names[i]),
+        name: names[i],
+      ),
+  ];
 }
 
 int _compareText(String a, String b) =>

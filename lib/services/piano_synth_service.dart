@@ -15,13 +15,16 @@ import 'wav_builder.dart';
 /// Programmatic piano synthesizer using additive synthesis + ADSR envelope.
 /// Generates WAV audio in-memory (no asset files needed).
 ///
-/// Each key of the visible range gets its own [AudioPlayer] with the note's
-/// source already loaded, so a key press is a single `resume` (or a seek to 0
-/// when the note is still ringing) instead of loading a new player item.
+/// Each key of the visible range gets [_voicesPerKey] [AudioPlayer]s with the
+/// note's source already loaded, so a key press is a single `resume` instead
+/// of loading a new player item. Presses alternate between the voices: a
+/// quick repeat starts a fresh voice while the previous one rings out,
+/// instead of cutting it off mid-waveform (an audible click).
 class PianoSynthService {
   static const int _sampleRate = 44100;
   static const int _channels = 1;
   static const double _noteDuration = 0.8; // seconds
+  static const int _voicesPerKey = 2;
 
   // ADSR envelope parameters (in seconds)
   static const double _attack = 0.005;
@@ -29,10 +32,13 @@ class PianoSynthService {
   static const double _sustainLevel = 0.6;
   static const double _release = 0.2;
 
-  /// Players for the keys of the current range (one per key, reused when
-  /// the octave changes).
+  /// Players for the keys of the current range ([_voicesPerKey] per key,
+  /// reused when the octave changes).
   final List<AudioPlayer> _players = [];
-  final Map<int, AudioPlayer> _notePlayers = {};
+  final Map<int, List<AudioPlayer>> _notePlayers = {};
+
+  /// Next voice to use per MIDI note.
+  final Map<int, int> _nextVoice = {};
 
   // Cache generated WAV bytes per MIDI note, and their temp files.
   final Map<int, Uint8List> _noteCache = {};
@@ -111,24 +117,31 @@ class PianoSynthService {
   /// range are ignored until [preloadRange] covers them.
   Future<void> playNote(int midiNote) async {
     if (_disposed) return;
-    final player = _notePlayers[midiNote];
-    if (player == null) return;
+    final voices = _notePlayers[midiNote];
+    if (voices == null || voices.isEmpty) return;
+    final index = (_nextVoice[midiNote] ?? 0) % voices.length;
+    _nextVoice[midiNote] = index + 1;
+    final player = voices[index];
 
     try {
       if (player.state == PlayerState.playing) {
-        // Still ringing: restart from the top.
+        // This voice is still ringing (both voices busy): restart it. Always
+        // resume after the seek: if the native player's own completion raced
+        // an earlier press, it may consider itself stopped (the seek then
+        // pauses it and no completion is ever reported), and the resume
+        // recovers it instead of leaving the key silent.
         await player.seek(Duration.zero);
-      } else {
-        await player.resume();
       }
+      await player.resume();
     } catch (e) {
       debugPrint('PianoSynthService: Error playing note $midiNote: $e');
     }
   }
 
   /// Synthesize (off the UI isolate), write and load [count] notes starting
-  /// at [startMidi], one player per key. A newer call supersedes an older
-  /// one still in progress.
+  /// at [startMidi], [_voicesPerKey] players per key. Keys already loaded
+  /// keep their players; only players of keys that left the range are
+  /// reloaded. A newer call supersedes an older one still in progress.
   Future<void> preloadRange(int startMidi, int count) async {
     try {
       await _preloadRange(startMidi, count);
@@ -157,8 +170,16 @@ class PianoSynthService {
       if (superseded()) return;
     }
 
-    for (var i = 0; i < notes.length; i++) {
-      final note = notes[i];
+    // Keys that left the range give up their players; players a superseded
+    // call loaded but never assigned are free too.
+    final wanted = notes.toSet();
+    _notePlayers.removeWhere((note, _) => !wanted.contains(note));
+    final assigned = {for (final voices in _notePlayers.values) ...voices};
+    final free = [for (final player in _players) if (!assigned.contains(player)) player];
+
+    for (final note in notes) {
+      if (_notePlayers[note]?.length == _voicesPerKey) continue;
+
       var path = _fileCache[note];
       if (path == null) {
         path = p.join(tempDir, 'note_$note.wav');
@@ -167,22 +188,23 @@ class PianoSynthService {
         if (superseded()) return;
       }
 
-      final AudioPlayer player;
-      if (i < _players.length) {
-        player = _players[i];
-      } else {
-        player = AudioPlayer();
-        _players.add(player);
-        await player.setReleaseMode(ReleaseMode.stop);
-        if (_players.length == 1) await _applyAudioContext(player);
-        if (_disposed) return;
+      final voices = <AudioPlayer>[];
+      for (var v = 0; v < _voicesPerKey; v++) {
+        final AudioPlayer player;
+        if (free.isNotEmpty) {
+          player = free.removeLast();
+        } else {
+          player = AudioPlayer();
+          _players.add(player);
+          await player.setReleaseMode(ReleaseMode.stop);
+          if (_players.length == 1) await _applyAudioContext(player);
+          if (_disposed) return;
+        }
+        await player.setSource(DeviceFileSource(path, mimeType: 'audio/wav'));
+        if (superseded()) return;
+        voices.add(player);
       }
-
-      if (_notePlayers[note] == player) continue;
-      _notePlayers.removeWhere((_, v) => v == player);
-      await player.setSource(DeviceFileSource(path, mimeType: 'audio/wav'));
-      if (superseded()) return;
-      _notePlayers[note] = player;
+      _notePlayers[note] = voices;
     }
   }
 

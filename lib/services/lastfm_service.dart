@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 
 import '../jellyfin/jellyfin_track.dart';
 import 'hive_init.dart';
+import 'playback_logic.dart';
 
 /// Last.fm `api_sig`: md5 of every parameter (except `format` and
 /// `callback`) as `name` + `value`, sorted by name, followed by the secret.
@@ -111,6 +112,11 @@ class LastFmService extends ChangeNotifier {
   String? _username;
   bool _enabled = true;
   bool _initialized = false;
+  Future<void>? _initializing;
+
+  /// Whether [_pending] holds the stored queue. Until it does, saving would
+  /// overwrite plays queued in a previous run.
+  bool _queueLoaded = false;
   List<LastFmScrobble> _pending = [];
   Future<void>? _flushing;
 
@@ -135,11 +141,19 @@ class LastFmService extends ChangeNotifier {
     _sessionKey = sessionKey;
     _enabled = true;
     _pending = [...pending];
+    _queueLoaded = true;
   }
 
-  Future<void> initialize() async {
-    if (_initialized) return;
-    _initialized = true;
+  /// Loads the Keychain config and the queued plays. Safe to call
+  /// repeatedly and concurrently; a failed attempt (e.g. Keychain locked on
+  /// a background cold start) is retried by the next call.
+  Future<void> initialize() {
+    if (_initialized) return Future.value();
+    return _initializing ??=
+        _initialize().whenComplete(() => _initializing = null);
+  }
+
+  Future<void> _initialize() async {
     try {
       final raw = await _secure.read(key: _secureKey);
       if (raw != null) {
@@ -150,20 +164,39 @@ class LastFmService extends ChangeNotifier {
         _username = json['username'] as String?;
         _enabled = json['enabled'] as bool? ?? true;
       }
-      await ensureHiveInitialized();
-      final box = await Hive.openBox<dynamic>(_queueBox);
-      final stored = box.get(_queueKey);
-      if (stored is List) {
-        _pending = [
-          for (final e in stored) ?LastFmScrobble.fromJson(e),
-        ];
-      }
+      _initialized = true;
     } catch (e) {
       debugPrint('Last.fm: failed to load config: $e');
     }
+    await _ensureQueueLoaded();
     notifyListeners();
     // Send plays queued in a previous run (offline / Last.fm outage).
     if (_pending.isNotEmpty) unawaited(flush());
+  }
+
+  /// Reads the stored queue once, ahead of any plays queued meanwhile.
+  Future<bool> _ensureQueueLoaded() async {
+    if (_queueLoaded) return true;
+    try {
+      await ensureHiveInitialized();
+      final box = Hive.isBoxOpen(_queueBox)
+          ? Hive.box<dynamic>(_queueBox)
+          : await Hive.openBox<dynamic>(_queueBox);
+      if (_queueLoaded) return true;
+      final stored = box.get(_queueKey);
+      if (stored is List) {
+        // In place: a flush in flight holds this list.
+        _pending.insertAll(0, [
+          for (final e in stored) ?LastFmScrobble.fromJson(e),
+        ]);
+        _trimQueue();
+      }
+      _queueLoaded = true;
+      return true;
+    } catch (e) {
+      debugPrint('Last.fm: failed to load queue: $e');
+      return false;
+    }
   }
 
   Future<void> _saveConfig() => _secure.write(
@@ -178,6 +211,8 @@ class LastFmService extends ChangeNotifier {
       );
 
   Future<void> _saveQueue() async {
+    // Never overwrite a stored queue that couldn't be read.
+    if (!await _ensureQueueLoaded()) return;
     try {
       final box = Hive.isBoxOpen(_queueBox)
           ? Hive.box<dynamic>(_queueBox)
@@ -243,6 +278,7 @@ class LastFmService extends ChangeNotifier {
   Future<void> disconnect() async {
     _apiKey = _secret = _sessionKey = _username = null;
     _pending = [];
+    _queueLoaded = true; // an empty queue is exactly what should be stored
     await _secure.delete(key: _secureKey);
     await _saveQueue();
     notifyListeners();
@@ -256,7 +292,7 @@ class LastFmService extends ChangeNotifier {
 
   Future<void> updateNowPlaying(JellyfinTrack track) async {
     if (!isScrobblingEnabled) return;
-    final artist = track.scrobbleArtist;
+    final artist = track.lastFmArtist;
     if (artist == null || track.name.trim().isEmpty) return;
     try {
       await _call(
@@ -279,8 +315,10 @@ class LastFmService extends ChangeNotifier {
   /// Queue a play (started at [startedAt]) and try to send the queue.
   Future<void> scrobble(JellyfinTrack track, DateTime startedAt) async {
     if (!isScrobblingEnabled) return;
+    // Last.fm only takes tracks longer than 30 seconds.
+    if (!isLastFmScrobbleLength(track.duration)) return;
     // No usable artist/title: Last.fm would reject the whole batch (error 6).
-    final artist = track.scrobbleArtist;
+    final artist = track.lastFmArtist;
     if (artist == null || track.name.trim().isEmpty) return;
     _pending.add(LastFmScrobble(
       artist: artist,
@@ -289,12 +327,27 @@ class LastFmService extends ChangeNotifier {
       timestamp: startedAt.millisecondsSinceEpoch ~/ 1000,
       durationSeconds: track.duration?.inSeconds,
     ));
-    if (_pending.length > _maxQueue) {
-      _pending.removeRange(0, _pending.length - _maxQueue);
-    }
+    _trimQueue();
     await _saveQueue();
     notifyListeners();
     await flush();
+  }
+
+  /// Drops the oldest plays beyond [_maxQueue]. A flush in flight removes
+  /// its batch by identity, so trimming meanwhile can't make it remove
+  /// plays that were never sent.
+  void _trimQueue() {
+    if (_pending.length > _maxQueue) {
+      _pending.removeRange(0, _pending.length - _maxQueue);
+    }
+  }
+
+  /// Removes exactly [sent] (by identity) from [queue].
+  static void _removeSent(List<LastFmScrobble> queue, List<LastFmScrobble> sent) {
+    for (final s in sent) {
+      final i = queue.indexWhere((q) => identical(q, s));
+      if (i >= 0) queue.removeAt(i);
+    }
   }
 
   /// Send queued plays in batches of 50. Single-flight.
@@ -329,7 +382,7 @@ class LastFmService extends ChangeNotifier {
             batchSize = 1;
             continue;
           }
-          queue.removeAt(0);
+          _removeSent(queue, batch);
           await _saveQueue();
           notifyListeners();
           continue;
@@ -347,7 +400,7 @@ class LastFmService extends ChangeNotifier {
         return;
       }
       if (!identical(queue, _pending)) return; // disconnected meanwhile
-      queue.removeRange(0, batch.length.clamp(0, queue.length));
+      _removeSent(queue, batch);
       await _saveQueue();
       notifyListeners();
     }

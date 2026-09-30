@@ -40,28 +40,64 @@ bool isLikelyTruncated({required int probedTicks, required int expectedTicks}) {
 
 /// Whether a download recorded for [recordServerUrl] / [recordUserId]
 /// belongs to the signed-in account ([sessionServerUrl] / [sessionUserId]).
-/// Records without a server or user (written before these were stored) are
-/// treated as belonging to the current account.
+///
+/// The user id decides when both sides have one: Jellyfin user ids are
+/// unique GUIDs, so the same user reached through another address (the
+/// server moved from a LAN IP to a domain) keeps its downloads. A record
+/// without a user id falls back to comparing server addresses; records
+/// without either (written before these were stored) belong to the current
+/// account.
 bool downloadBelongsToSession({
   required String? recordServerUrl,
   required String? recordUserId,
   required String sessionServerUrl,
   required String? sessionUserId,
 }) {
+  final hasRecordUser = recordUserId != null && recordUserId.isNotEmpty;
+  final hasSessionUser = sessionUserId != null && sessionUserId.isNotEmpty;
+  if (hasRecordUser && hasSessionUser) return recordUserId == sessionUserId;
   if (recordServerUrl != null &&
       recordServerUrl.isNotEmpty &&
       !isSameServerUrl(recordServerUrl, sessionServerUrl)) {
     return false;
   }
-  if (recordUserId != null &&
-      recordUserId.isNotEmpty &&
-      sessionUserId != null &&
-      sessionUserId.isNotEmpty &&
-      recordUserId != sessionUserId) {
-    return false;
-  }
   return true;
 }
+
+/// Whether a `206 Partial Content` response with [contentRange] (e.g.
+/// `bytes 1000-4999/5000`) continues a partial download of [offset] bytes
+/// of a [totalBytes]-byte file, i.e. runs from [offset] to the end of the
+/// same-sized file. Anything else must not be appended to the partial file.
+bool continuesPartialDownload({
+  required String? contentRange,
+  required int offset,
+  required int totalBytes,
+}) {
+  if (contentRange == null || offset <= 0 || totalBytes <= offset) return false;
+  final match = RegExp(r'^\s*bytes\s+(\d+)-(\d+)/(\d+)\s*$', caseSensitive: false)
+      .firstMatch(contentRange);
+  if (match == null) return false;
+  final start = int.parse(match[1]!);
+  final end = int.parse(match[2]!);
+  final total = int.parse(match[3]!);
+  return start == offset && total == totalBytes && end == totalBytes - 1;
+}
+
+/// Query parameters that carry an access token.
+final RegExp _secretQueryParam = RegExp(
+  r'([?&;](?:api_?key|x-emby-token|x-mediabrowser-token|access_?token|token)=)'
+  r'''[^&#\s,;'")\]]+''',
+  caseSensitive: false,
+);
+
+/// [error] as text that is safe to log or persist: access tokens in URLs
+/// (the `ApiKey=` query parameter of download/stream/artwork URLs, which
+/// `http`'s `ClientException` and dart:io's `HttpException` messages
+/// include) are replaced with `<redacted>`.
+String redactSecrets(Object? error) => '$error'.replaceAllMapped(
+      _secretQueryParam,
+      (m) => '${m[1]}<redacted>',
+    );
 
 /// Whether the expensive part of a storage-stats scan (audio cache, waveform
 /// and chart directories) can be reused instead of rescanning.

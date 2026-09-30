@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:hive_flutter/hive_flutter.dart';
 
 import 'demo/demo_content.dart';
 import 'jellyfin/jellyfin_album.dart';
@@ -27,6 +28,7 @@ import 'services/profile_stats_cache.dart';
 import 'services/carplay_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/download_service.dart';
+import 'services/hive_init.dart';
 import 'services/local_cache_service.dart';
 import 'services/pending_report_store.dart';
 import 'services/remote_control_service.dart';
@@ -232,6 +234,10 @@ class NautuneAppState extends ChangeNotifier {
   bool _networkAvailable = true;  // Track network connectivity
   bool _handlingUnauthorizedSession = false;
 
+  /// Bumped when the account or library changes (and on logout): home shelf
+  /// loads started under an older value drop their results.
+  int _shelvesGeneration = 0;
+
   bool get isInitialized => _initialized;
   bool get networkAvailable => _networkAvailable;
   bool get isDemoMode => _demoModeProvider?.isDemoMode ?? _isDemoMode;
@@ -284,23 +290,26 @@ class NautuneAppState extends ChangeNotifier {
   // Sync session from SessionProvider
   void _onSessionChanged() {
     if (_sessionProvider == null) return;
+    final newSession = _sessionProvider.session;
+    // Scope listening analytics to this account (no-op when unchanged), so
+    // another account's plays are neither shown nor synced to this server.
+    // Done before the init guard: initialize() already builds home shelves
+    // ("On This Day") from the analytics.
+    ListeningAnalyticsService().setCurrentAccount(
+      serverUrl: newSession?.serverUrl,
+      userId: newSession?.credentials.userId,
+    );
     // Until initialize() has loaded the persisted preferences (offline mode,
     // remote control, battery saver) a session must not start any network
     // work: initialize() restores the stored session itself and calls this
     // again at the end to pick up anything that changed meanwhile.
     if (!_initialized) return;
 
-    final newSession = _sessionProvider.session;
-    // Scope listening analytics to this account (no-op when unchanged), so
-    // another account's plays are neither shown nor synced to this server.
-    ListeningAnalyticsService().setCurrentAccount(
-      serverUrl: newSession?.serverUrl,
-      userId: newSession?.credentials.userId,
-    );
     debugPrint('[NautuneAppState] _onSessionChanged called. Provider session: ${newSession?.selectedLibraryId}');
 
     if (_session != newSession) {
       debugPrint('[NautuneAppState] Updating local session. New Lib ID: ${newSession?.selectedLibraryId}');
+      final previous = _session;
       _session = newSession;
 
       // If the new session is a demo session, prefer demo provider data and avoid
@@ -345,8 +354,25 @@ class NautuneAppState extends ChangeNotifier {
       // Normal (non-demo) session handling
       if (_session != null && !(_session?.isDemo ?? false)) {
         final session = _session!;
+        final signedIn = previous == null || previous.isDemo;
+        if (previous == null ||
+            previous.isDemo ||
+            previous.selectedLibraryId != session.selectedLibraryId ||
+            _accountKey(previous) != _accountKey(session)) {
+          _clearHomeShelves();
+        }
+        if (previous != null &&
+            !previous.isDemo &&
+            _accountKey(previous) != _accountKey(session)) {
+          // Another account: a saved queue still waiting to be restored is
+          // the previous account's (setJellyfinService would restore it).
+          _audioPlayerService.clearPendingRestore();
+        }
         // Ensure AudioPlayerService has the correct JellyfinService instance
         _audioPlayerService.setJellyfinService(_jellyfinService);
+        // setJellyfinService starts a new image prewarmer (enabled): keep
+        // it off while offline.
+        _audioPlayerService.setImagePrewarmEnabled(!isOfflineMode);
         // Downloads: hydrate stored tracks with the new server/token and
         // resume the queue now rather than on the service's 2 s poll.
         _downloadService.onSessionChanged();
@@ -369,12 +395,52 @@ class NautuneAppState extends ChangeNotifier {
         if (session.selectedLibraryId != null) {
           unawaited(_loadLibraryDependentContent(forceRefresh: true));
         }
+        if (signedIn) {
+          // Signed in, or the stored session became readable after a
+          // locked-keychain start: what initialize() does for a restored
+          // session (bootstrap sync, which also detects an expired token;
+          // analytics and offline-edit sync; the offline policy).
+          _startSessionNetworkWork(session);
+          unawaited(_reconcileScrobblerLinks(session));
+        }
       } else if (_session == null) {
         // Session cleared - stop periodic sync
         _stopPeriodicSyncTimer();
         _clearLibraryCaches();
+        _clearHomeShelves();
       }
     }
+  }
+
+  /// Account part of [session] ("server|user"), for per-account checks.
+  String _accountKey(JellyfinSession session) =>
+      _cacheService.cacheKeyForSession(session);
+
+  /// Clears the home shelves the app state loads itself (they belong to one
+  /// account and library). Loads still running belong to the previous
+  /// account or library: bumping [_shelvesGeneration] drops their results
+  /// (and they no longer clear the loading flags, reset here).
+  void _clearHomeShelves() {
+    _shelvesGeneration++;
+    _recentlyAddedAlbums = null;
+    _recentlyAddedError = null;
+    _recentlyPlayedTracks = null;
+    _mostPlayedTracks = null;
+    _mostPlayedAlbums = null;
+    _longestTracks = null;
+    _discoverTracks = null;
+    _onThisDayTracks = null;
+    _recommendationTracks = null;
+    _recommendationSeedTrackName = null;
+    _isLoadingRecent = false;
+    _isLoadingRecentlyAdded = false;
+    _isLoadingRecentlyPlayed = false;
+    _isLoadingMostPlayedTracks = false;
+    _isLoadingMostPlayedAlbums = false;
+    _isLoadingLongestTracks = false;
+    _isLoadingDiscover = false;
+    _isLoadingOnThisDay = false;
+    _isLoadingRecommendations = false;
   }
 
   // --- End of _onSessionChanged ---
@@ -1122,6 +1188,8 @@ class NautuneAppState extends ChangeNotifier {
     _audioPlayerService.reportingService?.setProgressInterval(
       Duration(seconds: saver ? 60 : 10),
     );
+    // The analytics timer's interval follows the saver (30 / 10 min).
+    if (_periodicSyncTimer != null) _startPeriodicSyncTimer();
     _updateEffectiveVisualizer();
   }
 
@@ -1129,6 +1197,12 @@ class NautuneAppState extends ChangeNotifier {
   void _initPowerModeListener() {
     // Initial state: Low Power Mode pauses the visualizer.
     _updateEffectiveVisualizer();
+
+    // Low Power Mode already on at launch: its initial event went out before
+    // this listener existed, so apply the battery saver now.
+    if (PowerModeService.instance.isLowPowerMode) {
+      _activateSubmarineFeatures();
+    }
 
     // Listen for CHANGES
     _powerModeSub = PowerModeService.instance.lowPowerModeStream.listen((isLowPower) {
@@ -1151,6 +1225,7 @@ class NautuneAppState extends ChangeNotifier {
     if (_albumSortBy == sortBy && _albumSortOrder == sortOrder) return;
     _albumSortBy = sortBy;
     _albumSortOrder = sortOrder;
+    unawaited(_saveLibrarySort());
     notifyListeners();
     if (_libraryDataProvider != null) {
       // Provider owns the displayed `albums` list (see getter at `albums`).
@@ -1167,6 +1242,7 @@ class NautuneAppState extends ChangeNotifier {
     if (_artistSortBy == sortBy && _artistSortOrder == sortOrder) return;
     _artistSortBy = sortBy;
     _artistSortOrder = sortOrder;
+    unawaited(_saveLibrarySort());
     notifyListeners();
     if (_libraryDataProvider != null) {
       await _libraryDataProvider.setArtistSort(sortBy, sortOrder);
@@ -1213,16 +1289,26 @@ class NautuneAppState extends ChangeNotifier {
     _connectivityMonitorInitialized = true;
   }
 
+  /// Pending "network is back" handling (see [_handleConnectivityStatusChange]).
+  Timer? _reconnectDebounce;
+  static const Duration _reconnectDebounceDelay = Duration(seconds: 2);
+
+  /// When the last full refresh after a reconnect ran.
+  DateTime? _lastReconnectRefresh;
+  static const Duration _reconnectRefreshMinInterval = Duration(seconds: 30);
+
   void _handleConnectivityStatusChange(bool isOnline) {
-    final wasOnline = _networkAvailable;
-    _networkAvailable = isOnline;
     // OS connectivity is authoritative once it reports a change; the
     // bootstrap-triggered reachability probe is no longer needed.
     _stopReachabilityProbe();
 
     // When network is lost, isOfflineMode getter automatically returns true
     // We don't change _userWantsOffline - that's the user's explicit choice
-    if (!isOnline && wasOnline) {
+    if (!isOnline) {
+      _reconnectDebounce?.cancel();
+      _reconnectDebounce = null;
+      if (!_networkAvailable) return;
+      _networkAvailable = false;
       debugPrint('📴 Network lost - app is now effectively offline');
       _publishOfflineState();
       _activateSubmarineFeatures();
@@ -1230,32 +1316,54 @@ class NautuneAppState extends ChangeNotifier {
       return;
     }
 
-    // Going online - restore services only if user doesn't want offline
-    if (isOnline && !wasOnline) {
-      debugPrint('📶 Network restored');
-
-      if (!_userWantsOffline) {
-        debugPrint('📶 User is online — restoring network services');
-        _publishOfflineState();
-        // Stays engaged while iOS Low Power Mode is on.
-        _maybeDeactivateSubmarineFeatures();
-        // Refresh data in background - don't await, don't block UI
-        unawaited(_refreshAfterReconnect());
-      } else {
-        debugPrint('📴 User prefers offline — keeping services silenced');
-      }
-      notifyListeners();
-    } else if (wasOnline != isOnline) {
-      notifyListeners();
-    }
+    // Going online: wait until the connection has been up for a moment. A
+    // flapping connection (Wi-Fi handoff, CarPlay dead zones) would
+    // otherwise restart every service and reload the whole library on each
+    // flip. Going offline above stays immediate.
+    if (_networkAvailable) return;
+    _reconnectDebounce?.cancel();
+    _reconnectDebounce = Timer(_reconnectDebounceDelay, () {
+      _reconnectDebounce = null;
+      _handleNetworkRestored();
+    });
   }
-  
+
+  void _handleNetworkRestored() {
+    if (_networkAvailable) return;
+    _networkAvailable = true;
+    debugPrint('📶 Network restored');
+
+    // Restore services only if the user doesn't want offline.
+    if (!_userWantsOffline) {
+      debugPrint('📶 User is online — restoring network services');
+      // Before publishing, so the restarted timers use the normal
+      // intervals. Stays engaged while iOS Low Power Mode is on.
+      _maybeDeactivateSubmarineFeatures();
+      _publishOfflineState();
+      // Refresh data in background - don't await, don't block UI
+      unawaited(_refreshAfterReconnect());
+    } else {
+      debugPrint('📴 User prefers offline — keeping services silenced');
+    }
+    notifyListeners();
+  }
+
   Future<void> _refreshAfterReconnect() async {
     // Small delay to let connection stabilize
     await Future.delayed(const Duration(milliseconds: 500));
 
     // Check if still online before refreshing
     if (!_networkAvailable) return;
+
+    // A connection that dropped and came back within moments doesn't need
+    // the whole library reloaded again.
+    final last = _lastReconnectRefresh;
+    final now = DateTime.now();
+    if (last != null && now.difference(last) < _reconnectRefreshMinInterval) {
+      unawaited(_syncPendingPlaylistActions());
+      return;
+    }
+    _lastReconnectRefresh = now;
 
     try {
       await refreshLibraries();
@@ -1361,6 +1469,63 @@ class NautuneAppState extends ChangeNotifier {
     if (state == null) return;
     _userWantsOffline = state.isOfflineMode;
     _remoteControlEnabled = state.remoteControlEnabled;
+  }
+
+  /// Also before SessionProvider.initialize() (main): whether the device
+  /// has a network at all, so LibraryDataProvider's first loads read the
+  /// cache instead of trying the network, and the saved library sort, so
+  /// they load in that order. Never throws.
+  Future<void> prepareSessionRestore() async {
+    try {
+      _networkAvailable = await _connectivityService.hasNetworkConnection();
+    } catch (error) {
+      debugPrint('Connectivity probe failed: $error');
+    }
+    await _restoreLibrarySort();
+  }
+
+  static const _librarySortBox = 'nautune_library_sort';
+
+  Future<void> _restoreLibrarySort() async {
+    try {
+      final box = await _openBox(_librarySortBox);
+      final options = SortOption.values.asNameMap();
+      final orders = SortOrder.values.asNameMap();
+      _albumSortBy = options[box.get('albumSortBy')] ?? _albumSortBy;
+      _albumSortOrder = orders[box.get('albumSortOrder')] ?? _albumSortOrder;
+      _artistSortBy = options[box.get('artistSortBy')] ?? _artistSortBy;
+      _artistSortOrder = orders[box.get('artistSortOrder')] ?? _artistSortOrder;
+      _libraryDataProvider?.seedSortState(
+        albumSortBy: _albumSortBy,
+        albumSortOrder: _albumSortOrder,
+        artistSortBy: _artistSortBy,
+        artistSortOrder: _artistSortOrder,
+      );
+    } catch (error) {
+      debugPrint('Failed to restore the library sort: $error');
+    }
+  }
+
+  Future<void> _saveLibrarySort() async {
+    try {
+      final box = await _openBox(_librarySortBox);
+      await box.putAll({
+        'albumSortBy': _albumSortBy.name,
+        'albumSortOrder': _albumSortOrder.name,
+        'artistSortBy': _artistSortBy.name,
+        'artistSortOrder': _artistSortOrder.name,
+      });
+    } catch (error) {
+      debugPrint('Failed to save the library sort: $error');
+    }
+  }
+
+  /// A small Hive box of app preferences (opened once, then reused).
+  static Future<Box<dynamic>> _openBox(String name) async {
+    await ensureHiveInitialized();
+    return Hive.isBoxOpen(name)
+        ? Hive.box<dynamic>(name)
+        : Hive.openBox<dynamic>(name);
   }
 
   /// Restores the persisted preferences and session. Pass
@@ -1540,9 +1705,12 @@ class NautuneAppState extends ChangeNotifier {
           _jellyfinService.restoreSession(storedSession);
         }
         _audioPlayerService.setJellyfinService(_jellyfinService);
+        // setJellyfinService starts a new image prewarmer (enabled).
+        _audioPlayerService.setImagePrewarmEnabled(!isOfflineMode);
         _downloadService.onSessionChanged();
 
         _installReportingService(storedSession);
+        unawaited(_reconcileScrobblerLinks(storedSession));
 
         // Load cached snapshot and start sync in parallel
         final snapshot = await _bootstrapService.loadCachedSnapshot(
@@ -1554,27 +1722,14 @@ class NautuneAppState extends ChangeNotifier {
           _startPeriodicSyncTimer();
         }
 
-        if (_networkAvailable && !_userWantsOffline) {
-          // Also syncs pending playlist edits / favorites.
-          _startBootstrapSync(storedSession);
-          unawaited(_syncAnalyticsToServer());
-          _publishOfflineState(); // records "online" (policy already live)
-          // Home sections the app owns (recently played, discover, ...).
-          if (storedSession.selectedLibraryId != null) {
-            unawaited(_loadLibraryDependentContent(forceRefresh: true));
-          }
-        } else if (isOfflineMode) {
-          _publishOfflineState();
-          _activateSubmarineFeatures();
-          if (_libraryDataProvider?.libraries == null) {
-            unawaited(_loadLibraries()); // downloads-based fallback
-          }
+        _startSessionNetworkWork(storedSession);
+        if (isOfflineMode && _libraryDataProvider?.libraries == null) {
+          unawaited(_loadLibraries()); // downloads-based fallback
+        }
+        // Home sections the app owns (recently played, discover, ...);
+        // offline, also the downloads-based collections.
+        if (storedSession.selectedLibraryId != null || isOfflineMode) {
           unawaited(_loadLibraryDependentContent(forceRefresh: true));
-          if (!_userWantsOffline) {
-            // No network transport right now: keep checking the server so
-            // the app comes back online as soon as it answers.
-            _startReachabilityProbe();
-          }
         }
       } catch (error, stackTrace) {
         _lastError = error;
@@ -1587,6 +1742,27 @@ class NautuneAppState extends ChangeNotifier {
             context: ErrorDescription('restoring Nautune session'),
           ),
         );
+      }
+    }
+  }
+
+  /// Network work for a session that was just restored or signed in.
+  /// Online: the bootstrap sync (which also replays offline playlist edits
+  /// and detects an expired token) and the analytics sync. Offline: the
+  /// offline policy, the battery saver and, unless the user chose offline,
+  /// a probe that brings the app back online as soon as the server answers.
+  void _startSessionNetworkWork(JellyfinSession session) {
+    if (!isOfflineMode) {
+      _startBootstrapSync(session);
+      unawaited(_syncAnalyticsToServer());
+      _publishOfflineState(); // records "online" (policy already live)
+    } else {
+      _publishOfflineState();
+      _activateSubmarineFeatures();
+      if (!_userWantsOffline) {
+        // No network transport right now: keep checking the server so
+        // the app comes back online as soon as it answers.
+        _startReachabilityProbe();
       }
     }
   }
@@ -1787,6 +1963,9 @@ class NautuneAppState extends ChangeNotifier {
       // prewarm, playback streaming; kick queued downloads. The bootstrap
       // isn't restarted: this is called from a running bootstrap sync, and
       // the probe path refreshes via _refreshAfterReconnect.
+      // The battery saver engaged for the outage is lifted too (unless the
+      // user chose offline or Low Power Mode is on).
+      _maybeDeactivateSubmarineFeatures();
       _publishOfflineState(restartBootstrap: false);
       if (!_userWantsOffline) {
         unawaited(_syncPendingPlaylistActions());
@@ -1895,6 +2074,9 @@ class NautuneAppState extends ChangeNotifier {
     } catch (error) {
       debugPrint('Logout: failed to stop playback: $error');
     }
+    // A saved queue still waiting to be restored must not be restored
+    // under the next account.
+    _audioPlayerService.clearPendingRestore();
     try {
       await _playbackStateStore.clearPlaybackData();
     } catch (error) {
@@ -1936,36 +2118,20 @@ class NautuneAppState extends ChangeNotifier {
       ));
     }
 
-    // 3. Clear the SessionProvider BEFORE nulling our own session, so
-    //    _onSessionChanged sees the transition (old → null) and runs its
-    //    cleanup, and the UI shows the login screen.
-    if (_sessionProvider != null) {
-      try {
-        await _sessionProvider.logout();
-      } catch (error) {
-        debugPrint('SessionProvider.logout failed: $error');
-      }
+    // 3. Per-account data, cleared while the library is still showing: the
+    //    login screen appears only once this is done, so a quick sign-in
+    //    (or restarting demo) can't be undone by the rest of this logout.
+    //    Each step on its own, so one failure can't skip the others.
+    if (oldSession != null) {
+      // Remember which account the scrobbler links belong to.
+      await _reconcileScrobblerLinks(oldSession);
     }
-
-    // 4. Local cleanup (idempotent with _onSessionChanged's cleanup, and
-    //    needed when there is no SessionProvider).
-    _session = null;
-    _stopPeriodicSyncTimer();
-    _clearLibraryCaches();
-    _isLoadingLibraries = false;
-    _recentlyAddedAlbums = null;
-    _recentlyAddedError = null;
-    _isLoadingRecentlyAdded = false;
-    _recentlyPlayedTracks = null;
-    _mostPlayedTracks = null;
-    _mostPlayedAlbums = null;
-    _longestTracks = null;
-    _discoverTracks = null;
-    _onThisDayTracks = null;
-    _recommendationTracks = null;
-    _recommendationSeedTrackName = null;
     if (cacheKey != null) {
-      await _cacheService.clearForSession(cacheKey);
+      try {
+        await _cacheService.clearForSession(cacheKey);
+      } catch (error) {
+        debugPrint('Logout: failed to clear cached library data: $error');
+      }
     }
     try {
       await _sessionStore.clear();
@@ -1983,26 +2149,129 @@ class NautuneAppState extends ChangeNotifier {
     } catch (error) {
       debugPrint('Logout: failed to clear per-account playlist data: $error');
     }
-    _syncStatusProvider?.reset();
-    ListeningAnalyticsService().setCurrentAccount();
     try {
       await ProfileStatsCache.clear();
     } catch (error) {
       debugPrint('Logout: failed to clear profile stats cache: $error');
     }
+    try {
+      await _clearSearchHistory();
+    } catch (error) {
+      debugPrint('Logout: failed to clear search history: $error');
+    }
 
     // A bootstrap-detected network drop belongs to the old session; re-derive
     // network state from OS connectivity so the next login isn't stuck
-    // offline.
+    // offline (applied below, once the old session is gone).
+    bool? networkAvailable;
     try {
-      _networkAvailable = await _connectivityService.hasNetworkConnection();
+      networkAvailable = await _connectivityService.hasNetworkConnection();
     } catch (_) {
       // Keep the current value.
     }
-    _publishOfflineState();
 
-    await _teardownDemoMode();
+    try {
+      await _teardownDemoMode();
+    } catch (error) {
+      debugPrint('Logout: failed to stop demo mode: $error');
+    }
+
+    // 4. Clear the SessionProvider BEFORE nulling our own session, so
+    //    _onSessionChanged sees the transition (old → null) and runs its
+    //    cleanup, and the UI shows the login screen.
+    if (_sessionProvider != null) {
+      try {
+        await _sessionProvider.logout();
+      } catch (error) {
+        debugPrint('SessionProvider.logout failed: $error');
+      }
+    }
+
+    // 5. Local cleanup (idempotent with _onSessionChanged's cleanup, and
+    //    needed when there is no SessionProvider). Synchronous: nothing
+    //    the user does on the login screen can run in between.
+    _session = null;
+    _stopPeriodicSyncTimer();
+    _clearLibraryCaches();
+    _clearHomeShelves();
+    _isLoadingLibraries = false;
+    _isLoadingRecentlyAdded = false;
+    _syncStatusProvider?.reset();
+    ListeningAnalyticsService().setCurrentAccount();
+    if (networkAvailable != null) _networkAvailable = networkAvailable;
+    // "Go offline" was this account's choice. Kept, the next sign-in (which
+    // needs the network anyway) would land offline on an empty cache.
+    if (_userWantsOffline) {
+      _userWantsOffline = false;
+      unawaited(_playbackStateStore.saveUiState(isOfflineMode: false));
+    }
+    _maybeDeactivateSubmarineFeatures();
+    _publishOfflineState();
     notifyListeners();
+  }
+
+  /// Recent searches live in one global box; they belong to the account
+  /// that searched.
+  static Future<void> _clearSearchHistory() async {
+    final box = await _openBox('nautune_search_history');
+    await box.clear();
+  }
+
+  /// Which Jellyfin account ("server|user") connected Last.fm and
+  /// ListenBrainz. Those links are device-wide; kept blindly, another
+  /// account signing in here would scrobble into them.
+  static const _scrobblerLinksBox = 'nautune_scrobbler_links';
+
+  /// Records the owner of a connected scrobbler (the first account seen
+  /// with it), and disconnects a scrobbler that another account connected.
+  /// Called on sign-in / restore and on logout. Best effort.
+  Future<void> _reconcileScrobblerLinks(JellyfinSession session) async {
+    if (session.isDemo) return;
+    final account = _accountKey(session);
+    try {
+      final box = await _openBox(_scrobblerLinksBox);
+
+      Future<void> reconcile(
+        String key, {
+        required bool connected,
+        required Future<void> Function() disconnect,
+      }) async {
+        final owner = box.get(key) as String?;
+        switch (decideScrobblerLink(
+          connected: connected,
+          owner: owner,
+          account: account,
+        )) {
+          case ScrobblerLinkAction.keep:
+            break;
+          case ScrobblerLinkAction.adopt:
+            await box.put(key, account);
+          case ScrobblerLinkAction.forget:
+            await box.delete(key);
+          case ScrobblerLinkAction.disconnect:
+            debugPrint('Disconnecting $key: it was connected by another account');
+            await disconnect();
+            await box.delete(key);
+        }
+      }
+
+      final lastFm = LastFmService.instance;
+      await lastFm.initialize();
+      await reconcile(
+        'lastfm',
+        connected: lastFm.isConfigured,
+        disconnect: lastFm.disconnect,
+      );
+      final listenBrainz = ListenBrainzService();
+      await listenBrainz.initialize();
+      await reconcile(
+        'listenbrainz',
+        connected: listenBrainz.isConfigured,
+        disconnect: listenBrainz.disconnect,
+      );
+    } catch (error) {
+      debugPrint('Scrobbler account check failed: $error');
+    }
   }
 
   void clearError() {
@@ -2485,14 +2754,16 @@ class NautuneAppState extends ChangeNotifier {
         _loadFavorites(forceRefresh: forceRefresh)
             .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Favorites load timed out')),
       // Home sections only the app state owns.
+      // Recommendations are seeded from the recently played list, so they
+      // wait for this library's list (not the previous one).
       _loadRecentlyPlayed(libraryId, forceRefresh: forceRefresh)
-          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ RecentlyPlayed load timed out')),
+          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ RecentlyPlayed load timed out'))
+          .then((_) => _loadRecommendations(libraryId, forceRefresh: forceRefresh)
+              .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Recommendations load timed out'))),
       _loadDiscoverTracks(libraryId, forceRefresh: forceRefresh)
           .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Discover load timed out')),
       _loadOnThisDayTracks(libraryId, forceRefresh: forceRefresh)
           .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ OnThisDay load timed out')),
-      _loadRecommendations(libraryId, forceRefresh: forceRefresh)
-          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Recommendations load timed out')),
     ], eagerError: false);
   }
 
@@ -2802,27 +3073,62 @@ class NautuneAppState extends ChangeNotifier {
     }
   }
 
+  /// Demo "recent" tracks: DemoModeProvider's when it runs the demo, else
+  /// the legacy demo state's.
+  List<JellyfinTrack> _demoRecentTracks() {
+    final provider = _demoModeProvider;
+    if (provider != null && provider.isDemoMode) return provider.recentTracks;
+    return _demoTracksFromIds(_demoRecentTrackIds);
+  }
+
+  List<JellyfinAlbum> _demoAlbumList() {
+    final provider = _demoModeProvider;
+    if (provider != null && provider.isDemoMode) return provider.albums;
+    return _demoContent?.albums ?? const <JellyfinAlbum>[];
+  }
+
+  // The loaders below (legacy collections used offline or without
+  // LibraryDataProvider, and the home shelves the app state owns) capture
+  // [_shelvesGeneration]: a result that arrives after the account or
+  // library changed is dropped, and only the current load clears its
+  // loading flag. Offline they make no network requests.
+
   Future<void> _loadRecentForLibrary(String libraryId,
       {bool forceRefresh = false}) async {
+    final gen = _shelvesGeneration;
     _recentError = null;
     _isLoadingRecent = true;
     notifyListeners();
 
     if (_isDemoMode) {
-      _recentTracks = _demoTracksFromIds(_demoRecentTrackIds);
+      _recentTracks = _demoRecentTracks();
       _isLoadingRecent = false;
       notifyListeners();
       return;
     }
 
+    final cacheKey = _sessionCacheKey;
+    Future<List<JellyfinTrack>?> readCached() async {
+      if (cacheKey == null) return null;
+      final cached =
+          await _cacheService.readRecentTracks(cacheKey, libraryId: libraryId);
+      return (cached == null || cached.isEmpty) ? null : cached;
+    }
+
     try {
-      _recentTracks = await _jellyfinService.loadRecentTracks(
+      if (isOfflineMode) {
+        final cached = await readCached();
+        if (gen != _shelvesGeneration) return;
+        if (cached != null) _recentTracks = cached;
+        return;
+      }
+      final tracks = await _jellyfinService.loadRecentTracks(
         libraryId: libraryId,
         forceRefresh: forceRefresh,
       );
-      final cacheKey = _sessionCacheKey;
+      if (gen != _shelvesGeneration) return;
+      _recentTracks = tracks;
       if (cacheKey != null) {
-        final tracks = _recentTracks ?? const <JellyfinTrack>[];
         await _cacheService.saveRecentTracks(
           cacheKey,
           libraryId: libraryId,
@@ -2830,46 +3136,57 @@ class NautuneAppState extends ChangeNotifier {
         );
       }
     } catch (error) {
+      if (gen != _shelvesGeneration) return;
       _recentError = error;
-      final cacheKey = _sessionCacheKey;
-      if (cacheKey != null) {
-        final cached =
-            await _cacheService.readRecentTracks(cacheKey, libraryId: libraryId);
-        if (cached != null && cached.isNotEmpty) {
-          _recentTracks = cached;
-        } else {
-          _recentTracks = null;
-        }
-      } else {
-        _recentTracks = null;
-      }
+      final cached = await readCached();
+      if (gen != _shelvesGeneration) return;
+      _recentTracks = cached;
     } finally {
-      _isLoadingRecent = false;
-      notifyListeners();
+      if (gen == _shelvesGeneration) {
+        _isLoadingRecent = false;
+        notifyListeners();
+      }
     }
   }
 
   Future<void> _loadRecentlyAddedForLibrary(String libraryId,
       {bool forceRefresh = false}) async {
+    final gen = _shelvesGeneration;
     _recentlyAddedError = null;
     _isLoadingRecentlyAdded = true;
     notifyListeners();
 
     if (_isDemoMode) {
-      _recentlyAddedAlbums = _demoContent?.albums ?? const <JellyfinAlbum>[];
+      _recentlyAddedAlbums = _demoAlbumList();
       _isLoadingRecentlyAdded = false;
       notifyListeners();
       return;
     }
 
+    final cacheKey = _sessionCacheKey;
+    Future<List<JellyfinAlbum>?> readCached() async {
+      if (cacheKey == null) return null;
+      final cached = await _cacheService.readRecentlyAddedAlbums(
+        cacheKey,
+        libraryId: libraryId,
+      );
+      return (cached == null || cached.isEmpty) ? null : cached;
+    }
+
     try {
+      if (isOfflineMode) {
+        final cached = await readCached();
+        if (gen != _shelvesGeneration) return;
+        if (cached != null) _recentlyAddedAlbums = cached;
+        return;
+      }
       final albums = await _jellyfinService.loadRecentlyAddedAlbums(
         libraryId: libraryId,
         forceRefresh: forceRefresh,
         limit: 20,
       );
+      if (gen != _shelvesGeneration) return;
       _recentlyAddedAlbums = albums;
-      final cacheKey = _sessionCacheKey;
       if (cacheKey != null) {
         await _cacheService.saveRecentlyAddedAlbums(
           cacheKey,
@@ -2878,28 +3195,27 @@ class NautuneAppState extends ChangeNotifier {
         );
       }
     } catch (error) {
+      if (gen != _shelvesGeneration) return;
       _recentlyAddedError = error;
-      final cacheKey = _sessionCacheKey;
-      if (cacheKey != null) {
-        final cached = await _cacheService.readRecentlyAddedAlbums(
-          cacheKey,
-          libraryId: libraryId,
-        );
-        if (cached != null && cached.isNotEmpty) {
-          _recentlyAddedAlbums = cached;
-        } else {
-          _recentlyAddedAlbums = null;
-        }
-      } else {
-        _recentlyAddedAlbums = null;
-      }
+      final cached = await readCached();
+      if (gen != _shelvesGeneration) return;
+      _recentlyAddedAlbums = cached;
     } finally {
-      _isLoadingRecentlyAdded = false;
-      notifyListeners();
+      if (gen == _shelvesGeneration) {
+        _isLoadingRecentlyAdded = false;
+        notifyListeners();
+      }
     }
   }
 
   Future<void> refreshRecent() async {
+    // Demo collections are local; nothing to refresh.
+    if (isDemoMode) return;
+    final provider = _libData;
+    if (provider != null) {
+      await provider.loadRecentTracks(forceRefresh: true);
+      return;
+    }
     final libraryId = selectedLibraryId;
     if (libraryId != null) {
       await _loadRecentForLibrary(libraryId, forceRefresh: true);
@@ -2907,6 +3223,15 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> refreshRecentlyAdded() async {
+    // Demo collections are local; nothing to refresh.
+    if (isDemoMode) return;
+    // The recentlyAddedAlbums getter reads the provider when it's wired, so
+    // refresh that list (the legacy one would never show).
+    final provider = _libData;
+    if (provider != null) {
+      await provider.loadRecentlyAddedAlbums(forceRefresh: true);
+      return;
+    }
     final libraryId = selectedLibraryId;
     if (libraryId != null) {
       await _loadRecentlyAddedForLibrary(libraryId, forceRefresh: true);
@@ -2972,6 +3297,15 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> refreshGenres() async {
+    // Demo collections are local; nothing to refresh.
+    if (isDemoMode) return;
+    // The genres getter reads the provider when it's wired (not in demo
+    // mode), so refresh that list, as refreshAlbums/refreshArtists do.
+    final provider = _libData;
+    if (provider != null) {
+      await provider.loadGenres(forceRefresh: true);
+      return;
+    }
     final libraryId = selectedLibraryId;
     if (libraryId != null) {
       await _loadGenres(libraryId, forceRefresh: true);
@@ -2984,7 +3318,9 @@ class NautuneAppState extends ChangeNotifier {
     notifyListeners();
 
     if (_isDemoMode) {
-      _genres = _demoContent?.genres ?? const <JellyfinGenre>[];
+      _genres = _demoModeProvider?.genres ??
+          _demoContent?.genres ??
+          const <JellyfinGenre>[];
       _isLoadingGenres = false;
       notifyListeners();
       return;
@@ -3002,99 +3338,122 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> _loadRecentlyPlayed(String libraryId, {bool forceRefresh = false}) async {
-    _isLoadingRecentlyPlayed = true;
-    notifyListeners();
-
     if (_isDemoMode) {
-      _recentlyPlayedTracks = _demoTracksFromIds(_demoRecentTrackIds.take(10).toList());
+      _recentlyPlayedTracks = _demoRecentTracks().take(10).toList();
       _isLoadingRecentlyPlayed = false;
       notifyListeners();
       return;
     }
 
+    final gen = _shelvesGeneration;
+    _isLoadingRecentlyPlayed = true;
+    notifyListeners();
     try {
-      _recentlyPlayedTracks = await repository.getRecentlyPlayedTracks(
+      // The repository serves downloads offline.
+      final tracks = await repository.getRecentlyPlayedTracks(
         libraryId: libraryId,
         limit: 20,
       );
+      if (gen != _shelvesGeneration) return;
+      _recentlyPlayedTracks = tracks;
     } catch (error) {
+      if (gen != _shelvesGeneration) return;
       _recentlyPlayedTracks = null;
     } finally {
-      _isLoadingRecentlyPlayed = false;
-      notifyListeners();
+      if (gen == _shelvesGeneration) {
+        _isLoadingRecentlyPlayed = false;
+        notifyListeners();
+      }
     }
   }
 
   Future<void> _loadMostPlayedTracks(String libraryId, {bool forceRefresh = false}) async {
-    _isLoadingMostPlayedTracks = true;
-    notifyListeners();
-
     if (_isDemoMode) {
-      _mostPlayedTracks = _demoTracksFromIds(_demoRecentTrackIds.take(10).toList());
+      _mostPlayedTracks = _demoRecentTracks().take(10).toList();
       _isLoadingMostPlayedTracks = false;
       notifyListeners();
       return;
     }
+    if (isOfflineMode) return; // Server data: keep what's shown.
 
+    final gen = _shelvesGeneration;
+    _isLoadingMostPlayedTracks = true;
+    notifyListeners();
     try {
-      _mostPlayedTracks = await _jellyfinService.getMostPlayedTracks(
+      final tracks = await _jellyfinService.getMostPlayedTracks(
         libraryId: libraryId,
         limit: 20,
       );
+      if (gen != _shelvesGeneration) return;
+      _mostPlayedTracks = tracks;
     } catch (error) {
+      if (gen != _shelvesGeneration) return;
       _mostPlayedTracks = null;
     } finally {
-      _isLoadingMostPlayedTracks = false;
-      notifyListeners();
+      if (gen == _shelvesGeneration) {
+        _isLoadingMostPlayedTracks = false;
+        notifyListeners();
+      }
     }
   }
 
   Future<void> _loadMostPlayedAlbums(String libraryId, {bool forceRefresh = false}) async {
-    _isLoadingMostPlayedAlbums = true;
-    notifyListeners();
-
     if (_isDemoMode) {
-      final demoAlbums = _demoContent?.albums ?? [];
-      _mostPlayedAlbums = demoAlbums.take(10).toList();
+      _mostPlayedAlbums = _demoAlbumList().take(10).toList();
       _isLoadingMostPlayedAlbums = false;
       notifyListeners();
       return;
     }
+    if (isOfflineMode) return; // Server data: keep what's shown.
 
+    final gen = _shelvesGeneration;
+    _isLoadingMostPlayedAlbums = true;
+    notifyListeners();
     try {
-      _mostPlayedAlbums = await _jellyfinService.getMostPlayedAlbums(
+      final albums = await _jellyfinService.getMostPlayedAlbums(
         libraryId: libraryId,
         limit: 20,
       );
+      if (gen != _shelvesGeneration) return;
+      _mostPlayedAlbums = albums;
     } catch (error) {
+      if (gen != _shelvesGeneration) return;
       _mostPlayedAlbums = null;
     } finally {
-      _isLoadingMostPlayedAlbums = false;
-      notifyListeners();
+      if (gen == _shelvesGeneration) {
+        _isLoadingMostPlayedAlbums = false;
+        notifyListeners();
+      }
     }
   }
 
   Future<void> _loadLongestTracks(String libraryId, {bool forceRefresh = false}) async {
-    _isLoadingLongestTracks = true;
-    notifyListeners();
-
     if (_isDemoMode) {
-      _longestTracks = _demoTracksFromIds(_demoRecentTrackIds.take(10).toList());
+      _longestTracks = _demoRecentTracks().take(10).toList();
       _isLoadingLongestTracks = false;
       notifyListeners();
       return;
     }
+    if (isOfflineMode) return; // Server data: keep what's shown.
 
+    final gen = _shelvesGeneration;
+    _isLoadingLongestTracks = true;
+    notifyListeners();
     try {
-      _longestTracks = await _jellyfinService.getLongestRuntimeTracks(
+      final tracks = await _jellyfinService.getLongestRuntimeTracks(
         libraryId: libraryId,
         limit: 20,
       );
+      if (gen != _shelvesGeneration) return;
+      _longestTracks = tracks;
     } catch (error) {
+      if (gen != _shelvesGeneration) return;
       _longestTracks = null;
     } finally {
-      _isLoadingLongestTracks = false;
-      notifyListeners();
+      if (gen == _shelvesGeneration) {
+        _isLoadingLongestTracks = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -3127,44 +3486,50 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> _loadDiscoverTracks(String libraryId, {bool forceRefresh = false}) async {
-    _isLoadingDiscover = true;
-    notifyListeners();
-
     if (_isDemoMode) {
       // In demo mode, shuffle some tracks as "discover"
-      _discoverTracks = _demoTracksFromIds(_demoRecentTrackIds.reversed.take(10).toList());
+      _discoverTracks = _demoRecentTracks().reversed.take(10).toList();
       _isLoadingDiscover = false;
       notifyListeners();
       return;
     }
+    if (isOfflineMode) return; // Server data: keep what's shown.
 
+    final gen = _shelvesGeneration;
+    _isLoadingDiscover = true;
+    notifyListeners();
     try {
       // Get tracks with less than 3 plays (rarely played = discover)
-      _discoverTracks = await _jellyfinService.getLeastPlayedTracks(
+      final tracks = await _jellyfinService.getLeastPlayedTracks(
         libraryId: libraryId,
         maxPlayCount: 3,
         limit: 20,
       );
+      if (gen != _shelvesGeneration) return;
+      _discoverTracks = tracks;
     } catch (error) {
+      if (gen != _shelvesGeneration) return;
       debugPrint('Failed to load discover tracks: $error');
       _discoverTracks = null;
     } finally {
-      _isLoadingDiscover = false;
-      notifyListeners();
+      if (gen == _shelvesGeneration) {
+        _isLoadingDiscover = false;
+        notifyListeners();
+      }
     }
   }
 
   Future<void> _loadOnThisDayTracks(String libraryId, {bool forceRefresh = false}) async {
-    _isLoadingOnThisDay = true;
-    notifyListeners();
-
     if (_isDemoMode) {
-      _onThisDayTracks = _demoTracksFromIds(_demoRecentTrackIds.take(5).toList());
+      _onThisDayTracks = _demoRecentTracks().take(5).toList();
       _isLoadingOnThisDay = false;
       notifyListeners();
       return;
     }
 
+    final gen = _shelvesGeneration;
+    _isLoadingOnThisDay = true;
+    notifyListeners();
     try {
       // Get tracks from local analytics that were played on this day in previous years
       final analyticsService = ListeningAnalyticsService();
@@ -3176,16 +3541,26 @@ class NautuneAppState extends ChangeNotifier {
         // Get unique track IDs from the events
         final trackIds = onThisDayEvents.map((e) => e.trackId).toSet().take(20).toList();
 
-        // Batch fetch all tracks at once for better performance
-        final tracks = await _jellyfinService.loadTracksByIds(trackIds);
+        // Offline, only the downloaded ones (no server request). Online,
+        // batch fetch all tracks at once for better performance.
+        final tracks = isOfflineMode
+            ? trackIds
+                .map(_downloadService.trackFor)
+                .whereType<JellyfinTrack>()
+                .toList()
+            : await _jellyfinService.loadTracksByIds(trackIds);
+        if (gen != _shelvesGeneration) return;
         _onThisDayTracks = tracks;
       }
     } catch (error) {
+      if (gen != _shelvesGeneration) return;
       debugPrint('Failed to load on this day tracks: $error');
       _onThisDayTracks = null;
     } finally {
-      _isLoadingOnThisDay = false;
-      notifyListeners();
+      if (gen == _shelvesGeneration) {
+        _isLoadingOnThisDay = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -3204,17 +3579,18 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   Future<void> _loadRecommendations(String libraryId, {bool forceRefresh = false}) async {
-    _isLoadingRecommendations = true;
-    notifyListeners();
-
     if (_isDemoMode) {
-      _recommendationTracks = _demoTracksFromIds(_demoRecentTrackIds.take(10).toList());
+      _recommendationTracks = _demoRecentTracks().take(10).toList();
       _recommendationSeedTrackName = 'Demo Track';
       _isLoadingRecommendations = false;
       notifyListeners();
       return;
     }
+    if (isOfflineMode) return; // Server data: keep what's shown.
 
+    final gen = _shelvesGeneration;
+    _isLoadingRecommendations = true;
+    notifyListeners();
     try {
       // Get a seed track from recently played or most played
       JellyfinTrack? seedTrack;
@@ -3232,6 +3608,7 @@ class NautuneAppState extends ChangeNotifier {
           libraryId: libraryId,
           limit: 1,
         );
+        if (gen != _shelvesGeneration) return;
         if (mostPlayed.isNotEmpty) {
           seedTrack = mostPlayed.first;
         }
@@ -3248,17 +3625,21 @@ class NautuneAppState extends ChangeNotifier {
         itemId: seedTrack.id,
         limit: 30,
       );
+      if (gen != _shelvesGeneration) return;
 
       // Filter out the seed track itself
       _recommendationTracks = recommendations.where((t) => t.id != seedTrack!.id).take(20).toList();
       _recommendationSeedTrackName = seedTrack.name;
     } catch (error) {
+      if (gen != _shelvesGeneration) return;
       debugPrint('Failed to load recommendations: $error');
       _recommendationTracks = null;
       _recommendationSeedTrackName = null;
     } finally {
-      _isLoadingRecommendations = false;
-      notifyListeners();
+      if (gen == _shelvesGeneration) {
+        _isLoadingRecommendations = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -3395,11 +3776,17 @@ class NautuneAppState extends ChangeNotifier {
 
     // Cancel bootstrap sync
     _bootstrapService.cancelSync();
+
+    // Hold downloads (transfers, artwork, lyrics) until back online
+    _downloadService.setSuspended(true);
   }
 
   /// Restore all background network activity when coming back online.
   void _restoreOnlineNetworkPolicy({bool restartBootstrap = true}) {
     debugPrint('📶 Restoring online network policy — re-enabling background services');
+
+    // Resume downloads held by the offline policy
+    _downloadService.setSuspended(false);
 
     final session = _session;
     if (session == null || _isDemoMode) return;
@@ -3512,6 +3899,8 @@ class NautuneAppState extends ChangeNotifier {
         aborted = true;
         break;
       }
+      // `add` progress: ids of the action the server has accepted so far.
+      int? addSent;
       try {
         switch (action.type) {
           case 'create':
@@ -3542,11 +3931,38 @@ class NautuneAppState extends ChangeNotifier {
             await _jellyfinService.deletePlaylist(playlistId);
             break;
           case 'add':
+            // Resume after the chunks an earlier attempt got accepted, and
+            // skip the chunk that was in flight if the server applied it:
+            // re-adding would duplicate songs in the playlist.
             final playlistId = action.payload['playlistId'] as String;
-            final itemIds = (action.payload['itemIds'] as List).cast<String>();
+            final total = (action.payload['itemIds'] as List).length;
+            var remaining = remainingAddIds(action.payload);
+            if (action.maybeApplied && remaining.isNotEmpty) {
+              var inPlaylist = const <String>{};
+              try {
+                inPlaylist = {
+                  for (final t
+                      in await _jellyfinService.getPlaylistItems(playlistId))
+                    t.id,
+                };
+              } catch (_) {}
+              final applied = appliedLeadingChunk(
+                maybeApplied: true,
+                remaining: remaining,
+                playlistItemIds: inPlaylist,
+              );
+              remaining = remaining.sublist(applied);
+            }
+            final base = total - remaining.length;
+            addSent = base;
+            if (sessionChanged()) {
+              aborted = true;
+              break;
+            }
             await _jellyfinService.addItemsToPlaylist(
               playlistId: playlistId,
-              itemIds: itemIds,
+              itemIds: remaining,
+              onChunkSent: (sent) => addSent = base + sent,
             );
             break;
           case 'favorite':
@@ -3580,9 +3996,17 @@ class NautuneAppState extends ChangeNotifier {
           continue;
         }
         debugPrint('❌ Failed to sync ${action.type} action: $error');
+        final sent = addSent;
         await _syncQueue.update(action.copyWith(
           attempts: decision.attempts,
-          maybeApplied: action.maybeApplied || _mayHaveBeenApplied(error),
+          // For `add` it concerns only the chunk that was in flight now
+          // (earlier chunks are recorded in the payload).
+          maybeApplied: sent != null
+              ? _mayHaveBeenApplied(error)
+              : action.maybeApplied || _mayHaveBeenApplied(error),
+          payload: sent != null
+              ? {...action.payload, kAddActionSentCountKey: sent}
+              : null,
         ));
         failure = error.toString();
         break; // keep the order; retry from here next time
@@ -3635,6 +4059,7 @@ class NautuneAppState extends ChangeNotifier {
     _connectivitySubscription?.cancel();
     _powerModeSub?.cancel();
     _periodicSyncTimer?.cancel();
+    _reconnectDebounce?.cancel();
     _stopReachabilityProbe();
     _demoModeProvider?.removeListener(_onDemoModeChanged);
     _sessionProvider?.removeListener(_onSessionChanged);

@@ -175,11 +175,14 @@ class OnlineRepository implements MusicRepository {
   }
 
   @override
-  Future<List<JellyfinAlbum>> getGenreAlbums(String genreId) async {
-    // Genre albums are loaded via loadAlbums with genreIds filter
-    // The genre detail screen handles this directly via JellyfinClient
-    // For now, this repository method isn't used by UI
-    return [];
+  Future<List<JellyfinAlbum>> getGenreAlbums(
+    String genreId, {
+    required String libraryId,
+  }) async {
+    return await _jellyfinService.loadGenreAlbums(
+      libraryId: libraryId,
+      genreId: genreId,
+    );
   }
 
   @override

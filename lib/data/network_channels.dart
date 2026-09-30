@@ -2,7 +2,11 @@ import '../models/network_channel.dart';
 
 /// All available channels on the Other People Network.
 /// Filenames are from the actual server /audio/ directory.
-/// Channel numbers distributed across 0-333 range.
+/// Channel numbers distributed across 0-333 range (plus the hidden 999).
+///
+/// Channels whose recording is gone from the server are kept (they are part
+/// of the dial) with `available: false`; tuning to one shows "signal lost".
+/// `dart run scripts/check_network_channels.dart` re-checks every URL.
 const List<NetworkChannel> networkChannels = [
   // === A ===
   NetworkChannel(
@@ -161,7 +165,7 @@ const List<NetworkChannel> networkChannels = [
     number: 162,
     name: 'Everyone Gets Into Heaven',
     artist: 'Nicolas Jaar',
-    audioFile: 'everyone gets into heaven.mp3',
+    audioFile: 'radio radi0.mp3', // Same placeholder the live site uses
     imageFile: 'EGH.FM.jpg',
   ),
   NetworkChannel(
@@ -185,6 +189,7 @@ const List<NetworkChannel> networkChannels = [
     name: 'Feet FM',
     artist: 'Nicolas Jaar',
     audioFile: 'FEET FM.mp3',
+    available: false, // Gone from the server
     imageFile: 'F.FM.jpg',
   ),
   NetworkChannel(
@@ -366,6 +371,7 @@ const List<NetworkChannel> networkChannels = [
     name: 'Life Radio',
     artist: 'Nicolas Jaar',
     audioFile: 'life radio.mp3',
+    available: false, // Gone from the server
     imageFile: 'life radio.jpg',
   ),
   NetworkChannel(
@@ -379,7 +385,7 @@ const List<NetworkChannel> networkChannels = [
     number: 237,
     name: 'Live from Las Vegas',
     artist: 'Nicolas Jaar',
-    audioFile: 'live from las vegas.mp3',
+    audioFile: 'radio radi0.mp3', // Same placeholder the live site uses
     imageFile: 'LFLV.FM.jpg',
   ),
   NetworkChannel(
@@ -396,6 +402,7 @@ const List<NetworkChannel> networkChannels = [
     name: 'Mashcast',
     artist: 'Nicolas Jaar',
     audioFile: 'mashcast.mp3',
+    available: false, // Gone from the server
     imageFile: 'MC.FM.jpg',
   ),
   NetworkChannel(
@@ -609,6 +616,7 @@ const List<NetworkChannel> networkChannels = [
     name: 'Science Needs a Clown',
     artist: 'Nicolas Jaar',
     audioFile: 'science needs a clown.mp3',
+    available: false, // Gone from the server
     imageFile: 'SNC.FM.jpg',
   ),
   NetworkChannel(
@@ -616,19 +624,21 @@ const List<NetworkChannel> networkChannels = [
     name: 'Silence FM',
     artist: 'Nicolas Jaar',
     audioFile: '121 Human Heartbeat (Slow, Pounding).mp3',
-    imageFile: 'silenceFM.jpg',
+    // silenceFM.jpg is gone from the server; the placeholder art is shown.
   ),
   NetworkChannel(
     number: 333,
     name: 'Sirens',
     artist: 'Nicolas Jaar',
     audioFile: 'sirens.mp3',
+    available: false, // Gone from the server
   ),
   NetworkChannel(
     number: 999,
     name: 'Sirens (Digital)',
     artist: 'Nicolas Jaar',
     audioFile: 'sirens digital.mp3',
+    available: false, // Gone from the server
   ),
   NetworkChannel(
     number: 198,
@@ -741,6 +751,7 @@ const List<NetworkChannel> networkChannels = [
     name: 'The Object Spoke to Me',
     artist: 'Nicolas Jaar',
     audioFile: '2 of everything object spoke to me.mp3',
+    available: false, // Gone from the server
     imageFile: 'TOSM_PSD copy.jpg',
   ),
   NetworkChannel(
@@ -769,7 +780,7 @@ const List<NetworkChannel> networkChannels = [
     number: 178,
     name: "Un Coup de Dés Jamais N'Abolira le Hasard",
     artist: 'Nicolas Jaar',
-    audioFile: 'un coup de des.mp3',
+    audioFile: 'radio radi0.mp3', // Same placeholder the live site uses
     imageFile: 'UCDDJNLH.FM.jpg',
   ),
 
@@ -808,7 +819,7 @@ const List<NetworkChannel> networkChannels = [
     number: 7,
     name: 'Work in Progress',
     artist: 'Nicolas Jaar',
-    audioFile: 'work in progress.mp3',
+    audioFile: 'radio radi0.mp3', // Same placeholder the live site uses
   ),
   NetworkChannel(
     number: 13,
@@ -857,7 +868,7 @@ const List<NetworkChannel> networkChannels = [
     number: 170,
     name: 'Young Me With Young You',
     artist: 'Nicolas Jaar',
-    audioFile: 'young me with young you.mp3',
+    audioFile: 'radio radi0.mp3', // Same placeholder the live site uses
     imageFile: 'YMWYY.FM-scanned (1).jpg',
   ),
   NetworkChannel(
@@ -895,3 +906,12 @@ final List<NetworkChannel> sortedChannels = List.unmodifiable(
 final Map<int, NetworkChannel> networkChannelsByNumber = {
   for (final channel in networkChannels) channel.number: channel,
 };
+
+/// Channels whose recording can still be streamed or downloaded.
+final List<NetworkChannel> availableNetworkChannels = List.unmodifiable(
+  networkChannels.where((channel) => channel.available),
+);
+
+/// Approximate size of every available recording (unique files), measured
+/// against the server in September 2026. Used to warn before "Download All".
+const int networkAllChannelsApproxBytes = 2780000000;

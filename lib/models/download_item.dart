@@ -19,6 +19,7 @@ enum DownloadErrorKind {
   fileSystem,   // Other FileSystemException
   canceled,     // User canceled or pause/dispose interrupted
   unknown,
+  missing,      // Was downloaded, but the file is gone (e.g. device restore)
 }
 
 class DownloadItem {
@@ -36,6 +37,11 @@ class DownloadItem {
   final Set<String> owners;
   final int? fileSizeBytes; // Cached file size to avoid repeated file I/O
 
+  /// Whether the record holds the full track metadata (track/disc numbers,
+  /// genres, favorite, ReplayGain, …). Records written before v9.1.3 only
+  /// kept names and ids; `DownloadService` fills them in from the server.
+  final bool hasFullMetadata;
+
   DownloadItem({
     required this.track,
     required this.localPath,
@@ -50,6 +56,7 @@ class DownloadItem {
     this.isDemoAsset = false,
     required this.owners,
     this.fileSizeBytes,
+    this.hasFullMetadata = true,
   });
 
   DownloadItem copyWith({
@@ -67,6 +74,7 @@ class DownloadItem {
     bool? isDemoAsset,
     Set<String>? owners,
     int? fileSizeBytes,
+    bool? hasFullMetadata,
   }) {
     return DownloadItem(
       track: track ?? this.track,
@@ -82,6 +90,7 @@ class DownloadItem {
       isDemoAsset: isDemoAsset ?? this.isDemoAsset,
       owners: owners ?? this.owners,
       fileSizeBytes: fileSizeBytes ?? this.fileSizeBytes,
+      hasFullMetadata: hasFullMetadata ?? this.hasFullMetadata,
     );
   }
 
@@ -103,6 +112,19 @@ class DownloadItem {
       'trackBitDepth': track.bitDepth,
       'trackChannels': track.channels,
       'trackProductionYear': track.productionYear,
+      // Full metadata (v9.1.3+). Older records lack these keys and load
+      // with them unset; `trackMeta` marks records that have them.
+      'trackMeta': hasFullMetadata ? 1 : 0,
+      'trackIndexNumber': track.indexNumber,
+      'trackParentIndexNumber': track.parentIndexNumber,
+      'trackPrimaryImageTag': track.primaryImageTag,
+      'trackParentThumbImageTag': track.parentThumbImageTag,
+      'trackIsFavorite': track.isFavorite,
+      'trackNormalizationGain': track.normalizationGain,
+      'trackAlbumNormalizationGain': track.albumNormalizationGain,
+      'trackGenres': track.genres,
+      'trackTags': track.tags,
+      'trackProviderIds': track.providerIds,
       // Account the download belongs to (never the access token). Absent in
       // records written by older versions.
       'serverUrl': track.serverUrl,
@@ -149,6 +171,7 @@ class DownloadItem {
         isDemoAsset: json['isDemoAsset'] as bool? ?? false,
         owners: HashSet<String>.from(json['owners'] as List? ?? []),
         fileSizeBytes: json['fileSizeBytes'] as int?,
+        hasFullMetadata: json['trackMeta'] == 1,
       );
     } catch (e) {
       return null;

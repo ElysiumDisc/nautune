@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:audio_service/audio_service.dart' as audio_service;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import '../jellyfin/jellyfin_track.dart';
 import 'engine/engine_player.dart';
 
@@ -126,6 +127,7 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
     final shuffleMode = shuffle
         ? audio_service.AudioServiceShuffleMode.all
         : audio_service.AudioServiceShuffleMode.none;
+    unawaited(_pushModesToCommandCenter(shuffle, repeat));
     final current = playbackState.value;
     if (current.shuffleMode == shuffleMode && current.repeatMode == repeat) {
       return;
@@ -134,6 +136,73 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
       shuffleMode: shuffleMode,
       repeatMode: repeat,
       updatePosition: _lastKnownPosition,
+    ));
+  }
+
+  static const MethodChannel _modesChannel =
+      MethodChannel('nautune/now_playing_modes');
+
+  /// audio_service enables the shuffle/repeat remote commands but never sets
+  /// MPRemoteCommandCenter's current shuffle/repeat type, so CarPlay's Now
+  /// Playing buttons showed "off" whatever the app's state (AppDelegate).
+  static Future<void> _pushModesToCommandCenter(
+    bool shuffle,
+    audio_service.AudioServiceRepeatMode repeat,
+  ) async {
+    if (defaultTargetPlatform != TargetPlatform.iOS) return;
+    try {
+      await _modesChannel.invokeMethod<bool>('setModes', {
+        'shuffle': shuffle,
+        'repeat': switch (repeat) {
+          audio_service.AudioServiceRepeatMode.one => 'one',
+          audio_service.AudioServiceRepeatMode.all ||
+          audio_service.AudioServiceRepeatMode.group =>
+            'all',
+          audio_service.AudioServiceRepeatMode.none => 'none',
+        },
+      });
+    } catch (e) {
+      debugPrint('⚠️ Now Playing modes update failed: $e');
+    }
+  }
+
+  /// Playback speed, so the lock screen / CarPlay advance the elapsed time
+  /// at the real rate (audio_service extrapolates with `speed`).
+  void updateSpeed(double speed) {
+    final current = playbackState.value;
+    if (current.speed == speed) return;
+    playbackState.add(current.copyWith(
+      speed: speed,
+      updatePosition: _lastKnownPosition,
+    ));
+  }
+
+  /// The player's duration for [trackId], once known: it replaces the
+  /// metadata duration of the published item (if that item is still
+  /// [trackId]'s).
+  void updateCurrentDuration(String trackId, Duration duration) {
+    final item = mediaItem.value;
+    if (item == null || item.id != trackId || item.duration == duration) return;
+    mediaItem.add(item.copyWith(duration: duration));
+  }
+
+  /// Show a loaded-later track (restored session) as paused at [position],
+  /// keeping the shuffle/repeat modes and the full set of controls and
+  /// system actions already published.
+  void showPaused({required Duration position, int? queueIndex}) {
+    _lastKnownPosition = position;
+    playbackState.add(playbackState.value.copyWith(
+      playing: false,
+      updatePosition: position,
+      controls: [
+        audio_service.MediaControl.skipToPrevious,
+        audio_service.MediaControl.play,
+        audio_service.MediaControl.stop,
+        audio_service.MediaControl.skipToNext,
+      ],
+      systemActions: _systemActions,
+      processingState: audio_service.AudioProcessingState.ready,
+      queueIndex: queueIndex,
     ));
   }
 
@@ -178,7 +247,11 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
   /// track is downloaded and the file exists). It is preferred over the
   /// network URL so the lock screen / CarPlay show art offline and don't
   /// re-fetch what is already on disk.
-  void updateNautuneMediaItem(JellyfinTrack track, {Uri? offlineArtUri}) {
+  void updateNautuneMediaItem(
+    JellyfinTrack track, {
+    Uri? offlineArtUri,
+    Duration? duration,
+  }) {
     final networkArtUrl = track.artworkUrl();
     final artUri = offlineArtUri ??
         (networkArtUrl != null ? Uri.parse(networkArtUrl) : null);
@@ -188,7 +261,7 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
       album: track.album,
       title: track.name,
       artist: track.displayArtist,
-      duration: track.duration,
+      duration: duration ?? track.duration,
       artUri: artUri,
     );
     mediaItem.add(item);

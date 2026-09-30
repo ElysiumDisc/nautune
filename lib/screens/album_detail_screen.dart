@@ -191,9 +191,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       _notAvailableOffline = false;
     });
 
+    // Downloads without an album id are grouped (and their album tile
+    // identified) by album name offline, so match those by name.
     List<JellyfinTrack> downloadedTracks() => _appState!
         .downloadService.completedDownloads
-        .where((d) => d.track.albumId == widget.album.id)
+        .where((d) =>
+            d.track.albumId == widget.album.id ||
+            (d.track.albumId == null &&
+                (d.track.album ?? 'Unknown Album') == widget.album.name))
         .map((d) => d.track)
         .toList();
 

@@ -8,7 +8,9 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../models/appearance.dart' show AccentSource;
 import '../providers/now_playing_colors_provider.dart';
+import '../providers/theme_provider.dart';
 import '../services/lyrics_service.dart';
 import '../models/now_playing_layout.dart';
 import '../services/playback_state_store.dart' show StreamingQuality, VisualizerPosition;
@@ -48,7 +50,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   // Artwork colours come from the app-wide NowPlayingColorsProvider.
   NowPlayingColorsProvider? _colorsProvider;
   List<Color>? get _paletteColors => _colorsProvider?.colors;
-  double? get _cachedAvgLuminance => _colorsProvider?.avgLuminance;
 
   // Track the shown lyrics belong to, and the latest lyrics request: an
   // older request that finishes late (the user skipped) must not overwrite
@@ -71,6 +72,15 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   // Visualizer in album art toggle state
   bool _showingVisualizerInArtwork = false;
   String? _lastTrackIdForVisualizerReset; // Track ID to detect track changes
+
+  // The app theme at the other brightness, for content drawn over a
+  // background of that brightness (see _contentTheme). Cached per app theme.
+  ThemeData? _variantBase;
+  Brightness? _variantBrightness;
+  ThemeData? _variantTheme;
+
+  // An album / artist lookup is running (repeat taps must not push twice).
+  bool _openingDetail = false;
 
 
   @override
@@ -231,7 +241,11 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     final theme = Theme.of(context);
     showModalBottomSheet(
       context: context,
+      // Scrolls instead of overflowing where it's taller than the sheet may
+      // be (landscape, large text).
+      isScrollControlled: true,
       builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
         child: StreamBuilder<Duration>(
           stream: _audioService.sleepTimerStream,
           builder: (context, snapshot) {
@@ -341,6 +355,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
               ],
             );
           },
+        ),
         ),
       ),
     );
@@ -618,6 +633,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                             ),
                             trailing: IconButton(
                               icon: const Icon(Icons.play_arrow),
+                              tooltip: 'Play this loop',
                               onPressed: () {
                                 Navigator.pop(sheetContext);
                                 _audioService.setLoopMarkers(loop.startDuration, loop.endDuration);
@@ -878,27 +894,79 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     }
   }
 
-  /// Compute adaptive text color based on palette luminance.
-  /// Light albums (luminance > 0.5) get dark text, dark albums get light text.
-  /// Only applies to Gradient and Blur layouts.
-  Color _getAdaptiveTextColor(ThemeData theme, {double alpha = 1.0}) {
-    final layout = _appState.nowPlayingLayout;
-    // Only apply adaptive colors for Gradient and Blur layouts
-    if (layout != NowPlayingLayout.gradient && layout != NowPlayingLayout.blur) {
-      return theme.colorScheme.onSurface.withValues(alpha: alpha);
+  /// Brightness of the background [_buildBackgroundLayers] paints under the
+  /// content, as shown (dim overlay included); null where the content sits
+  /// on the theme's own surface.
+  Brightness? _backgroundBrightness(ThemeData theme) {
+    final colors = _paletteColors;
+    final hasColors = colors != null && colors.isNotEmpty;
+    final List<Color> shown;
+    final double dim;
+    switch (_appState.nowPlayingLayout) {
+      case NowPlayingLayout.fullArt:
+        return Brightness.dark;
+      case NowPlayingLayout.card:
+      case NowPlayingLayout.compact:
+        return null;
+      case NowPlayingLayout.classic:
+      case NowPlayingLayout.gradient:
+        if (!hasColors) return null;
+        shown = colors.length >= 2 ? colors.take(4).toList() : [colors[0], Colors.black];
+        dim = 0.3;
+      case NowPlayingLayout.blur:
+        shown = hasColors
+            ? [colors[0], colors.length > 1 ? colors[1] : colors[0]]
+            : [theme.scaffoldBackgroundColor];
+        dim = 0.5;
     }
-
-    final avgLuminance = _cachedAvgLuminance;
-    if (avgLuminance == null) {
-      return theme.colorScheme.onSurface.withValues(alpha: alpha);
+    var total = 0.0;
+    for (final c in shown) {
+      total += Color.alphaBlend(Colors.black.withValues(alpha: dim), c)
+          .computeLuminance();
     }
-
-    if (avgLuminance > 0.5) {
-      return Colors.black.withValues(alpha: alpha * 0.87);
-    } else {
-      return Colors.white.withValues(alpha: alpha);
-    }
+    final luminance = total / shown.length;
+    // Whichever of black or white text contrasts more.
+    return (luminance + 0.05) / 0.05 > 1.05 / (luminance + 0.05)
+        ? Brightness.light
+        : Brightness.dark;
   }
+
+  /// Theme for everything drawn over the background: the app theme, or the
+  /// same palette at the other brightness when the background is of that
+  /// brightness (Full Art's black in light mode, a bright cover in dark
+  /// mode). Text, icons, labels and sliders then all stay readable; only the
+  /// title and artist used to adapt, and Classic / Full Art never did.
+  ThemeData _contentTheme(ThemeData theme) {
+    final background = _backgroundBrightness(theme);
+    if (background == null || background == theme.brightness) return theme;
+    if (identical(_variantBase, theme) && _variantBrightness == background) {
+      return _variantTheme!;
+    }
+    final themeProvider = Provider.of<ThemeProvider?>(context, listen: false);
+    final ThemeData variant;
+    if (themeProvider != null) {
+      // As the app theme is built (main.dart).
+      final accent = themeProvider.accentSource == AccentSource.nowPlaying
+          ? _colorsProvider?.accent
+          : null;
+      variant = themeProvider.themeFor(background, accent: accent);
+    } else {
+      variant = ThemeData(
+        brightness: background,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: theme.colorScheme.primary,
+          brightness: background,
+        ),
+      );
+    }
+    _variantBase = theme;
+    _variantBrightness = background;
+    return _variantTheme = variant;
+  }
+
+  /// Primary text colour of the content ([theme] is [_contentTheme]'s).
+  Color _getAdaptiveTextColor(ThemeData theme, {double alpha = 1.0}) =>
+      theme.colorScheme.onSurface.withValues(alpha: alpha);
 
   /// Get secondary adaptive color (for subtitles, icons) with reduced opacity
   Color _getAdaptiveSecondaryColor(ThemeData theme) {
@@ -924,7 +992,10 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     final isFullArt = layout == NowPlayingLayout.fullArt;
     final borderRadius = isFullArt ? BorderRadius.zero : BorderRadius.circular(isWide ? 24 : 16);
 
-    return GestureDetector(
+    return Semantics(
+      button: true,
+      label: _showingVisualizerInArtwork ? 'Show artwork' : 'Show visualizer',
+      child: GestureDetector(
       onTap: _toggleVisualizerInArtwork,
       onHorizontalDragEnd: (details) {
         // Toggle on swipe if velocity is sufficient
@@ -982,6 +1053,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -1135,6 +1207,11 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
         ));
     // Tablet layout by the short side: a landscape iPhone is wide but short.
     final isWide = MediaQuery.sizeOf(context).shortestSide >= 600;
+    // Matches the mini player of the page that opened the player.
+    final route = ModalRoute.of(context);
+    final heroTag = route is NowPlayingRoute
+        ? route.artworkHeroTag
+        : nowPlayingArtworkHeroTag(null);
 
     // Track + playing state only: position ticks (5/s) must not rebuild the
     // artwork, background, controls and menus.
@@ -1156,6 +1233,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
               title: const Text('Now Playing'),
               leading: IconButton(
                 icon: const Icon(Icons.arrow_back),
+                tooltip: 'Close player',
                 onPressed: () => Navigator.of(context).pop(),
               ),
             ),
@@ -1177,7 +1255,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
         }
 
         final baseArtwork = Hero(
-          tag: kNowPlayingArtworkHeroTag,
+          tag: heroTag,
           transitionOnUserGestures: true,
           child: _buildArtwork(
             track: track,
@@ -1192,6 +1270,9 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
           isWide: isWide,
           theme: theme,
         );
+        // Everything over the background is themed for it (see
+        // _contentTheme); the background itself keeps the app theme.
+        final contentTheme = _contentTheme(theme);
 
         return Focus(
           autofocus: true,
@@ -1204,7 +1285,13 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                 // Background layer - varies by layout
                 ..._buildBackgroundLayers(theme),
                 // Content layer
-                SafeArea(
+                Theme(
+                  data: contentTheme,
+                  // Unstyled text follows the content theme too (the
+                  // Scaffold's Material set the app theme's colour).
+                  child: DefaultTextStyle.merge(
+                  style: TextStyle(color: contentTheme.colorScheme.onSurface),
+                  child: SafeArea(
                   child: Column(
                     children: [
                       // Header with TabBar
@@ -1228,7 +1315,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                   controller: _tabController,
                                   isScrollable: true,
                                   tabAlignment: TabAlignment.center,
-                                  labelStyle: theme.textTheme.titleSmall,
+                                  labelStyle: contentTheme.textTheme.titleSmall,
                                   tabs: const [
                                     Tab(text: 'Now Playing'),
                                     Tab(text: 'Lyrics'),
@@ -1248,7 +1335,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                       icon: Icon(
                                         Icons.nightlight_round,
                                         color: isActive
-                                            ? theme.colorScheme.primary
+                                            ? contentTheme.colorScheme.primary
                                             : null,
                                       ),
                                       tooltip: 'Sleep Timer',
@@ -1262,7 +1349,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                           width: 8,
                                           height: 8,
                                           decoration: BoxDecoration(
-                                            color: theme.colorScheme.primary,
+                                            color: contentTheme.colorScheme.primary,
                                             shape: BoxShape.circle,
                                           ),
                                         ),
@@ -1273,6 +1360,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                             ),
                             IconButton(
                               icon: const Icon(Icons.more_vert),
+                              tooltip: 'More options',
                               onPressed: () => _showTrackMenu(context, track),
                             ),
                           ],
@@ -1288,19 +1376,21 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                               track: track,
                               isPlaying: isPlaying,
                               isWide: isWide,
-                              theme: theme,
+                              theme: contentTheme,
                               artwork: artwork,
                             ),
 
                             // Tab 2: Lyrics
                             _buildLyricsTab(
                               track: track,
-                              theme: theme,
+                              theme: contentTheme,
                             ),
                           ],
                         ),
                       ),
                     ],
+                  ),
+                  ),
                   ),
                 ),
               ],
@@ -1417,6 +1507,147 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     );
   }
 
+  static const Duration _detailLookupTimeout = Duration(seconds: 10);
+
+  /// Runs [lookup] behind a spinner the user can dismiss to give up. The
+  /// value is null when the lookup failed or timed out; [cancelled] when the
+  /// spinner was dismissed. (It used to be a non-dismissible dialog over a
+  /// request that retries for up to ~45 s, popped only if the calling
+  /// context was still mounted.)
+  Future<({T? value, bool cancelled})> _lookUpWithSpinner<T>(
+    BuildContext context,
+    Future<T> Function() lookup,
+  ) async {
+    final navigator = Navigator.of(context);
+    final spinner = DialogRoute<void>(
+      context: context,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+    _openingDetail = true;
+    navigator.push(spinner);
+    T? value;
+    try {
+      value = await lookup().timeout(_detailLookupTimeout);
+    } catch (e) {
+      debugPrint('Player lookup failed: $e');
+    } finally {
+      _openingDetail = false;
+    }
+    final cancelled = !spinner.isActive;
+    if (!cancelled) {
+      if (spinner.isCurrent) {
+        navigator.pop();
+      } else {
+        navigator.removeRoute(spinner);
+      }
+    }
+    return (value: value, cancelled: cancelled);
+  }
+
+  /// Opens [track]'s artist: from the library cache, the server (online
+  /// only), or, from downloads, a stand-in the artist page fills offline.
+  Future<void> _openArtist(BuildContext context, JellyfinTrack track) async {
+    if (_openingDetail) return;
+    final artistName =
+        track.artists.isNotEmpty ? track.artists.first : track.displayArtist;
+    final artistId = track.artistIds.isNotEmpty ? track.artistIds.first : null;
+    final artists = _appState.artists ?? const <JellyfinArtist>[];
+
+    // First, try direct ID-based lookup from track metadata, then the name.
+    JellyfinArtist? artist = artistId == null
+        ? null
+        : artists.where((a) => a.id == artistId).firstOrNull;
+    artist ??= artists
+        .where((a) => a.name.toLowerCase() == artistName.toLowerCase())
+        .firstOrNull;
+
+    // Not in the local cache: ask the server for the artist by ID. One
+    // round-trip beats paging through up to 500 artists for one match.
+    if (artist == null && artistId != null && !_appState.isOfflineMode) {
+      final result = await _lookUpWithSpinner(
+        context,
+        () => _appState.jellyfinService.getArtist(artistId),
+      );
+      if (result.cancelled || !mounted) return;
+      artist = result.value;
+    }
+
+    // If still not found, try downloads for offline mode
+    if (artist == null) {
+      final hasDownloads = _appState.downloadService.completedDownloads.any(
+        (d) => d.track.artists
+            .any((a) => a.toLowerCase() == artistName.toLowerCase()),
+      );
+      if (hasDownloads) {
+        // Create synthetic artist for offline mode
+        artist = JellyfinArtist(id: 'offline_$artistName', name: artistName);
+      }
+    }
+
+    if (!context.mounted) return;
+    if (artist != null) {
+      final found = artist;
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (context) => ArtistDetailScreen(artist: found)),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not find artist "$artistName"'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  /// Opens [track]'s album: from the library cache, the server (online
+  /// only), or a stand-in built from its downloads.
+  Future<void> _openAlbum(BuildContext context, JellyfinTrack track) async {
+    final albumId = track.albumId;
+    if (albumId == null || _openingDetail) return;
+    var album = (_appState.albums ?? const <JellyfinAlbum>[])
+        .where((a) => a.id == albumId)
+        .firstOrNull;
+
+    if (album == null && !_appState.isOfflineMode) {
+      final result = await _lookUpWithSpinner(
+        context,
+        () => _appState.jellyfinService.getAlbum(albumId),
+      );
+      if (result.cancelled || !mounted) return;
+      album = result.value;
+    }
+
+    // If still not found, try to create from downloads
+    if (album == null &&
+        _appState.downloadService.completedDownloads
+            .any((d) => d.track.albumId == albumId)) {
+      // Create a synthetic JellyfinAlbum for offline mode
+      album = JellyfinAlbum(
+        id: albumId,
+        name: track.album ?? 'Unknown Album',
+        artists: track.artists,
+        primaryImageTag: track.albumPrimaryImageTag,
+        genres: const [],
+      );
+    }
+
+    if (!context.mounted) return;
+    if (album != null) {
+      final found = album;
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (context) => AlbumDetailScreen(album: found)),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Album "${track.album}" not available'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   /// Title, radio badge, artist, album and quality badges.
   Widget _buildTrackInfo({
     required BuildContext context,
@@ -1476,108 +1707,11 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
 
         // Artist - clickable to navigate to artist detail
         GestureDetector(
-          onTap: () async {
-            // Get the artist name from the track
-            final artistName = track.artists.isNotEmpty
-                ? track.artists.first
-                : track.displayArtist;
-
-            // Show loading indicator
-            if (!mounted) return;
-            showDialog(
-              context: context,
-              barrierDismissible: false,
-              builder: (context) => const Center(
-                child: CircularProgressIndicator(),
-              ),
-            );
-
-            JellyfinArtist? artist;
-
-            try {
-              // First, try direct ID-based lookup from track metadata
-              final artistId = track.artistIds.isNotEmpty
-                  ? track.artistIds.first
-                  : null;
-              final artists = _appState.artists ?? [];
-
-              if (artistId != null) {
-                artist = artists
-                    .where((a) => a.id == artistId)
-                    .firstOrNull;
-              }
-
-              // Fall back to name-based search
-              artist ??= artists
-                  .where(
-                    (a) =>
-                        a.name.toLowerCase() ==
-                        artistName.toLowerCase(),
-                  )
-                  .firstOrNull;
-
-              // Not in the local cache — ask the server directly for the
-              // artist by ID. One round-trip beats paging through up to
-              // 500 artists hunting for a single match.
-              if (artist == null && artistId != null) {
-                try {
-                  artist = await _appState.jellyfinService
-                      .getArtist(artistId);
-                } catch (e) {
-                  debugPrint('Direct artist fetch failed: $e');
-                }
-              }
-
-              // If still not found, try downloads for offline mode
-              if (artist == null) {
-                final downloads = _appState
-                    .downloadService
-                    .completedDownloads;
-                final artistTracks = downloads
-                    .where(
-                      (d) => d.track.artists.any(
-                        (a) =>
-                            a.toLowerCase() ==
-                            artistName.toLowerCase(),
-                      ),
-                    )
-                    .map((d) => d.track)
-                    .toList();
-
-                if (artistTracks.isNotEmpty) {
-                  // Create synthetic artist for offline mode
-                  artist = JellyfinArtist(
-                    id: 'offline_$artistName',
-                    name: artistName,
-                  );
-                }
-              }
-            } finally {
-              // Close loading dialog
-              if (context.mounted) Navigator.of(context).pop();
-            }
-
-            if (artist != null) {
-              if (!context.mounted) return;
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) =>
-                      ArtistDetailScreen(artist: artist!),
-                ),
-              );
-            } else {
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'Could not find artist "$artistName"',
-                  ),
-                  duration: const Duration(seconds: 2),
-                ),
-              );
-            }
-          },
-          child: Row(
+          onTap: () => _openArtist(context, track),
+          child: Semantics(
+            button: true,
+            hint: 'Opens the artist',
+            child: Row(
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -1607,74 +1741,18 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
               ),
             ],
           ),
+          ),
         ),
 
         // Album - clickable to navigate to album detail
         if (track.album != null && track.albumId != null) ...[
           const SizedBox(height: 4),
           GestureDetector(
-            onTap: () async {
-              // First try to find in online cache
-              final albums = _appState.albums ?? [];
-              var album = albums
-                  .where((a) => a.id == track.albumId)
-                  .firstOrNull;
-
-              // If not found in cache and we're online, fetch from server
-              if (album == null && !_appState.isOfflineMode) {
-                try {
-                  album = await _appState.jellyfinService
-                      .getAlbum(track.albumId!);
-                } catch (_) {
-                  // Fall through to downloads fallback
-                }
-              }
-
-              // If still not found, try to create from downloads
-              if (album == null) {
-                final downloads = _appState
-                    .downloadService
-                    .completedDownloads;
-                final albumTracks = downloads
-                    .where(
-                      (d) => d.track.albumId == track.albumId,
-                    )
-                    .map((d) => d.track)
-                    .toList();
-
-                if (albumTracks.isNotEmpty) {
-                  // Create a synthetic JellyfinAlbum for offline mode
-                  album = JellyfinAlbum(
-                    id: track.albumId!,
-                    name: track.album!,
-                    artists: track.artists,
-                    primaryImageTag: track.albumPrimaryImageTag,
-                    genres: const [],
-                  );
-                }
-              }
-
-              if (!context.mounted) return;
-              if (album != null) {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) =>
-                        AlbumDetailScreen(album: album!),
-                  ),
-                );
-              } else {
-                // Album not available
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Album "${track.album}" not available',
-                    ),
-                    duration: const Duration(seconds: 2),
-                  ),
-                );
-              }
-            },
-            child: Row(
+            onTap: () => _openAlbum(context, track),
+            child: Semantics(
+              button: true,
+              hint: 'Opens the album',
+              child: Row(
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -1702,6 +1780,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                   ),
                 ),
               ],
+            ),
             ),
           ),
         ],
@@ -1856,8 +1935,12 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                   if (_showLoopControls && isLoopAvailable)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8.0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                      // Wraps instead of overflowing: with markers set the
+                      // controls need more width than most iPhones have.
+                      child: Wrap(
+                        alignment: WrapAlignment.center,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 8,
                         children: [
                           // Set A button
                           _LoopMarkerButton(
@@ -1867,7 +1950,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                             onTap: () => _audioService.setLoopStart(),
                             color: theme.colorScheme.primary,
                           ),
-                          const SizedBox(width: 12),
                           // Set B button
                           _LoopMarkerButton(
                             label: 'B',
@@ -1878,7 +1960,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                                 : null,
                             color: theme.colorScheme.primary,
                           ),
-                          const SizedBox(width: 12),
                           // Toggle loop active
                           if (loopState.hasValidLoop)
                             IconButton(
@@ -1893,7 +1974,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                               onPressed: () => _audioService.toggleLoop(),
                               tooltip: loopState.isActive ? 'Disable loop' : 'Enable loop',
                             ),
-                          const SizedBox(width: 4),
                           // Clear loop
                           if (loopState.hasMarkers)
                             IconButton(
@@ -1904,7 +1984,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                               onPressed: () => _audioService.clearLoop(),
                               tooltip: 'Clear loop markers',
                             ),
-                          const Spacer(),
                           // Done button
                           TextButton(
                             onPressed: _toggleLoopControls,
@@ -1971,7 +2050,12 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                               slider: true,
                               label: 'Playback position',
                               value: '${_fmtPosition(positionData.position)} of ${_fmtPosition(positionData.duration)}',
-                              onIncrease: () => _audioService.seek(positionData.position + const Duration(seconds: 10)),
+                              // Not past the end (a known duration only).
+                              onIncrease: () {
+                                final next = positionData.position + const Duration(seconds: 10);
+                                final end = positionData.duration;
+                                _audioService.seek(end > Duration.zero && next > end ? end : next);
+                              },
                               onDecrease: () => _audioService.seek(positionData.position - const Duration(seconds: 10) < Duration.zero ? Duration.zero : positionData.position - const Duration(seconds: 10)),
                               child: ExcludeSemantics(
                                 child: ProgressBar(
@@ -2090,7 +2174,10 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
             padding: const EdgeInsets.only(bottom: 8.0),
             child: GestureDetector(
               onTap: () => _showLoopOptionsSheet(context, track),
-              child: Container(
+              child: Semantics(
+                button: true,
+                hint: 'Loop options',
+                child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 12,
                   vertical: 4,
@@ -2127,6 +2214,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                     ),
                   ],
                 ),
+              ),
               ),
             ),
           ),
@@ -2697,7 +2785,13 @@ class _LoopMarkerButton extends StatelessWidget {
     final isEnabled = onTap != null;
     final theme = Theme.of(context);
 
-    return GestureDetector(
+    return Semantics(
+      button: true,
+      enabled: isEnabled,
+      label: isSet ? 'Loop point $label, $time' : 'Set loop point $label',
+      excludeSemantics: true,
+      onTap: onTap,
+      child: GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -2743,6 +2837,7 @@ class _LoopMarkerButton extends StatelessWidget {
             ),
           ],
         ),
+      ),
       ),
     );
   }

@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../jellyfin/jellyfin_service.dart';
 import '../jellyfin/jellyfin_track.dart';
 import 'smart_playlist_filter.dart';
-export 'smart_playlist_filter.dart' show trackMatchesAllTags;
+export 'smart_playlist_filter.dart' show tagHasKeyword, trackMatchesAllTags;
 
 /// Mood categories for smart playlist generation
 enum Mood {
@@ -388,6 +388,22 @@ class SmartPlaylistService {
     return _genreMoodMap[normalized];
   }
 
+  /// Mood keywords looked for in tags, as whole words (see [tagHasKeyword]).
+  static const Map<Mood, Set<String>> _tagMoodKeywords = {
+    Mood.chill: {
+      'chill', 'chillout', 'chilled', 'relaxed', 'relaxing', 'calm', 'mellow',
+      'peaceful', 'ambient',
+    },
+    Mood.energetic: {
+      'energetic', 'energy', 'intense', 'powerful', 'driving', 'aggressive',
+    },
+    Mood.melancholy: {
+      'melancholy', 'melancholic', 'sad', 'emotional', 'somber', 'sombre',
+      'moody', 'dark',
+    },
+    Mood.upbeat: {'upbeat', 'happy', 'cheerful', 'fun', 'party', 'groovy'},
+  };
+
   /// Try to detect mood from tags (preferred over genre mapping)
   /// Looks for mood-related keywords in the track's tags
   Mood? _getMoodFromTags(JellyfinTrack track) {
@@ -395,46 +411,8 @@ class SmartPlaylistService {
     if (tags == null || tags.isEmpty) return null;
 
     for (final tag in tags) {
-      final normalized = tag.toLowerCase().trim();
-
-      // Check for chill-related keywords
-      if (normalized.contains('chill') ||
-          normalized.contains('relaxed') ||
-          normalized.contains('calm') ||
-          normalized.contains('mellow') ||
-          normalized.contains('peaceful') ||
-          normalized.contains('ambient')) {
-        return Mood.chill;
-      }
-
-      // Check for energetic-related keywords
-      if (normalized.contains('energetic') ||
-          normalized.contains('energy') ||
-          normalized.contains('intense') ||
-          normalized.contains('powerful') ||
-          normalized.contains('driving') ||
-          normalized.contains('aggressive')) {
-        return Mood.energetic;
-      }
-
-      // Check for melancholy-related keywords
-      if (normalized.contains('melancholy') ||
-          normalized.contains('sad') ||
-          normalized.contains('emotional') ||
-          normalized.contains('somber') ||
-          normalized.contains('moody') ||
-          normalized.contains('dark')) {
-        return Mood.melancholy;
-      }
-
-      // Check for upbeat-related keywords
-      if (normalized.contains('upbeat') ||
-          normalized.contains('happy') ||
-          normalized.contains('cheerful') ||
-          normalized.contains('fun') ||
-          normalized.contains('party') ||
-          normalized.contains('groovy')) {
-        return Mood.upbeat;
+      for (final entry in _tagMoodKeywords.entries) {
+        if (tagHasKeyword(tag, entry.value)) return entry.key;
       }
     }
 

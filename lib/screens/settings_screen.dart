@@ -1775,6 +1775,33 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
     _waveformStatsFuture = null;
   });
 
+  /// Asks before a destructive action; true when confirmed.
+  Future<bool> _confirm(
+    BuildContext context, {
+    required String title,
+    required String message,
+    required String action,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(action),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -2050,6 +2077,15 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                                 Expanded(
                                   child: FilledButton.tonalIcon(
                                     onPressed: () async {
+                                      if (!await _confirm(
+                                        context,
+                                        title: 'Clean Old Downloads?',
+                                        message:
+                                            'Delete single-track downloads older than 30 days? Albums and playlists are kept.',
+                                        action: 'Delete',
+                                      )) {
+                                        return;
+                                      }
                                       final deleted = await downloadService
                                           .cleanupByAge(
                                             const Duration(days: 30),
@@ -2075,6 +2111,15 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                                 Expanded(
                                   child: FilledButton.tonalIcon(
                                     onPressed: () async {
+                                      if (!await _confirm(
+                                        context,
+                                        title: 'Free 500 MB?',
+                                        message:
+                                            'Delete the oldest single-track downloads to free up to 500 MB? Albums and playlists are kept.',
+                                        action: 'Delete',
+                                      )) {
+                                        return;
+                                      }
                                       final deleted = await downloadService
                                           .cleanupToFreeSpace(500);
                                       if (context.mounted) {
@@ -2267,7 +2312,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                     builder: (context) => AlertDialog(
                       title: const Text('Delete Album?'),
                       content: Text(
-                        'Remove all $trackCount downloaded tracks from "$albumName"?',
+                        'Remove all $trackCount downloaded tracks from "$albumName"? Tracks that are also part of another downloaded album or playlist are kept.',
                       ),
                       actions: [
                         TextButton(
@@ -2282,9 +2327,23 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                     ),
                   );
                   if (confirm == true) {
-                    await downloadService.deleteAlbumDownloads(albumId);
+                    // Keeps tracks another downloaded album or playlist
+                    // still needs.
+                    final result =
+                        await downloadService.releaseAlbumDownloads(albumId);
                     if (context.mounted) {
                       _refreshStats();
+                      if (result.kept > 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Kept ${result.kept} '
+                              '${result.kept == 1 ? 'track' : 'tracks'} '
+                              'that another download still uses',
+                            ),
+                          ),
+                        );
+                      }
                     }
                   }
                 },
@@ -2337,7 +2396,7 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                     builder: (context) => AlertDialog(
                       title: const Text('Delete Artist?'),
                       content: Text(
-                        'Remove all $trackCount downloaded tracks from "$artistName"?',
+                        'Remove all $trackCount downloaded tracks from "$artistName"? Tracks that are also part of another downloaded album or playlist are kept.',
                       ),
                       actions: [
                         TextButton(
@@ -2352,9 +2411,23 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                     ),
                   );
                   if (confirm == true) {
-                    await downloadService.deleteArtistDownloads(artistName);
+                    // Keeps tracks another downloaded album or playlist
+                    // still needs.
+                    final result =
+                        await downloadService.releaseArtistDownloads(artistName);
                     if (context.mounted) {
                       _refreshStats();
+                      if (result.kept > 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Kept ${result.kept} '
+                              '${result.kept == 1 ? 'track' : 'tracks'} '
+                              'that another download still uses',
+                            ),
+                          ),
+                        );
+                      }
                     }
                   }
                 },
@@ -2941,6 +3014,16 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                         trailing: IconButton(
                           icon: const Icon(Icons.delete_outline),
                           onPressed: () async {
+                            // Deleting a chart also deletes its high score.
+                            if (!await _confirm(
+                              context,
+                              title: 'Delete Chart?',
+                              message:
+                                  'Delete the chart for "${chart.trackName}" and its high score (${chart.highScore})?',
+                              action: 'Delete',
+                            )) {
+                              return;
+                            }
                             await chartService.deleteChart(chart.trackId);
                             if (context.mounted) {
                               _refreshStats();

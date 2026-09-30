@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -70,14 +72,17 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     super.dispose();
   }
 
-  Future<void> _loadTracks() async {
+  /// [quiet] keeps the current list on screen while reloading (after an
+  /// edit), instead of replacing it with a spinner and losing the scroll
+  /// position.
+  Future<void> _loadTracks({bool quiet = false}) async {
     if (_appState == null) return;
     // Overlapping loads (connectivity flapping, reorder reverts): only the
     // latest one lands.
     final generation = ++_loadGeneration;
 
     setState(() {
-      _isLoading = true;
+      _isLoading = !quiet || _tracks == null;
       _error = null;
     });
 
@@ -92,7 +97,8 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     } catch (e) {
       if (mounted && generation == _loadGeneration) {
         setState(() {
-          _error = e;
+          // A failed quiet reload keeps the list that is shown.
+          if (!quiet || _tracks == null) _error = e;
           _isLoading = false;
         });
       }
@@ -119,27 +125,38 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to reorder: $e')),
         );
-        _loadTracks(); // Revert
+        _loadTracks(quiet: true); // Revert
       }
     }
   }
 
   Future<void> _removeTrack(JellyfinTrack track) async {
+    // Optimistic: drop the row now (on a copy; a queue may hold the old
+    // list), then reload quietly so the list keeps its scroll position.
+    final current = _tracks;
+    if (current != null) {
+      setState(() {
+        _tracks = [
+          for (final t in current)
+            if (!identical(t, track)) t,
+        ];
+      });
+    }
     try {
       await _appState!.jellyfinService.removeItemsFromPlaylist(
         playlistId: widget.playlist.id,
         entryIds: [_entryId(track)],
       );
-      await _loadTracks(); // Reload
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Track removed from playlist'),
-          ),
-        );
-      }
+      if (!mounted) return;
+      unawaited(_loadTracks(quiet: true));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Track removed from playlist'),
+        ),
+      );
     } catch (e) {
       if (mounted) {
+        unawaited(_loadTracks(quiet: true)); // Revert
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to remove track: $e'),
@@ -354,38 +371,14 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
       error.toString().contains('queued');
 
   Future<void> _showRenameDialog() async {
-    final nameController = TextEditingController(text: _name);
-    String? newName;
-    try {
-      final result = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Rename Playlist'),
-          content: TextField(
-            controller: nameController,
-            decoration: const InputDecoration(
-              labelText: 'Playlist Name',
-              border: OutlineInputBorder(),
-            ),
-            autofocus: true,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      );
-      final name = nameController.text.trim();
-      if (result == true && name.isNotEmpty) newName = name;
-    } finally {
-      nameController.dispose();
-    }
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (_) => _PlaylistNameDialog(
+        title: 'Rename Playlist',
+        action: 'Save',
+        initial: _name,
+      ),
+    );
     if (newName == null || !mounted) return;
 
     final messenger = ScaffoldMessenger.of(context);
@@ -395,11 +388,11 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
         playlistId: widget.playlist.id,
         newName: newName,
       );
-      if (mounted) setState(() => _name = newName!);
+      if (mounted) setState(() => _name = newName);
       messenger.showSnackBar(SnackBar(content: Text('Renamed to "$newName"')));
     } catch (e) {
       if (_isQueuedOffline(e)) {
-        if (mounted) setState(() => _name = newName!);
+        if (mounted) setState(() => _name = newName);
         messenger.showSnackBar(const SnackBar(
           content: Text('Offline: the rename will sync when you\'re online'),
         ));
@@ -465,5 +458,66 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
       return '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
     }
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+}
+
+/// Asks for a playlist name; pops the trimmed name, or null when cancelled
+/// or left empty. Owns (and disposes) its text controller, so the field
+/// never outlives it during the closing animation.
+class _PlaylistNameDialog extends StatefulWidget {
+  const _PlaylistNameDialog({
+    required this.title,
+    required this.action,
+    this.initial = '',
+  });
+
+  final String title;
+  final String action;
+  final String initial;
+
+  @override
+  State<_PlaylistNameDialog> createState() => _PlaylistNameDialogState();
+}
+
+class _PlaylistNameDialogState extends State<_PlaylistNameDialog> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final name = _controller.text.trim();
+    Navigator.pop(context, name.isEmpty ? null : name);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _controller,
+        decoration: const InputDecoration(
+          labelText: 'Playlist Name',
+          border: OutlineInputBorder(),
+        ),
+        autofocus: true,
+        textInputAction: TextInputAction.done,
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: Text(widget.action),
+        ),
+      ],
+    );
   }
 }

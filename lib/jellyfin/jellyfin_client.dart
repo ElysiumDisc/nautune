@@ -274,7 +274,7 @@ class JellyfinClient {
       'Recursive': 'true',
       'SortBy': sortBy,
       'SortOrder': sortOrder,
-      'Fields': 'PrimaryImageAspectRatio,ProductionYear,Artists,AlbumArtists,ImageTags,Genres,GenreItems',
+      'Fields': 'PrimaryImageAspectRatio,ProductionYear,Artists,AlbumArtists,ImageTags,Genres,GenreItems,SortName',
       'StartIndex': startIndex.toString(),
       'Limit': limit.toString(),
     };
@@ -325,9 +325,100 @@ class JellyfinClient {
       'ParentId': libraryId,
       'SortBy': sortBy,
       'SortOrder': sortOrder,
-      'Fields': 'PrimaryImageAspectRatio,ImageTags,Overview,Genres,ChildCount,SongCount,ProviderIds',
+      'Fields': 'PrimaryImageAspectRatio,ImageTags,Overview,Genres,ChildCount,SongCount,ProviderIds,SortName',
       'StartIndex': startIndex.toString(),
       'Limit': limit.toString(),
+    });
+
+    final response = await _robustClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch artists: ${response.statusCode}',
+      );
+    }
+
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
+    final items = data?['Items'] as List<dynamic>? ?? const [];
+
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(JellyfinArtist.fromJson)
+        .toList();
+  }
+
+  /// One page of albums whose sort name starts with [nameStartsWith], or
+  /// sorts before [nameLessThan] (the "#" bucket). Name-sorted.
+  ///
+  /// Jellyfin matches both against the item's SortName, which it stores
+  /// lowercased, so pass lowercase values.
+  Future<List<JellyfinAlbum>> fetchAlbumsByNamePrefix({
+    required JellyfinCredentials credentials,
+    required String libraryId,
+    String? nameStartsWith,
+    String? nameLessThan,
+    int startIndex = 0,
+    int limit = 50,
+  }) async {
+    final uri = _buildUri('/Items', {
+      'userId': credentials.userId,
+      'ParentId': libraryId,
+      'IncludeItemTypes': 'MusicAlbum',
+      'Recursive': 'true',
+      'SortBy': 'SortName',
+      'SortOrder': 'Ascending',
+      'Fields': 'PrimaryImageAspectRatio,ProductionYear,Artists,AlbumArtists,ImageTags,SortName',
+      'StartIndex': startIndex.toString(),
+      'Limit': limit.toString(),
+      'EnableTotalRecordCount': 'false',
+      'NameStartsWith': ?nameStartsWith,
+      'NameLessThan': ?nameLessThan,
+    });
+
+    final response = await _robustClient.get(
+      uri,
+      headers: _defaultHeaders(credentials),
+    );
+
+    if (response.statusCode != 200) {
+      throw JellyfinRequestException(
+        'Unable to fetch albums: ${response.statusCode}',
+      );
+    }
+
+    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
+    final items = data?['Items'] as List<dynamic>? ?? const [];
+
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(JellyfinAlbum.fromJson)
+        .toList();
+  }
+
+  /// One page of artists filtered by name like [fetchAlbumsByNamePrefix].
+  Future<List<JellyfinArtist>> fetchArtistsByNamePrefix({
+    required JellyfinCredentials credentials,
+    required String libraryId,
+    String? nameStartsWith,
+    String? nameLessThan,
+    int startIndex = 0,
+    int limit = 50,
+  }) async {
+    // `/Artists`: see fetchArtists for why the deprecated endpoint is used.
+    final uri = _buildUri('/Artists', {
+      'userId': credentials.userId,
+      'ParentId': libraryId,
+      'SortBy': 'SortName',
+      'SortOrder': 'Ascending',
+      'Fields': 'PrimaryImageAspectRatio,ImageTags,SortName',
+      'StartIndex': startIndex.toString(),
+      'Limit': limit.toString(),
+      'EnableTotalRecordCount': 'false',
+      'NameStartsWith': ?nameStartsWith,
+      'NameLessThan': ?nameLessThan,
     });
 
     final response = await _robustClient.get(
@@ -462,7 +553,7 @@ class JellyfinClient {
       final uri = _buildUri('/Items', {
         'userId': credentials.userId,
         'Ids': chunk.join(','),
-        'Fields': 'RunTimeTicks,Albums,Album,Artists,ImageTags,AlbumPrimaryImageTag,ParentThumbImageTag,IndexNumber,ParentIndexNumber,UserData,MediaStreams,Tags,ProviderIds',
+        'Fields': 'RunTimeTicks,Albums,Album,Artists,ImageTags,AlbumPrimaryImageTag,ParentThumbImageTag,IndexNumber,ParentIndexNumber,UserData,MediaStreams,Tags,ProviderIds,Genres',
         'IncludeItemTypes': 'Audio',
       });
 
@@ -509,7 +600,7 @@ class JellyfinClient {
       'SortOrder': 'Descending',
       'Limit': '$limit',
       'Fields':
-          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags',
+          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags,Genres,ProviderIds',
       'EnableImageTypes': 'Primary,Thumb',
       'EnableUserData': 'true',
     });
@@ -554,7 +645,7 @@ class JellyfinClient {
       'Limit': '$limit',
       'Filters': 'IsPlayed',
       'Fields':
-          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags',
+          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags,Genres,ProviderIds',
       'EnableImageTypes': 'Primary,Thumb',
       'EnableUserData': 'true',
     });
@@ -634,7 +725,7 @@ class JellyfinClient {
       'SortBy': 'ParentIndexNumber,IndexNumber,SortName',
       'SortOrder': 'Ascending',
       'Fields':
-          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags',
+          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags,Genres,ProviderIds',
       'EnableImageTypes': 'Primary,Thumb',
       'EnableUserData': 'true',
     });
@@ -676,7 +767,7 @@ class JellyfinClient {
       'SortBy': 'ParentIndexNumber,IndexNumber,SortName',
       'SortOrder': 'Ascending',
       'Fields':
-          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags',
+          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags,Genres,ProviderIds',
       'EnableImageTypes': 'Primary,Thumb',
       'EnableUserData': 'true',
     });
@@ -796,7 +887,7 @@ class JellyfinClient {
       if (limit != null) 'Limit': '$limit',
       'SortBy': 'Album,ParentIndexNumber,IndexNumber,SortName',
       'Fields':
-          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags,ProviderIds',
+          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags,ProviderIds,Genres',
       'EnableImageTypes': 'Primary,Thumb',
       'EnableUserData': 'true',
     });
@@ -957,7 +1048,7 @@ class JellyfinClient {
     final queryParams = <String, String>{
       'UserId': credentials.userId,
       'Limit': limit.toString(),
-      'Fields': 'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags',
+      'Fields': 'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags,Genres,ProviderIds',
     };
 
     final uri = _buildUri('/Items/$itemId/InstantMix', queryParams);
@@ -991,7 +1082,7 @@ class JellyfinClient {
       'Recursive': 'true',
       'SortBy': 'Random',
       'Limit': '$limit',
-      'Fields': 'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags',
+      'Fields': 'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags,Genres,ProviderIds',
     });
 
     final response = await _robustClient.get(
@@ -1032,7 +1123,7 @@ class JellyfinClient {
       'StartIndex': startIndex.toString(),
       'Limit': limit.toString(),
       if (filterPlayed) 'Filters': 'IsPlayed',
-      'Fields': 'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,UserData,Genres,Tags',
+      'Fields': 'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,UserData,Genres,Tags,ProviderIds',
       'EnableImageTypes': 'Primary,Thumb',
       'EnableUserData': 'true',
     };
@@ -1070,7 +1161,7 @@ class JellyfinClient {
       'SortBy': 'Random', // Randomize to discover different tracks each time
       'Recursive': 'true',
       'Limit': limit.toString(),
-      'Fields': 'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,UserData,Genres,Tags',
+      'Fields': 'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,UserData,Genres,Tags,ProviderIds',
       'EnableImageTypes': 'Primary,Thumb',
       'EnableUserData': 'true',
     };
@@ -1138,7 +1229,7 @@ class JellyfinClient {
       'SortOrder': 'Descending',
       'Limit': '$limit',
       'Fields':
-          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags',
+          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags,Genres,ProviderIds',
       'EnableImageTypes': 'Primary,Thumb',
     });
 
@@ -1181,7 +1272,7 @@ class JellyfinClient {
       'SortOrder': 'Descending',
       'Limit': '$limit',
       'Fields':
-          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags',
+          'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags,Genres,ProviderIds',
       'EnableImageTypes': 'Primary,Thumb',
       'EnableUserData': 'true',
     });
@@ -1242,7 +1333,7 @@ class JellyfinClient {
             'SortOrder': 'Ascending',
             'Limit': '$limit',
             'StartIndex': '$startIndex',
-            'Fields': 'MediaStreams,Genres,Tags',
+            'Fields': 'MediaStreams,Genres,Tags,ProviderIds',
             'EnableImageTypes': 'Primary,Thumb',
             'EnableUserData': 'true',
           },

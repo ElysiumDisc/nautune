@@ -73,6 +73,49 @@ enum LyricsLookup { found, notFound, error }
 bool canCacheNoLyrics(Iterable<LyricsLookup> outcomes) =>
     outcomes.every((o) => o == LyricsLookup.notFound);
 
+/// Parses LRC lyrics ("[00:12.34] Lyrics line") into timed lines, sorted by
+/// time. Handles `[mm:ss]`, `[mm:ss.x]`…`[mm:ss.xxx]` and 3-digit minutes,
+/// and lines with several timestamps (`[00:10.00][01:10.00]Chorus`, one line
+/// each). Empty timed lines are kept: they mark instrumental breaks, so the
+/// previous line doesn't stay highlighted through them. Returns no lines
+/// when nothing has text.
+@visibleForTesting
+List<LyricLine> parseLrcLyrics(String lrcContent) {
+  final lines = <LyricLine>[];
+  final stamp = RegExp(r'^\s*\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]');
+
+  for (var rest in lrcContent.split('\n')) {
+    final startsMs = <int>[];
+    for (var match = stamp.firstMatch(rest);
+        match != null;
+        match = stamp.firstMatch(rest)) {
+      final minutes = int.parse(match.group(1)!);
+      final seconds = int.parse(match.group(2)!);
+      final fraction = match.group(3);
+      // 1 digit = tenths, 2 = centiseconds, 3 = milliseconds.
+      final millis = fraction == null
+          ? 0
+          : int.parse(fraction.padRight(3, '0'));
+      startsMs.add((minutes * 60 + seconds) * 1000 + millis);
+      rest = rest.substring(match.end);
+    }
+    if (startsMs.isEmpty) continue; // metadata ([ar:…]) or untimed text
+    final text = rest.trim();
+    for (final ms in startsMs) {
+      // Jellyfin ticks (100ns units): 1ms = 10,000 ticks.
+      lines.add(LyricLine(text: text, startTicks: ms * 10000));
+    }
+  }
+
+  if (!lines.any((l) => l.text.isNotEmpty)) return const [];
+  lines.sort((a, b) => a.startTicks!.compareTo(b.startTicks!));
+  // Leading empty lines add nothing before the first words.
+  while (lines.isNotEmpty && lines.first.text.isEmpty) {
+    lines.removeAt(0);
+  }
+  return lines;
+}
+
 /// Cached lyrics entry
 class _CachedLyrics {
   final LyricsResult? result; // null means "no lyrics found"
@@ -233,10 +276,13 @@ class LyricsService {
               startTicks: start is num ? start.toInt() : null,
             );
           })
-          .where((l) => l.text.isNotEmpty)
+          // Empty synced lines mark instrumental breaks (shown as ♫).
+          .where((l) => l.text.isNotEmpty || l.isSynced)
           .toList();
 
-      if (lines.isEmpty) return (LyricsLookup.notFound, null);
+      if (!lines.any((l) => l.text.isNotEmpty)) {
+        return (LyricsLookup.notFound, null);
+      }
 
       return (LyricsLookup.found, LyricsResult(lines: lines, source: 'jellyfin'));
     } catch (e) {
@@ -337,39 +383,8 @@ class LyricsService {
     }
   }
 
-  /// Parse LRC format lyrics (e.g., "[00:12.34] Lyrics line")
-  List<LyricLine> _parseLrcFormat(String lrcContent) {
-    final lines = <LyricLine>[];
-    final regex = RegExp(r'\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)');
-
-    for (final line in lrcContent.split('\n')) {
-      final match = regex.firstMatch(line);
-      if (match != null) {
-        final minutes = int.parse(match.group(1)!);
-        final seconds = int.parse(match.group(2)!);
-        final millisStr = match.group(3)!;
-        // Handle both 2-digit (centiseconds) and 3-digit (milliseconds) formats
-        final millis = millisStr.length == 2
-            ? int.parse(millisStr) * 10
-            : int.parse(millisStr);
-        final text = match.group(4)?.trim() ?? '';
-
-        if (text.isNotEmpty) {
-          // Convert to Jellyfin ticks (100ns units)
-          // 1ms = 10,000 ticks
-          final totalMs = (minutes * 60 + seconds) * 1000 + millis;
-          final ticks = totalMs * 10000;
-
-          lines.add(LyricLine(
-            text: text,
-            startTicks: ticks,
-          ));
-        }
-      }
-    }
-
-    return lines;
-  }
+  List<LyricLine> _parseLrcFormat(String lrcContent) =>
+      parseLrcLyrics(lrcContent);
 
   /// Normalize artist name for better matching
   String _normalizeArtist(String artist) {

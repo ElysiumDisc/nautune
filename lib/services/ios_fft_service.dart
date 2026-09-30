@@ -18,6 +18,9 @@ class IOSFFTService {
 
   StreamSubscription? _eventSubscription;
   bool _isCapturing = false;
+  // Bumped by every start/stop, so a failed start doesn't clear the flag of
+  // a newer one.
+  int _captureSerial = 0;
   bool _initialized = false;
   String? _currentUrl;
   bool _wasCapturingBeforeBackground = false;
@@ -29,6 +32,12 @@ class IOSFFTService {
 
   /// Check if iOS FFT is available
   bool get isAvailable => Platform.isIOS;
+
+  /// Whether capture is on (requested and not stopped since).
+  bool get isCapturing => _isCapturing;
+
+  /// The URL the shadow player was last pointed at (null after [resetUrl]).
+  String? get currentUrl => _currentUrl;
 
   /// Initialize the iOS FFT service
   Future<bool> initialize() async {
@@ -63,6 +72,9 @@ class IOSFFTService {
     if (url == _currentUrl) return;
 
     _currentUrl = url;
+    // The native side stops capture when it replaces the shadow player;
+    // mirror that so the next startCapture() isn't skipped.
+    _isCapturing = false;
 
     try {
       await _methodChannel.invokeMethod('setAudioUrl', {'url': url});
@@ -75,26 +87,32 @@ class IOSFFTService {
   /// Start capturing audio for FFT analysis
   Future<void> startCapture() async {
     if (_isCapturing || !Platform.isIOS || !_initialized) return;
+    // Marked before the call: a stopCapture() arriving meanwhile must see
+    // it and stop (method calls reach the native side in order), instead of
+    // being skipped and leaving the shadow player running.
+    _isCapturing = true;
+    final serial = ++_captureSerial;
 
     try {
       await _methodChannel.invokeMethod('startCapture');
-      _isCapturing = true;
       debugPrint('🎵 iOS FFT: Capture started');
     } catch (e) {
       debugPrint('🎵 iOS FFT: Start error - $e');
+      if (serial == _captureSerial) _isCapturing = false;
     }
   }
 
   /// Stop capturing
   Future<void> stopCapture() async {
     if (!_isCapturing) return;
+    _isCapturing = false;
+    _captureSerial++;
 
     try {
       await _methodChannel.invokeMethod('stopCapture');
     } catch (e) {
       debugPrint('🎵 iOS FFT: Stop error - $e');
     } finally {
-      _isCapturing = false;
       _fftController.add(IOSFFTData.zero);
       debugPrint('🎵 iOS FFT: Capture stopped');
     }

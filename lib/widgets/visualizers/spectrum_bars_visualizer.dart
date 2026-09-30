@@ -88,6 +88,10 @@ class _SpectrumBarsPainter extends CustomPainter {
 
   static const MaskFilter _blurFilter8 = MaskFilter.blur(BlurStyle.normal, 8);
 
+  // Each bar's colour for the current frame, shared by the glow and bar
+  // passes (it was converted from HSL twice per bar per frame).
+  static List<Color> _barColors = const [];
+
   // Cache for pre-computed HSL values from primary color
   static Color? _cachedPrimaryColor;
   static double _cachedBaseHue = 0.0;
@@ -158,6 +162,10 @@ class _SpectrumBarsPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (bars.isEmpty) return;
+    // The bass glow below leaves a shader on _glowPaint; clear it, or a
+    // repaint of this same painter (relayout while paused) drew every bar
+    // glow with that gradient.
+    _glowPaint.shader = null;
 
     final barCount = bars.length;
     final spacing = 2.0;
@@ -172,6 +180,13 @@ class _SpectrumBarsPainter extends CustomPainter {
     // Bass-reactive height multiplier - bars grow taller on bass hits
     final bassBoost = 1.0 + bass * 0.4;
 
+    if (_barColors.length != barCount) {
+      _barColors = List<Color>.filled(barCount, Colors.transparent);
+    }
+    for (int i = 0; i < barCount; i++) {
+      _barColors[i] = _getBarColor(i, barCount, bars[i]);
+    }
+
     // Draw glow layer first (behind bars) - more intense on bass
     for (int i = 0; i < barCount; i++) {
       final value = bars[i];
@@ -179,7 +194,7 @@ class _SpectrumBarsPainter extends CustomPainter {
 
       final x = i * (barWidth + spacing);
       final barHeight = value * effectiveHeight * 0.9 * bassBoost;
-      final color = _getBarColor(i, barCount, value);
+      final color = _barColors[i];
 
       // Glow intensity increases with bass
       final glowIntensity = opacity * (0.3 + bass * 0.3) * value;
@@ -202,7 +217,7 @@ class _SpectrumBarsPainter extends CustomPainter {
       final value = bars[i];
       final x = i * (barWidth + spacing);
       final barHeight = max(3.0, value * effectiveHeight * 0.85 * bassBoost);
-      final color = _getBarColor(i, barCount, value);
+      final color = _barColors[i];
 
       // Create gradient from bottom to top
       final barRect = Rect.fromLTWH(

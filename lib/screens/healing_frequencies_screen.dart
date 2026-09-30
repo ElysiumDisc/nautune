@@ -21,6 +21,11 @@ class _HealingFrequenciesScreenState extends State<HealingFrequenciesScreen> {
   StreamSubscription<double?>? _sub;
   bool _ready = false;
 
+  /// Which pill started the tone ("category#index"). Several categories list
+  /// the same Hz (e.g. Heart and Mid Ohm are both 136.1), so the playing pill
+  /// is tracked by identity rather than by frequency.
+  String? _activeKey;
+
   @override
   void initState() {
     super.initState();
@@ -68,13 +73,17 @@ class _HealingFrequenciesScreenState extends State<HealingFrequenciesScreen> {
     );
   }
 
-  Future<void> _onPillTap(HealingFrequency freq) async {
-    final playing = _service.currentHz == freq.playbackHz;
-    if (playing) {
+  bool _isPillPlaying(String key, HealingFrequency freq) =>
+      _activeKey == key && _service.currentHz == freq.playbackHz;
+
+  Future<void> _onPillTap(String key, HealingFrequency freq) async {
+    if (_isPillPlaying(key, freq)) {
       await _service.stop();
-    } else {
-      await _service.play(freq.playbackHz);
+      return;
     }
+    // Same tone from another category: just move the highlight.
+    setState(() => _activeKey = key);
+    await _service.play(freq.playbackHz);
   }
 
   @override
@@ -165,10 +174,12 @@ class _HealingFrequenciesScreenState extends State<HealingFrequenciesScreen> {
                 color: theme.colorScheme.onSurfaceVariant,
               ),
               const SizedBox(width: 6),
-              Text(
-                'Works offline — tones are synthesized on-device.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+              Expanded(
+                child: Text(
+                  'Works offline — tones are synthesized on-device.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
             ],
@@ -197,11 +208,11 @@ class _HealingFrequenciesScreenState extends State<HealingFrequenciesScreen> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              for (final freq in category.frequencies)
+              for (final (i, freq) in category.frequencies.indexed)
                 _FreqPill(
                   freq: freq,
-                  isPlaying: _service.currentHz == freq.playbackHz,
-                  onTap: () => _onPillTap(freq),
+                  isPlaying: _isPillPlaying('${category.name}#$i', freq),
+                  onTap: () => _onPillTap('${category.name}#$i', freq),
                 ),
             ],
           ),
@@ -324,14 +335,18 @@ class _FreqPillState extends State<_FreqPill>
                     Icon(Icons.graphic_eq, size: 14, color: fg),
                     const SizedBox(width: 6),
                   ],
-                  Tooltip(
-                    message: tooltipMsg,
-                    child: Text(
-                      label,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: fg,
-                        fontWeight:
-                            playing ? FontWeight.bold : FontWeight.w500,
+                  // Flexible: at large text sizes a long label wraps inside
+                  // the pill instead of overflowing the Wrap.
+                  Flexible(
+                    child: Tooltip(
+                      message: tooltipMsg,
+                      child: Text(
+                        label,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: fg,
+                          fontWeight:
+                              playing ? FontWeight.bold : FontWeight.w500,
+                        ),
                       ),
                     ),
                   ),

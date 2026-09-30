@@ -21,3 +21,16 @@ bool trackMatchesAllTags(List<String>? trackTags, List<String> normalizedQuery) 
   }
   return true;
 }
+
+/// Whether [tag] contains one of [keywords] as a whole word
+/// (case-insensitive). Unlike a substring test, "funeral doom" doesn't
+/// match "fun" and "crusade" doesn't match "sad"; "chill-out" still
+/// matches "chill".
+bool tagHasKeyword(String tag, Set<String> keywords) {
+  for (final word in tag.toLowerCase().split(_nonWord)) {
+    if (word.isNotEmpty && keywords.contains(word)) return true;
+  }
+  return false;
+}
+
+final _nonWord = RegExp(r'[^a-z0-9]+');

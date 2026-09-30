@@ -9,6 +9,9 @@ class NotificationService {
 
   bool _initialized = false;
 
+  // Authorization request made before the first notification is posted.
+  Future<void>? _authorization;
+
   Future<void> initialize() async {
     if (_initialized) return;
 
@@ -70,9 +73,29 @@ class NotificationService {
     );
   }
 
+  /// Ask iOS for *provisional* authorization before the first post: no
+  /// prompt, and notifications are delivered quietly to Notification
+  /// Center (the user can promote them there). Without any authorization
+  /// request iOS drops every notification. Once per launch; a user who
+  /// granted or denied full authorization keeps that choice.
+  Future<void> _ensureAuthorized() {
+    if (!Platform.isIOS) return Future.value();
+    return _authorization ??= () async {
+      try {
+        await _flutterLocalNotificationsPlugin
+            .resolvePlatformSpecificImplementation<
+                IOSFlutterLocalNotificationsPlugin>()
+            ?.requestPermissions(alert: true, provisional: true);
+      } catch (_) {
+        // Best effort: posting below simply won't show.
+      }
+    }();
+  }
+
   /// Show download complete notification
   Future<void> showComplete({required String title, required String body}) async {
     if (!_initialized) return;
+    await _ensureAuthorized();
 
     const NotificationDetails platformChannelSpecifics = NotificationDetails();
 

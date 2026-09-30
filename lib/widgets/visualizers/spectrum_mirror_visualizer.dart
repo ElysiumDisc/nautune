@@ -101,6 +101,9 @@ class _SpectrumMirrorPainter extends CustomPainter {
   // Pre-computed hue offsets for bar indices (avoids per-bar computation)
   static final List<double> _hueOffsets = List.generate(64, (i) => (i / 64) * 60 - 30);
 
+  // Per-bar colours of the frame being painted (see paint).
+  static List<Color> _barColors = const [];
+
 
   _SpectrumMirrorPainter({
     required this.bars,
@@ -164,6 +167,10 @@ class _SpectrumMirrorPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (bars.isEmpty) return;
+    // The edge glow below leaves a shader on _glowPaint; clear it, or a
+    // repaint of this same painter (relayout while paused) drew every bar
+    // glow with that gradient.
+    _glowPaint.shader = null;
 
     final barCount = bars.length;
     final spacing = 1.5;
@@ -191,6 +198,15 @@ class _SpectrumMirrorPainter extends CustomPainter {
     );
 
     // Draw glow layer first - more intense with bass
+    // Each bar's colour, shared by the glow and bar passes (it was converted
+    // from HSL twice per bar per frame).
+    if (_barColors.length != barCount) {
+      _barColors = List<Color>.filled(barCount, Colors.transparent);
+    }
+    for (int i = 0; i < barCount; i++) {
+      _barColors[i] = _getBarColor(i, barCount, bars[i]);
+    }
+
     final glowBoost = 0.3 + bass * 0.4;
     for (int i = 0; i < barCount; i++) {
       final value = bars[i];
@@ -198,7 +214,7 @@ class _SpectrumMirrorPainter extends CustomPainter {
 
       final x = i * (barWidth + spacing);
       final barHeight = value * maxBarHeight;
-      final color = _getBarColor(i, barCount, value);
+      final color = _barColors[i];
 
       _glowPaint.color = color.withValues(alpha: opacity * glowBoost * value);
 
@@ -226,7 +242,7 @@ class _SpectrumMirrorPainter extends CustomPainter {
       final value = bars[i];
       final x = i * (barWidth + spacing);
       final barHeight = max(1.0, value * maxBarHeight);
-      final color = _getBarColor(i, barCount, value);
+      final color = _barColors[i];
 
       // Top bar (going up)
       final topRect = Rect.fromLTWH(

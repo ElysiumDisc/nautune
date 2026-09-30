@@ -337,3 +337,33 @@ class SessionProvider extends ChangeNotifier {
     super.dispose();
   }
 }
+
+/// What to do with a device-wide scrobbler link (Last.fm, ListenBrainz)
+/// when [account] ("server|user") signs in, is restored or logs out.
+enum ScrobblerLinkAction {
+  /// Nothing to change.
+  keep,
+
+  /// Connected, with no owner recorded: it belongs to [account].
+  adopt,
+
+  /// Not connected (any more): drop the recorded owner.
+  forget,
+
+  /// Connected by another account: disconnect it.
+  disconnect,
+}
+
+ScrobblerLinkAction decideScrobblerLink({
+  required bool connected,
+  required String? owner,
+  required String account,
+}) {
+  if (!connected) {
+    return owner == null ? ScrobblerLinkAction.keep : ScrobblerLinkAction.forget;
+  }
+  if (owner == null) return ScrobblerLinkAction.adopt;
+  return owner == account
+      ? ScrobblerLinkAction.keep
+      : ScrobblerLinkAction.disconnect;
+}

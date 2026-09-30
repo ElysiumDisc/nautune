@@ -220,18 +220,28 @@ class NetworkDownloadService extends ChangeNotifier {
   int? _activeChannel;
   void Function()? _abortActive;
 
+  /// Channels cancelled while their transfer was not abortable (between
+  /// files, or while a finished file was being flushed and renamed). Checked
+  /// before each file and before the channel is committed as downloaded.
+  final Set<int> _cancelled = {};
+
   Timer? _progressNotifyTimer;
 
-  // Auto-cache mode setting
-  bool _autoCacheEnabled = false;
-  bool get autoCacheEnabled => _autoCacheEnabled;
+  /// Asked before each channel starts; false stops the queue (for example
+  /// the app's Wi-Fi-only download setting while on cellular). Set by the
+  /// UI, which owns those settings.
+  Future<bool> Function()? transferAllowed;
+
+  /// True after the queue stopped because [transferAllowed] said no. Cleared
+  /// when downloads are requested again.
+  bool _stoppedByPolicy = false;
+  bool get stoppedByPolicy => _stoppedByPolicy;
 
   // Listening stats
   final Map<int, NetworkChannelStats> _channelStats = {};
 
   static const _boxName = 'nautune_network_downloads';
   static const _downloadsKey = 'downloads';
-  static const _autoCacheKey = 'auto_cache_enabled';
   static const _statsKey = 'channel_stats';
   Box<dynamic>? _box;
 
@@ -251,7 +261,6 @@ class NetworkDownloadService extends ChangeNotifier {
       final docsDir = await getApplicationDocumentsDirectory();
       _rootPath = p.join(docsDir.path, 'network');
       await _initHive();
-      await _loadSettings();
       await _loadDownloads();
       await _loadStats();
       await _verifyDownloads();
@@ -268,14 +277,12 @@ class NetworkDownloadService extends ChangeNotifier {
     _box = await Hive.openBox<dynamic>(_boxName);
   }
 
-  Future<void> _loadSettings() async {
-    if (_box == null) return;
-    _autoCacheEnabled = _box!.get(_autoCacheKey, defaultValue: false) as bool;
-  }
-
   /// Convert a stored path to one relative to `Documents/network`.
   /// Older builds stored absolute paths, which break when the app container
   /// moves; those are migrated. Returns null if it can't be mapped.
+  @visibleForTesting
+  static String? toRelativePath(String? stored) => _toRelative(stored);
+
   static String? _toRelative(String? stored) {
     if (stored == null || stored.isEmpty) return null;
     if (!stored.startsWith('/')) return stored;
@@ -506,15 +513,6 @@ class NetworkDownloadService extends ChangeNotifier {
     }
   }
 
-  /// Toggle auto-cache mode.
-  Future<void> setAutoCacheEnabled(bool enabled) async {
-    if (_autoCacheEnabled == enabled) return;
-
-    _autoCacheEnabled = enabled;
-    await _box?.put(_autoCacheKey, enabled);
-    notifyListeners();
-  }
-
   /// Verify downloaded files still exist on disk.
   Future<void> _verifyDownloads() async {
     final toRemove = <int>[];
@@ -621,31 +619,20 @@ class NetworkDownloadService extends ChangeNotifier {
     return _downloads[channelNumber]?.progress ?? 0.0;
   }
 
-  /// Called when a channel is played - auto-caches if enabled.
-  /// Returns the local path if available, otherwise the stream URL.
+  /// Available channels (see [NetworkChannel.available]) not downloaded yet.
+  int get remainingDownloadCount => availableNetworkChannels
+      .where((channel) => !isChannelDownloaded(channel.number))
+      .length;
+
+  /// Local path if the channel is downloaded, otherwise the stream URL.
   Future<String> getPlaybackUrl(NetworkChannel channel) async {
-    // If already downloaded, return local path
-    final localPath = getLocalAudioPath(channel.number);
-    if (localPath != null) {
-      return localPath;
-    }
-
-    // If auto-cache is enabled, start background download
-    if (_autoCacheEnabled) {
-      // Return stream URL immediately for playback
-      // Download in background for future offline access
-      _enqueue(channel.number);
-      notifyListeners();
-      unawaited(_processQueue());
-    }
-
-    // Return stream URL for immediate playback
-    return channel.audioUrl;
+    return getLocalAudioPath(channel.number) ?? channel.audioUrl;
   }
 
   /// Mark [channelNumber] as queued. Returns false if it is already
-  /// downloaded or in progress.
+  /// downloaded or in progress, or its recording is gone from the server.
   bool _enqueue(int channelNumber) {
+    if (networkChannelsByNumber[channelNumber]?.available != true) return false;
     if (isChannelDownloaded(channelNumber) ||
         isChannelDownloading(channelNumber)) {
       return false;
@@ -662,15 +649,18 @@ class NetworkDownloadService extends ChangeNotifier {
   /// Manually trigger download for a channel.
   Future<void> downloadChannel(NetworkChannel channel) async {
     if (!_enqueue(channel.number)) return;
+    _stoppedByPolicy = false;
     notifyListeners();
     unawaited(_processQueue());
   }
 
-  /// Download all channels (queued; returns once they are queued).
+  /// Download every available channel (queued; returns once they are
+  /// queued). Channels whose recording is gone are skipped.
   Future<void> downloadAllChannels() async {
-    for (final channel in networkChannels) {
+    for (final channel in availableNetworkChannels) {
       _enqueue(channel.number);
     }
+    _stoppedByPolicy = false;
     notifyListeners();
     unawaited(_processQueue());
   }
@@ -691,6 +681,17 @@ class NetworkDownloadService extends ChangeNotifier {
           _downloads.remove(channelNumber);
           continue;
         }
+        // Finished meanwhile (cancelled and re-queued while it completed).
+        if (isChannelDownloaded(channelNumber)) continue;
+
+        // Settings such as Wi-Fi-only can change while the queue runs.
+        final allowed = transferAllowed;
+        if (allowed != null && !await allowed()) {
+          _stopQueueForPolicy(channelNumber);
+          break;
+        }
+        // Cancelled while the policy check was running.
+        if (_downloads[channelNumber]?.isDownloading != true) continue;
 
         _activeChannel = channelNumber;
         try {
@@ -715,6 +716,7 @@ class NetworkDownloadService extends ChangeNotifier {
         } finally {
           _activeChannel = null;
           _abortActive = null;
+          _cancelled.remove(channelNumber);
         }
 
         _progressNotifyTimer?.cancel();
@@ -724,6 +726,23 @@ class NetworkDownloadService extends ChangeNotifier {
     } finally {
       _isProcessingQueue = false;
     }
+  }
+
+  /// Drop [current] and everything still queued (they are not started) and
+  /// remember why, so the UI can say so.
+  void _stopQueueForPolicy(int current) {
+    debugPrint('Network downloads stopped: not allowed on this connection');
+    final dropped = {current, ..._downloadQueue};
+    _downloadQueue.clear();
+    for (final number in dropped) {
+      if (_downloads[number]?.isDownloading == true) _downloads.remove(number);
+    }
+    _stoppedByPolicy = true;
+    notifyListeners();
+  }
+
+  void _throwIfCancelled(int channelNumber) {
+    if (_cancelled.contains(channelNumber)) throw const _DownloadCancelled();
   }
 
   void _setProgress(int channelNumber, double progress) {
@@ -748,6 +767,14 @@ class NetworkDownloadService extends ChangeNotifier {
         ? 'images/${_sanitizeFilename(channel.imageFile!)}'
         : null;
 
+    // Reserve the paths on the in-progress entry, so deleting another channel
+    // that shares these files keeps them (see [_isPathInUse]).
+    final pending = _downloads[channel.number];
+    if (pending != null && pending.isDownloading) {
+      _downloads[channel.number] =
+          pending.copyWith(audioPath: relAudio, imagePath: relImage);
+    }
+
     // Reuse a file only when another downloaded channel already owns it
     // (shared recordings). Any other existing file may be a partial left by
     // an older build, so it is downloaded again.
@@ -756,36 +783,52 @@ class NetworkDownloadService extends ChangeNotifier {
         d.isDownloaded &&
         d.channelNumber != channel.number &&
         d.audioPath == relAudio);
-    if (!(audioShared && await File(audioPath).exists())) {
-      await _downloadFile(
-        channel.audioUrl,
-        audioPath,
-        onProgress: (progress) => _setProgress(channel.number, progress * 0.9),
-      );
-    }
+    var wroteAudio = false;
+    try {
+      _throwIfCancelled(channel.number);
+      if (!(audioShared && await File(audioPath).exists())) {
+        await _downloadFile(
+          channel.audioUrl,
+          audioPath,
+          onProgress: (progress) => _setProgress(channel.number, progress * 0.9),
+        );
+        wroteAudio = true;
+      }
 
-    if (channel.imageUrl != null && relImage != null) {
-      final imagePath = p.join(root, relImage);
-      final imageShared = _downloads.values.any((d) =>
-          d.isDownloaded &&
-          d.channelNumber != channel.number &&
-          d.imagePath == relImage);
-      if (!(imageShared && await File(imagePath).exists())) {
-        try {
-          await _downloadFile(
-            channel.imageUrl!,
-            imagePath,
-            onProgress: (progress) =>
-                _setProgress(channel.number, 0.9 + progress * 0.1),
-          );
-        } on _DownloadCancelled {
-          rethrow;
-        } catch (e) {
-          // Image download failure is not critical
-          debugPrint('Failed to download image for channel ${channel.number}: $e');
-          relImage = null;
+      if (channel.imageUrl != null && relImage != null) {
+        final imagePath = p.join(root, relImage);
+        final imageShared = _downloads.values.any((d) =>
+            d.isDownloaded &&
+            d.channelNumber != channel.number &&
+            d.imagePath == relImage);
+        _throwIfCancelled(channel.number);
+        if (!(imageShared && await File(imagePath).exists())) {
+          try {
+            await _downloadFile(
+              channel.imageUrl!,
+              imagePath,
+              onProgress: (progress) =>
+                  _setProgress(channel.number, 0.9 + progress * 0.1),
+            );
+          } on _DownloadCancelled {
+            rethrow;
+          } catch (e) {
+            // Image download failure is not critical
+            debugPrint('Failed to download image for channel ${channel.number}: $e');
+            relImage = null;
+          }
         }
       }
+      _throwIfCancelled(channel.number);
+    } on _DownloadCancelled {
+      // Don't leave an untracked recording behind (it would never show up in
+      // storage stats or be removed by "Clear All").
+      if (wroteAudio && !_isPathInUse(relAudio, except: channel.number)) {
+        try {
+          await File(audioPath).delete();
+        } catch (_) {}
+      }
+      rethrow;
     }
 
     // Mark as completed
@@ -926,7 +969,11 @@ class NetworkDownloadService extends ChangeNotifier {
   /// Cancel a downloading channel.
   void cancelDownload(int channelNumber) {
     _downloadQueue.remove(channelNumber);
-    if (_activeChannel == channelNumber) _abortActive?.call();
+    if (_activeChannel == channelNumber) {
+      // Also covers the moments no transfer is abortable (between files).
+      _cancelled.add(channelNumber);
+      _abortActive?.call();
+    }
     if (_downloads[channelNumber]?.status == NetworkDownloadStatus.downloading) {
       _downloads.remove(channelNumber);
     }
@@ -936,6 +983,8 @@ class NetworkDownloadService extends ChangeNotifier {
   /// Cancel all pending and in-progress downloads.
   void cancelAllDownloads() {
     _downloadQueue.clear();
+    final active = _activeChannel;
+    if (active != null) _cancelled.add(active);
     _abortActive?.call();
     _downloads.removeWhere(
       (_, item) => item.status == NetworkDownloadStatus.downloading,

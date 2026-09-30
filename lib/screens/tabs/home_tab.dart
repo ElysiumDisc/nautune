@@ -63,6 +63,31 @@ class _ShelfHeader extends StatelessWidget {
   }
 }
 
+/// Height of a horizontal shelf whose cards hold [fixed] points of artwork,
+/// margins and padding plus a two-line title and a one-line subtitle, at the
+/// current text size; never below [minimum] (the default-size layout). Fixed
+/// heights overflowed with larger text.
+double _shelfExtent(
+  BuildContext context, {
+  required double fixed,
+  required double minimum,
+}) {
+  final theme = Theme.of(context);
+  final scaler = MediaQuery.textScalerOf(context);
+  double line(TextStyle? style, double fallbackSize) =>
+      scaler.scale(style?.fontSize ?? fallbackSize) * (style?.height ?? 1.4);
+  final extent = fixed +
+      2 * line(theme.textTheme.titleSmall, 14) +
+      4 +
+      line(theme.textTheme.bodySmall, 12) +
+      2; // rounding slack
+  return extent > minimum ? extent : minimum;
+}
+
+/// Shelf height for [_TrackChip]s: card margins and text padding.
+double _trackShelfExtent(BuildContext context) =>
+    _shelfExtent(context, fixed: 8 + 16, minimum: 140);
+
 class _TrackChip extends StatelessWidget {
   const _TrackChip({required this.track, required this.onTap});
 
@@ -81,8 +106,10 @@ class _TrackChip extends StatelessWidget {
           onTap: onTap,
           child: Row(
             children: [
-              AspectRatio(
-                aspectRatio: 1,
+              // Fixed width: a taller chip (larger text) keeps room for text.
+              SizedBox(
+                width: 132,
+                height: double.infinity,
                 child: (track.albumId != null && track.albumPrimaryImageTag != null)
                     ? JellyfinImage(
                         itemId: track.albumId!,
@@ -163,7 +190,8 @@ class _RecentlyAddedShelf extends StatelessWidget {
           isLoading: isLoading,
         ),
         SizedBox(
-          height: 240,
+          // Card margins, 142pt artwork and text padding, plus the text.
+          height: _shelfExtent(context, fixed: 8 + 142 + 16, minimum: 240),
           child: !hasData && isLoading
               ? const SkeletonAlbumShelf()
               : hasData
@@ -247,7 +275,7 @@ class _RecentlyPlayedShelf extends StatelessWidget {
           ],
         ),
         SizedBox(
-          height: 140,
+          height: _trackShelfExtent(context),
           child: !hasData && isLoading
               ? const SkeletonTrackShelf()
               : hasData
@@ -305,7 +333,7 @@ class _DiscoverShelf extends StatelessWidget {
           isLoading: isLoading,
         ),
         SizedBox(
-          height: 140,
+          height: _trackShelfExtent(context),
           child: !hasData && isLoading
               ? const SkeletonTrackShelf()
               : hasData
@@ -368,7 +396,7 @@ class _RecommendationsShelf extends StatelessWidget {
           isLoading: isLoading,
         ),
         SizedBox(
-          height: 140,
+          height: _trackShelfExtent(context),
           child: !hasData && isLoading
               ? const SkeletonTrackShelf()
               : hasData
@@ -454,6 +482,12 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
   bool _isLoading = false;
   bool _hasChecked = false;
 
+  /// ListenBrainz user the recommendations were requested for; null until
+  /// a connected account was found. The Home tab is kept alive, so build()
+  /// compares it with the current user to pick up an account connected (or
+  /// switched) in Settings afterwards.
+  String? _requestedFor;
+
   @override
   void initState() {
     super.initState();
@@ -463,6 +497,7 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
       _recommendations = cached.recommendations;
       _matchedTracks = cached.tracks;
       _hasChecked = true;
+      _requestedFor = ListenBrainzService().username;
     } else {
       _loadRecommendations();
     }
@@ -495,6 +530,7 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
     }
     debugPrint('🎵 ListenBrainz Discovery: User ${listenBrainz.username} is configured, fetching...');
 
+    _requestedFor = listenBrainz.username;
     if (mounted) setState(() => _isLoading = true);
 
     try {
@@ -587,6 +623,20 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
       return const SizedBox.shrink();
     }
 
+    // Connected (or switched account) since the last check: load now.
+    // Once per account, so a failed load doesn't retry on every rebuild.
+    if (_hasChecked &&
+        !_isLoading &&
+        listenBrainz.isConfigured &&
+        listenBrainz.isScrobblingEnabled &&
+        _requestedFor != listenBrainz.username) {
+      _recommendations = null;
+      _matchedTracks = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _loadRecommendations();
+      });
+    }
+
     // Get recommendations NOT in library (for discovery section)
     // Only show LB Radio and Fresh Release items — CF recommendations are
     // excluded because unmatched CF results are usually false negatives
@@ -626,7 +676,12 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
           isLoading: _isLoading,
         ),
         SizedBox(
-          height: 140,
+          // Discovery chips add a badge line above the title.
+          height: _shelfExtent(
+            context,
+            fixed: 8 + 20 + 4 + 2 + MediaQuery.textScalerOf(context).scale(14),
+            minimum: 140,
+          ),
           child: !hasMatchedData && !hasDiscoveryData && _isLoading
               ? const SkeletonTrackShelf()
               : (hasMatchedData || hasDiscoveryData)
@@ -817,7 +872,7 @@ class _OnThisDayShelf extends StatelessWidget {
           isLoading: isLoading,
         ),
         SizedBox(
-          height: 140,
+          height: _trackShelfExtent(context),
           child: !hasData && isLoading
               ? const SkeletonTrackShelf()
               : hasData

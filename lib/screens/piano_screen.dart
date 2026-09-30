@@ -20,6 +20,9 @@ class _PianoScreenState extends State<PianoScreen> {
   final FocusNode _focusNode = FocusNode();
   final Set<int> _pressedKeys = {};
 
+  /// Touch pointer → the MIDI note it is holding down.
+  final Map<int, int> _pointerNotes = {};
+
   // Current octave base (MIDI note of the leftmost C)
   int _octaveBase = 60; // C4
 
@@ -29,32 +32,33 @@ class _PianoScreenState extends State<PianoScreen> {
 
   bool _initialized = false;
 
-  // Hardware keyboard → MIDI note offset mapping (upiano-style)
+  // Hardware keyboard → MIDI note offset mapping (upiano-style), by key
+  // position so it's the same piano layout on AZERTY/QWERTZ keyboards.
   // Lower octave: a w s e d f t g y h u j
-  // Upper octave: k o l p ; ' ] \
-  static final Map<LogicalKeyboardKey, int> _keyMap = {
+  // Upper octave: k o l p ; ' ] \   (US key positions)
+  static final Map<PhysicalKeyboardKey, int> _keyMap = {
     // Lower octave (offsets from _octaveBase)
-    LogicalKeyboardKey.keyA: 0,   // C
-    LogicalKeyboardKey.keyW: 1,   // C#
-    LogicalKeyboardKey.keyS: 2,   // D
-    LogicalKeyboardKey.keyE: 3,   // D#
-    LogicalKeyboardKey.keyD: 4,   // E
-    LogicalKeyboardKey.keyF: 5,   // F
-    LogicalKeyboardKey.keyT: 6,   // F#
-    LogicalKeyboardKey.keyG: 7,   // G
-    LogicalKeyboardKey.keyY: 8,   // G#
-    LogicalKeyboardKey.keyH: 9,   // A
-    LogicalKeyboardKey.keyU: 10,  // A#
-    LogicalKeyboardKey.keyJ: 11,  // B
+    PhysicalKeyboardKey.keyA: 0,   // C
+    PhysicalKeyboardKey.keyW: 1,   // C#
+    PhysicalKeyboardKey.keyS: 2,   // D
+    PhysicalKeyboardKey.keyE: 3,   // D#
+    PhysicalKeyboardKey.keyD: 4,   // E
+    PhysicalKeyboardKey.keyF: 5,   // F
+    PhysicalKeyboardKey.keyT: 6,   // F#
+    PhysicalKeyboardKey.keyG: 7,   // G
+    PhysicalKeyboardKey.keyY: 8,   // G#
+    PhysicalKeyboardKey.keyH: 9,   // A
+    PhysicalKeyboardKey.keyU: 10,  // A#
+    PhysicalKeyboardKey.keyJ: 11,  // B
     // Upper octave
-    LogicalKeyboardKey.keyK: 12,  // C
-    LogicalKeyboardKey.keyO: 13,  // C#
-    LogicalKeyboardKey.keyL: 14,  // D
-    LogicalKeyboardKey.keyP: 15,  // D#
-    LogicalKeyboardKey.semicolon: 16, // E
-    LogicalKeyboardKey.quoteSingle: 17, // F
-    LogicalKeyboardKey.bracketRight: 18, // F#
-    LogicalKeyboardKey.backslash: 19, // G
+    PhysicalKeyboardKey.keyK: 12,  // C
+    PhysicalKeyboardKey.keyO: 13,  // C#
+    PhysicalKeyboardKey.keyL: 14,  // D
+    PhysicalKeyboardKey.keyP: 15,  // D#
+    PhysicalKeyboardKey.semicolon: 16, // E
+    PhysicalKeyboardKey.quote: 17, // F
+    PhysicalKeyboardKey.bracketRight: 18, // F#
+    PhysicalKeyboardKey.backslash: 19, // G
   };
 
   @override
@@ -100,8 +104,24 @@ class _PianoScreenState extends State<PianoScreen> {
     setState(() => _pressedKeys.remove(midiNote));
   }
 
+  // Touch keys use raw pointer events rather than tap gestures: they fire on
+  // contact without waiting for the gesture arena (e.g. the iOS back-swipe
+  // strip over the lowest key), and each finger is tracked on its own.
+  void _onPointerDown(PointerDownEvent event, int midiNote) {
+    _pointerNotes[event.pointer] = midiNote;
+    _onNoteOn(midiNote);
+  }
+
+  void _onPointerUp(PointerEvent event) {
+    final midiNote = _pointerNotes.remove(event.pointer);
+    // Keep the key down while another finger still holds it.
+    if (midiNote != null && !_pointerNotes.containsValue(midiNote)) {
+      _onNoteOff(midiNote);
+    }
+  }
+
   void _handleKeyEvent(KeyEvent event) {
-    final offset = _keyMap[event.logicalKey];
+    final offset = _keyMap[event.physicalKey];
     if (offset != null) {
       final midiNote = _octaveBase + offset;
       if (event is KeyDownEvent) {
@@ -118,6 +138,7 @@ class _PianoScreenState extends State<PianoScreen> {
       setState(() {
         _octaveBase = newBase;
         _pressedKeys.clear();
+        _pointerNotes.clear();
       });
       _synth.preloadRange(_octaveBase, 24);
     }
@@ -168,39 +189,44 @@ class _PianoScreenState extends State<PianoScreen> {
         onKeyEvent: _handleKeyEvent,
         child: !_initialized
             ? const Center(child: CircularProgressIndicator())
-            : Column(
-                children: [
-                  // Keyboard hint
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Text(
-                      'Use keyboard: A-J (lower) K-\\ (upper) | Click/tap keys',
-                      style: TextStyle(
-                        color: Colors.white38,
-                        fontFamily: 'monospace',
-                        fontSize: 12,
+            // Keep the end keys clear of the notch and rounded corners in
+            // landscape (the app bar already covers the top inset).
+            : SafeArea(
+                top: false,
+                child: Column(
+                  children: [
+                    // Keyboard hint
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        'Use keyboard: A-J (lower) K-\\ (upper) | Click/tap keys',
+                        style: TextStyle(
+                          color: Colors.white38,
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
                       ),
                     ),
-                  ),
-                  // Piano keyboard
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.all(8),
-                      child: _buildKeyboard(theme),
-                    ),
-                  ),
-                  // Note labels
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: Text(
-                      'Notes played: $_notesPlayed',
-                      style: const TextStyle(
-                        color: Colors.white54,
-                        fontFamily: 'monospace',
+                    // Piano keyboard
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: _buildKeyboard(theme),
                       ),
                     ),
-                  ),
-                ],
+                    // Note labels
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Text(
+                        'Notes played: $_notesPlayed',
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
       ),
     );
@@ -241,10 +267,11 @@ class _PianoScreenState extends State<PianoScreen> {
                 final isPressed = _pressedKeys.contains(midiNote);
 
                 return Expanded(
-                  child: GestureDetector(
-                    onTapDown: (_) => _onNoteOn(midiNote),
-                    onTapUp: (_) => _onNoteOff(midiNote),
-                    onTapCancel: () => _onNoteOff(midiNote),
+                  child: Listener(
+                    behavior: HitTestBehavior.opaque,
+                    onPointerDown: (e) => _onPointerDown(e, midiNote),
+                    onPointerUp: _onPointerUp,
+                    onPointerCancel: _onPointerUp,
                     child: Container(
                       margin: const EdgeInsets.symmetric(horizontal: 1),
                       decoration: BoxDecoration(
@@ -288,10 +315,11 @@ class _PianoScreenState extends State<PianoScreen> {
                       final midiNote = _octaveBase + octave * 12 + bk.offset;
                       final isPressed = _pressedKeys.contains(midiNote);
 
-                      return GestureDetector(
-                        onTapDown: (_) => _onNoteOn(midiNote),
-                        onTapUp: (_) => _onNoteOff(midiNote),
-                        onTapCancel: () => _onNoteOff(midiNote),
+                      return Listener(
+                        behavior: HitTestBehavior.opaque,
+                        onPointerDown: (e) => _onPointerDown(e, midiNote),
+                        onPointerUp: _onPointerUp,
+                        onPointerCancel: _onPointerUp,
                         child: Container(
                           decoration: BoxDecoration(
                             color: isPressed ? accent : Colors.black,

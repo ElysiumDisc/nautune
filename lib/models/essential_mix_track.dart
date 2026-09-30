@@ -31,8 +31,8 @@ class EssentialMixTrack {
   /// Credit for the audio source
   final String credit = 'Internet Archive (archive.org)';
 
-  /// Approximate file size in bytes (~233.6 MB)
-  final int fileSizeBytes = 233600000;
+  /// File size in bytes as served by archive.org (233.6 MiB)
+  final int fileSizeBytes = 244958622;
 
   const EssentialMixTrack();
 

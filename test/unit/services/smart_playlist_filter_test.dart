@@ -81,4 +81,19 @@ void main() {
       }
     });
   });
+
+  group('tagHasKeyword', () {
+    test('matches whole words only', () {
+      expect(tagHasKeyword('Fun', const {'fun'}), isTrue);
+      expect(tagHasKeyword('party / fun', const {'fun'}), isTrue);
+      expect(tagHasKeyword('funeral doom', const {'fun'}), isFalse);
+      expect(tagHasKeyword('Funk', const {'fun'}), isFalse);
+      expect(tagHasKeyword('crusade', const {'sad'}), isFalse);
+    });
+
+    test('splits on punctuation', () {
+      expect(tagHasKeyword('chill-out', const {'chill'}), isTrue);
+      expect(tagHasKeyword('mood:dark', const {'dark'}), isTrue);
+    });
+  });
 }

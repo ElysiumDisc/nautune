@@ -1,7 +1,6 @@
-import 'dart:async' show StreamSubscription;
+import 'dart:async' show StreamSubscription, Timer;
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart' show Ticker;
 import '../../services/audio_player_service.dart';
 import '../../services/ios_fft_service.dart';
 
@@ -20,9 +19,22 @@ abstract class BaseVisualizer extends StatefulWidget {
 
 /// Base state class with FFT subscription and smoothing logic.
 /// Subclasses must implement [buildVisualizer] to render their specific visualization.
-abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
-    with SingleTickerProviderStateMixin {
-  late final Ticker _ticker;
+abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T> {
+  // Visual frames come from a timer, not a Ticker: a Ticker requests an
+  // engine frame on every vsync (120 Hz on ProMotion), and skipping the Dart
+  // work on most of them still composited and rasterized the whole screen,
+  // backdrop blurs included, at the display rate. Bumping [_frameNotifier]
+  // from the timer requests a frame only when there is a new one to draw.
+  Timer? _frameTimer;
+  final Stopwatch _clock = Stopwatch();
+
+  // Playing, on screen (TickerMode enabled) and the app in the foreground.
+  // The timer runs only when all hold: unlike a Ticker, a timer keeps firing
+  // in the background, where music keeps the app running.
+  bool _playing = false;
+  bool _onScreen = true;
+  bool _appActive = true;
+  AppLifecycleListener? _lifecycle;
 
   // Smoothed values (interpolate towards targets each frame)
   double smoothBass = 0.0;
@@ -38,12 +50,10 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
   double _targetAmplitude = 0.0;
   List<double> _targetSpectrum = [];
 
-  // Visual frames are produced at ~30 fps whatever the display rate (60 or
-  // 120 Hz): the ticker fires every vsync, but only every ~33 ms does it
-  // advance the state and rebuild.
+  // Visual frames are produced at ~30 fps whatever the display rate.
   static const _frameInterval = Duration(milliseconds: 32);
   Duration _lastFrameAt = Duration.zero;
-  bool _tickerRestarted = true;
+  bool _timerRestarted = true;
 
   /// Animation time in seconds. Monotonic: it advances only while playing
   /// and on screen, and never wraps (a wrap made the waves and the radial
@@ -90,7 +100,14 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
   @override
   void initState() {
     super.initState();
-    _ticker = createTicker(_onTick);
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _appActive = lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    _lifecycle = AppLifecycleListener(onStateChange: (state) {
+      final active = state == AppLifecycleState.resumed;
+      if (active == _appActive) return;
+      _appActive = active;
+      _updateTimer();
+    });
     _subscribeToService();
     _setPlaying(widget.audioService.isPlaying);
   }
@@ -98,7 +115,12 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _updateRetained(TickerMode.valuesOf(context).enabled);
+    final onScreen = TickerMode.valuesOf(context).enabled;
+    _updateRetained(onScreen);
+    if (onScreen != _onScreen) {
+      _onScreen = onScreen;
+      _updateTimer();
+    }
   }
 
   void _updateRetained(bool onScreen) {
@@ -112,7 +134,7 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
   }
 
   void _subscribeToService() {
-    // Start/stop the frame ticker with playback.
+    // Start/stop the frame timer with playback.
     _playingSubscription = widget.audioService.playingStream.listen((playing) {
       if (mounted) _setPlaying(playing);
     });
@@ -129,26 +151,39 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
   }
 
   void _setPlaying(bool playing) {
-    if (playing && !_ticker.isActive) {
-      _tickerRestarted = true;
-      _ticker.start();
-    } else if (!playing && _ticker.isActive) {
-      _ticker.stop();
+    if (playing == _playing) return;
+    _playing = playing;
+    _updateTimer();
+  }
+
+  /// Runs the frame timer while playing, on screen and in the foreground.
+  void _updateTimer() {
+    final run = _playing && _onScreen && _appActive;
+    if (run && _frameTimer == null) {
+      _timerRestarted = true;
+      _clock
+        ..reset()
+        ..start();
+      _frameTimer = Timer.periodic(_frameInterval, (_) => _onFrameTimer());
+    } else if (!run && _frameTimer != null) {
+      _frameTimer!.cancel();
+      _frameTimer = null;
+      _clock.stop();
     }
   }
 
-  void _onTick(Duration elapsed) {
+  void _onFrameTimer() {
+    if (!mounted) return;
+    final elapsed = _clock.elapsed;
     double dt;
-    if (_tickerRestarted) {
-      _tickerRestarted = false;
+    if (_timerRestarted) {
+      _timerRestarted = false;
       dt = _frameInterval.inMicroseconds / 1e6;
     } else {
-      final since = elapsed - _lastFrameAt;
-      if (since < _frameInterval) return;
-      dt = since.inMicroseconds / 1e6;
+      dt = (elapsed - _lastFrameAt).inMicroseconds / 1e6;
     }
     _lastFrameAt = elapsed;
-    // A muted ticker (offstage) keeps counting; don't jump ahead on return.
+    // A late timer (busy UI thread) must not jump the animation ahead.
     frameDelta = dt > 0.1 ? 0.1 : dt;
     lastPaintedTime += frameDelta;
     updateSmoothedValues();
@@ -245,7 +280,9 @@ abstract class BaseVisualizerState<T extends BaseVisualizer> extends State<T>
       widget.audioService.releaseVisualizer();
     }
     _unsubscribeFromService();
-    _ticker.dispose();
+    _frameTimer?.cancel();
+    _frameTimer = null;
+    _lifecycle?.dispose();
     _frameNotifier.dispose();
     super.dispose();
   }

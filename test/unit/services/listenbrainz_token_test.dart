@@ -23,4 +23,35 @@ void main() {
     expect(ListenBrainzService.parseTokenCheck(200, '<html>').status,
         ListenBrainzTokenStatus.networkError);
   });
+
+  group('MusicBrainz ids in listens', () {
+    const a = '0383dadf-2a4e-4d10-a46a-e9e041da8eb3';
+    const b = 'b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d';
+
+    test('a release track id is never sent as the recording id', () {
+      final info = ListenBrainzService.musicBrainzInfo({'MusicBrainzTrack': a});
+      expect(info.containsKey('recording_mbid'), isFalse);
+      expect(info['track_mbid'], a);
+    });
+
+    test('recording, release and release group go to their own fields', () {
+      final info = ListenBrainzService.musicBrainzInfo({
+        'MusicBrainzRecording': a,
+        'MusicBrainzAlbum': b,
+        'MusicBrainzReleaseGroup': a,
+      });
+      expect(info['recording_mbid'], a);
+      expect(info['release_mbid'], b);
+      expect(info['release_group_mbid'], a);
+    });
+
+    test('joined artist ids are split and invalid ones dropped', () {
+      final info = ListenBrainzService.musicBrainzInfo(
+          {'MusicBrainzArtist': '$a/${b.toUpperCase()}; not-an-id'});
+      expect(info['artist_mbids'], [a, b]);
+      expect(ListenBrainzService.musicBrainzInfo({'MusicBrainzAlbum': 'x'}),
+          isEmpty);
+      expect(ListenBrainzService.musicBrainzInfo(null), isEmpty);
+    });
+  });
 }

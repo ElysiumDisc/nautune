@@ -128,7 +128,9 @@ class DemoContent {
   late final JellyfinLibrary library;
   late final List<JellyfinAlbum> albums;
   late final List<JellyfinArtist> artists;
-  late final List<JellyfinPlaylist> playlists;
+  /// Not final: DemoModeProvider replaces it when demo playlists are
+  /// created, renamed, deleted or added to.
+  late List<JellyfinPlaylist> playlists;
   late final List<JellyfinGenre> genres;
   late final Map<String, JellyfinTrack> tracks;
   late final Map<String, List<String>> albumTrackIds;

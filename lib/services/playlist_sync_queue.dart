@@ -5,6 +5,8 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
+import '../jellyfin/order_by_ids.dart';
+
 class PendingPlaylistAction {
   PendingPlaylistAction({
     required this.type,
@@ -26,14 +28,19 @@ class PendingPlaylistAction {
 
   /// A previous attempt may have been applied by the server even though it
   /// failed from the app's point of view (timed out or broke after being
-  /// sent, or a 5xx). Used to avoid re-creating a playlist.
+  /// sent, or a 5xx). Used to avoid re-creating a playlist, and (for `add`)
+  /// re-adding the chunk that was in flight.
   final bool maybeApplied;
 
-  PendingPlaylistAction copyWith({int? attempts, bool? maybeApplied}) =>
+  PendingPlaylistAction copyWith({
+    int? attempts,
+    bool? maybeApplied,
+    Map<String, dynamic>? payload,
+  }) =>
       PendingPlaylistAction(
         id: id,
         type: type,
-        payload: payload,
+        payload: payload ?? this.payload,
         timestamp: timestamp,
         attempts: attempts ?? this.attempts,
         maybeApplied: maybeApplied ?? this.maybeApplied,
@@ -253,4 +260,33 @@ bool retriedCreateAlreadyApplied({
   if (!maybeApplied) return false;
   return serverPlaylists.any((p) =>
       p.name == name && p.created != null && !p.created!.isBefore(queuedAt));
+}
+
+/// Payload key of an `add` action: how many of its `itemIds` the server
+/// already accepted (chunks are sent in order), so a retry resumes after
+/// them instead of adding them again.
+const String kAddActionSentCountKey = 'sentCount';
+
+/// Ids of a queued `add` [payload] still to send, after the chunks already
+/// accepted ([kAddActionSentCountKey]).
+List<String> remainingAddIds(Map<String, dynamic> payload) {
+  final ids = (payload['itemIds'] as List).cast<String>();
+  final sent = (payload[kAddActionSentCountKey] as num?)?.toInt() ?? 0;
+  return ids.sublist(sent.clamp(0, ids.length));
+}
+
+/// How many leading ids of [remaining] a previous attempt that may have
+/// reached the server ([maybeApplied]) already added: the first chunk (the
+/// one in flight, sent as one request of up to [chunkSize] ids) when every
+/// id of it is in the playlist ([playlistItemIds]). Otherwise 0 — when
+/// unsure, a duplicate beats a lost song.
+int appliedLeadingChunk({
+  required bool maybeApplied,
+  required List<String> remaining,
+  required Set<String> playlistItemIds,
+  int chunkSize = kMaxIdsPerRequest,
+}) {
+  if (!maybeApplied || remaining.isEmpty) return 0;
+  final chunk = remaining.take(chunkSize).toList();
+  return chunk.every(playlistItemIds.contains) ? chunk.length : 0;
 }

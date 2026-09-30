@@ -453,7 +453,9 @@ class DownloadQueueBanner extends StatelessWidget {
                   Icon(
                     switch (pause) {
                       DownloadQueuePause.waitingForWifi => Icons.wifi_off,
-                      DownloadQueuePause.waitingForNetwork => Icons.cloud_off,
+                      DownloadQueuePause.waitingForNetwork ||
+                      DownloadQueuePause.offline =>
+                        Icons.cloud_off,
                       DownloadQueuePause.storageFull ||
                       DownloadQueuePause.storageLimit =>
                         Icons.sd_card_alert_outlined,
@@ -566,6 +568,7 @@ class DownloadItemTile extends StatelessWidget {
           DownloadQueuePause.waitingForNetwork => 'Waiting for connection',
           DownloadQueuePause.storageFull => 'Paused: storage full',
           DownloadQueuePause.storageLimit => 'Paused: storage limit reached',
+          DownloadQueuePause.offline => 'Paused: offline mode',
           DownloadQueuePause.none =>
             item.errorKind == DownloadErrorKind.network
                 ? 'Queued to retry'

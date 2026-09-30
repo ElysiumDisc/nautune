@@ -233,6 +233,14 @@ class _EventTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // Play events don't store the artwork tag. A downloaded copy knows the
+    // real one (the URL then follows artwork changes); otherwise the
+    // server serves the current image for any tag.
+    final imageTag = appState.downloadService
+            .getDownload(event.trackId)
+            ?.track
+            .albumPrimaryImageTag ??
+        'Primary';
 
     return InkWell(
       onTap: () => _playTrack(context),
@@ -250,7 +258,7 @@ class _EventTile extends StatelessWidget {
                 child: event.albumId != null
                     ? JellyfinImage(
                         itemId: event.albumId!,
-                        imageTag: 'Primary',
+                        imageTag: imageTag,
                         albumId: event.albumId,
                         maxWidth: 48,
                         boxFit: BoxFit.cover,

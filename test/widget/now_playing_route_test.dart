@@ -94,6 +94,90 @@ void main() {
     expect(find.text('player'), findsOneWidget);
   });
 
+  // Once open the route is opaque, so the page below isn't laid out, painted
+  // or rasterized under the player; a drag still reveals it.
+  testWidgets('the page below is offstage while open and shown while dragging',
+      (tester) async {
+    await openPlayer(tester);
+    expect(find.text('open'), findsNothing);
+
+    final gesture = await tester.startGesture(tester.getCenter(find.text('player')));
+    await gesture.moveBy(const Offset(0, 20));
+    await gesture.moveBy(const Offset(0, 80));
+    await tester.pump();
+    expect(find.text('open'), findsOneWidget);
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(find.text('player'), findsOneWidget);
+    expect(find.text('open'), findsNothing);
+  });
+
+  testWidgets('the artwork flies back to the opener\'s mini player on a drag',
+      (tester) async {
+    Widget art(Object tag) => Hero(
+          tag: tag,
+          transitionOnUserGestures: true,
+          child: const SizedBox.square(dimension: 40, child: ColoredBox(color: Colors.red)),
+        );
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => Scaffold(
+          body: Column(children: [
+            art(nowPlayingArtworkHeroTag(ModalRoute.of(context))),
+            TextButton(
+              onPressed: () => NowPlayingRoute.show(
+                context,
+                (playerContext) {
+                  final route = ModalRoute.of(playerContext)! as NowPlayingRoute;
+                  return Scaffold(
+                    body: Center(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        art(route.artworkHeroTag),
+                        const Text('player'),
+                      ]),
+                    ),
+                  );
+                },
+              ),
+              child: const Text('open'),
+            ),
+          ]),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    final gesture = await tester.startGesture(tester.getCenter(find.text('player')));
+    await gesture.moveBy(const Offset(0, 20));
+    await gesture.moveBy(const Offset(0, 300));
+    await tester.pump();
+    // In flight: both heroes hold placeholders, and the artwork is drawn
+    // once, in the navigator's overlay.
+    final redBox = find.byWidgetPredicate(
+        (w) => w is ColoredBox && w.color == Colors.red);
+    expect(find.byType(Hero), findsNWidgets(2));
+    expect(find.descendant(of: find.byType(Hero), matching: redBox), findsNothing);
+    expect(redBox, findsOneWidget);
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.text('player'), findsNothing);
+    expect(find.text('open'), findsOneWidget);
+  });
+
+  test('the artwork hero tag is scoped to the opening page', () {
+    final a = MaterialPageRoute<void>(builder: (_) => const SizedBox());
+    final b = MaterialPageRoute<void>(builder: (_) => const SizedBox());
+    expect(nowPlayingArtworkHeroTag(a), nowPlayingArtworkHeroTag(a));
+    expect(nowPlayingArtworkHeroTag(a), isNot(nowPlayingArtworkHeroTag(b)));
+    expect(
+      NowPlayingRoute<void>(builder: (_) => const SizedBox(), opener: a).artworkHeroTag,
+      nowPlayingArtworkHeroTag(a),
+    );
+  });
+
   testWidgets('show returns to an open player instead of stacking one',
       (tester) async {
     late BuildContext pageContext;

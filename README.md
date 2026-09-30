@@ -53,28 +53,33 @@ Flutter, shipped for iOS.
 - Files that iOS can play are saved as the untouched original. Opus,
   Vorbis, WMA, APE and similar formats are saved as 320 kbps MP3.
 - The queue survives the app being killed. It pauses on cellular when
-  Wi-Fi-only is on, and it waits out network drops by itself. You can set
-  concurrency, a storage limit and age-based cleanup.
+  Wi-Fi-only is on, waits out network drops by itself, and continues an
+  interrupted download where it stopped when the server allows it. You can
+  set concurrency, a storage limit and age-based cleanup.
+- Removing an album or artist keeps songs that a downloaded playlist (or
+  another album) still needs.
 - Album, artist and playlist pages fall back to your downloads when
   you're offline.
 - **Downloads screen** (Library ⋮ → Downloads): browse, search, sort and
   shuffle your offline library, and manage the queue (progress, cancel,
   retry, remove).
-- **Offline mode**: Library ⋮ → **Go offline** stops all network traffic
-  and shows only downloaded music (the Home tab becomes Downloads), even
+- **Offline mode**: Library ⋮ → **Go offline** stops all network traffic,
+  downloads included (they resume when you go back online), and shows only
+  downloaded music (the Home tab becomes Downloads), even
   across restarts. The app also goes offline by itself when the connection
   or server drops, and it comes back on its own when the server can be
   reached again.
 - While offline or in Low Power Mode, battery-hungry extras (visualizers,
   crossfade, gapless, pre-caching) pause. Your settings come back when you
   reconnect.
-- Downloads are stored outside iCloud backup.
+- Downloads are stored outside iCloud backup. After restoring an iPhone
+  from a backup, they show as **File missing** and can be retried.
 
 ### CarPlay
 - Browse Albums, Artists, Playlists, Albums/Artists A-Z, Recently Played,
   Favorite Tracks and Downloaded Music from one simple root list
-- Long lists page through your whole library, and tapping a track opens
-  Now Playing
+- Long lists page through your whole library, the A-Z indexes load each
+  letter from the server, and tapping a track opens Now Playing
 - Artwork loads from local files for downloaded music, and CarPlay works
   from a cold start while the phone is locked
 
@@ -83,7 +88,7 @@ Flutter, shipped for iOS.
   Your Music → Last.fm)
 - Scrobbles plays after you've actually listened to half the track or 4
   minutes, whichever comes first (seeking ahead doesn't count), and queues
-  them while offline
+  them while offline. Last.fm only takes tracks longer than 30 seconds
 - Recommendations on Home, plus popular-track highlights on artist and
   album pages
 
@@ -110,7 +115,7 @@ Eggs**.
 
 | Name | What it is | Hint |
 |------|------------|------|
-| 📻 The Network | 120 channels of Nicolas Jaar's Other People radio, with a dial and offline saving | `network` |
+| 📻 The Network | The 0–333 dial of Nicolas Jaar's Other People radio, with offline saving. Channels lost upstream show "Signal lost" | `network` |
 | 🎧 Essential Mix | A legendary two-hour BBC Radio 1 Essential Mix, downloadable | `essential` |
 | 🎸 Frets on Fire | A rhythm game that charts your downloaded tracks. Play perfectly for a legendary unlock | `frets` |
 | 🌧️ Relax Mode | Mix rain, thunder, campfire, waves and loons | `relax` |

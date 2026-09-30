@@ -189,4 +189,106 @@ void main() {
     expect(legacy.isUntagged, isTrue);
     expect(legacy.isCatchUp, isFalse);
   });
+
+  group('skips, period comparisons and import', () {
+    final service = ListeningAnalyticsService();
+    tearDown(() {
+      service.setCurrentAccount();
+      service.debugSetEvents(const []);
+    });
+
+    test('a track left before the play threshold is a skip, not a play',
+        () async {
+      service.debugSetEvents(const []);
+      final track = JellyfinTrack(
+        id: 't',
+        name: 'T',
+        album: null,
+        artists: const ['A'],
+        runTimeTicks: const Duration(minutes: 4).inMicroseconds * 10,
+        serverUrl: 'https://a.example/jf',
+        userId: 'u1',
+      );
+      await service.recordPlay(track,
+          actualDurationMs: 30000, reportedToServer: false); // < 2 min
+      await service.recordPlay(track,
+          actualDurationMs: 150000,
+          playStartTime: DateTime.now().subtract(const Duration(minutes: 10)),
+          reportedToServer: false);
+      final all = service.getRecentEvents(limit: 10);
+      expect(all, hasLength(1)); // only the play
+      expect(service.getTotalPlays(), 1);
+      // Both count as listening time.
+      expect(service.getTotalListeningTime(), const Duration(seconds: 180));
+      // A skip is never pushed to the server as a play.
+      expect(
+          service.pushableEvents(serverUrl: 'https://a.example/jf', userId: 'u1'),
+          hasLength(1));
+      // The caller's verdict wins over the duration heuristic.
+      await service.recordPlay(track,
+          actualDurationMs: 200000,
+          playStartTime: DateTime.now().subtract(const Duration(minutes: 20)),
+          countsAsPlay: false);
+      expect(service.getTotalPlays(), 1);
+    });
+
+    test('skip flag round-trips through JSON', () {
+      final e = PlayEvent(
+        trackId: 't',
+        trackName: 't',
+        artists: const [],
+        genres: const [],
+        timestamp: DateTime.utc(2026),
+        durationMs: 1000,
+        isSkip: true,
+      );
+      expect(PlayEvent.fromJson(e.toJson()).isSkip, isTrue);
+      expect(e.toJson().containsKey('isSkip'), isTrue);
+    });
+
+    test('comparisons use the same elapsed span of the previous period', () {
+      final now = DateTime(2026, 9, 29, 15); // Tuesday afternoon
+      service.debugSetEvents([
+        _event('this-week', DateTime(2026, 9, 28, 10)),
+        _event('last-week-same-span', DateTime(2026, 9, 21, 10)),
+        _event('last-week-later', DateTime(2026, 9, 25, 10)),
+        _event('last-year-same-span', DateTime(2025, 3, 1)),
+        _event('last-year-later', DateTime(2025, 11, 1)),
+      ]);
+      final week = service.getWeekOverWeekComparison(now: now);
+      expect(week.currentPeriodPlays, 1);
+      expect(week.previousPeriodPlays, 1);
+      final year = service.getYearOverYearComparison(now: now);
+      expect(year.currentPeriodPlays, 3);
+      expect(year.previousPeriodPlays, 1); // Mar 1, not Nov 1
+    });
+
+    test('shiftCalendar clamps the day and keeps the time', () {
+      expect(shiftCalendar(DateTime(2026, 3, 31, 8), months: -1),
+          DateTime(2026, 2, 28, 8));
+      expect(shiftCalendar(DateTime(2028, 2, 29, 8), months: -12),
+          DateTime(2027, 2, 28, 8));
+      expect(shiftCalendar(DateTime(2026, 9, 29, 15), days: -7),
+          DateTime(2026, 9, 22, 15));
+    });
+
+    test('importing a backup keeps waves and loon usage', () async {
+      service.debugSetEvents(const []);
+      await service.recordRelaxModeSession(
+        sessionDuration: const Duration(minutes: 5),
+        rainUsage: Duration.zero,
+        thunderUsage: Duration.zero,
+        campfireUsage: Duration.zero,
+        waveUsage: const Duration(minutes: 3),
+        loonUsage: const Duration(minutes: 2),
+      );
+      final before = service.getRelaxModeStats();
+      await service.importAllStatsFromJson(
+          '{"nautune_stats_backup": true, "relax_mode_stats": {"rainUsageMs": 1}}');
+      final after = service.getRelaxModeStats();
+      expect(after.waveUsageMs, before.waveUsageMs);
+      expect(after.loonUsageMs, before.loonUsageMs);
+      expect(after.rainUsageMs, greaterThanOrEqualTo(1));
+    });
+  });
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nautune/theme/nautune_theme.dart';
@@ -15,7 +17,8 @@ Widget _host(Widget child) => MaterialApp(
 
 /// Taps the index strip at [letter] (strip spans the view's right edge,
 /// top 32 to bottom 16, one equal slot per letter).
-Future<void> _tapLetter(WidgetTester tester, String letter) async {
+Future<void> _tapLetter(WidgetTester tester, String letter,
+    {bool settle = true}) async {
   const letters = '#ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   final view = tester.getRect(find.byType(CustomScrollView));
   final top = view.top + 32;
@@ -23,7 +26,12 @@ Future<void> _tapLetter(WidgetTester tester, String letter) async {
   final slot = height / letters.length;
   final y = top + slot * (letters.indexOf(letter) + 0.5);
   await tester.tapAt(Offset(view.right - 10, y));
-  await tester.pumpAndSettle();
+  // While pages load, a spinner animates and nothing would settle.
+  if (settle) {
+    await tester.pumpAndSettle();
+  } else {
+    await tester.pump();
+  }
 }
 
 /// The sticky header for [letter] sits at the top of the scroll view.
@@ -84,5 +92,39 @@ void main() {
     await _tapLetter(tester, 'P');
     expect(hasMore, isFalse);
     _expectHeaderAtTop(tester, 'P');
+  });
+
+  testWidgets('after loading the rest, jumps to the letter picked last',
+      (tester) async {
+    final controller = ScrollController();
+    var items = _names('ABC', 30);
+    var hasMore = true;
+    final load = Completer<void>();
+    late StateSetter setOuter;
+    await tester.pumpWidget(_host(StatefulBuilder(builder: (context, setState) {
+      setOuter = setState;
+      return IndexedCollectionView<String>(
+        items: items,
+        nameOf: (s) => s,
+        controller: controller,
+        columns: 2,
+        hasMore: hasMore,
+        onLoadAll: () async {
+          await load.future;
+          setOuter(() {
+            items = [...items, ..._names('DEFGHIJKLMNOPQRSTUVWXYZ', 30)];
+            hasMore = false;
+          });
+        },
+        listItemBuilder: (c, s) => Text(s),
+        gridItemBuilder: (c, s) => Text(s),
+      );
+    })));
+    // M starts the load; the finger then moves on to T before it finishes.
+    await _tapLetter(tester, 'M', settle: false);
+    await _tapLetter(tester, 'T', settle: false);
+    load.complete();
+    await tester.pumpAndSettle();
+    _expectHeaderAtTop(tester, 'T');
   });
 }

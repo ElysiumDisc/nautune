@@ -17,6 +17,9 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     // Sync with main player
     private var syncTimer: Timer?
     private var targetPosition: Double = 0
+    /// When `targetPosition` was reported: the main player has moved on
+    /// since, so checkSync compares against the extrapolated position.
+    private var targetSetAt: CFTimeInterval = 0
 
     // FFT setup
     private var fftSetup: FFTSetup?
@@ -330,10 +333,14 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         shadowPlayer = nil
         playerItem = nil
         currentUrl = nil
+        // A new source must not be seeked to the previous one's position
+        // (e.g. Frets on Fire after the player's visualizer).
+        targetPosition = 0
     }
 
     private func syncPosition(_ position: Double) {
         targetPosition = position
+        targetSetAt = CACurrentMediaTime()
 
         guard let player = shadowPlayer else { return }
 
@@ -355,12 +362,18 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             player.play()
         }
 
-        // Verify sync with target position
-        if isCapturing && targetPosition > 0 {
+        // Verify sync with where the main player is now: the last reported
+        // position plus the time since (Dart reports about once a second;
+        // comparing with the stale value seeked back and forth every
+        // second). A report older than a few seconds means the main player
+        // isn't reporting (paused): don't chase it.
+        let elapsed = CACurrentMediaTime() - targetSetAt
+        if isCapturing && targetPosition > 0 && elapsed >= 0 && elapsed < 3 {
+            let expected = targetPosition + elapsed
             let currentTime = CMTimeGetSeconds(player.currentTime())
-            let diff = abs(currentTime - targetPosition)
+            let diff = abs(currentTime - expected)
             if diff > 0.3 {
-                let time = CMTime(seconds: targetPosition, preferredTimescale: 44100)
+                let time = CMTime(seconds: expected, preferredTimescale: 44100)
                 player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
             }
         }

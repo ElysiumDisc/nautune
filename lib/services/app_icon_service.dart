@@ -60,39 +60,54 @@ class AppIconService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setIcon(String iconName) async {
+  /// Switches the icon. On iOS the preference only changes once the system
+  /// accepted the new icon, so the stored choice never disagrees with the
+  /// home screen. Returns false if the icon couldn't be changed.
+  Future<bool> setIcon(String iconName) async {
     if (!supportedIcons.contains(iconName)) {
       throw ArgumentError('Unsupported icon: $iconName. Supported icons: $supportedIcons');
     }
-    if (_currentIcon == iconName) return;
+    if (_currentIcon == iconName) return true;
 
-    // Update iOS alternate icon if on iOS
     if (Platform.isIOS) {
       try {
         await _iosChannel.invokeMethod('setIcon', {'iconName': iconName});
       } catch (e) {
         debugPrint('🎨 AppIconService: Failed to set iOS icon: $e');
-        // Continue anyway to update local state
+        return false;
       }
     }
 
-    _currentIcon = iconName;
-    final box = await Hive.openBox<String>(_boxName);
-    await box.put(_selectedIconKey, iconName);
+    await _saveIcon(iconName);
     debugPrint('🎨 AppIconService: Saved icon preference: $iconName');
-    notifyListeners();
+    return true;
   }
 
-  /// Sync iOS icon with stored preference on app launch
+  /// On launch, adopt the icon iOS actually shows.
+  ///
+  /// iOS is the source of truth: it never loses the alternate icon, while
+  /// the stored preference can be stale (restored backup, an earlier failed
+  /// switch). This never calls setAlternateIconName, which would show the
+  /// system "You have changed the icon" alert at launch, and fails while the
+  /// app is in the background (e.g. launched from CarPlay).
   Future<void> syncIOSIcon() async {
     if (!Platform.isIOS) return;
     try {
-      final currentIOSIcon = await _iosChannel.invokeMethod<String>('getCurrentIcon');
-      if (currentIOSIcon != _currentIcon) {
-        await _iosChannel.invokeMethod('setIcon', {'iconName': _currentIcon});
+      final iosIcon = await _iosChannel.invokeMethod<String>('getCurrentIcon');
+      if (iosIcon == null || !supportedIcons.contains(iosIcon)) return;
+      if (iosIcon != _currentIcon) {
+        debugPrint('🎨 AppIconService: Adopting iOS icon: $iosIcon');
+        await _saveIcon(iosIcon);
       }
     } catch (e) {
       debugPrint('🎨 AppIconService: Failed to sync iOS icon: $e');
     }
+  }
+
+  Future<void> _saveIcon(String iconName) async {
+    _currentIcon = iconName;
+    notifyListeners();
+    final box = await Hive.openBox<String>(_boxName);
+    await box.put(_selectedIconKey, iconName);
   }
 }

@@ -31,13 +31,14 @@ class ConnectivityService {
   /// False in airplane mode.
   Future<bool> hasNetworkTransport() async {
     try {
-      final results = await _connectivity.checkConnectivity().timeout(
-        const Duration(seconds: 2),
-        onTimeout: () => [ConnectivityResult.none],
-      );
+      final results = await _connectivity
+          .checkConnectivity()
+          .timeout(const Duration(seconds: 2));
       return _extractPrimaryResult(results) != ConnectivityResult.none;
     } catch (e) {
-      // Unknown: let the caller try the network rather than stall.
+      // Unknown (platform error, or no answer in time): let the caller try
+      // the network rather than stall. Reporting "offline" here would start
+      // the app offline (the startup probe) on a slow platform answer.
       return true;
     }
   }

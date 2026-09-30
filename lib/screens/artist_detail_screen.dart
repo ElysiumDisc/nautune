@@ -131,10 +131,11 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         tracks = _downloadedArtistTracks();
       } else {
         try {
-          // Use artist ID to fetch tracks directly (much more reliable than search)
-          tracks = await _appState.jellyfinService.getArtistMix(
+          // The artist's whole catalogue in this library, not a random
+          // sample: "Most Listened", Play All and Download use it.
+          tracks = await _appState.jellyfinService.getAllArtistTracks(
             artistId: widget.artist.id,
-            limit: 500, // Get up to 500 tracks
+            libraryId: _appState.selectedLibraryId,
           );
         } catch (e) {
           final local = _downloadedArtistTracks();
@@ -182,6 +183,9 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         sorted.sort((a, b) {
           final albumCompare = (a.album ?? '').compareTo(b.album ?? '');
           if (albumCompare != 0) return albumCompare;
+          final discCompare =
+              (a.parentIndexNumber ?? 0).compareTo(b.parentIndexNumber ?? 0);
+          if (discCompare != 0) return discCompare;
           return (a.indexNumber ?? 0).compareTo(b.indexNumber ?? 0);
         });
         break;
@@ -517,6 +521,16 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     }
   }
 
+  /// Runs a playback start, reporting a failure instead of leaving it as
+  /// an uncaught async error.
+  Future<void> _playGuarded(Future<void> Function() start) async {
+    try {
+      await start();
+    } catch (e) {
+      _snack('Could not start playback: $e', error: true);
+    }
+  }
+
   /// Play / Shuffle buttons for every library track of the artist.
   Widget _playButtons(ThemeData theme) {
     final tracks = _sortedLibraryTracks;
@@ -539,11 +553,12 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     return Row(
       children: [
         button(Icons.play_arrow_rounded, 'Play', !enabled ? null : () {
-          _appState.audioPlayerService.playTrack(tracks.first, queueContext: tracks);
+          _playGuarded(() => _appState.audioPlayerService
+              .playTrack(tracks.first, queueContext: tracks));
         }),
         const SizedBox(width: 12),
         button(Icons.shuffle_rounded, 'Shuffle', !enabled ? null : () {
-          _appState.audioPlayerService.playShuffled(tracks);
+          _playGuarded(() => _appState.audioPlayerService.playShuffled(tracks));
         }),
       ],
     );
@@ -927,11 +942,10 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                           child: TextButton(
                             onPressed: () {
                               // Play all tracks
-                              if (_sortedLibraryTracks != null && _sortedLibraryTracks!.isNotEmpty) {
-                                _appState.audioPlayerService.playTrack(
-                                  _sortedLibraryTracks!.first,
-                                  queueContext: _sortedLibraryTracks,
-                                );
+                              final tracks = _sortedLibraryTracks;
+                              if (tracks != null && tracks.isNotEmpty) {
+                                _playGuarded(() => _appState.audioPlayerService
+                                    .playTrack(tracks.first, queueContext: tracks));
                               }
                             },
                             child: Text('Play All ${_sortedLibraryTracks!.length} Tracks'),

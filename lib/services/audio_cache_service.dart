@@ -3,9 +3,11 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 
 import '../jellyfin/jellyfin_track.dart';
+import '../utils/download_checks.dart';
 import 'connectivity_service.dart';
 import 'playback_logic.dart';
 import 'waveform_service.dart';
@@ -49,7 +51,7 @@ class AudioCacheService {
         stalePeriod: _stalePeriod,
         maxNrOfCacheObjects: _maxCacheSize,
         repo: repo,
-        fileService: HttpFileService(),
+        fileService: _AudioFileService(),
       ),
     );
     debugPrint('🎵 AudioCacheService initialized');
@@ -108,8 +110,6 @@ class AudioCacheService {
   /// (`/Items/{id}/Download`) needs the download permission, logs a
   /// "downloaded" activity entry, and may be a format AVPlayer can't decode.
   Future<File?> cacheTrack(JellyfinTrack track, {String? streamUrl}) async {
-    await initialize();
-
     // Get the streaming URL
     final url = streamUrl ?? track.streamUrlOverride;
     if (url == null) {
@@ -122,24 +122,26 @@ class AudioCacheService {
     final variant = cacheVariantForUrl(url);
     final key = audioCacheKey(track.id, variant);
 
-    // Already caching this track - wait for it
-    if (_cachingInProgress.contains(key)) {
-      return _cacheCompleters[key]?.future;
-    }
-
-    // Check if already cached at this quality (or better)
-    final existing = await getCachedFile(track.id, variant: variant);
-    if (existing != null) {
-      debugPrint('✅ Track already cached: ${track.name}');
-      return existing;
-    }
-
-    // Start caching
+    // Already caching this track - wait for it. Registered synchronously
+    // (before any await) so two callers starting together (visualizer and
+    // track start) share one download instead of both fetching the file.
+    final inFlight = _cacheCompleters[key];
+    if (inFlight != null) return inFlight.future;
     _cachingInProgress.add(key);
     final completer = Completer<File?>();
     _cacheCompleters[key] = completer;
 
     try {
+      await initialize();
+
+      // Check if already cached at this quality (or better)
+      final existing = await getCachedFile(track.id, variant: variant);
+      if (existing != null) {
+        debugPrint('✅ Track already cached: ${track.name}');
+        completer.complete(existing);
+        return existing;
+      }
+
       debugPrint('📥 Caching track: ${track.name} [$variant]');
       final file = await _cacheManager!.getSingleFile(url, key: key);
       debugPrint('✅ Cached track: ${track.name}');
@@ -159,12 +161,16 @@ class AudioCacheService {
       completer.complete(file);
       return file;
     } catch (e) {
-      debugPrint('❌ Failed to cache track ${track.name}: $e');
-      completer.complete(null);
+      // Stream URLs carry the access token; exception messages include them.
+      debugPrint('❌ Failed to cache track ${track.name}: ${redactSecrets(e)}');
+      if (!completer.isCompleted) completer.complete(null);
       return null;
     } finally {
+      if (!completer.isCompleted) completer.complete(null);
       _cachingInProgress.remove(key);
-      _cacheCompleters.remove(key);
+      if (identical(_cacheCompleters[key], completer)) {
+        _cacheCompleters.remove(key);
+      }
     }
   }
   
@@ -236,7 +242,7 @@ class AudioCacheService {
       );
       unawaited(_trimToBudget(protect: {key}));
     } catch (e) {
-      debugPrint('⚠️ Could not adopt streamed copy $key: $e');
+      debugPrint('⚠️ Could not adopt streamed copy $key: ${redactSecrets(e)}');
     }
   }
 
@@ -422,5 +428,55 @@ class AudioCacheService {
     _initFuture = null;
     _cachingInProgress.clear();
     _cacheCompleters.clear();
+  }
+}
+
+/// Fetches audio for the cache, refusing what isn't audio. A reverse-proxy
+/// login page (or a JSON error) answered with `200` would otherwise be kept
+/// as the track for a week, and played from the cache offline. A body cut
+/// short of its Content-Length is an error rather than a cached file.
+class _AudioFileService extends FileService {
+  _AudioFileService({http.Client? httpClient})
+      : _httpClient = httpClient ?? http.Client();
+
+  final http.Client _httpClient;
+
+  @override
+  Future<FileServiceResponse> get(
+    String url, {
+    Map<String, String>? headers,
+  }) async {
+    final request = http.Request('GET', Uri.parse(url));
+    if (headers != null) request.headers.addAll(headers);
+    final response = await _httpClient.send(request);
+    if (response.statusCode == 200) {
+      final contentType = response.headers['content-type'];
+      if (!isAcceptableDownloadContentType(contentType)) {
+        unawaited(response.stream.listen(null, onError: (_) {}).cancel());
+        throw HttpException('Server did not send audio (${contentType ?? ''})');
+      }
+    }
+    return _CheckedLengthResponse(response);
+  }
+}
+
+/// [HttpGetResponse] whose content fails when fewer bytes arrive than the
+/// response's Content-Length announced.
+class _CheckedLengthResponse extends HttpGetResponse {
+  _CheckedLengthResponse(this._streamed) : super(_streamed);
+
+  final http.StreamedResponse _streamed;
+
+  @override
+  Stream<List<int>> get content async* {
+    final expected = _streamed.contentLength;
+    var received = 0;
+    await for (final chunk in _streamed.stream) {
+      received += chunk.length;
+      yield chunk;
+    }
+    if (expected != null && expected > 0 && received < expected) {
+      throw HttpException('Connection closed after $received of $expected bytes');
+    }
   }
 }

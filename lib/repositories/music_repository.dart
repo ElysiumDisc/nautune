@@ -139,8 +139,12 @@ abstract class MusicRepository {
     required String libraryId,
   });
 
-  /// Get albums for a specific genre
-  Future<List<JellyfinAlbum>> getGenreAlbums(String genreId);
+  /// Get albums for a specific genre. [libraryId] scopes the online query;
+  /// the offline repository ignores it.
+  Future<List<JellyfinAlbum>> getGenreAlbums(
+    String genreId, {
+    required String libraryId,
+  });
 
   /// Check if repository is currently available
   bool get isAvailable;

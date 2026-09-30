@@ -97,6 +97,22 @@ void main() {
     test('caps at four minutes', () {
       expect(scrobbleThresholdSeconds(const Duration(minutes: 20)), 240);
     });
+
+    test('is at least one second for very short tracks', () {
+      expect(scrobbleThresholdSeconds(const Duration(seconds: 1)), 1);
+      expect(scrobbleThresholdSeconds(Duration.zero), 1);
+    });
+  });
+
+  group('isLastFmScrobbleLength', () {
+    test('requires more than 30 seconds', () {
+      expect(isLastFmScrobbleLength(const Duration(seconds: 30)), isFalse);
+      expect(isLastFmScrobbleLength(const Duration(seconds: 31)), isTrue);
+    });
+
+    test('allows an unknown length', () {
+      expect(isLastFmScrobbleLength(null), isTrue);
+    });
   });
 
   group('queue index bookkeeping', () {
@@ -128,6 +144,28 @@ void main() {
 
     test('removing the current last track falls back to the new last', () {
       expect(trackRemoval(['A', 'B', 'C'], 2, 2), 1);
+    });
+
+    test('removing the current last track wraps to the first with wrap', () {
+      expect(
+        currentIndexAfterRemoval(
+          currentIndex: 2,
+          removedIndex: 2,
+          lengthBefore: 3,
+          wrap: true,
+        ),
+        0,
+      );
+      // Only the last slot wraps; a middle one still takes the next track.
+      expect(
+        currentIndexAfterRemoval(
+          currentIndex: 1,
+          removedIndex: 1,
+          lengthBefore: 3,
+          wrap: true,
+        ),
+        1,
+      );
     });
 
     test('removing the only track yields 0', () {

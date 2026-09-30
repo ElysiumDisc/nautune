@@ -19,6 +19,7 @@ import '../services/listening_analytics_service.dart';
 import '../services/profile_stats_cache.dart';
 import '../theme/nautune_theme.dart';
 import '../utils/artwork_colors.dart';
+import '../widgets/jellyfin_image.dart';
 
 /// Display fields of a track shown on the Profile. Unlike
 /// `JellyfinTrack.toStorageJson()` this carries no server URL or token, so it
@@ -500,13 +501,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (libraryId == null) return;
 
     try {
-      // Load favorites count
-      final favTracks = await appState.jellyfinService.getFavoriteTracks();
-      final favAlbums = await appState.jellyfinService.getFavoriteAlbums();
+      // Favorites count: two count-only queries in parallel (fetching every
+      // favorite track and album just to count them was slow).
+      final counts = await Future.wait([
+        appState.jellyfinService.countFavorites(itemTypes: 'Audio'),
+        appState.jellyfinService.countFavorites(itemTypes: 'MusicAlbum'),
+      ]);
 
       if (mounted) {
         setState(() {
-          _favoritesCount = favTracks.length + favAlbums.length;
+          _favoritesCount = counts[0] + counts[1];
         });
       }
     } catch (e) {
@@ -858,8 +862,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (session == null) return null;
     // Spec-documented `GET /UserImage?userId=…` (the legacy
     // `/Users/{id}/Images/Primary` alias is absent from the 10.11/12.1 specs).
+    // The image tag (once the profile has loaded) makes a changed picture a
+    // new URL; without it the cached one would be shown forever.
+    final tag = _user?.primaryImageTag;
     return buildServerUrl(session.serverUrl, '/UserImage', {
       'userId': session.credentials.userId,
+      'tag': ?tag,
     });
   }
 
@@ -1834,12 +1842,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         itemCount: _topArtists!.length,
         itemBuilder: (context, index) {
           final artist = _topArtists![index];
-          final session = Provider.of<SessionProvider>(context, listen: false).session;
-          final imageUrl = artist.imageTag != null && artist.id != null && session != null
-              ? buildServerUrl(session.serverUrl, '/Items/${artist.id}/Images/Primary', {
-                  'tag': artist.imageTag!,
-                })
-              : null;
+          final hasImage = artist.imageTag != null && artist.id != null;
 
           return Padding(
             padding: EdgeInsets.only(right: index < _topArtists!.length - 1 ? 12 : 0),
@@ -1855,14 +1858,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                   child: ClipOval(
-                    child: imageUrl != null
-                        ? CachedNetworkImage(
-                            imageUrl: imageUrl,
-                            fit: BoxFit.cover,
-                            memCacheWidth: 160,
-                            memCacheHeight: 160,
-                            placeholder: (context, url) => _buildArtistPlaceholder(theme, artist.name),
-                            errorWidget: (context, url, error) => _buildArtistPlaceholder(theme, artist.name),
+                    // Sized to the 80pt circle, with auth headers (not the
+                    // full-size original).
+                    child: hasImage
+                        ? JellyfinImage(
+                            itemId: artist.id!,
+                            imageTag: artist.imageTag,
+                            artistId: artist.id,
+                            maxWidth: 80,
+                            boxFit: BoxFit.cover,
+                            placeholderBuilder: (context, url) => _buildArtistPlaceholder(theme, artist.name),
+                            errorBuilder: (context, url, error) => _buildArtistPlaceholder(theme, artist.name),
                           )
                         : _buildArtistPlaceholder(theme, artist.name),
                   ),
@@ -1925,12 +1931,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         itemCount: _topAlbums!.length,
         itemBuilder: (context, index) {
           final album = _topAlbums![index];
-          final session = Provider.of<SessionProvider>(context, listen: false).session;
-          final imageUrl = album.imageTag != null && album.albumId != null && session != null
-              ? buildServerUrl(session.serverUrl, '/Items/${album.albumId}/Images/Primary', {
-                  'tag': album.imageTag!,
-                })
-              : null;
+          final hasImage = album.imageTag != null && album.albumId != null;
 
           return Padding(
             padding: EdgeInsets.only(right: index < _topAlbums!.length - 1 ? 12 : 0),
@@ -1948,20 +1949,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(12),
-                    child: imageUrl != null
-                        ? CachedNetworkImage(
-                            imageUrl: imageUrl,
-                            fit: BoxFit.cover,
-                            memCacheWidth: 200,
-                            memCacheHeight: 200,
-                            placeholder: (context, url) => Container(
+                    // Sized to the 100pt tile, with auth headers.
+                    child: hasImage
+                        ? JellyfinImage(
+                            itemId: album.albumId!,
+                            imageTag: album.imageTag,
+                            albumId: album.albumId,
+                            maxWidth: 100,
+                            boxFit: BoxFit.cover,
+                            placeholderBuilder: (context, url) => Container(
                               color: theme.colorScheme.surfaceContainerHighest,
                               child: Icon(
                                 Icons.album,
                                 color: theme.colorScheme.onSurfaceVariant,
                               ),
                             ),
-                            errorWidget: (context, url, error) => Container(
+                            errorBuilder: (context, url, error) => Container(
                               color: theme.colorScheme.surfaceContainerHighest,
                               child: Icon(
                                 Icons.album,

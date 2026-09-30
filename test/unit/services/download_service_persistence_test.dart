@@ -119,7 +119,7 @@ void main() {
     service.dispose();
   });
 
-  test('reloads per-track records and drops records whose file vanished',
+  test('reloads per-track records; a vanished file is marked missing',
       () async {
     final box = Hive.box<dynamic>('nautune_downloads');
     await box.put(
@@ -132,11 +132,14 @@ void main() {
     await service.ready;
 
     expect(service.isDownloaded('a'), isTrue); // from the previous test
-    expect(service.getDownload('gone'), isNull); // file missing
+    // File missing (e.g. after a device restore): kept, failed, retryable.
+    final gone = service.getDownload('gone')!;
+    expect(gone.status, DownloadStatus.failed);
+    expect(gone.errorKind, DownloadErrorKind.missing);
     expect(service.completedBytes, 3);
 
     await service.flushPendingSave();
-    expect(box.containsKey('t:gone'), isFalse);
+    expect((box.get('t:gone') as Map)['status'], 'failed');
     expect(box.containsKey('t:junk'), isFalse);
     expect(box.containsKey('t:a'), isTrue);
 
@@ -186,6 +189,10 @@ void main() {
     });
     final service = DownloadService(jellyfinService: jellyfin, httpClient: client);
     await service.ready;
+    // The queue waits for the user's download settings.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(requested, isEmpty);
+    service.loadSettings();
 
     for (var i = 0; i < 100 && !service.getDownload('mine')!.isFailed; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 10));

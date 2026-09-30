@@ -106,23 +106,25 @@ class WaveformService {
       return;
     }
 
-    // Check if already extracting
+    // Check if already extracting. Claimed right away (no await between the
+    // check and the claim), so two callers can't both extract into the same
+    // output file.
     if (_extractionCompleters.containsKey(trackId)) {
       debugPrint('WaveformService: Extraction already in progress for $trackId');
       return;
     }
-
-    // Check if already exists and is valid
-    if (await hasWaveform(trackId)) {
-      debugPrint('WaveformService: Waveform already exists for $trackId');
-      yield 1.0;
-      return;
-    }
-
     final completer = Completer<WaveformData?>();
     _extractionCompleters[trackId] = completer;
 
     try {
+      // Check if already exists and is valid
+      if (await hasWaveform(trackId)) {
+        debugPrint('WaveformService: Waveform already exists for $trackId');
+        completer.complete(_cache.get(trackId));
+        yield 1.0;
+        return;
+      }
+
       final outputPath = await _getWaveformPath(trackId);
 
       // Delete old invalid waveform file if it exists
@@ -158,8 +160,9 @@ class WaveformService {
       debugPrint('WaveformService: Extraction complete for $trackId');
     } catch (e) {
       debugPrint('WaveformService: Extraction failed for $trackId: $e');
-      completer.complete(null);
     } finally {
+      // Also on an early return or a cancelled subscription.
+      if (!completer.isCompleted) completer.complete(null);
       _extractionCompleters.remove(trackId);
     }
   }

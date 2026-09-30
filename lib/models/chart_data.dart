@@ -85,7 +85,7 @@ enum FrequencyBand {
 class ChartData {
   /// Version of the chart generator output. Bump whenever the generator
   /// changes in a way that should invalidate cached charts.
-  static const int currentVersion = 2;
+  static const int currentVersion = 3;
 
   /// Generator version this chart was built with (1 = pre-versioning).
   final int version;
@@ -255,17 +255,43 @@ class ChartJudge {
     }
   }
 
-  /// Earliest unjudged note in [lane] within [windowMs] of [nowMs], or -1.
+  /// Unjudged note in [lane] closest to [nowMs] within [windowMs], or -1.
+  ///
+  /// The closest note wins (not the earliest), so a tap aimed at a note isn't
+  /// taken by an older one still inside its late window. On a tie a regular
+  /// note beats a golden bonus note.
   int findHittable(int lane, int nowMs, int windowMs, {bool includeBonus = true}) {
+    int best = -1;
+    int bestDiff = 0;
     for (int i = _cursor; i < notes.length; i++) {
       final note = notes[i];
       // Sorted by time: nothing later can be in the window.
       if (note.timestampMs > nowMs + windowMs) break;
       if (_judged[i] || note.lane != lane) continue;
       if (!includeBonus && note.isBonus) continue;
-      if ((note.timestampMs - nowMs).abs() <= windowMs) return i;
+      final diff = (note.timestampMs - nowMs).abs();
+      if (diff > windowMs) continue;
+      if (best < 0 ||
+          diff < bestDiff ||
+          (diff == bestDiff && notes[best].isBonus && !note.isBonus)) {
+        best = i;
+        bestDiff = diff;
+      }
     }
-    return -1;
+    return best;
+  }
+
+  /// Indices of unjudged notes to draw at [nowMs]: from [lateMs] late (the
+  /// late hit window, so a note stays visible while it can still be hit) up
+  /// to [leadMs] ahead.
+  List<int> visible(int nowMs, int leadMs, int lateMs) {
+    final result = <int>[];
+    for (int i = _cursor; i < notes.length; i++) {
+      final ts = notes[i].timestampMs;
+      if (ts > nowMs + leadMs) break;
+      if (ts >= nowMs - lateMs && !_judged[i]) result.add(i);
+    }
+    return result;
   }
 
   /// Judge every unjudged note whose late window ([windowMs]) has passed at

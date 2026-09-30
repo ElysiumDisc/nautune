@@ -41,12 +41,16 @@ class ImagePrewarmService {
 
   /// Pre-warm a single track's album art
   void _prewarmTrackImage(JellyfinTrack track) {
-    String? imageTag = track.primaryImageTag ?? track.albumPrimaryImageTag ?? track.parentThumbImageTag;
-    String? itemId = imageTag != null ? (track.albumId ?? track.id) : null;
-
-    if (itemId == null || imageTag == null) return;
-
-    _prewarmImage(itemId, imageTag);
+    // The album's image under the album's tag (what album grids and rows
+    // request); a track tag with the album id would be a URL nothing uses.
+    final albumId = track.albumId;
+    final albumTag = track.albumPrimaryImageTag;
+    if (albumId != null && albumTag != null) {
+      _prewarmImage(albumId, albumTag);
+      return;
+    }
+    final trackTag = track.primaryImageTag;
+    if (trackTag != null) _prewarmImage(track.id, trackTag);
   }
 
   /// Pre-warm a single album's art
@@ -85,6 +89,7 @@ class ImagePrewarmService {
         CachedNetworkImageProvider(
           imageUrl,
           headers: _jellyfinService.imageHeaders(),
+          cacheManager: NautuneArtworkCacheManager(),
         ),
       );
 

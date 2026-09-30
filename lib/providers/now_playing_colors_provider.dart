@@ -112,7 +112,9 @@ class NowPlayingColorsProvider extends ChangeNotifier {
       // Downloaded artwork first (works offline)
       final artworkFile = await _downloadService.getArtworkFile(track.id);
       if (artworkFile != null && await artworkFile.exists()) {
-        imageProvider = FileImage(artworkFile);
+        // Decoded small, like the network request below: the saved file is
+        // up to 800 px, 64x the pixels to quantize for the same colours.
+        imageProvider = ResizeImage(FileImage(artworkFile), width: 100);
       } else if (imageTag != null && imageTag.isNotEmpty) {
         imageProvider = CachedNetworkImageProvider(
           _jellyfinService.buildImageUrl(

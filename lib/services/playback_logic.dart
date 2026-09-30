@@ -108,12 +108,19 @@ String? sleepTimerLabel(Duration value) {
 }
 
 /// ListenBrainz scrobble threshold: 50% of the track or 4 minutes, whichever
-/// is less.
+/// is less. At least 1 second, so a very short track isn't counted on the
+/// first position tick.
 int scrobbleThresholdSeconds(Duration trackDuration) {
   final half = trackDuration.inSeconds ~/ 2;
   const fourMinutes = 240;
-  return half < fourMinutes ? half : fourMinutes;
+  final threshold = half < fourMinutes ? half : fourMinutes;
+  return threshold < 1 ? 1 : threshold;
 }
+
+/// Last.fm only accepts scrobbles of tracks longer than 30 seconds. Unknown
+/// lengths are allowed (the threshold check already needed a duration).
+bool isLastFmScrobbleLength(Duration? trackDuration) =>
+    trackDuration == null || trackDuration.inSeconds > 30;
 
 /// Accumulates the time a track was actually listened to, from position
 /// ticks. A position jump that outruns the wall clock (a seek forward) and any
@@ -164,18 +171,20 @@ class ListenedTimeTracker {
 ///
 /// Removing an earlier item shifts the current track down by one. Removing
 /// the current item makes whatever slides into its slot current (the next
-/// track), or the new last track when the current one was last. Returns 0
-/// when the queue becomes empty.
+/// track). When the current one was last, that is the first track with
+/// [wrap] (repeat-all), otherwise the new last track. Returns 0 when the
+/// queue becomes empty.
 int currentIndexAfterRemoval({
   required int currentIndex,
   required int removedIndex,
   required int lengthBefore,
+  bool wrap = false,
 }) {
   final lengthAfter = lengthBefore - 1;
   if (lengthAfter <= 0) return 0;
   if (removedIndex < currentIndex) return currentIndex - 1;
   if (removedIndex == currentIndex && currentIndex >= lengthAfter) {
-    return lengthAfter - 1;
+    return wrap ? 0 : lengthAfter - 1;
   }
   return currentIndex;
 }

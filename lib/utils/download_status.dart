@@ -17,6 +17,10 @@ enum DownloadQueuePause {
 
   /// The user's download storage limit has been reached.
   storageLimit,
+
+  /// The app is in offline mode (the user chose "Go offline"): no network
+  /// use until it goes back online.
+  offline,
 }
 
 /// Human-readable, actionable explanation for a paused queue, or null when
@@ -35,6 +39,8 @@ String? describeQueuePause(DownloadQueuePause pause) {
     case DownloadQueuePause.storageLimit:
       return 'Download storage limit reached. Raise the limit in Settings '
           'or remove some downloads.';
+    case DownloadQueuePause.offline:
+      return 'Offline mode is on. Downloads resume when you go back online.';
   }
 }
 
@@ -61,6 +67,8 @@ String describeDownloadError(DownloadErrorKind? kind) {
       return 'Could not save file';
     case DownloadErrorKind.canceled:
       return 'Cancelled';
+    case DownloadErrorKind.missing:
+      return 'File missing';
     case DownloadErrorKind.unknown:
     case null:
       return 'Download failed';

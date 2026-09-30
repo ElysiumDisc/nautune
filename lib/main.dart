@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
@@ -33,6 +34,7 @@ import 'services/local_cache_service.dart';
 import 'services/notification_service.dart';
 import 'services/ios_fft_service.dart';
 import 'services/playback_state_store.dart';
+import 'widgets/jellyfin_image.dart';
 import 'app_version.dart';
 
 /// Migrates old Hive files from ~/Documents/ to ~/Documents/nautune/
@@ -145,6 +147,9 @@ Future<void> main() async {
   // on phones and removes the thrashing on iPad.
   PaintingBinding.instance.imageCache.maximumSize = 1500;
   PaintingBinding.instance.imageCache.maximumSizeBytes = 100 * 1024 * 1024; // 100MB
+  // Every artwork load shares the app's artwork disk cache (the package
+  // default keeps only 200 files, so large libraries re-downloaded art).
+  CachedNetworkImageProvider.defaultCacheManager = NautuneArtworkCacheManager();
 
   // The Hive file migration must finish before any box is opened: opening
   // a box first creates a file in the new location, which makes the
@@ -247,7 +252,12 @@ Future<void> main() async {
   // Initialize providers/services in parallel. A failing service must not
   // keep the app from starting, so each one is guarded.
   await Future.wait<void>([
-    _guard(sessionProvider.initialize(), 'Session'),
+    // The restore starts LibraryDataProvider's loads, which must already
+    // see the network state and the saved sort.
+    _guard(
+      appState.prepareSessionRestore().then((_) => sessionProvider.initialize()),
+      'Session',
+    ),
     _guard(uiStateProvider.initialize(storedState: storedPlaybackState), 'UI state'),
     _guard(themeProvider.initialize(storedState: storedPlaybackState), 'Theme'),
     _guard(ListeningAnalyticsService().initialize(), 'Listening analytics'),

@@ -110,4 +110,84 @@ void main() {
       expect(service.pendingCount, 0);
     });
   });
+
+  group('scrobble rules and queue limits', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    setUpAll(() => Hive.init(
+        Directory.systemTemp.createTempSync('lastfm_rules_test').path));
+    setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+
+    JellyfinTrack track(String name, {int seconds = 200, List<String>? artists}) =>
+        JellyfinTrack(
+          id: name,
+          name: name,
+          album: null,
+          artists: artists ?? const ['A'],
+          runTimeTicks: seconds * 10000000,
+        );
+
+    test('tracks of 30 seconds or less are not scrobbled', () async {
+      final service = LastFmService.instance;
+      service.httpClient = MockClient((_) async => http.Response('{}', 200));
+      service.debugConfigure(apiKey: 'k', secret: 's', sessionKey: 'sk');
+      final gate = Completer<void>();
+      service.httpClient = MockClient((_) async {
+        await gate.future;
+        return http.Response('{}', 200);
+      });
+      unawaited(service.scrobble(track('Short', seconds: 30), DateTime(2026)));
+      expect(service.pendingCount, 0);
+      unawaited(service.scrobble(track('Long', seconds: 31), DateTime(2026)));
+      await Future<void>.delayed(Duration.zero);
+      expect(service.pendingCount, 1);
+      gate.complete();
+      await service.flush();
+    });
+
+    test('scrobbles under the primary artist', () async {
+      final service = LastFmService.instance;
+      final artists = <String?>[];
+      service.httpClient = MockClient((request) async {
+        artists.add(Uri.splitQueryString(request.body)['artist[0]']);
+        return http.Response('{}', 200);
+      });
+      service.debugConfigure(apiKey: 'k', secret: 's', sessionKey: 'sk');
+      await service.scrobble(
+          track('Get Lucky', artists: const ['Daft Punk', 'Pharrell Williams']),
+          DateTime(2026));
+      expect(artists, ['Daft Punk']);
+    });
+
+    test('trimming a full queue during a send loses no unsent play', () async {
+      final service = LastFmService.instance;
+      final sent = <String>[];
+      final gate = Completer<void>();
+      var first = true;
+      service.httpClient = MockClient((request) async {
+        if (first) {
+          first = false;
+          await gate.future;
+        }
+        final body = Uri.splitQueryString(request.body);
+        for (var i = 0; body['track[$i]'] != null; i++) {
+          sent.add(body['track[$i]']!);
+        }
+        return http.Response('{}', 200);
+      });
+      service.debugConfigure(apiKey: 'k', secret: 's', sessionKey: 'sk', pending: [
+        for (var i = 0; i < 1000; i++)
+          LastFmScrobble(artist: 'A', track: 'q$i', timestamp: i),
+      ]);
+      final flushing = service.flush();
+      // Queue is full: this play pushes the oldest (in flight) out.
+      unawaited(service.scrobble(track('new'), DateTime(2026)));
+      await Future<void>.delayed(Duration.zero);
+      gate.complete();
+      await flushing;
+      await service.flush();
+      expect(service.pendingCount, 0);
+      expect(sent.toSet(), {for (var i = 0; i < 1000; i++) 'q$i', 'new'});
+      expect(sent, hasLength(1001));
+    });
+  });
 }

@@ -48,13 +48,26 @@ Layout:
 ```
 test/
   unit/
+    data/        Easter egg data (Network channels, healing frequencies)
+    demo/        demo library
     jellyfin/    URL building, auth header, API conformance, pagination
+    models/      chart judging, playback state
     providers/   provider state
-    services/    playback logic, reporting, bootstrap, WAV synthesis
+    repositories/ offline repository
+    services/    playback logic, reporting, downloads, CarPlay navigation,
+                 chart generation, scrobbling, WAV synthesis
+    theme/ widgets/  palettes, image sizing, skeleton loader
     utils/       downloads (paths, migration, format, status), keywords, ...
     repo_consistency_test.dart   versions, deployment target, docs, CI
+  widget/        player route, A-Z index, position builder
   widget_test.dart               smoke test
 ```
+
+The Network's channel URLs live on other-people.network and can disappear
+upstream. `dart run scripts/check_network_channels.dart` checks every
+channel's audio and artwork URL; it fails when a channel dies, or when one
+marked unavailable in `lib/data/network_channels.dart` comes back. It needs
+network access, so it isn't part of `flutter test`.
 
 How tests are written here:
 
@@ -155,7 +168,10 @@ lib/
 ios/Runner/          AppDelegate, SceneDelegate, native plugins, Info.plist
 ```
 
-**Bootstrap.** `lib/main.dart` sets image-cache limits and starts
+**Bootstrap.** `lib/main.dart` sets image-cache limits, points every
+`CachedNetworkImage` at the shared artwork disk cache
+(`NautuneArtworkCacheManager` in `lib/widgets/jellyfin_image.dart`, 4000
+files, 60 days), and starts
 `AppVersion`, `LocalCacheService` and a Hive migration in parallel. It then
 builds `JellyfinService`, `DownloadService` and the providers, creates
 `NautuneAppState`, and exposes everything through `provider`.
@@ -184,7 +200,9 @@ curves. **Streams** without transcoding play through
 `LockCachingAudioSource`, which saves them while they play (under the same
 Wi-Fi-only and Low Power Mode rules as background copies; each load gets its
 own file); finished files move into the audio cache
-(`AudioCacheService.adoptFile`), so a track is downloaded once. The Easter egg screens still use `audioplayers`. The decision logic is pure and
+(`AudioCacheService.adoptFile`), so a track is downloaded once. Relax Mode,
+The Network, Piano and Frets on Fire still use `audioplayers`; Healing
+Frequencies uses `just_audio` (`LoopMode.one`) for gapless tones. The decision logic is pure and
 lives in `lib/services/playback_logic.dart`. `NautuneAudioHandler`
 (`lib/services/audio_handler.dart`, `audio_service`) publishes the lock
 screen and Control Center state. `PlaybackReportingService` reports
@@ -227,8 +245,11 @@ themselves with `LibraryTileMetrics`, which scales with the text size.
 
 **Player chrome.** The full player opens with `NowPlayingRoute`
 (`lib/widgets/ios/now_playing_route.dart`), which drives its own animation
-from vertical drags. The mini player and full player artwork share
-`kNowPlayingArtworkHeroTag`. Track rows get queue swipes from
+from vertical drags. It is opaque once open (the page below stops painting
+and its tickers pause) and turns see-through while opening, closing or
+dragging. The artwork Hero tag is scoped to the page that opened the
+player (`nowPlayingArtworkHeroTag(route)`), so the artwork only flies
+between the player and that page's mini player. Track rows get queue swipes from
 `TrackSwipeActions` and multi-select from `TrackSelection` /
 `SelectionActionBar`.
 
@@ -268,10 +289,25 @@ backup through the `nautune/file_attributes` channel
 (`lib/utils/backup_exclusion.dart`, App Review 2.23). AVPlayer-native
 originals come from `/Items/{id}/Download`. Other formats come from
 `/Audio/{id}/universal` as 320 kbps MP3 (`lib/utils/download_format.dart`).
-Queued and in-flight items are re-queued on launch. Cancellation uses
-cancel tokens, aborts the socket and removes the temp file. Network loss
+Records keep the full track metadata (track and disc numbers, genres,
+favorite, ReplayGain, provider ids); records from older versions are
+backfilled from the server once per session. Queued and in-flight items
+are re-queued on launch, but the queue doesn't start until the download
+settings and connectivity service are in place. Cancellation uses cancel
+tokens, aborts the socket and removes the temp file. Network loss
 re-queues items with backoff (5s up to 2 min) and resumes on connectivity or
-app resume. The pause reason (waiting for Wi-Fi or network, storage full or at its
+app resume. When the server sent a length, `Accept-Ranges` and a strong
+validator, a network failure keeps the partial file and the retry sends
+`Range` + `If-Range`, appending only on a matching 206
+(`continuesPartialDownload` in `lib/utils/download_checks.dart`).
+`setSuspended` holds all download traffic while offline.
+`completedDownloads` is the signed-in account's downloads (matched by user
+id, so a server address change keeps them); `allCompletedDownloads` is
+every account's, for storage management. A record whose file is missing
+(for example after restoring an iPhone from backup) is kept as failed
+("File missing"), and files no record points to are swept after
+verification. Error messages go through `redactSecrets()` so tokens never
+reach storage or logs. The pause reason (waiting for Wi-Fi or network, storage full or at its
 limit) comes from `lib/utils/download_status.dart`. The offline library
 grouping and sorting are in `lib/utils/download_library.dart`. The UI
 widgets are in `lib/widgets/download_indicators.dart`.
@@ -284,7 +320,9 @@ persisted. `networkAvailable` drops only on genuine network failures (see
 the server is unreachable, a probe checks it every 30 s and restores the
 online state automatically, unless the user chose offline. Going offline
 silences all background traffic (reporting, sync timers, image
-prewarming) and engages the battery saver. `RepositoryFactory` then serves
+prewarming, downloads, home-shelf requests) and engages the battery
+saver. Coming back online is debounced by 2 s, and a full library reload
+is skipped if one ran in the last 30 s. `RepositoryFactory` then serves
 `OfflineRepository` (downloads only). `OfflineLibraryScreen` has a Library
 tab (offline browsing) and a Manage tab (queue). While offline, the Home
 bottom tab turns into a Downloads tab that shows the same browsing view.
@@ -297,9 +335,14 @@ with `first_unlock` accessibility so CarPlay can cold-start while the
 phone is locked. Other boxes include `nautune_downloads`,
 `nautune_playback` (queue and UI state), `nautune_cache` (library cache),
 `nautune_playlists`, `nautune_sync_queue` (offline playlist edits),
-`nautune_lyrics`, `nautune_analytics`, `nautune_saved_loops` and
-`playback_report_queue` (offline Jellyfin start/stop reports) and
-`lastfm_queue` (Last.fm scrobbles waiting to be sent).
+`nautune_lyrics`, `nautune_analytics`, `nautune_saved_loops`,
+`playback_report_queue` (offline Jellyfin start/stop reports),
+`lastfm_queue` (Last.fm scrobbles waiting to be sent),
+`nautune_search_history` (cleared at logout), `nautune_library_sort`
+(album and artist sort) and `nautune_scrobbler_links` (which Jellyfin
+account connected Last.fm and ListenBrainz; a different account signing in
+disconnects them). `Info.plist` doesn't enable file sharing, so none of
+this is visible in the Files app.
 
 **On-device storage.**
 
@@ -318,10 +361,12 @@ phone is locked. Other boxes include `nautune_downloads`,
 |-----------|---------|---------|
 | `AudioFFTPlugin.swift` | `com.nautune.audio_fft/methods`, `/events` | real-time FFT (MTAudioProcessingTap + vDSP) for visualizers, on its own muted shadow AVPlayer |
 | `AudioEffectsPlugin.swift` | `com.nautune.audio_effects` | 10-band equalizer: swizzles `AVQueuePlayer insertItem:afterItem:` (only just_audio uses AVQueuePlayer) and taps each queued item with `vDSP_biquadm` peaking filters. Settings from `EqualizerService` |
-| `AudioDecoderPlugin.swift` | `com.elysiumdisc.nautune/audio_decoder` | PCM decoding for Frets on Fire chart generation |
+| `AudioDecoderPlugin.swift` | `com.elysiumdisc.nautune/audio_decoder` | PCM decoding for Frets on Fire chart generation, read in 64k-frame chunks straight to mono at the target rate |
 | `SharePlugin.swift` | `com.nautune.share/methods` | share sheet / AirDrop (uses the phone scene, not CarPlay's) |
 | `AppIconPlugin.swift` | `com.nautune.app_icon/methods` | alternate app icons |
 | `AppDelegate.swift` | `nautune/file_attributes` | `excludeFromBackup` (`isExcludedFromBackup`) |
+| `AppDelegate.swift` | `nautune/now_playing_modes` | sets the shuffle/repeat state on `MPRemoteCommandCenter` (audio_service doesn't), so CarPlay's buttons show it |
+| `AppDelegate.swift` | `nautune/carplay_navigation` | reports CarPlay's real template stack (depth, Now Playing on top) to `CarPlayService` |
 
 `SceneDelegate.swift` asks for background time when the app goes to the
 background, so playback state gets saved. `ios/Runner/PrivacyInfo.xcprivacy`
@@ -367,7 +412,17 @@ templates.
   only update row text and pop to root.
 - Long lists page through the repository, and page sizes respect the car's
   maximum item count. The A-Z indexes are root rows so navigation stays
-  within CarPlay's template depth limit.
+  within CarPlay's template depth limit. Online, each letter is fetched from
+  the server (`NameStartsWith`, and `NameLessThan=a` for `#`) with Load
+  More, so there are no counts and no library-size cap.
+- flutter_carplay's history doesn't include Now Playing, so before pushing
+  a page `CarPlayService` asks `nautune/carplay_navigation` for the real
+  stack and never pushes over Now Playing. A navigation generation
+  (`CarPlayNavGate`) drops pages whose load finishes after Now Playing, a
+  session change, an offline switch or a disconnect.
+- `flutter_carplay` is pinned to 1.3.3 in `pubspec.yaml`: the service
+  relies on that version's `templateHistory` and root behaviour. Retest on
+  a head unit before upgrading.
 - Artwork URLs have the token embedded (`ApiKey`) so the system image
   loader can fetch them. Downloaded music uses local files.
 - Cold start from CarPlay doesn't wait for a connect event, because the
@@ -426,7 +481,11 @@ Simulator) before promoting a TestFlight build:
 - [ ] Playback speed (⋯ menu in the player) and the Equalizer (Settings →
       Audio): presets are clearly audible, Off bypasses it.
 - [ ] Visualizer reacts on downloaded, cached and streamed tracks.
-- [ ] Easter eggs (Relax Mode, Network, Piano, Frets on Fire) still play.
+- [ ] Easter eggs (Relax Mode, Network, Piano, Frets on Fire, Healing
+      Frequencies, Essential Mix) still play, and Relax, Healing and the
+      Network come back after a phone call.
+- [ ] Frets on Fire: analyze a long track (memory stays reasonable), play
+      a chord with two fingers.
 - [ ] Lock the phone for a few minutes while playing: the Jellyfin
       dashboard shows the current position.
 - [ ] Skip a track after a few seconds: its play count doesn't go up.
@@ -464,7 +523,9 @@ Simulator) before promoting a TestFlight build:
 - [ ] Airplane mode: the library shows downloads only and playback works.
       Turn networking back on: the app reconnects by itself.
 - [ ] **Go offline** / **Go online** from the Library ⋮ menu; the choice
-      persists across relaunch.
+      persists across relaunch, and downloads pause while offline.
+- [ ] Turn Wi-Fi off mid-download and back on: the track continues rather
+      than restarting (on servers that support ranges).
 - [ ] Settings → iCloud backup size doesn't include downloads.
 
 **CarPlay**
@@ -475,6 +536,8 @@ Simulator) before promoting a TestFlight build:
 - [ ] Browse a library with more than 500 albums (pagination) and a long
       playlist.
 - [ ] Downloaded Music plays with the phone offline.
+- [ ] Albums A-Z and Artists A-Z: a letter opens and lists its items.
+- [ ] Shuffle and repeat buttons on CarPlay Now Playing match the phone.
 
 ## Troubleshooting
 

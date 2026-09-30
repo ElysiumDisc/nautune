@@ -32,7 +32,25 @@ class TrackWaveform extends StatefulWidget {
 class _TrackWaveformState extends State<TrackWaveform> {
   WaveformData? _waveformData;
   bool _isLoading = false;
+  // Last few waveforms, most recent last, so remounts (tab switches, the
+  // mini player / full player) don't wait on the service. Bounded: it used
+  // to keep every track played for the life of the app.
   static final Map<String, WaveformData> _cache = {};
+  static const int _cacheSize = 20;
+
+  static WaveformData? _cacheGet(String trackId) {
+    final data = _cache.remove(trackId);
+    if (data != null) _cache[trackId] = data;
+    return data;
+  }
+
+  static void _cachePut(String trackId, WaveformData data) {
+    _cache.remove(trackId);
+    _cache[trackId] = data;
+    while (_cache.length > _cacheSize) {
+      _cache.remove(_cache.keys.first);
+    }
+  }
   StreamSubscription<String>? _waveformSubscription;
 
   @override
@@ -74,7 +92,7 @@ class _TrackWaveformState extends State<TrackWaveform> {
   Future<void> _loadWaveform() async {
     final trackId = widget.trackId;
     // Check local cache first
-    final cached = _cache[trackId];
+    final cached = _cacheGet(trackId);
     if (cached != null) {
       if (mounted) setState(() => _waveformData = cached);
       return;
@@ -90,7 +108,7 @@ class _TrackWaveformState extends State<TrackWaveform> {
       // Load waveform from service
       final data = await WaveformService.instance.getWaveform(trackId);
       final usable = data != null && data.amplitudes.isNotEmpty;
-      if (usable) _cache[trackId] = data;
+      if (usable) _cachePut(trackId, data);
 
       // The widget may have moved on to another track meanwhile; that
       // track's own load owns _isLoading and _waveformData now.
