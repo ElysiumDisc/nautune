@@ -14,7 +14,7 @@ class _PlaylistsTab extends StatefulWidget {
   final bool isLoading;
   final Object? error;
   final ScrollController scrollController;
-  final VoidCallback onRefresh;
+  final Future<void> Function() onRefresh;
   final NautuneAppState appState;
 
   @override
@@ -29,7 +29,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
   bool get isLoading => widget.isLoading;
   Object? get error => widget.error;
   ScrollController get scrollController => widget.scrollController;
-  VoidCallback get onRefresh => widget.onRefresh;
+  Future<void> Function() get onRefresh => widget.onRefresh;
   NautuneAppState get appState => widget.appState;
 
   Future<void> _playMoodMix(Mood mood) async {
@@ -92,9 +92,37 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
     }
   }
 
+  /// Result of a playlist edit: offline edits are queued (app state throws
+  /// to say so), which isn't a failure.
+  void _showEditResult(
+    ScaffoldMessengerState messenger,
+    ThemeData theme, {
+    required String done,
+    required String queued,
+    required String failed,
+    Object? error,
+  }) {
+    final isQueued = error != null && error.toString().contains('queued');
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(error == null
+            ? done
+            : isQueued
+                ? queued
+                : '$failed: $error'),
+        backgroundColor: error == null
+            ? theme.colorScheme.primary
+            : isQueued
+                ? null
+                : theme.colorScheme.error,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (error != null) {
+    // Playlists we already have (cached or from before) win over an error.
+    if (error != null && (playlists == null || playlists!.isEmpty)) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -112,7 +140,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
     if (playlists == null || playlists!.isEmpty) {
       final theme = Theme.of(context);
       return RefreshIndicator(
-        onRefresh: () async => onRefresh(),
+        onRefresh: onRefresh,
         child: CustomScrollView(
           slivers: [
             // Empty state content
@@ -144,7 +172,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
     final uiState = context.watch<UIStateProvider>();
     final sortedPlaylists = sortPlaylists(playlists!, uiState.playlistSort);
     return RefreshIndicator(
-      onRefresh: () async => onRefresh(),
+      onRefresh: onRefresh,
       child: ListView.builder(
         controller: scrollController,
         scrollCacheExtent: ScrollCacheExtent.pixels(500), // Pre-render items above/below viewport for smoother scrolling
@@ -170,40 +198,42 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
                     ),
                   ),
                 ),
-                // Smart Mix Section
-                const Divider(),
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Smart Mix',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
+                // Smart Mix needs the server.
+                if (!appState.isOfflineMode) ...[
+                  const Divider(),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Smart Mix',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Generate a playlist based on mood',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Generate a playlist based on mood',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                // Horizontal 1x4 Mood Cards (compact layout)
-                SizedBox(
-                  height: 70,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: Mood.values.length,
-                    separatorBuilder: (_, _) => const SizedBox(width: 8),
-                    itemBuilder: (context, index) => _buildCompactMoodCard(Mood.values[index], theme),
+                  // Horizontal 1x4 Mood Cards (compact layout)
+                  SizedBox(
+                    height: 70,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: Mood.values.length,
+                      separatorBuilder: (_, _) => const SizedBox(width: 8),
+                      itemBuilder: (context, index) => _buildCompactMoodCard(Mood.values[index], theme),
+                    ),
                   ),
-                ),
-                const SizedBox(height: NautuneSpacing.lg),
+                  const SizedBox(height: NautuneSpacing.lg),
+                ],
                 const Divider(),
                 Padding(
                   padding: const EdgeInsets.only(top: 12, bottom: 8),
@@ -384,13 +414,18 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
     }
   }
 
-  Future<void> _showCreatePlaylistDialog(BuildContext context) async {
-    final nameController = TextEditingController();
+  /// Asks for a playlist name; null when cancelled or left empty.
+  Future<String?> _askName({
+    required String title,
+    required String action,
+    String initial = '',
+  }) async {
+    final nameController = TextEditingController(text: initial);
     try {
       final result = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Create Playlist'),
+        builder: (dialogContext) => AlertDialog(
+          title: Text(title),
           content: TextField(
             controller: nameController,
             decoration: const InputDecoration(
@@ -401,115 +436,82 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context, false),
+              onPressed: () => Navigator.pop(dialogContext, false),
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Create'),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(action),
             ),
           ],
         ),
       );
-
-      if (result == true && nameController.text.isNotEmpty && context.mounted) {
-        try {
-          await appState.createPlaylist(name: nameController.text);
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Created playlist "${nameController.text}"'),
-                backgroundColor: Theme.of(context).colorScheme.primary,
-              ),
-            );
-          }
-        } catch (e) {
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Failed to create playlist: $e'),
-                backgroundColor: Theme.of(context).colorScheme.error,
-              ),
-            );
-          }
-        }
-      }
+      final name = nameController.text.trim();
+      return result == true && name.isNotEmpty ? name : null;
     } finally {
       nameController.dispose();
     }
   }
 
-  void _showEditPlaylistDialog(BuildContext context, JellyfinPlaylist playlist) async {
-    final nameController = TextEditingController(text: playlist.name);
-
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Edit Playlist'),
-        content: TextField(
-          controller: nameController,
-          decoration: const InputDecoration(
-            labelText: 'Playlist Name',
-            border: OutlineInputBorder(),
-          ),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-
-    if (result == true && nameController.text.isNotEmpty && context.mounted) {
-      try {
-        await appState.updatePlaylist(
-          playlistId: playlist.id,
-          newName: nameController.text,
-        );
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Renamed to "${nameController.text}"'),
-              backgroundColor: Theme.of(context).colorScheme.primary,
-            ),
-          );
-        }
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to rename: $e'),
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ),
-          );
-        }
-      }
+  // Dialogs and snackbars use this State's context: a row's context is gone
+  // once the list refreshes (e.g. the deleted playlist's row).
+  Future<void> _showCreatePlaylistDialog(BuildContext _) async {
+    final name = await _askName(title: 'Create Playlist', action: 'Create');
+    if (name == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final theme = Theme.of(context);
+    Object? error;
+    try {
+      await appState.createPlaylist(name: name);
+    } catch (e) {
+      error = e;
     }
+    _showEditResult(messenger, theme,
+        done: 'Created playlist "$name"',
+        queued: 'Offline: "$name" will be created when you\'re online',
+        failed: 'Failed to create playlist',
+        error: error);
   }
 
-  void _showDeletePlaylistDialog(BuildContext context, JellyfinPlaylist playlist) async {
+  Future<void> _showEditPlaylistDialog(
+      BuildContext _, JellyfinPlaylist playlist) async {
+    final name = await _askName(
+      title: 'Edit Playlist',
+      action: 'Save',
+      initial: playlist.name,
+    );
+    if (name == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final theme = Theme.of(context);
+    Object? error;
+    try {
+      await appState.updatePlaylist(playlistId: playlist.id, newName: name);
+    } catch (e) {
+      error = e;
+    }
+    _showEditResult(messenger, theme,
+        done: 'Renamed to "$name"',
+        queued: 'Offline: the rename will sync when you\'re online',
+        failed: 'Failed to rename',
+        error: error);
+  }
 
+  Future<void> _showDeletePlaylistDialog(
+      BuildContext _, JellyfinPlaylist playlist) async {
     final result = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Delete Playlist?'),
         content: Text('Are you sure you want to delete "${playlist.name}"? This cannot be undone.'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () => Navigator.pop(dialogContext, true),
             style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
             ),
             child: const Text('Delete'),
           ),
@@ -517,27 +519,19 @@ class _PlaylistsTabState extends State<_PlaylistsTab> {
       ),
     );
 
-    if (result == true && context.mounted) {
-      try {
-        await appState.deletePlaylist(playlist.id);
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Deleted "${playlist.name}"'),
-              backgroundColor: Theme.of(context).colorScheme.primary,
-            ),
-          );
-        }
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to delete: $e'),
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ),
-          );
-        }
-      }
+    if (result != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final theme = Theme.of(context);
+    Object? error;
+    try {
+      await appState.deletePlaylist(playlist.id);
+    } catch (e) {
+      error = e;
     }
+    _showEditResult(messenger, theme,
+        done: 'Deleted "${playlist.name}"',
+        queued: 'Offline: "${playlist.name}" will be deleted when you\'re online',
+        failed: 'Failed to delete',
+        error: error);
   }
 }

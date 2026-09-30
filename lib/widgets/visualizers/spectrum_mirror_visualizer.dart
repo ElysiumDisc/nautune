@@ -43,10 +43,19 @@ class _SpectrumMirrorVisualizerState extends BaseVisualizerState<SpectrumMirrorV
     }
   }
 
+  // Bars for the current frame (the shared buffer from getSpectrumBars).
+  List<double> _bars = const [];
+
+  @override
+  void onFrame(double dt) {
+    _bars = getSpectrumBars(_barCount);
+    _updatePeaks(_bars);
+  }
+
   @override
   Widget buildVisualizer(BuildContext context) {
-    final bars = getSpectrumBars(_barCount);
-    _updatePeaks(bars);
+    // Before the first frame (e.g. opened while paused) draw the resting state.
+    final bars = _bars.isEmpty ? (_bars = getSpectrumBars(_barCount)) : _bars;
 
     final theme = Theme.of(context);
     final primaryColor = theme.colorScheme.primary;
@@ -58,6 +67,7 @@ class _SpectrumMirrorVisualizerState extends BaseVisualizerState<SpectrumMirrorV
         primaryColor: primaryColor,
         opacity: widget.opacity,
         bass: smoothBass,
+        frame: frame,
         amplitude: smoothAmplitude,
       ),
       size: Size.infinite,
@@ -71,6 +81,7 @@ class _SpectrumMirrorPainter extends CustomPainter {
   final Color primaryColor;
   final double opacity;
   final double bass;
+  final int frame;
   final double amplitude;
 
   late final Paint _barPaint;
@@ -90,9 +101,6 @@ class _SpectrumMirrorPainter extends CustomPainter {
   // Pre-computed hue offsets for bar indices (avoids per-bar computation)
   static final List<double> _hueOffsets = List.generate(64, (i) => (i / 64) * 60 - 30);
 
-  // Gradient cache to avoid creating new shaders every frame
-  final Map<int, Shader> _topGradientCache = {};
-  final Map<int, Shader> _bottomGradientCache = {};
 
   _SpectrumMirrorPainter({
     required this.bars,
@@ -100,6 +108,7 @@ class _SpectrumMirrorPainter extends CustomPainter {
     required this.primaryColor,
     required this.opacity,
     required this.bass,
+    required this.frame,
     required this.amplitude,
   }) {
     _barPaint = Paint()..style = PaintingStyle.fill;
@@ -138,38 +147,18 @@ class _SpectrumMirrorPainter extends CustomPainter {
     return HSLColor.fromAHSL(1.0, newHue, saturation, lightness).toColor();
   }
 
-  /// Get cached gradient shader for top bar
-  Shader _getTopGradient(int index, Rect rect, Color color) {
-    final heightBucket = (rect.height / 10).round();
-    final key = index * 1000 + heightBucket;
-
-    return _topGradientCache.putIfAbsent(key, () {
-      return LinearGradient(
-        begin: Alignment.bottomCenter,
-        end: Alignment.topCenter,
-        colors: [
-          color.withValues(alpha: opacity * 0.95),
-          color.withValues(alpha: opacity * 0.5),
-        ],
-      ).createShader(rect);
-    });
-  }
-
-  /// Get cached gradient shader for bottom bar
-  Shader _getBottomGradient(int index, Rect rect, Color color) {
-    final heightBucket = (rect.height / 10).round();
-    final key = index * 1000 + heightBucket;
-
-    return _bottomGradientCache.putIfAbsent(key, () {
-      return LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          color.withValues(alpha: opacity * 0.95),
-          color.withValues(alpha: opacity * 0.5),
-        ],
-      ).createShader(rect);
-    });
+  /// Gradient shader for a bar growing up ([up]) or down from the centre
+  /// line. Painters are rebuilt every frame and each bar's colour follows
+  /// its value, so a per-painter cache never hit.
+  Shader _barGradient(Rect rect, Color color, {required bool up}) {
+    return LinearGradient(
+      begin: up ? Alignment.bottomCenter : Alignment.topCenter,
+      end: up ? Alignment.topCenter : Alignment.bottomCenter,
+      colors: [
+        color.withValues(alpha: opacity * 0.95),
+        color.withValues(alpha: opacity * 0.5),
+      ],
+    ).createShader(rect);
   }
 
   @override
@@ -247,7 +236,7 @@ class _SpectrumMirrorPainter extends CustomPainter {
         barHeight,
       );
 
-      _barPaint.shader = _getTopGradient(i, topRect, color);
+      _barPaint.shader = _barGradient(topRect, color, up: true);
 
       canvas.drawRRect(
         RRect.fromRectAndRadius(topRect, Radius.circular(barWidth / 4)),
@@ -262,7 +251,7 @@ class _SpectrumMirrorPainter extends CustomPainter {
         barHeight,
       );
 
-      _barPaint.shader = _getBottomGradient(i, bottomRect, color);
+      _barPaint.shader = _barGradient(bottomRect, color, up: false);
 
       canvas.drawRRect(
         RRect.fromRectAndRadius(bottomRect, Radius.circular(barWidth / 4)),
@@ -333,15 +322,11 @@ class _SpectrumMirrorPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _SpectrumMirrorPainter old) {
-    const tolerance = 0.005;
-    if (bars.length != old.bars.length) return true;
-    if ((bass - old.bass).abs() > tolerance) return true;
-    if ((amplitude - old.amplitude).abs() > tolerance) return true;
-    if ((opacity - old.opacity).abs() > tolerance) return true;
-    if (primaryColor != old.primaryColor) return true;
-    for (int i = 0; i < bars.length; i++) {
-      if ((bars[i] - old.bars[i]).abs() > tolerance) return true;
-    }
-    return false;
+    // One repaint per visual frame (~30 fps). `bars` and `peaks` are buffers
+    // reused (mutated in place) across frames, so comparing their contents
+    // against the old painter's always found them equal and froze the bars.
+    return old.frame != frame ||
+        old.primaryColor != primaryColor ||
+        old.opacity != opacity;
   }
 }

@@ -1,52 +1,34 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 
-/// Monitors the device's network reachability and reports whether the internet
-/// is actually reachable (not just if a transport like Wi-Fi is enabled).
+/// Reports whether the device has a usable network transport (Wi-Fi,
+/// cellular, ethernet).
+///
+/// This deliberately does NOT probe the public internet: a Jellyfin server
+/// on the local network must keep working on a Wi-Fi without internet access
+/// (or where public DNS is blocked). Whether the *server* answers is decided
+/// separately (bootstrap sync failures and
+/// `JellyfinService.isServerReachable()`, see `NautuneAppState`).
 class ConnectivityService {
-  ConnectivityService({
-    Connectivity? connectivity,
-    this.lookupHost = 'one.one.one.one',
-    this.lookupTimeout = const Duration(seconds: 3),
-  }) : _connectivity = connectivity ?? Connectivity();
+  ConnectivityService({Connectivity? connectivity})
+      : _connectivity = connectivity ?? Connectivity();
 
   final Connectivity _connectivity;
 
-  /// Host to resolve to verify that DNS/internet is reachable.
-  final String lookupHost;
+  /// Emits `true` when a network transport is available and `false` when
+  /// there is none. One shared broadcast stream, so every listener sees the
+  /// same events without triggering extra platform queries.
+  late final Stream<bool> onStatusChange = _connectivity.onConnectivityChanged
+      .map((results) => _extractPrimaryResult(results) != ConnectivityResult.none)
+      .asBroadcastStream();
 
-  /// Maximum amount of time to wait for DNS resolution before assuming offline.
-  final Duration lookupTimeout;
-
-  /// Emits [true] when the internet appears reachable and [false] otherwise.
-  Stream<bool> get onStatusChange => _connectivity.onConnectivityChanged
-      .asyncMap((results) async {
-        try {
-          return await _probeConnection(_extractPrimaryResult(results));
-        } catch (_) {
-          return false;
-        }
-      });
-
-  /// Performs an immediate connectivity check.
-  Future<bool> hasNetworkConnection() async {
-    try {
-      final results = await _connectivity.checkConnectivity().timeout(
-        const Duration(seconds: 2),
-        onTimeout: () => [ConnectivityResult.none],
-      );
-      return await _probeConnection(_extractPrimaryResult(results));
-    } catch (e) {
-      return false;
-    }
-  }
+  /// Performs an immediate connectivity check (network transport present).
+  Future<bool> hasNetworkConnection() => hasNetworkTransport();
 
   /// Whether any network interface (Wi-Fi, cellular, ethernet) is up,
-  /// without probing the internet. Cheap, and correct for LAN-only servers
-  /// where the public DNS probe in [hasNetworkConnection] fails. False in
-  /// airplane mode.
+  /// without probing the internet. Cheap, and correct for LAN-only servers.
+  /// False in airplane mode.
   Future<bool> hasNetworkTransport() async {
     try {
       final results = await _connectivity.checkConnectivity().timeout(
@@ -85,24 +67,6 @@ class ConnectivityService {
       final primary = _extractPrimaryResult(results);
       return primary == ConnectivityResult.mobile;
     } catch (e) {
-      return false;
-    }
-  }
-
-  Future<bool> _probeConnection(ConnectivityResult result) async {
-    if (result == ConnectivityResult.none) {
-      return false;
-    }
-
-    try {
-      final lookup = await InternetAddress.lookup(lookupHost).timeout(
-        lookupTimeout,
-        onTimeout: () => const <InternetAddress>[],
-      );
-      return lookup.isNotEmpty;
-    } on SocketException {
-      return false;
-    } on TimeoutException {
       return false;
     }
   }

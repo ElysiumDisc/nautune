@@ -48,6 +48,17 @@ class PlaylistMembershipStore {
     return null;
   }
 
+  /// Forget every playlist (e.g. on logout).
+  Future<void> clear() async {
+    try {
+      final box = await _box();
+      await box.clear();
+    } catch (e) {
+      _boxFuture = null;
+      debugPrint('⚠️ PlaylistMembershipStore: clear failed: $e');
+    }
+  }
+
   Future<void> remove(String playlistId) async {
     try {
       final box = await _box();

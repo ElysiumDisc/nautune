@@ -90,6 +90,7 @@ class DownloadItem {
       'trackId': track.id,
       'trackName': track.name,
       'trackArtist': track.displayArtist,
+      'trackArtists': track.artists,
       'trackArtistIds': track.artistIds,
       'trackAlbum': track.album,
       'trackAlbumId': track.albumId,
@@ -102,6 +103,10 @@ class DownloadItem {
       'trackBitDepth': track.bitDepth,
       'trackChannels': track.channels,
       'trackProductionYear': track.productionYear,
+      // Account the download belongs to (never the access token). Absent in
+      // records written by older versions.
+      'serverUrl': track.serverUrl,
+      'userId': track.userId,
       'localPath': localPath,
       'status': status.name,
       'progress': progress,

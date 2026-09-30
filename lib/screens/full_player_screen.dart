@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:ui' as ui show ImageFilter;
+import 'dart:math' as math;
 
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
 import 'package:flutter/material.dart' hide RepeatMode;
@@ -24,6 +24,7 @@ import '../widgets/track_context_menu.dart';
 import '../widgets/visualizers/visualizer_factory.dart';
 import '../widgets/jellyfin_image.dart';
 import '../widgets/jellyfin_waveform.dart';
+import '../widgets/position_data_builder.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
 
@@ -49,23 +50,23 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   List<Color>? get _paletteColors => _colorsProvider?.colors;
   double? get _cachedAvgLuminance => _colorsProvider?.avgLuminance;
 
-  // Lyrics scrolling state
-  final ScrollController _lyricsScrollController = ScrollController();
-  int _currentLyricIndex = -1;
-  bool _userIsScrolling = false;
-  Timer? _userScrollTimer;
+  // Track the shown lyrics belong to, and the latest lyrics request: an
+  // older request that finishes late (the user skipped) must not overwrite
+  // the newer track's lyrics.
+  String? _lyricsTrackId;
+  int _lyricsRequest = 0;
 
   // A-B loop controls state
   StreamSubscription? _loopSub;
   bool _showLoopControls = false;
   bool _showLoopButton = false; // Toggle visibility of A-B Loop button (off by default)
 
-  // Cached streams (avoid resubscription per build). The page itself only
-  // rebuilds on track / playing changes; position drives just the progress
-  // bar and the lyrics list, each through its own builder.
+  // Cached (avoids resubscription per build): the page itself only rebuilds
+  // on track / playing changes. Its StreamBuilder is the root of build() and
+  // never remounts. Position drives just the progress bar and the lyrics
+  // list, each of which subscribes itself when it mounts (PositionDataBuilder,
+  // _SyncedLyricsView), so switching tabs can't re-listen a used stream.
   Stream<TrackPlayingState>? _trackPlayingStream;
-  Stream<PositionData>? _positionDataStream;
-  Stream<Duration>? _positionStream;
 
   // Visualizer in album art toggle state
   bool _showingVisualizerInArtwork = false;
@@ -89,25 +90,27 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
       _colorsProvider!.addListener(_onColorsChanged);
     }
     _audioService = _appState.audioService;
-    _lyricsService ??= LyricsService(jellyfinService: _appState.jellyfinService);
+    _lyricsService ??= LyricsService(
+      jellyfinService: _appState.jellyfinService,
+      isOffline: () => _appState.isOfflineMode,
+    );
     _trackPlayingStream ??= _audioService.trackPlayingStream;
-    _positionDataStream ??= _audioService.positionDataStream;
-    _positionStream ??= _audioService.positionStream;
 
     // Set up stream listeners only once
     if (_trackSub == null) {
       _trackSub = _audioService.currentTrackStream.listen((track) {
-        if (mounted) {
+        if (!mounted) return;
+        // Reset visualizer toggle on track change (show album art for new
+        // track). The track itself reaches the page through its
+        // StreamBuilder; no rebuild needed for a same-track update.
+        if (track?.id != _lastTrackIdForVisualizerReset) {
           setState(() {
-            // Reset visualizer toggle on track change (show album art for new track)
-            if (track?.id != _lastTrackIdForVisualizerReset) {
-              _showingVisualizerInArtwork = false;
-              _lastTrackIdForVisualizerReset = track?.id;
-            }
+            _showingVisualizerInArtwork = false;
+            _lastTrackIdForVisualizerReset = track?.id;
           });
-          if (track != null) {
-            _fetchLyrics(track);
-          }
+        }
+        if (track != null) {
+          _fetchLyrics(track);
         }
       });
       // Playing state is handled by StreamBuilder<TrackPlayingState> in
@@ -375,54 +378,32 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     );
   }
 
-  Future<void> _fetchLyrics(JellyfinTrack track) async {
-    setState(() {
-      _loadingLyrics = true;
-      _lyrics = null;
-      _lyricsSource = null;
-      _currentLyricIndex = -1;
-    });
-
-    try {
-      final result = await _lyricsService?.getLyrics(track);
-
-      List<_LyricLine>? parsedLyrics;
-      String? source;
-
-      if (result != null && result.isNotEmpty) {
-        parsedLyrics = result.lines
-            .map((line) => _LyricLine(
-                  text: line.text,
-                  startTicks: line.startTicks,
-                ))
-            .toList();
-        source = result.source;
-      }
-
-      if (mounted) {
-        setState(() {
-          _lyrics = parsedLyrics;
-          _lyricsSource = source;
-          _loadingLyrics = false;
-        });
-      }
-    } catch (e) {
-      debugPrint('Failed to fetch lyrics: $e');
-      if (mounted) {
-        setState(() {
-          _loadingLyrics = false;
-        });
-      }
-    }
+  /// Loads lyrics for [track] unless they're already shown or loading: the
+  /// current track stream re-emits the same track (on open, after a
+  /// favourite toggle), which used to refetch and reset the lyrics.
+  Future<void> _fetchLyrics(JellyfinTrack track) {
+    if (track.id == _lyricsTrackId) return Future.value();
+    return _loadLyrics(track, refresh: false);
   }
 
-  Future<void> _refreshLyrics(JellyfinTrack track) async {
+  Future<void> _refreshLyrics(JellyfinTrack track) =>
+      _loadLyrics(track, refresh: true);
+
+  Future<void> _loadLyrics(JellyfinTrack track, {required bool refresh}) async {
+    final request = ++_lyricsRequest;
+    _lyricsTrackId = track.id;
     setState(() {
       _loadingLyrics = true;
+      if (!refresh) {
+        _lyrics = null;
+        _lyricsSource = null;
+      }
     });
 
     try {
-      final result = await _lyricsService?.refreshLyrics(track);
+      final result = refresh
+          ? await _lyricsService?.refreshLyrics(track)
+          : await _lyricsService?.getLyrics(track);
 
       List<_LyricLine>? parsedLyrics;
       String? source;
@@ -437,20 +418,19 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
         source = result.source;
       }
 
-      if (mounted) {
-        setState(() {
-          _lyrics = parsedLyrics;
-          _lyricsSource = source;
-          _loadingLyrics = false;
-        });
-      }
+      // A newer request (the track changed, or a refresh) owns the state.
+      if (!mounted || request != _lyricsRequest) return;
+      setState(() {
+        _lyrics = parsedLyrics;
+        _lyricsSource = source;
+        _loadingLyrics = false;
+      });
     } catch (e) {
-      debugPrint('Failed to refresh lyrics: $e');
-      if (mounted) {
-        setState(() {
-          _loadingLyrics = false;
-        });
-      }
+      debugPrint('Failed to ${refresh ? 'refresh' : 'fetch'} lyrics: $e');
+      if (!mounted || request != _lyricsRequest) return;
+      setState(() {
+        _loadingLyrics = false;
+      });
     }
   }
 
@@ -498,8 +478,6 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     _tabController.dispose();
     _trackSub?.cancel();
     _loopSub?.cancel();
-    _lyricsScrollController.dispose();
-    _userScrollTimer?.cancel();
     super.dispose();
   }
 
@@ -685,7 +663,8 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   void _toggleVisualizerInArtwork() {
     HapticService.mediumTap();
     // The visualizer widget is only mounted while shown; it retains the iOS
-    // FFT capture in initState and releases it in dispose (BaseVisualizer).
+    // FFT capture while mounted and on screen (TickerMode enabled) and
+    // releases it otherwise (BaseVisualizer).
     setState(() {
       _showingVisualizerInArtwork = !_showingVisualizerInArtwork;
     });
@@ -815,12 +794,12 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                 ),
               ),
             ),
+          // Dim the gradient. (A full-screen sigma-100 BackdropFilter used to
+          // sit here: blurring a smooth gradient changes nothing visible, but
+          // it re-ran every frame while a visualizer animated.)
           if (hasColors)
             Positioned.fill(
-              child: BackdropFilter(
-                filter: ui.ImageFilter.blur(sigmaX: 100, sigmaY: 100),
-                child: Container(color: Colors.black.withValues(alpha: 0.3)),
-              ),
+              child: ColoredBox(color: Colors.black.withValues(alpha: 0.3)),
             ),
         ];
 
@@ -839,11 +818,10 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                 ),
               ),
             ),
+          // Dim only: a BackdropFilter here blurred nothing but the gradient
+          // and the scaffold colour (see the classic layout).
           Positioned.fill(
-            child: BackdropFilter(
-              filter: ui.ImageFilter.blur(sigmaX: 150, sigmaY: 150),
-              child: Container(color: Colors.black.withValues(alpha: 0.5)),
-            ),
+            child: ColoredBox(color: Colors.black.withValues(alpha: 0.5)),
           ),
         ];
 
@@ -1008,86 +986,134 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     );
   }
 
-  void _handleKeyEvent(KeyEvent event) {
-    if (event is! KeyDownEvent) return;
+  static final Set<LogicalKeyboardKey> _seekVolumeKeys = {
+    LogicalKeyboardKey.arrowLeft,
+    LogicalKeyboardKey.arrowRight,
+    LogicalKeyboardKey.arrowUp,
+    LogicalKeyboardKey.arrowDown,
+  };
+
+  static final Set<LogicalKeyboardKey> _shortcutKeys = {
+    ..._seekVolumeKeys,
+    LogicalKeyboardKey.space,
+    LogicalKeyboardKey.keyN,
+    LogicalKeyboardKey.keyP,
+    LogicalKeyboardKey.keyR,
+    LogicalKeyboardKey.keyL,
+  };
+
+  /// Hardware keyboard shortcuts. Returns whether [event] was used, so other
+  /// keys (Escape, system shortcuts) keep working.
+  ///
+  /// Key-ups and repeats of the shortcut keys are consumed too: otherwise
+  /// they reach the app's default shortcuts, where a held arrow moves focus
+  /// between the player's buttons and a held Space (or Enter) then presses
+  /// the focused one. Held arrows keep seeking / changing the volume.
+  bool _handleKeyEvent(KeyEvent event) {
+    final key = event.logicalKey;
+    if (!_shortcutKeys.contains(key)) return false;
+    if (event is KeyUpEvent) return true;
+    if (event is KeyRepeatEvent && !_seekVolumeKeys.contains(key)) return true;
 
     final track = _audioService.currentTrack;
     final position = _audioService.currentPosition;
-    final duration = track?.duration ?? Duration.zero;
+    final duration = track?.duration;
 
     switch (event.logicalKey) {
       case LogicalKeyboardKey.space:
         _audioService.playPause();
-        break;
       case LogicalKeyboardKey.arrowLeft:
         // Seek backward 10 seconds
         final newPos = position - const Duration(seconds: 10);
         _audioService.seek(newPos < Duration.zero ? Duration.zero : newPos);
-        break;
       case LogicalKeyboardKey.arrowRight:
-        // Seek forward 10 seconds
+        // Seek forward 10 seconds. Clamp only to a known duration: with
+        // none (no RunTimeTicks) this used to clamp to zero, i.e. restart.
         final newPos = position + const Duration(seconds: 10);
-        _audioService.seek(newPos > duration ? duration : newPos);
-        break;
+        _audioService.seek(
+          duration != null && duration > Duration.zero && newPos > duration
+              ? duration
+              : newPos,
+        );
       case LogicalKeyboardKey.arrowUp:
         // Volume up 5%
         final newVolume = (_audioService.volume + 0.05).clamp(0.0, 1.0);
         _audioService.setVolume(newVolume);
-        break;
       case LogicalKeyboardKey.arrowDown:
         // Volume down 5%
         final newVolume = (_audioService.volume - 0.05).clamp(0.0, 1.0);
         _audioService.setVolume(newVolume);
-        break;
       case LogicalKeyboardKey.keyN:
         // Next track
         _audioService.next();
-        break;
       case LogicalKeyboardKey.keyP:
         // Previous track
         _audioService.previous();
-        break;
       case LogicalKeyboardKey.keyR:
         // Toggle repeat mode
         _audioService.toggleRepeatMode();
-        break;
       case LogicalKeyboardKey.keyL:
         // Toggle favorite
-        if (track != null) {
-          _toggleFavorite(track);
-        }
-        break;
+        if (track == null) return false;
+        _toggleFavorite(track);
+      default:
+        return false;
     }
+    return true;
   }
 
+  /// Sets the current track's favourite flag, but only while [trackId] is
+  /// still the current track: after an await the user may have skipped, and
+  /// writing the old track back would replace the new one in the player and
+  /// the queue.
+  void _setCurrentFavorite(String trackId, bool isFavorite) {
+    final current = _audioService.currentTrack;
+    if (current == null || current.id != trackId) return;
+    if (current.isFavorite == isFavorite) return;
+    _audioService.updateCurrentTrack(current.copyWith(isFavorite: isFavorite));
+  }
+
+  /// Favourite / unfavourite [track]: the heart flips at once (optimistic),
+  /// then the server is updated. A real failure flips it back; an offline
+  /// failure keeps it (the change is queued and syncs later).
   Future<void> _toggleFavorite(JellyfinTrack track) async {
+    final newFavoriteStatus = !track.isFavorite;
+    _setCurrentFavorite(track.id, newFavoriteStatus);
     try {
-      final currentFavoriteStatus = track.isFavorite;
-      final newFavoriteStatus = !currentFavoriteStatus;
-
       await _appState.markFavorite(track.id, newFavoriteStatus);
-      final updatedTrack = track.copyWith(isFavorite: newFavoriteStatus);
-      _audioService.updateCurrentTrack(updatedTrack);
-
-      if (mounted) setState(() {});
-      await _appState.refreshFavorites();
-
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              newFavoriteStatus ? 'Added to favorites' : 'Removed from favorites',
+            ),
+            duration: const Duration(seconds: 2),
+            backgroundColor: Theme.of(context).colorScheme.primary,
+          ),
+        );
+      }
+      // Refresh the favourites list; its failure isn't a failure to favourite.
+      try {
+        await _appState.refreshFavorites();
+      } catch (e) {
+        debugPrint('Refreshing favorites failed: $e');
+      }
+    } catch (e) {
+      debugPrint('Error toggling favorite: $e');
+      final isOfflineError =
+          e.toString().contains('Offline') || e.toString().contains('queued');
+      if (!isOfflineError) _setCurrentFavorite(track.id, !newFavoriteStatus);
       if (!mounted) return;
+      final theme = Theme.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            newFavoriteStatus ? 'Added to favorites' : 'Removed from favorites',
+            isOfflineError
+                ? 'Offline: Favorite will sync when online'
+                : 'Failed to update favorite: $e',
           ),
-          duration: const Duration(seconds: 2),
-          backgroundColor: Theme.of(context).colorScheme.primary,
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to update favorite: $e'),
-          backgroundColor: Theme.of(context).colorScheme.error,
+          backgroundColor:
+              isOfflineError ? Colors.orange : theme.colorScheme.error,
         ),
       );
     }
@@ -1096,8 +1122,19 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final size = MediaQuery.of(context).size;
-    final isWide = size.width > 600;
+    // The app state is read without listening; rebuild when one of the
+    // settings the player shows changes (e.g. Infinite Radio from the menu).
+    context.select<NautuneAppState, Object>((s) => (
+          s.nowPlayingLayout,
+          s.visualizerEnabled,
+          s.visualizerPosition,
+          s.visualizerType,
+          s.showVolumeBar,
+          s.streamingQuality,
+          s.infiniteRadioEnabled,
+        ));
+    // Tablet layout by the short side: a landscape iPhone is wide but short.
+    final isWide = MediaQuery.sizeOf(context).shortestSide >= 600;
 
     // Track + playing state only: position ticks (5/s) must not rebuild the
     // artwork, background, controls and menus.
@@ -1158,10 +1195,9 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
 
         return Focus(
           autofocus: true,
-          onKeyEvent: (node, event) {
-            _handleKeyEvent(event);
-            return KeyEventResult.handled;
-          },
+          onKeyEvent: (node, event) => _handleKeyEvent(event)
+              ? KeyEventResult.handled
+              : KeyEventResult.ignored,
           child: Scaffold(
             body: Stack(
               children: [
@@ -1184,18 +1220,22 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
                               tooltip: 'Close player',
                               onPressed: () => Navigator.of(context).pop(),
                             ),
-                            const Spacer(),
-                            TabBar(
-                              controller: _tabController,
-                              isScrollable: true,
-                              tabAlignment: TabAlignment.center,
-                              labelStyle: theme.textTheme.titleSmall,
-                              tabs: const [
-                                Tab(text: 'Now Playing'),
-                                Tab(text: 'Lyrics'),
-                              ],
+                            // Takes the room between the buttons (and scrolls
+                            // at large text sizes) instead of overflowing.
+                            Expanded(
+                              child: Center(
+                                child: TabBar(
+                                  controller: _tabController,
+                                  isScrollable: true,
+                                  tabAlignment: TabAlignment.center,
+                                  labelStyle: theme.textTheme.titleSmall,
+                                  tabs: const [
+                                    Tab(text: 'Now Playing'),
+                                    Tab(text: 'Lyrics'),
+                                  ],
+                                ),
+                              ),
                             ),
-                            const Spacer(),
                             // Sleep Timer Button
                             StreamBuilder<Duration>(
                               stream: _audioService.sleepTimerStream,
@@ -1278,973 +1318,974 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     required ThemeData theme,
     required Widget artwork,
   }) {
-    return Builder(
-      builder: (context) {
-        final size = MediaQuery.of(context).size;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Guard against too-small constraints (e.g., during window resize)
+        if (constraints.maxHeight < 150) {
+          return const SizedBox.shrink();
+        }
+        final size = MediaQuery.sizeOf(context);
+        final info = _buildTrackInfo(
+          context: context,
+          track: track,
+          isWide: isWide,
+          theme: theme,
+        );
+        final controls = _buildControlsSection(
+          context: context,
+          track: track,
+          isPlaying: isPlaying,
+          isWide: isWide,
+          theme: theme,
+        );
+        final styledArtwork = _buildLayoutStyledArtwork(
+          artwork: artwork,
+          isWide: isWide,
+          size: size,
+          theme: theme,
+        );
+
+        // Landscape iPhone: too short to stack artwork, info and controls.
+        // Artwork on the left, the rest (scrollable) on the right.
+        if (constraints.maxWidth > constraints.maxHeight &&
+            constraints.maxHeight < 500) {
+          final artSide = math.max(
+            0.0,
+            math.min(constraints.maxHeight - 32, constraints.maxWidth * 0.42),
+          );
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            child: Row(
+              children: [
+                SizedBox.square(dimension: artSide, child: styledArtwork),
+                const SizedBox(width: 24),
+                Expanded(
+                  child: Center(
+                    child: SingleChildScrollView(
+                      physics: const ClampingScrollPhysics(),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          info,
+                          const SizedBox(height: 24),
+                          controls,
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
         return Padding(
           padding: EdgeInsets.symmetric(
             horizontal: isWide ? size.width * 0.15 : 24,
             vertical: 16,
           ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              // Guard against too-small constraints (e.g., during window resize)
-              if (constraints.maxHeight < 200) {
-                return const SizedBox.shrink();
-              }
-              return Column(
-                children: [
-                  // Top section: Artwork and Track Info
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        // Artwork - Styled based on layout
-                        Flexible(
-                          child: _buildLayoutStyledArtwork(
-                            artwork: artwork,
-                            isWide: isWide,
-                            size: size,
-                            theme: theme,
-                          ),
-                        ),
-
-                        const SizedBox(height: 24),
-
-                        // Track Info - Compact with adaptive colors
-                        GestureDetector(
-                          onLongPress: () => _showTrackMenu(context, track),
-                          child: Text(
-                            track.name,
-                            style:
-                                (isWide
-                                        ? theme.textTheme.headlineMedium
-                                        : theme.textTheme.titleLarge)
-                                    ?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                      color: _getAdaptiveTextColor(theme),
-                                    ),
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-
-                        // Radio indicator
-                        if (_appState.audioPlayerService.infiniteRadioEnabled) ...[
-                          const SizedBox(height: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.primaryContainer,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.radio, size: 14, color: theme.colorScheme.onPrimaryContainer),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'RADIO',
-                                  style: theme.textTheme.labelSmall?.copyWith(
-                                    color: theme.colorScheme.onPrimaryContainer,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-
-                        const SizedBox(height: 8),
-
-                        // Artist - clickable to navigate to artist detail
-                        GestureDetector(
-                          onTap: () async {
-                            // Get the artist name from the track
-                            final artistName = track.artists.isNotEmpty
-                                ? track.artists.first
-                                : track.displayArtist;
-
-                            // Show loading indicator
-                            if (!mounted) return;
-                            showDialog(
-                              context: context,
-                              barrierDismissible: false,
-                              builder: (context) => const Center(
-                                child: CircularProgressIndicator(),
-                              ),
-                            );
-
-                            JellyfinArtist? artist;
-
-                            try {
-                              // First, try direct ID-based lookup from track metadata
-                              final artistId = track.artistIds.isNotEmpty
-                                  ? track.artistIds.first
-                                  : null;
-                              final artists = _appState.artists ?? [];
-
-                              if (artistId != null) {
-                                artist = artists
-                                    .where((a) => a.id == artistId)
-                                    .firstOrNull;
-                              }
-
-                              // Fall back to name-based search
-                              artist ??= artists
-                                  .where(
-                                    (a) =>
-                                        a.name.toLowerCase() ==
-                                        artistName.toLowerCase(),
-                                  )
-                                  .firstOrNull;
-
-                              // Not in the local cache — ask the server directly for the
-                              // artist by ID. One round-trip beats paging through up to
-                              // 500 artists hunting for a single match.
-                              if (artist == null && artistId != null) {
-                                try {
-                                  artist = await _appState.jellyfinService
-                                      .getArtist(artistId);
-                                } catch (e) {
-                                  debugPrint('Direct artist fetch failed: $e');
-                                }
-                              }
-
-                              // If still not found, try downloads for offline mode
-                              if (artist == null) {
-                                final downloads = _appState
-                                    .downloadService
-                                    .completedDownloads;
-                                final artistTracks = downloads
-                                    .where(
-                                      (d) => d.track.artists.any(
-                                        (a) =>
-                                            a.toLowerCase() ==
-                                            artistName.toLowerCase(),
-                                      ),
-                                    )
-                                    .map((d) => d.track)
-                                    .toList();
-
-                                if (artistTracks.isNotEmpty) {
-                                  // Create synthetic artist for offline mode
-                                  artist = JellyfinArtist(
-                                    id: 'offline_$artistName',
-                                    name: artistName,
-                                  );
-                                }
-                              }
-                            } finally {
-                              // Close loading dialog
-                              if (context.mounted) Navigator.of(context).pop();
-                            }
-
-                            if (artist != null) {
-                              if (!context.mounted) return;
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) =>
-                                      ArtistDetailScreen(artist: artist!),
-                                ),
-                              );
-                            } else {
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Could not find artist "$artistName"',
-                                  ),
-                                  duration: const Duration(seconds: 2),
-                                ),
-                              );
-                            }
-                          },
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.person,
-                                size: 16,
-                                color: _getAdaptiveSecondaryColor(theme),
-                              ),
-                              const SizedBox(width: 4),
-                              Flexible(
-                                child: Text(
-                                  track.displayArtist,
-                                  style:
-                                      (isWide
-                                              ? theme.textTheme.headlineSmall
-                                              : theme.textTheme.titleMedium)
-                                          ?.copyWith(
-                                            color: _getAdaptiveSecondaryColor(theme),
-                                            decoration:
-                                                TextDecoration.underline,
-                                            decorationColor: _getAdaptiveSecondaryColor(theme).withValues(alpha: 0.5),
-                                          ),
-                                  textAlign: TextAlign.center,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-
-                        // Album - clickable to navigate to album detail
-                        if (track.album != null && track.albumId != null) ...[
-                          const SizedBox(height: 4),
-                          GestureDetector(
-                            onTap: () async {
-                              // First try to find in online cache
-                              final albums = _appState.albums ?? [];
-                              var album = albums
-                                  .where((a) => a.id == track.albumId)
-                                  .firstOrNull;
-
-                              // If not found in cache and we're online, fetch from server
-                              if (album == null && !_appState.isOfflineMode) {
-                                try {
-                                  album = await _appState.jellyfinService
-                                      .getAlbum(track.albumId!);
-                                } catch (_) {
-                                  // Fall through to downloads fallback
-                                }
-                              }
-
-                              // If still not found, try to create from downloads
-                              if (album == null) {
-                                final downloads = _appState
-                                    .downloadService
-                                    .completedDownloads;
-                                final albumTracks = downloads
-                                    .where(
-                                      (d) => d.track.albumId == track.albumId,
-                                    )
-                                    .map((d) => d.track)
-                                    .toList();
-
-                                if (albumTracks.isNotEmpty) {
-                                  // Create a synthetic JellyfinAlbum for offline mode
-                                  album = JellyfinAlbum(
-                                    id: track.albumId!,
-                                    name: track.album!,
-                                    artists: track.artists,
-                                    primaryImageTag: track.albumPrimaryImageTag,
-                                    genres: const [],
-                                  );
-                                }
-                              }
-
-                              if (!context.mounted) return;
-                              if (album != null) {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (context) =>
-                                        AlbumDetailScreen(album: album!),
-                                  ),
-                                );
-                              } else {
-                                // Album not available
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      'Album "${track.album}" not available',
-                                    ),
-                                    duration: const Duration(seconds: 2),
-                                  ),
-                                );
-                              }
-                            },
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.album,
-                                  size: 16,
-                                  color: theme.colorScheme.onSurfaceVariant
-                                      .withValues(alpha: 0.7),
-                                ),
-                                const SizedBox(width: 4),
-                                Flexible(
-                                  child: Text(
-                                    track.album!,
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                      decoration: TextDecoration.underline,
-                                      decorationColor: theme
-                                          .colorScheme
-                                          .onSurfaceVariant
-                                          .withValues(alpha: 0.3),
-                                    ),
-                                    textAlign: TextAlign.center,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-
-                        // Audio quality info with streaming mode (stacked vertically)
-                        if (track.audioQualityInfo != null) ...[
-                          const SizedBox(height: 8),
-                          // File quality badge
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.surfaceContainerHighest
-                                  .withValues(alpha: 0.3),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: theme.colorScheme.outline.withValues(
-                                  alpha: 0.2,
-                                ),
-                                width: 1,
-                              ),
-                            ),
-                            child: Text(
-                              track.audioQualityInfo!,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.tertiary,
-                                fontWeight: FontWeight.w500,
-                                letterSpacing: 0.5,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          // Streaming mode badge (below file quality)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color:
-                                  _appState.streamingQuality ==
-                                      StreamingQuality.original
-                                  ? theme.colorScheme.primaryContainer
-                                        .withValues(alpha: 0.5)
-                                  : theme.colorScheme.secondaryContainer
-                                        .withValues(alpha: 0.5),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color:
-                                    _appState.streamingQuality ==
-                                        StreamingQuality.original
-                                    ? theme.colorScheme.primary.withValues(
-                                        alpha: 0.3,
-                                      )
-                                    : theme.colorScheme.secondary.withValues(
-                                        alpha: 0.3,
-                                      ),
-                                width: 1,
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  _appState.streamingQuality ==
-                                          StreamingQuality.original
-                                      ? Icons.high_quality
-                                      : Icons.compress,
-                                  size: 14,
-                                  color:
-                                      _appState.streamingQuality ==
-                                          StreamingQuality.original
-                                      ? theme.colorScheme.primary
-                                      : theme.colorScheme.secondary,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  _getStreamingModeLabel(
-                                    _appState.streamingQuality,
-                                  ),
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color:
-                                        _appState.streamingQuality ==
-                                            StreamingQuality.original
-                                        ? theme.colorScheme.primary
-                                        : theme.colorScheme.secondary,
-                                    fontWeight: FontWeight.w500,
-                                    letterSpacing: 0.5,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ],
+          child: Column(
+            children: [
+              // Top section: artwork above the track info. The info keeps its
+              // natural height (and scrolls when even that doesn't fit: small
+              // phones at large text sizes); the artwork takes what's left.
+              Expanded(
+                child: CustomMultiChildLayout(
+                  delegate: _ArtworkAndInfoLayout(gap: 24),
+                  children: [
+                    LayoutId(id: _TopSlot.artwork, child: styledArtwork),
+                    LayoutId(
+                      id: _TopSlot.info,
+                      child: SingleChildScrollView(
+                        physics: const ClampingScrollPhysics(),
+                        child: info,
+                      ),
                     ),
-                  ),
+                  ],
+                ),
+              ),
 
-                  // Spacer for waveform (waveform extends 16px above progress bar)
-                  const SizedBox(height: 24),
+              // Spacer for waveform (waveform extends 16px above progress bar)
+              const SizedBox(height: 24),
 
-                  // Bottom section: Controls with bioluminescent visualizer
-                  Stack(
-                    children: [
-                      // Visualizer behind controls
-                      // Only shown when visualizerPosition is controlsBar
-                      // Wrapped in RepaintBoundary to isolate repaints from parent layout
-                      if (_appState.visualizerEnabled &&
-                          _appState.visualizerPosition == VisualizerPosition.controlsBar)
-                        Positioned.fill(
-                          child: RepaintBoundary(
-                            child: VisualizerFactory(
-                              type: _appState.visualizerType,
-                              audioService: _audioService,
-                              opacity: 0.4,
-                            ),
-                          ),
-                        ),
-                      // Controls on top
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Progress Slider with A-B Loop support
-                          StreamBuilder<PositionData>(
-                        stream: _positionDataStream,
-                        builder: (context, snapshot) {
-                          final positionData =
-                              snapshot.data ??
-                              const PositionData(
-                                Duration.zero,
-                                Duration.zero,
-                                Duration.zero,
-                              );
-                          final track = _audioService.currentTrack;
-                          final progress = positionData.duration.inMilliseconds > 0
-                              ? positionData.position.inMilliseconds / positionData.duration.inMilliseconds
-                              : 0.0;
-                          final loopState = _audioService.loopState;
-                          final isLoopAvailable = _audioService.isLoopAvailable;
-
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 24.0,
-                            ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                // A-B Loop controls overlay
-                                if (_showLoopControls && isLoopAvailable)
-                                  Padding(
-                                    padding: const EdgeInsets.only(bottom: 8.0),
-                                    child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        // Set A button
-                                        _LoopMarkerButton(
-                                          label: 'A',
-                                          isSet: loopState.start != null,
-                                          time: loopState.formattedStart,
-                                          onTap: () => _audioService.setLoopStart(),
-                                          color: theme.colorScheme.primary,
-                                        ),
-                                        const SizedBox(width: 12),
-                                        // Set B button
-                                        _LoopMarkerButton(
-                                          label: 'B',
-                                          isSet: loopState.end != null,
-                                          time: loopState.formattedEnd,
-                                          onTap: loopState.start != null
-                                              ? () => _audioService.setLoopEnd()
-                                              : null,
-                                          color: theme.colorScheme.primary,
-                                        ),
-                                        const SizedBox(width: 12),
-                                        // Toggle loop active
-                                        if (loopState.hasValidLoop)
-                                          IconButton(
-                                            icon: Icon(
-                                              loopState.isActive
-                                                  ? Icons.repeat_one
-                                                  : Icons.repeat_one_outlined,
-                                              color: loopState.isActive
-                                                  ? theme.colorScheme.primary
-                                                  : theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                                            ),
-                                            onPressed: () => _audioService.toggleLoop(),
-                                            tooltip: loopState.isActive ? 'Disable loop' : 'Enable loop',
-                                          ),
-                                        const SizedBox(width: 4),
-                                        // Clear loop
-                                        if (loopState.hasMarkers)
-                                          IconButton(
-                                            icon: Icon(
-                                              Icons.clear,
-                                              color: theme.colorScheme.error,
-                                            ),
-                                            onPressed: () => _audioService.clearLoop(),
-                                            tooltip: 'Clear loop markers',
-                                          ),
-                                        const Spacer(),
-                                        // Done button
-                                        TextButton(
-                                          onPressed: _toggleLoopControls,
-                                          child: Text(
-                                            'Done',
-                                            style: TextStyle(
-                                              color: theme.colorScheme.primary,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                // Progress bar with loop visualization
-                                // Long-press (touch) or right-click (mouse) to show A-B loop controls
-                                GestureDetector(
-                                  onLongPress: isLoopAvailable ? _toggleLoopControls : null,
-                                  onSecondaryTap: isLoopAvailable ? _toggleLoopControls : null,
-                                  behavior: HitTestBehavior.translucent,
-                                  child: LayoutBuilder(
-                                    builder: (context, constraints) {
-                                      return Stack(
-                                        clipBehavior: Clip.none,
-                                        children: [
-                                          // Loop region overlay
-                                          if (loopState.hasValidLoop && positionData.duration.inMilliseconds > 0)
-                                            Positioned(
-                                              left: (loopState.start!.inMilliseconds / positionData.duration.inMilliseconds) * constraints.maxWidth,
-                                              top: -2,
-                                              width: ((loopState.end!.inMilliseconds - loopState.start!.inMilliseconds) / positionData.duration.inMilliseconds) * constraints.maxWidth,
-                                              height: 8,
-                                              child: Container(
-                                                decoration: BoxDecoration(
-                                                  color: loopState.isActive
-                                                      ? theme.colorScheme.primary.withValues(alpha: 0.3)
-                                                      : theme.colorScheme.onSurface.withValues(alpha: 0.15),
-                                                  borderRadius: BorderRadius.circular(4),
-                                                  border: Border.all(
-                                                    color: loopState.isActive
-                                                        ? theme.colorScheme.primary
-                                                        : theme.colorScheme.onSurface.withValues(alpha: 0.3),
-                                                    width: 1,
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                          // Waveform layer
-                                          if (track != null)
-                                            Positioned(
-                                              left: 0,
-                                              right: 0,
-                                              top: -16,
-                                              height: 40,
-                                              child: TrackWaveform(
-                                                trackId: track.id,
-                                                progress: progress.clamp(0.0, 1.0),
-                                                width: constraints.maxWidth,
-                                                height: 40,
-                                              ),
-                                            ),
-                                          // Progress bar on top; VoiceOver
-                                          // adjusts it in 10 s steps.
-                                          Semantics(
-                                            slider: true,
-                                            label: 'Playback position',
-                                            value: '${_fmtPosition(positionData.position)} of ${_fmtPosition(positionData.duration)}',
-                                            onIncrease: () => _audioService.seek(positionData.position + const Duration(seconds: 10)),
-                                            onDecrease: () => _audioService.seek(positionData.position - const Duration(seconds: 10) < Duration.zero ? Duration.zero : positionData.position - const Duration(seconds: 10)),
-                                            child: ExcludeSemantics(
-                                              child: ProgressBar(
-                                            progress: positionData.position,
-                                            buffered: positionData.bufferedPosition,
-                                            total: positionData.duration,
-                                            onSeek: _audioService.seek,
-                                            barHeight: 4.0,
-                                            thumbRadius: 8.0,
-                                            thumbGlowRadius: 20.0,
-                                            progressBarColor: theme.colorScheme.secondary,
-                                            baseBarColor: theme.colorScheme.secondary
-                                                .withValues(alpha: 0.2),
-                                            bufferedBarColor: theme.colorScheme.secondary
-                                                .withValues(alpha: 0.1),
-                                            thumbColor: theme.colorScheme.secondary,
-                                            timeLabelLocation: TimeLabelLocation.below,
-                                            timeLabelPadding: 8.0,
-                                            timeLabelTextStyle: theme.textTheme.bodySmall,
-                                          ),
-                                            ),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-
-                      const SizedBox(height: 8),
-
-                      // Volume Slider (optional - can be hidden in settings)
-                      if (_appState.showVolumeBar)
-                        StreamBuilder<double>(
-                          stream: _audioService.volumeStream,
-                          initialData: _audioService.volume,
-                          builder: (context, volumeSnapshot) {
-                            final double volume =
-                                volumeSnapshot.data ?? _audioService.volume;
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16),
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.volume_mute, size: 20),
-                                  Expanded(
-                                    child: SliderTheme(
-                                      data: SliderTheme.of(context).copyWith(
-                                        activeTrackColor:
-                                            theme.colorScheme.tertiary,
-                                        inactiveTrackColor: theme
-                                            .colorScheme
-                                            .tertiary
-                                            .withValues(alpha: 0.2),
-                                        thumbColor: theme.colorScheme.tertiary,
-                                        overlayColor: theme.colorScheme.tertiary
-                                            .withValues(alpha: 0.1),
-                                      ),
-                                      child: Slider(
-                                        value: volume,
-                                        min: 0,
-                                        max: 1,
-                                        onChanged: (value) {
-                                          _audioService.setVolume(value);
-                                        },
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    '${(volume * 100).round()}%',
-                                    style: theme.textTheme.bodySmall,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  const Icon(Icons.volume_up, size: 20),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-
-                      // A-B Loop button (when enabled in menu and loop available but not active)
-                      if (_showLoopButton && _audioService.isLoopAvailable && !_audioService.loopState.isActive)
-                        TextButton.icon(
-                          onPressed: _toggleLoopControls,
-                          icon: Icon(
-                            Icons.repeat,
-                            size: 14,
-                            color: _showLoopControls
-                                ? theme.colorScheme.primary
-                                : theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                          ),
-                          label: Text(
-                            'A-B Loop',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: _showLoopControls
-                                  ? theme.colorScheme.primary
-                                  : theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                            ),
-                          ),
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                        ),
-
-                      // Loop indicator when active (clickable to show options)
-                      if (_audioService.loopState.isActive)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8.0),
-                          child: GestureDetector(
-                            onTap: () => _showLoopOptionsSheet(context, track),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.primary.withValues(alpha: 0.15),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: theme.colorScheme.primary.withValues(alpha: 0.5),
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.repeat_one,
-                                    size: 16,
-                                    color: theme.colorScheme.primary,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    '${_audioService.loopState.formattedStart} - ${_audioService.loopState.formattedEnd}',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: theme.colorScheme.primary,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Icon(
-                                    Icons.bookmark_add_outlined,
-                                    size: 14,
-                                    color: theme.colorScheme.primary,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-
-                      const SizedBox(height: 16),
-
-                      // Playback Controls
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          IconButton(
-                            icon: Icon(
-                              track.isFavorite
-                                  ? Icons.favorite
-                                  : Icons.favorite_border,
-                              size: isWide ? 32 : 26,
-                            ),
-                            tooltip: track.isFavorite ? 'Remove from favorites' : 'Add to favorites',
-                            onPressed: () async {
-                              HapticService.lightTap();
-                              try {
-                                final currentFavoriteStatus = track.isFavorite;
-                                final newFavoriteStatus =
-                                    !currentFavoriteStatus;
-
-                                debugPrint(
-                                  '🎯 Favorite button clicked: current=$currentFavoriteStatus, new=$newFavoriteStatus',
-                                );
-
-                                // Update Jellyfin server (with offline queue support)
-                                await _appState.markFavorite(
-                                  track.id,
-                                  newFavoriteStatus,
-                                );
-
-                                // Update track object with new favorite status
-                                final updatedTrack = track.copyWith(
-                                  isFavorite: newFavoriteStatus,
-                                );
-                                debugPrint(
-                                  '🔄 Updating track: old isFavorite=${track.isFavorite}, new isFavorite=${updatedTrack.isFavorite}',
-                                );
-                                _audioService.updateCurrentTrack(updatedTrack);
-
-                                // Force UI rebuild
-                                if (mounted) setState(() {});
-
-                                // Refresh favorites list in app state
-                                await _appState.refreshFavorites();
-
-                                if (!context.mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      newFavoriteStatus
-                                          ? 'Added to favorites'
-                                          : 'Removed from favorites',
-                                    ),
-                                    duration: const Duration(seconds: 2),
-                                    backgroundColor: Theme.of(context).colorScheme.primary,
-                                  ),
-                                );
-                              } catch (e) {
-                                debugPrint('❌ Error toggling favorite: $e');
-                                if (!context.mounted) return;
-                                final isOfflineError =
-                                    e.toString().contains('Offline') ||
-                                    e.toString().contains('queued');
-
-                                // Update track optimistically even when offline
-                                if (isOfflineError) {
-                                  final currentFavoriteStatus =
-                                      track.isFavorite;
-                                  final newFavoriteStatus =
-                                      !currentFavoriteStatus;
-                                  final updatedTrack = track.copyWith(
-                                    isFavorite: newFavoriteStatus,
-                                  );
-                                  _audioService.updateCurrentTrack(
-                                    updatedTrack,
-                                  );
-                                  if (mounted) setState(() {});
-                                }
-
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      isOfflineError
-                                          ? 'Offline: Favorite will sync when online'
-                                          : 'Failed to update favorite: $e',
-                                    ),
-                                    backgroundColor: isOfflineError
-                                        ? Colors.orange
-                                        : theme.colorScheme.error,
-                                  ),
-                                );
-                              }
-                            },
-                            color: track.isFavorite ? Colors.red : null,
-                          ),
-
-                          SizedBox(width: isWide ? 16 : 4),
-
-                          StreamBuilder<bool>(
-                            stream: _audioService.shuffleStream,
-                            initialData: _audioService.shuffleEnabled,
-                            builder: (context, snapshot) {
-                              final shuffled = snapshot.data ?? false;
-                              return IconButton(
-                                icon: Icon(
-                                  Icons.shuffle_rounded,
-                                  size: isWide ? 32 : 26,
-                                  color: shuffled ? theme.colorScheme.primary : null,
-                                ),
-                                tooltip: shuffled ? 'Shuffle on' : 'Shuffle off',
-                                isSelected: shuffled,
-                                onPressed: () {
-                                  HapticService.selectionClick();
-                                  _audioService.toggleShuffle();
-                                },
-                              );
-                            },
-                          ),
-
-                          SizedBox(width: isWide ? 16 : 4),
-
-                          IconButton(
-                            icon: Icon(
-                              Icons.skip_previous,
-                              size: isWide ? 48 : 40,
-                            ),
-                            tooltip: 'Previous',
-                            onPressed: () => _audioService.previous(),
-                          ),
-
-                          SizedBox(width: isWide ? 24 : 8),
-
-                          Container(
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: theme.colorScheme.primary,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: theme.colorScheme.primary.withValues(
-                                    alpha: 0.4,
-                                  ),
-                                  blurRadius: 16,
-                                  spreadRadius: 2,
-                                ),
-                              ],
-                            ),
-                            child: IconButton(
-                              icon: AnimatedSwitcher(
-                                duration: const Duration(milliseconds: 180),
-                                transitionBuilder: (child, animation) =>
-                                    ScaleTransition(scale: animation, child: child),
-                                child: Icon(
-                                  isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                                  key: ValueKey(isPlaying),
-                                  size: isWide ? 56 : 48,
-                                ),
-                              ),
-                              tooltip: isPlaying ? 'Pause' : 'Play',
-                              onPressed: () {
-                                HapticService.lightTap();
-                                _audioService.playPause();
-                              },
-                              color: theme.colorScheme.onPrimary,
-                            ),
-                          ),
-
-                          SizedBox(width: isWide ? 24 : 8),
-
-                          IconButton(
-                            icon: Icon(
-                              Icons.skip_next,
-                              size: isWide ? 48 : 40,
-                            ),
-                            tooltip: 'Next',
-                            onPressed: () => _audioService.next(),
-                          ),
-
-                          SizedBox(width: isWide ? 16 : 4),
-
-                          // Repeat button
-                          StreamBuilder<RepeatMode>(
-                            stream: _audioService.repeatModeStream,
-                            initialData: _audioService.repeatMode,
-                            builder: (context, snapshot) {
-                              final repeatMode =
-                                  snapshot.data ?? RepeatMode.off;
-                              final IconData icon;
-                              final Color? color;
-
-                              switch (repeatMode) {
-                                case RepeatMode.off:
-                                  icon = Icons.repeat;
-                                  color = null;
-                                case RepeatMode.all:
-                                  icon = Icons.repeat;
-                                  color = theme.colorScheme.primary;
-                                case RepeatMode.one:
-                                  icon = Icons.repeat_one;
-                                  color = theme.colorScheme.primary;
-                              }
-
-                              return IconButton(
-                                icon: Icon(
-                                  icon,
-                                  size: isWide ? 32 : 26,
-                                  color: color,
-                                ),
-                                tooltip: switch (repeatMode) {
-                                  RepeatMode.off => 'Repeat off',
-                                  RepeatMode.all => 'Repeat all',
-                                  RepeatMode.one => 'Repeat one',
-                                },
-                                onPressed: () {
-                                  HapticService.selectionClick();
-                                  _audioService.toggleRepeatMode();
-                                },
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                    ],
-                  ),
-                ],
-              );
-            },
+              // Bottom section: Controls with bioluminescent visualizer
+              controls,
+            ],
           ),
         );
       },
+    );
+  }
+
+  /// Title, radio badge, artist, album and quality badges.
+  Widget _buildTrackInfo({
+    required BuildContext context,
+    required JellyfinTrack track,
+    required bool isWide,
+    required ThemeData theme,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Track Info - Compact with adaptive colors
+        GestureDetector(
+          onLongPress: () => _showTrackMenu(context, track),
+          child: Text(
+            track.name,
+            style:
+                (isWide
+                        ? theme.textTheme.headlineMedium
+                        : theme.textTheme.titleLarge)
+                    ?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: _getAdaptiveTextColor(theme),
+                    ),
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+
+        // Radio indicator
+        if (_appState.infiniteRadioEnabled) ...[
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.radio, size: 14, color: theme.colorScheme.onPrimaryContainer),
+                const SizedBox(width: 4),
+                Text(
+                  'RADIO',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onPrimaryContainer,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+
+        const SizedBox(height: 8),
+
+        // Artist - clickable to navigate to artist detail
+        GestureDetector(
+          onTap: () async {
+            // Get the artist name from the track
+            final artistName = track.artists.isNotEmpty
+                ? track.artists.first
+                : track.displayArtist;
+
+            // Show loading indicator
+            if (!mounted) return;
+            showDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (context) => const Center(
+                child: CircularProgressIndicator(),
+              ),
+            );
+
+            JellyfinArtist? artist;
+
+            try {
+              // First, try direct ID-based lookup from track metadata
+              final artistId = track.artistIds.isNotEmpty
+                  ? track.artistIds.first
+                  : null;
+              final artists = _appState.artists ?? [];
+
+              if (artistId != null) {
+                artist = artists
+                    .where((a) => a.id == artistId)
+                    .firstOrNull;
+              }
+
+              // Fall back to name-based search
+              artist ??= artists
+                  .where(
+                    (a) =>
+                        a.name.toLowerCase() ==
+                        artistName.toLowerCase(),
+                  )
+                  .firstOrNull;
+
+              // Not in the local cache — ask the server directly for the
+              // artist by ID. One round-trip beats paging through up to
+              // 500 artists hunting for a single match.
+              if (artist == null && artistId != null) {
+                try {
+                  artist = await _appState.jellyfinService
+                      .getArtist(artistId);
+                } catch (e) {
+                  debugPrint('Direct artist fetch failed: $e');
+                }
+              }
+
+              // If still not found, try downloads for offline mode
+              if (artist == null) {
+                final downloads = _appState
+                    .downloadService
+                    .completedDownloads;
+                final artistTracks = downloads
+                    .where(
+                      (d) => d.track.artists.any(
+                        (a) =>
+                            a.toLowerCase() ==
+                            artistName.toLowerCase(),
+                      ),
+                    )
+                    .map((d) => d.track)
+                    .toList();
+
+                if (artistTracks.isNotEmpty) {
+                  // Create synthetic artist for offline mode
+                  artist = JellyfinArtist(
+                    id: 'offline_$artistName',
+                    name: artistName,
+                  );
+                }
+              }
+            } finally {
+              // Close loading dialog
+              if (context.mounted) Navigator.of(context).pop();
+            }
+
+            if (artist != null) {
+              if (!context.mounted) return;
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) =>
+                      ArtistDetailScreen(artist: artist!),
+                ),
+              );
+            } else {
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Could not find artist "$artistName"',
+                  ),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            }
+          },
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.person,
+                size: 16,
+                color: _getAdaptiveSecondaryColor(theme),
+              ),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  track.displayArtist,
+                  style:
+                      (isWide
+                              ? theme.textTheme.headlineSmall
+                              : theme.textTheme.titleMedium)
+                          ?.copyWith(
+                            color: _getAdaptiveSecondaryColor(theme),
+                            decoration:
+                                TextDecoration.underline,
+                            decorationColor: _getAdaptiveSecondaryColor(theme).withValues(alpha: 0.5),
+                          ),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Album - clickable to navigate to album detail
+        if (track.album != null && track.albumId != null) ...[
+          const SizedBox(height: 4),
+          GestureDetector(
+            onTap: () async {
+              // First try to find in online cache
+              final albums = _appState.albums ?? [];
+              var album = albums
+                  .where((a) => a.id == track.albumId)
+                  .firstOrNull;
+
+              // If not found in cache and we're online, fetch from server
+              if (album == null && !_appState.isOfflineMode) {
+                try {
+                  album = await _appState.jellyfinService
+                      .getAlbum(track.albumId!);
+                } catch (_) {
+                  // Fall through to downloads fallback
+                }
+              }
+
+              // If still not found, try to create from downloads
+              if (album == null) {
+                final downloads = _appState
+                    .downloadService
+                    .completedDownloads;
+                final albumTracks = downloads
+                    .where(
+                      (d) => d.track.albumId == track.albumId,
+                    )
+                    .map((d) => d.track)
+                    .toList();
+
+                if (albumTracks.isNotEmpty) {
+                  // Create a synthetic JellyfinAlbum for offline mode
+                  album = JellyfinAlbum(
+                    id: track.albumId!,
+                    name: track.album!,
+                    artists: track.artists,
+                    primaryImageTag: track.albumPrimaryImageTag,
+                    genres: const [],
+                  );
+                }
+              }
+
+              if (!context.mounted) return;
+              if (album != null) {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) =>
+                        AlbumDetailScreen(album: album!),
+                  ),
+                );
+              } else {
+                // Album not available
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Album "${track.album}" not available',
+                    ),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              }
+            },
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.album,
+                  size: 16,
+                  color: theme.colorScheme.onSurfaceVariant
+                      .withValues(alpha: 0.7),
+                ),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    track.album!,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      decoration: TextDecoration.underline,
+                      decorationColor: theme
+                          .colorScheme
+                          .onSurfaceVariant
+                          .withValues(alpha: 0.3),
+                    ),
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+
+        // Audio quality info with streaming mode (stacked vertically)
+        if (track.audioQualityInfo != null) ...[
+          const SizedBox(height: 8),
+          // File quality badge
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 6,
+            ),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest
+                  .withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: theme.colorScheme.outline.withValues(
+                  alpha: 0.2,
+                ),
+                width: 1,
+              ),
+            ),
+            child: Text(
+              track.audioQualityInfo!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.tertiary,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          // Streaming mode badge (below file quality)
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 6,
+            ),
+            decoration: BoxDecoration(
+              color:
+                  _appState.streamingQuality ==
+                      StreamingQuality.original
+                  ? theme.colorScheme.primaryContainer
+                        .withValues(alpha: 0.5)
+                  : theme.colorScheme.secondaryContainer
+                        .withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color:
+                    _appState.streamingQuality ==
+                        StreamingQuality.original
+                    ? theme.colorScheme.primary.withValues(
+                        alpha: 0.3,
+                      )
+                    : theme.colorScheme.secondary.withValues(
+                        alpha: 0.3,
+                      ),
+                width: 1,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  _appState.streamingQuality ==
+                          StreamingQuality.original
+                      ? Icons.high_quality
+                      : Icons.compress,
+                  size: 14,
+                  color:
+                      _appState.streamingQuality ==
+                          StreamingQuality.original
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.secondary,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _getStreamingModeLabel(
+                    _appState.streamingQuality,
+                  ),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color:
+                        _appState.streamingQuality ==
+                            StreamingQuality.original
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.secondary,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Progress bar, volume, A-B loop and transport controls, over the
+  /// controls-bar visualizer.
+  Widget _buildControlsSection({
+    required BuildContext context,
+    required JellyfinTrack track,
+    required bool isPlaying,
+    required bool isWide,
+    required ThemeData theme,
+  }) {
+    return Stack(
+      children: [
+        // Visualizer behind controls
+        // Only shown when visualizerPosition is controlsBar
+        // Wrapped in RepaintBoundary to isolate repaints from parent layout
+        if (_appState.visualizerEnabled &&
+            _appState.visualizerPosition == VisualizerPosition.controlsBar)
+          Positioned.fill(
+            child: RepaintBoundary(
+              child: VisualizerFactory(
+                type: _appState.visualizerType,
+                audioService: _audioService,
+                opacity: 0.4,
+              ),
+            ),
+          ),
+        // Controls on top
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Progress Slider with A-B Loop support
+            // Repaints 5x a second on its own layer instead of
+            // repainting the whole page (artwork shadow, glows).
+            RepaintBoundary(
+              child: PositionDataBuilder(
+          audioService: _audioService,
+          builder: (context, positionData) {
+            final track = _audioService.currentTrack;
+            final progress = positionData.duration.inMilliseconds > 0
+                ? positionData.position.inMilliseconds / positionData.duration.inMilliseconds
+                : 0.0;
+            final loopState = _audioService.loopState;
+            final isLoopAvailable = _audioService.isLoopAvailable;
+
+            return Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 24.0,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // A-B Loop controls overlay
+                  if (_showLoopControls && isLoopAvailable)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          // Set A button
+                          _LoopMarkerButton(
+                            label: 'A',
+                            isSet: loopState.start != null,
+                            time: loopState.formattedStart,
+                            onTap: () => _audioService.setLoopStart(),
+                            color: theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: 12),
+                          // Set B button
+                          _LoopMarkerButton(
+                            label: 'B',
+                            isSet: loopState.end != null,
+                            time: loopState.formattedEnd,
+                            onTap: loopState.start != null
+                                ? () => _audioService.setLoopEnd()
+                                : null,
+                            color: theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: 12),
+                          // Toggle loop active
+                          if (loopState.hasValidLoop)
+                            IconButton(
+                              icon: Icon(
+                                loopState.isActive
+                                    ? Icons.repeat_one
+                                    : Icons.repeat_one_outlined,
+                                color: loopState.isActive
+                                    ? theme.colorScheme.primary
+                                    : theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                              ),
+                              onPressed: () => _audioService.toggleLoop(),
+                              tooltip: loopState.isActive ? 'Disable loop' : 'Enable loop',
+                            ),
+                          const SizedBox(width: 4),
+                          // Clear loop
+                          if (loopState.hasMarkers)
+                            IconButton(
+                              icon: Icon(
+                                Icons.clear,
+                                color: theme.colorScheme.error,
+                              ),
+                              onPressed: () => _audioService.clearLoop(),
+                              tooltip: 'Clear loop markers',
+                            ),
+                          const Spacer(),
+                          // Done button
+                          TextButton(
+                            onPressed: _toggleLoopControls,
+                            child: Text(
+                              'Done',
+                              style: TextStyle(
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  // Progress bar with loop visualization
+                  // Long-press (touch) or right-click (mouse) to show A-B loop controls
+                  GestureDetector(
+                    onLongPress: isLoopAvailable ? _toggleLoopControls : null,
+                    onSecondaryTap: isLoopAvailable ? _toggleLoopControls : null,
+                    behavior: HitTestBehavior.translucent,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        return Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            // Loop region overlay
+                            if (loopState.hasValidLoop && positionData.duration.inMilliseconds > 0)
+                              Positioned(
+                                left: (loopState.start!.inMilliseconds / positionData.duration.inMilliseconds) * constraints.maxWidth,
+                                top: -2,
+                                width: ((loopState.end!.inMilliseconds - loopState.start!.inMilliseconds) / positionData.duration.inMilliseconds) * constraints.maxWidth,
+                                height: 8,
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: loopState.isActive
+                                        ? theme.colorScheme.primary.withValues(alpha: 0.3)
+                                        : theme.colorScheme.onSurface.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(
+                                      color: loopState.isActive
+                                          ? theme.colorScheme.primary
+                                          : theme.colorScheme.onSurface.withValues(alpha: 0.3),
+                                      width: 1,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            // Waveform layer
+                            if (track != null)
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                top: -16,
+                                height: 40,
+                                child: TrackWaveform(
+                                  trackId: track.id,
+                                  progress: progress.clamp(0.0, 1.0),
+                                  width: constraints.maxWidth,
+                                  height: 40,
+                                ),
+                              ),
+                            // Progress bar on top; VoiceOver
+                            // adjusts it in 10 s steps.
+                            Semantics(
+                              slider: true,
+                              label: 'Playback position',
+                              value: '${_fmtPosition(positionData.position)} of ${_fmtPosition(positionData.duration)}',
+                              onIncrease: () => _audioService.seek(positionData.position + const Duration(seconds: 10)),
+                              onDecrease: () => _audioService.seek(positionData.position - const Duration(seconds: 10) < Duration.zero ? Duration.zero : positionData.position - const Duration(seconds: 10)),
+                              child: ExcludeSemantics(
+                                child: ProgressBar(
+                              progress: positionData.position,
+                              buffered: positionData.bufferedPosition,
+                              total: positionData.duration,
+                              onSeek: _audioService.seek,
+                              barHeight: 4.0,
+                              thumbRadius: 8.0,
+                              thumbGlowRadius: 20.0,
+                              progressBarColor: theme.colorScheme.secondary,
+                              baseBarColor: theme.colorScheme.secondary
+                                  .withValues(alpha: 0.2),
+                              bufferedBarColor: theme.colorScheme.secondary
+                                  .withValues(alpha: 0.1),
+                              thumbColor: theme.colorScheme.secondary,
+                              timeLabelLocation: TimeLabelLocation.below,
+                              timeLabelPadding: 8.0,
+                              timeLabelTextStyle: theme.textTheme.bodySmall,
+                            ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+            ),
+
+        const SizedBox(height: 8),
+
+        // Volume Slider (optional - can be hidden in settings)
+        if (_appState.showVolumeBar)
+          StreamBuilder<double>(
+            stream: _audioService.volumeStream,
+            initialData: _audioService.volume,
+            builder: (context, volumeSnapshot) {
+              final double volume =
+                  volumeSnapshot.data ?? _audioService.volume;
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    const Icon(Icons.volume_mute, size: 20),
+                    Expanded(
+                      child: SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          activeTrackColor:
+                              theme.colorScheme.tertiary,
+                          inactiveTrackColor: theme
+                              .colorScheme
+                              .tertiary
+                              .withValues(alpha: 0.2),
+                          thumbColor: theme.colorScheme.tertiary,
+                          overlayColor: theme.colorScheme.tertiary
+                              .withValues(alpha: 0.1),
+                        ),
+                        child: Slider(
+                          value: volume,
+                          min: 0,
+                          max: 1,
+                          onChanged: (value) {
+                            _audioService.setVolume(value);
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${(volume * 100).round()}%',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    const SizedBox(width: 8),
+                    const Icon(Icons.volume_up, size: 20),
+                  ],
+                ),
+              );
+            },
+          ),
+
+        // A-B Loop button (when enabled in menu and loop available but not active)
+        if (_showLoopButton && _audioService.isLoopAvailable && !_audioService.loopState.isActive)
+          TextButton.icon(
+            onPressed: _toggleLoopControls,
+            icon: Icon(
+              Icons.repeat,
+              size: 14,
+              color: _showLoopControls
+                  ? theme.colorScheme.primary
+                  : theme.colorScheme.onSurface.withValues(alpha: 0.5),
+            ),
+            label: Text(
+              'A-B Loop',
+              style: TextStyle(
+                fontSize: 11,
+                color: _showLoopControls
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.onSurface.withValues(alpha: 0.5),
+              ),
+            ),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+
+        // Loop indicator when active (clickable to show options)
+        if (_audioService.loopState.isActive)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8.0),
+            child: GestureDetector(
+              onTap: () => _showLoopOptionsSheet(context, track),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.5),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.repeat_one,
+                      size: 16,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${_audioService.loopState.formattedStart} - ${_audioService.loopState.formattedEnd}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Icon(
+                      Icons.bookmark_add_outlined,
+                      size: 14,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+        const SizedBox(height: 16),
+
+        // Playback Controls. Scales down instead of overflowing
+        // where the row is wider than the space (375 pt iPhones,
+        // which need 348 pt for it at the padded 48 pt targets).
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            IconButton(
+              icon: Icon(
+                track.isFavorite
+                    ? Icons.favorite
+                    : Icons.favorite_border,
+                size: isWide ? 32 : 26,
+              ),
+              tooltip: track.isFavorite ? 'Remove from favorites' : 'Add to favorites',
+              onPressed: () {
+                HapticService.lightTap();
+                _toggleFavorite(track);
+              },
+              color: track.isFavorite ? Colors.red : null,
+            ),
+
+            SizedBox(width: isWide ? 16 : 4),
+
+            StreamBuilder<bool>(
+              stream: _audioService.shuffleStream,
+              initialData: _audioService.shuffleEnabled,
+              builder: (context, snapshot) {
+                final shuffled = snapshot.data ?? false;
+                return IconButton(
+                  icon: Icon(
+                    Icons.shuffle_rounded,
+                    size: isWide ? 32 : 26,
+                    color: shuffled ? theme.colorScheme.primary : null,
+                  ),
+                  tooltip: shuffled ? 'Shuffle on' : 'Shuffle off',
+                  isSelected: shuffled,
+                  onPressed: () {
+                    HapticService.selectionClick();
+                    _audioService.toggleShuffle();
+                  },
+                );
+              },
+            ),
+
+            SizedBox(width: isWide ? 16 : 4),
+
+            IconButton(
+              icon: Icon(
+                Icons.skip_previous,
+                size: isWide ? 48 : 40,
+              ),
+              tooltip: 'Previous',
+              onPressed: () => _audioService.previous(),
+            ),
+
+            SizedBox(width: isWide ? 24 : 8),
+
+            Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: theme.colorScheme.primary,
+                boxShadow: [
+                  BoxShadow(
+                    color: theme.colorScheme.primary.withValues(
+                      alpha: 0.4,
+                    ),
+                    blurRadius: 16,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+              child: IconButton(
+                icon: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 180),
+                  transitionBuilder: (child, animation) =>
+                      ScaleTransition(scale: animation, child: child),
+                  child: Icon(
+                    isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                    key: ValueKey(isPlaying),
+                    size: isWide ? 56 : 48,
+                  ),
+                ),
+                tooltip: isPlaying ? 'Pause' : 'Play',
+                onPressed: () {
+                  HapticService.lightTap();
+                  _audioService.playPause();
+                },
+                color: theme.colorScheme.onPrimary,
+              ),
+            ),
+
+            SizedBox(width: isWide ? 24 : 8),
+
+            IconButton(
+              icon: Icon(
+                Icons.skip_next,
+                size: isWide ? 48 : 40,
+              ),
+              tooltip: 'Next',
+              onPressed: () => _audioService.next(),
+            ),
+
+            SizedBox(width: isWide ? 16 : 4),
+
+            // Repeat button
+            StreamBuilder<RepeatMode>(
+              stream: _audioService.repeatModeStream,
+              initialData: _audioService.repeatMode,
+              builder: (context, snapshot) {
+                final repeatMode =
+                    snapshot.data ?? RepeatMode.off;
+                final IconData icon;
+                final Color? color;
+
+                switch (repeatMode) {
+                  case RepeatMode.off:
+                    icon = Icons.repeat;
+                    color = null;
+                  case RepeatMode.all:
+                    icon = Icons.repeat;
+                    color = theme.colorScheme.primary;
+                  case RepeatMode.one:
+                    icon = Icons.repeat_one;
+                    color = theme.colorScheme.primary;
+                }
+
+                return IconButton(
+                  icon: Icon(
+                    icon,
+                    size: isWide ? 32 : 26,
+                    color: color,
+                  ),
+                  tooltip: switch (repeatMode) {
+                    RepeatMode.off => 'Repeat off',
+                    RepeatMode.all => 'Repeat all',
+                    RepeatMode.one => 'Repeat one',
+                  },
+                  onPressed: () {
+                    HapticService.selectionClick();
+                    _audioService.toggleRepeatMode();
+                  },
+                );
+              },
+            ),
+          ],
+        ),
+        ),
+      ],
+    ),
+      ],
     );
   }
 
@@ -2295,129 +2336,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
       );
     }
 
-    // Only the synced list follows position (its own builder, so position
-    // ticks don't rebuild the rest of the player).
-    return StreamBuilder<Duration>(
-      stream: _positionStream,
-      initialData: _audioService.currentPosition,
-      builder: (context, snapshot) => _buildSyncedLyrics(
-        position: snapshot.data ?? Duration.zero,
-        theme: theme,
-      ),
-    );
-  }
-
-  Widget _buildSyncedLyrics({
-    required Duration position,
-    required ThemeData theme,
-  }) {
-    // Find current lyric based on position
-    final currentTicks = position.inMicroseconds * 10;
-    int activeIndex = 0;
-    for (int i = 0; i < _lyrics!.length; i++) {
-      final lineTicks = _lyrics![i].startTicks;
-      if (lineTicks != null && lineTicks <= currentTicks) {
-        activeIndex = i;
-      }
-    }
-
-    // Trigger auto-scroll if index changed and user is not scrolling
-    if (activeIndex != _currentLyricIndex) {
-      _currentLyricIndex = activeIndex;
-      if (!_userIsScrolling) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          if (activeIndex >= 0 && activeIndex < _lyrics!.length) {
-            final key = _lyrics![activeIndex].key;
-            if (key.currentContext != null) {
-              // Item is in viewport — use precise scroll
-              Scrollable.ensureVisible(
-                key.currentContext!,
-                alignment: 0.5,
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-              );
-            } else if (_lyricsScrollController.hasClients) {
-              // Item is outside viewport (not yet built) — estimate position
-              const estimatedItemHeight = 52.0; // ~20px font * 1.4 lineHeight + 24px padding
-              const topPadding = 200.0;
-              final viewportCenter = _lyricsScrollController.position.viewportDimension * 0.5;
-              final offset = topPadding + (activeIndex * estimatedItemHeight) - viewportCenter;
-              _lyricsScrollController.animateTo(
-                offset.clamp(0.0, _lyricsScrollController.position.maxScrollExtent),
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-              );
-            }
-          }
-        });
-      }
-    }
-
-    return Stack(
-      children: [
-        NotificationListener<UserScrollNotification>(
-          onNotification: (notification) {
-            if (notification.direction != ScrollDirection.idle) {
-              _userIsScrolling = true;
-              _userScrollTimer?.cancel();
-              _userScrollTimer = Timer(const Duration(seconds: 2), () {
-                if (mounted) setState(() { _userIsScrolling = false; });
-              });
-            }
-            return false;
-          },
-          child: ListView.builder(
-            controller: _lyricsScrollController,
-            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 200),
-            itemCount: _lyrics!.length,
-            itemBuilder: (context, index) {
-              final line = _lyrics![index];
-              final isCurrent = index == activeIndex;
-              final isPast = index < activeIndex;
-
-              return GestureDetector(
-                key: line.key,
-                onTap: () {
-                  if (line.startTicks != null) {
-                    final microseconds = line.startTicks! ~/ 10;
-                    _audioService.seek(Duration(microseconds: microseconds));
-                  }
-                },
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: AnimatedDefaultTextStyle(
-                    duration: const Duration(milliseconds: 200),
-                    style: theme.textTheme.titleLarge!.copyWith(
-                      color: isCurrent
-                          ? theme.colorScheme.primary
-                          : theme.colorScheme.onSurfaceVariant.withValues(
-                              alpha: isPast ? 0.3 : 0.6,
-                            ),
-                      fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                      fontSize: isCurrent ? 28 : 20,
-                      height: 1.4,
-                      shadows: isCurrent
-                          ? [
-                              Shadow(
-                                color: theme.colorScheme.primary.withValues(alpha: 0.4),
-                                blurRadius: 12,
-                                offset: const Offset(0, 2),
-                              ),
-                            ]
-                          : [],
-                    ),
-                    textAlign: TextAlign.center,
-                    child: Text(line.text.isEmpty ? '♫' : line.text),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        // Source indicator removed - now in three-dot menu
-      ],
-    );
+    return _SyncedLyricsView(lyrics: _lyrics!, audioService: _audioService);
   }
 
   Widget _buildArtwork({
@@ -2432,7 +2351,9 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
     final borderRadius = isFullArt
         ? BorderRadius.zero
         : BorderRadius.circular(isWide ? 24 : 16);
-    final maxWidth = isWide ? 1024 : 800;
+    // Logical points (JellyfinImage scales by the pixel ratio): about the
+    // largest the artwork is drawn at. 800 decoded ~2400 px on @3x phones.
+    final maxWidth = isWide ? 640 : 420;
     final placeholder = Container(
       color: theme.colorScheme.primaryContainer,
       child: Icon(
@@ -2520,12 +2441,239 @@ class _FullPlayerScreenState extends State<FullPlayerScreen>
   }
 }
 
+enum _TopSlot { artwork, info }
+
+/// Lays out the artwork above the track info, centred as a group. The info
+/// is measured first at its natural height (a scroll view caps it at the
+/// available height); the artwork gets the rest. A Column can't do this:
+/// fixed children overflow when the space is short, and two Flexibles would
+/// split it evenly.
+class _ArtworkAndInfoLayout extends MultiChildLayoutDelegate {
+  _ArtworkAndInfoLayout({required this.gap});
+
+  final double gap;
+
+  @override
+  void performLayout(Size size) {
+    final infoSize = layoutChild(
+      _TopSlot.info,
+      BoxConstraints(maxWidth: size.width, maxHeight: size.height),
+    );
+    final artworkMax = math.max(0.0, size.height - infoSize.height - gap);
+    final artworkSize = layoutChild(
+      _TopSlot.artwork,
+      BoxConstraints(maxWidth: size.width, maxHeight: artworkMax),
+    );
+    final gapUsed = artworkSize.height > 0 ? gap : 0.0;
+    var y = math.max(
+      0.0,
+      (size.height - artworkSize.height - gapUsed - infoSize.height) / 2,
+    );
+    positionChild(
+      _TopSlot.artwork,
+      Offset((size.width - artworkSize.width) / 2, y),
+    );
+    y += artworkSize.height + gapUsed;
+    positionChild(_TopSlot.info, Offset((size.width - infoSize.width) / 2, y));
+  }
+
+  @override
+  bool shouldRelayout(_ArtworkAndInfoLayout oldDelegate) =>
+      oldDelegate.gap != gap;
+}
+
 class _LyricLine {
   _LyricLine({required this.text, this.startTicks});
 
   final String text;
   final int? startTicks; // Jellyfin uses ticks (100 nanoseconds)
   final GlobalKey key = GlobalKey();
+}
+
+/// Lyrics list that follows playback. It owns its position subscription and
+/// rebuilds only when the active line changes, not on every position tick.
+/// Plain (untimed) lyrics get no subscription and no highlighted line.
+class _SyncedLyricsView extends StatefulWidget {
+  const _SyncedLyricsView({required this.lyrics, required this.audioService});
+
+  final List<_LyricLine> lyrics;
+  final AudioPlayerService audioService;
+
+  @override
+  State<_SyncedLyricsView> createState() => _SyncedLyricsViewState();
+}
+
+class _SyncedLyricsViewState extends State<_SyncedLyricsView> {
+  static const double _verticalPadding = 200;
+  // Rough row height for lines not built yet (~20 pt * 1.4 + 24 pt padding).
+  static const double _estimatedItemHeight = 52;
+
+  final ScrollController _scrollController = ScrollController();
+  StreamSubscription<Duration>? _positionSub;
+  int _activeIndex = -1;
+  bool _userIsScrolling = false;
+  Timer? _userScrollTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribe();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SyncedLyricsView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.lyrics, widget.lyrics) ||
+        !identical(oldWidget.audioService, widget.audioService)) {
+      _subscribe();
+    }
+  }
+
+  @override
+  void dispose() {
+    _positionSub?.cancel();
+    _userScrollTimer?.cancel();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _subscribe() {
+    _positionSub?.cancel();
+    _positionSub = null;
+    _activeIndex = -1;
+    if (!widget.lyrics.any((line) => line.startTicks != null)) return;
+    _activeIndex = _indexFor(widget.audioService.currentPosition);
+    _positionSub = widget.audioService.positionStream.listen(_onPosition);
+    _scheduleScrollToActive(animate: false);
+  }
+
+  /// Last line that has started at [position]; -1 before the first one.
+  int _indexFor(Duration position) {
+    final ticks = position.inMicroseconds * 10; // Jellyfin ticks (100 ns)
+    var index = -1;
+    final lyrics = widget.lyrics;
+    for (var i = 0; i < lyrics.length; i++) {
+      final start = lyrics[i].startTicks;
+      if (start != null && start <= ticks) index = i;
+    }
+    return index;
+  }
+
+  void _onPosition(Duration position) {
+    if (!mounted) return;
+    final index = _indexFor(position);
+    if (index == _activeIndex) return;
+    setState(() => _activeIndex = index);
+    if (!_userIsScrolling) _scheduleScrollToActive();
+  }
+
+  void _scheduleScrollToActive({bool animate = true}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToActive(animate));
+  }
+
+  /// Centres the active line by scrolling this list only. (It used
+  /// Scrollable.ensureVisible, which also scrolls the TabBarView around it
+  /// and yanked a half-finished swipe between the tabs back to Lyrics.)
+  void _scrollToActive(bool animate) {
+    if (!mounted || !_scrollController.hasClients) return;
+    final index = _activeIndex;
+    if (index < 0 || index >= widget.lyrics.length) return;
+    final position = _scrollController.position;
+
+    double? target;
+    final renderObject =
+        widget.lyrics[index].key.currentContext?.findRenderObject();
+    if (renderObject != null && renderObject.attached) {
+      final viewport = RenderAbstractViewport.maybeOf(renderObject);
+      target = viewport?.getOffsetToReveal(renderObject, 0.5).offset;
+    }
+    // Not built yet (outside the viewport): estimate.
+    target ??= _verticalPadding +
+        index * _estimatedItemHeight -
+        position.viewportDimension * 0.5;
+    target = target.clamp(position.minScrollExtent, position.maxScrollExtent);
+
+    if (animate) {
+      _scrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+    } else {
+      _scrollController.jumpTo(target);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final activeIndex = _activeIndex;
+    return NotificationListener<UserScrollNotification>(
+      onNotification: (notification) {
+        if (notification.direction != ScrollDirection.idle) {
+          _userIsScrolling = true;
+          _userScrollTimer?.cancel();
+          _userScrollTimer = Timer(const Duration(seconds: 2), () {
+            if (!mounted) return;
+            _userIsScrolling = false;
+            // Back to the line being sung.
+            _scrollToActive(true);
+          });
+        }
+        return false;
+      },
+      child: ListView.builder(
+        controller: _scrollController,
+        padding: const EdgeInsets.symmetric(
+          horizontal: 32,
+          vertical: _verticalPadding,
+        ),
+        itemCount: widget.lyrics.length,
+        itemBuilder: (context, index) {
+          final line = widget.lyrics[index];
+          final isCurrent = index == activeIndex;
+          final isPast = activeIndex >= 0 && index < activeIndex;
+
+          return GestureDetector(
+            key: line.key,
+            onTap: () {
+              final start = line.startTicks;
+              if (start != null) {
+                widget.audioService.seek(Duration(microseconds: start ~/ 10));
+              }
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 200),
+                style: theme.textTheme.titleLarge!.copyWith(
+                  color: isCurrent
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.onSurfaceVariant.withValues(
+                          alpha: isPast ? 0.3 : 0.6,
+                        ),
+                  fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                  fontSize: isCurrent ? 28 : 20,
+                  height: 1.4,
+                  shadows: isCurrent
+                      ? [
+                          Shadow(
+                            color: theme.colorScheme.primary.withValues(alpha: 0.4),
+                            blurRadius: 12,
+                            offset: const Offset(0, 2),
+                          ),
+                        ]
+                      : const [],
+                ),
+                textAlign: TextAlign.center,
+                child: Text(line.text.isEmpty ? '♫' : line.text),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
 }
 
 /// A-B loop marker button widget

@@ -1,6 +1,6 @@
 part of '../library_screen.dart';
 
-class _FavoritesTab extends StatelessWidget {
+class _FavoritesTab extends StatefulWidget {
   const _FavoritesTab({
     required this.recentTracks,
     required this.isLoading,
@@ -13,15 +13,42 @@ class _FavoritesTab extends StatelessWidget {
   final List<JellyfinTrack>? recentTracks;
   final bool isLoading;
   final Object? error;
-  final VoidCallback onRefresh;
-  final Function(JellyfinTrack) onTrackTap;
+  final Future<void> Function() onRefresh;
+
+  /// Plays the tapped track with the list as shown (sorted) as the queue.
+  final void Function(JellyfinTrack track, List<JellyfinTrack> queue) onTrackTap;
   final NautuneAppState appState;
+
+  @override
+  State<_FavoritesTab> createState() => _FavoritesTabState();
+}
+
+class _FavoritesTabState extends State<_FavoritesTab> {
+  // Sorted list, recomputed only when the list or the sort changes.
+  List<JellyfinTrack>? _sortedSource;
+  FavoritesSort? _sortedBy;
+  List<JellyfinTrack> _sorted = const [];
+
+  List<JellyfinTrack> _sortedFor(List<JellyfinTrack> tracks, FavoritesSort sort) {
+    if (!identical(tracks, _sortedSource) || sort != _sortedBy) {
+      _sortedSource = tracks;
+      _sortedBy = sort;
+      _sorted = sortFavorites(tracks, sort);
+    }
+    return _sorted;
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final recentTracks = widget.recentTracks;
+    final error = widget.error;
+    final isLoading = widget.isLoading;
+    final onRefresh = widget.onRefresh;
+    final appState = widget.appState;
 
-    if (error != null) {
+    // A failed refresh keeps showing the favorites we have.
+    if (error != null && (recentTracks == null || recentTracks.isEmpty)) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -40,11 +67,11 @@ class _FavoritesTab extends StatelessWidget {
       );
     }
 
-    if (isLoading && (recentTracks == null || recentTracks!.isEmpty)) {
+    if (isLoading && (recentTracks == null || recentTracks.isEmpty)) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (recentTracks == null || recentTracks!.isEmpty) {
+    if (recentTracks == null || recentTracks.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -68,9 +95,9 @@ class _FavoritesTab extends StatelessWidget {
     }
 
     final uiState = context.watch<UIStateProvider>();
-    final tracks = sortFavorites(recentTracks!, uiState.favoritesSort);
+    final tracks = _sortedFor(recentTracks, uiState.favoritesSort);
     return RefreshIndicator(
-      onRefresh: () async => onRefresh(),
+      onRefresh: onRefresh,
       child: ListView.builder(
         scrollCacheExtent: ScrollCacheExtent.pixels(500), // Pre-render items above/below viewport for smoother scrolling
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
@@ -114,7 +141,7 @@ class _FavoritesTab extends StatelessWidget {
                           imageTag: track.albumPrimaryImageTag,
                           trackId: track.id, // Enable offline artwork support
                           albumId: track.albumId,
-                          maxWidth: 200,
+                          maxWidth: JellyfinImage.listArtwork,
                           boxFit: BoxFit.cover,
                           placeholderBuilder: (context, url) => Container(
                             color: theme.colorScheme.surfaceContainerHighest,
@@ -162,7 +189,7 @@ class _FavoritesTab extends StatelessWidget {
                   ),
                 ],
               ),
-              onTap: () => onTrackTap(track),
+              onTap: () => widget.onTrackTap(track, tracks),
             ),
           )),
           );

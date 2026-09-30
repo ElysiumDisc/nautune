@@ -277,12 +277,15 @@ class SessionProvider extends ChangeNotifier {
 
     _session = updated;
 
-    // Don't persist demo sessions
-    if (!session.isDemo) {
-      await _sessionStore.save(updated);
+    // Notify even if persisting fails: the in-memory session already
+    // changed and listeners must see it. Demo sessions aren't persisted.
+    try {
+      if (!session.isDemo) {
+        await _sessionStore.save(updated);
+      }
+    } finally {
+      notifyListeners();
     }
-
-    notifyListeners();
   }
 
   /// Clear the selected library from the current session.
@@ -297,11 +300,15 @@ class SessionProvider extends ChangeNotifier {
 
     _session = updated;
 
-    if (!session.isDemo) {
-      await _sessionStore.save(updated);
+    // Notify even if persisting fails: the in-memory session already
+    // changed and listeners must see it. Demo sessions aren't persisted.
+    try {
+      if (!session.isDemo) {
+        await _sessionStore.save(updated);
+      }
+    } finally {
+      notifyListeners();
     }
-
-    notifyListeners();
   }
 
   /// Clear any authentication errors.

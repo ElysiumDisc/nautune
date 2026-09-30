@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../jellyfin/jellyfin_service.dart';
 import '../utils/collection_sort.dart';
+import '../models/playback_state.dart';
 import '../services/playback_state_store.dart';
 
 /// Manages UI-only state that doesn't affect data or business logic.
@@ -102,12 +103,14 @@ class UIStateProvider extends ChangeNotifier {
 
   /// Initialize UI state by loading persisted preferences.
   ///
-  /// This should be called once during app startup.
-  Future<void> initialize() async {
+  /// This should be called once during app startup. Pass [storedState] when
+  /// the caller already loaded it, to avoid decoding it again.
+  Future<void> initialize({PlaybackState? storedState}) async {
     debugPrint('UIStateProvider: Initializing...');
 
     try {
-      final storedPlaybackState = await _playbackStateStore.load();
+      final storedPlaybackState =
+          storedState ?? await _playbackStateStore.load();
       if (storedPlaybackState != null) {
         _cacheTtlMinutes = storedPlaybackState.cacheTtlMinutes.clamp(1, 10080);
         _applyCacheTtl();
@@ -115,7 +118,14 @@ class UIStateProvider extends ChangeNotifier {
         _scrollOffsets = Map<String, double>.from(storedPlaybackState.scrollOffsets);
 
         // Smart caching settings
-        _preCacheTrackCount = storedPlaybackState.preCacheTrackCount;
+        // Builds before 2026-09 wrote the battery saver's override (0) into
+        // the preference and kept the user's value in the snapshot.
+        final legacySnapshot = storedPlaybackState.batterySaverSnapshot;
+        final legacyPreCache = (legacySnapshot != null && legacySnapshot.isNotEmpty)
+            ? (legacySnapshot['preCacheTrackCount'] as num?)?.toInt()
+            : null;
+        _preCacheTrackCount =
+            legacyPreCache ?? storedPlaybackState.preCacheTrackCount;
         _wifiOnlyCaching = storedPlaybackState.wifiOnlyCaching;
 
         // Download settings

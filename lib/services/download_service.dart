@@ -16,6 +16,7 @@ import '../jellyfin/jellyfin_session.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../models/download_item.dart';
 import '../utils/backup_exclusion.dart';
+import '../utils/download_checks.dart';
 import '../utils/download_format.dart';
 import '../utils/download_migration.dart';
 import '../utils/download_paths.dart';
@@ -75,6 +76,28 @@ class StorageStats {
   static String _formatBytes(int bytes) => formatDownloadBytes(bytes);
 }
 
+/// Storage used outside the downloads folder (see
+/// [DownloadService.getStorageStats]).
+class _AuxStorageStats {
+  const _AuxStorageStats({
+    required this.cacheBytes,
+    required this.cacheFileCount,
+    required this.cachedTrackIds,
+    required this.waveformBytes,
+    required this.waveformFileCount,
+    required this.chartBytes,
+    required this.chartCount,
+  });
+
+  final int cacheBytes;
+  final int cacheFileCount;
+  final List<String> cachedTrackIds;
+  final int waveformBytes;
+  final int waveformFileCount;
+  final int chartBytes;
+  final int chartCount;
+}
+
 /// Response for one download attempt plus how it was obtained.
 class _DownloadSource {
   const _DownloadSource(
@@ -121,7 +144,7 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
   StreamSubscription<bool>? _connectivitySub;
   int _maxConcurrentDownloads = 3; // Now configurable
   int _activeDownloads = 0;
-  final http.Client _httpClient = http.Client(); // Reuse for connection pooling
+  final http.Client _httpClient; // Reused for connection pooling
   bool _demoModeEnabled = false;
   Uint8List? _demoAudioBytes;
   final Set<String> _demoDownloadIds = <String>{};
@@ -152,6 +175,20 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
   // Waveform extraction for finished downloads runs one at a time so a big
   // batch doesn't decode dozens of files in parallel.
   Future<void> _waveformChain = Future<void>.value();
+
+  // Post-download work (duration probe, images, lyrics), one track at a
+  // time and off the download slots.
+  Future<void> _postCompletionChain = Future<void>.value();
+
+  // Transcodes that came back shorter than the server's length, per track.
+  // Retried a few times; a consistently short result is then kept (the
+  // server's length is probably wrong).
+  final Map<String, int> _truncatedAttempts = <String, int>{};
+  static const int _maxTruncatedAttempts = 3;
+
+  // Artwork fetches in flight per album, so tracks of one album finishing
+  // together share a single request and write.
+  final Map<String, Future<bool>> _artworkFetches = <String, Future<bool>>{};
 
   static const _boxName = 'nautune_downloads';
   // Legacy format: the whole map under one key (rewritten on every save).
@@ -212,7 +249,9 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
   DownloadService({
     required this.jellyfinService,
     NotificationService? notificationService,
-  }) : _notificationService = notificationService {
+    http.Client? httpClient,
+  })  : _notificationService = notificationService,
+        _httpClient = httpClient ?? http.Client() {
     try {
       WidgetsBinding.instance.addObserver(this);
     } catch (_) {
@@ -308,6 +347,9 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
     final userId =
         session.credentials.userId.isEmpty ? null : session.credentials.userId;
     if (serverUrl.isEmpty) return track;
+    // Another server or user's download: never hand it this session's
+    // credentials (its requests would go to the wrong account).
+    if (!_belongsTo(track, session)) return track;
     if (track.serverUrl == null || track.token == null) {
       return track.copyWith(
         serverUrl: track.serverUrl ?? serverUrl,
@@ -315,12 +357,31 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
         userId: track.userId ?? userId,
       );
     }
-    // Same server, refreshed credentials (re-login): keep the track current.
-    if (track.serverUrl == serverUrl &&
-        (track.token != token || (userId != null && track.userId != userId))) {
+    // Same account, refreshed credentials (re-login): keep the track current.
+    if (track.token != token || (userId != null && track.userId == null)) {
       return track.copyWith(token: token, userId: userId);
     }
     return track;
+  }
+
+  /// Whether [track]'s download belongs to [session]'s server and user.
+  /// Records from older versions (no server/user stored) always match.
+  bool _belongsTo(JellyfinTrack track, JellyfinSession session) =>
+      downloadBelongsToSession(
+        recordServerUrl: track.serverUrl,
+        recordUserId: track.userId,
+        sessionServerUrl: session.serverUrl,
+        sessionUserId: session.credentials.userId,
+      );
+
+  /// Stop every in-flight transfer and put it back at the head of the queue
+  /// (status queued, partial data discarded). Call when the account is about
+  /// to change (logout, switching server or user) so no transfer keeps
+  /// running with the previous account's credentials. Queued downloads of
+  /// another account stay queued until that account signs in again.
+  void pauseActiveForSessionChange() {
+    if (_disposed) return;
+    _requeueActiveDownloads();
   }
 
   /// Apply the current Jellyfin session to downloaded tracks when the session
@@ -338,8 +399,10 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
       if (!identical(hydrated, item.track)) {
         final updated = item.copyWith(track: hydrated);
         _downloads[entry.key] = updated;
-        // Session fields are not persisted: the stored record is unchanged.
-        if (identical(_persisted[entry.key], item)) {
+        // The token is not persisted; the server/user are, so a record that
+        // just got them (written by an older version) is saved again.
+        if (identical(_persisted[entry.key], item) &&
+            !_accountFieldsChanged(item.track, hydrated)) {
           _persisted[entry.key] = updated;
         }
         changed = true;
@@ -359,8 +422,28 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
   /// so calling this is optional but makes it immediate.
   void onSessionChanged() {
     _syncSessionFields();
+    _requeueForeignActiveDownloads();
     if (!_disposed) notifyListeners();
+    // Persist server/user newly attached to older records (no-op otherwise).
+    _scheduleSave();
     _resumeRestoredQueue();
+  }
+
+  static bool _accountFieldsChanged(JellyfinTrack before, JellyfinTrack after) =>
+      before.serverUrl != after.serverUrl || before.userId != after.userId;
+
+  /// In-flight transfers that belong to another account than the current
+  /// session go back to the queue (they resume when that account returns).
+  void _requeueForeignActiveDownloads() {
+    final session = jellyfinService.session;
+    if (session == null || session.isDemo || _activeTokens.isEmpty) return;
+    final foreign = [
+      for (final id in _activeTokens.keys)
+        if (_downloads[id] case final item?
+            when !item.isCompleted && !_belongsTo(item.track, session))
+          id,
+    ];
+    if (foreign.isNotEmpty) _requeueActiveDownloads(only: foreign);
   }
 
   /// Start processing queued downloads once the service is loaded and a
@@ -712,13 +795,14 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Stop every in-flight transfer and re-queue it at the head of the queue
   /// (partial data is discarded; the transfer restarts later).
-  void _requeueActiveDownloads() {
-    final ids = _activeTokens.keys.toList();
+  void _requeueActiveDownloads({List<String>? only}) {
+    final ids = only ?? _activeTokens.keys.toList();
     if (ids.isEmpty) return;
     for (final id in ids.reversed) {
       _cancelActive(id);
       final item = _downloads[id];
-      if (item == null) continue;
+      // A transfer that already finished keeps its file: never re-queue it.
+      if (item == null || item.isCompleted) continue;
       _downloads[id] = item.copyWith(
         status: DownloadStatus.queued,
         progress: 0.0,
@@ -809,6 +893,8 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
     if (e is HttpException) return DownloadErrorKind.network;
     if (e is HandshakeException) return DownloadErrorKind.network;
     if (e is http.ClientException) return DownloadErrorKind.network;
+    if (e is _UnexpectedContentException) return DownloadErrorKind.server;
+    if (e is _TruncatedDownloadException) return DownloadErrorKind.network;
     if (e is _HttpStatusException) {
       // Proxy/gateway errors and throttling are usually transient (server
       // restarting behind a reverse proxy): retry like a network error.
@@ -921,10 +1007,19 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
           ? rawArtistIds.whereType<String>().toList()
           : <String>[];
 
+      // The full artist list (newer records); older records only kept the
+      // display string, which can read "X & N more".
+      final rawArtists = itemData['trackArtists'];
+      final artists = (rawArtists is List)
+          ? rawArtists.whereType<String>().toList()
+          : <String>[];
+
       final track = JellyfinTrack(
         id: trackId,
         name: itemData['trackName'] as String? ?? 'Unknown Track',
-        artists: [itemData['trackArtist'] as String? ?? 'Unknown Artist'],
+        artists: artists.isNotEmpty
+            ? artists
+            : [itemData['trackArtist'] as String? ?? 'Unknown Artist'],
         artistIds: artistIds,
         album: itemData['trackAlbum'] as String?,
         albumId: itemData['trackAlbumId'] as String?,
@@ -937,6 +1032,8 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
         bitDepth: (itemData['trackBitDepth'] as num?)?.toInt(),
         channels: (itemData['trackChannels'] as num?)?.toInt(),
         productionYear: (itemData['trackProductionYear'] as num?)?.toInt(),
+        serverUrl: _nonEmpty(itemData['serverUrl']),
+        userId: _nonEmpty(itemData['userId']),
       );
       return DownloadItem.fromJson(itemData, track);
     } catch (e) {
@@ -944,6 +1041,9 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
       return null;
     }
   }
+
+  static String? _nonEmpty(Object? value) =>
+      value is String && value.isNotEmpty ? value : null;
 
   Future<void> _loadDownloads() async {
     try {
@@ -1020,7 +1120,9 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
         }
 
         if (session != null && !session.isDemo && !item.isDemoAsset) {
-          item = item.copyWith(track: _hydrateTrack(item.track, session));
+          final hydrated = _hydrateTrack(item.track, session);
+          if (_accountFieldsChanged(item.track, hydrated)) needsResave = true;
+          item = item.copyWith(track: hydrated);
         }
 
         if (item.isDownloading || item.isPaused) {
@@ -1206,6 +1308,21 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
           await entity.delete();
         }
       }
+      // Image temp files (artwork/, artists/) from an interrupted write. A
+      // fetch may be writing one right now, so only old ones are removed.
+      final cutoff = DateTime.now().subtract(const Duration(minutes: 5));
+      for (final name in const ['artwork', 'artists']) {
+        final dir = Directory('${downloadsDir.path}/$name');
+        if (!await dir.exists()) continue;
+        await for (final entity in dir.list()) {
+          if (entity is! File || !entity.path.endsWith('.tmp')) continue;
+          try {
+            if ((await entity.lastModified()).isBefore(cutoff)) {
+              await entity.delete();
+            }
+          } catch (_) {}
+        }
+      }
     } catch (e) {
       debugPrint('Error cleaning up tmp files: $e');
     }
@@ -1249,6 +1366,13 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
   /// Verify all downloaded files exist and clean up orphaned references
   Future<void> verifyAndCleanupDownloads() async {
     await _cleanupStaleTmpFiles();
+    if (_rootPath == null) {
+      // Without the downloads root, stored (relative) paths can't be
+      // resolved: every file would look missing and every record would be
+      // dropped. Verify on a later launch instead.
+      debugPrint('DownloadService: downloads root unavailable; skipping verification');
+      return;
+    }
     debugPrint('Verifying download files...');
     final toRemove = <String>{};  // Use Set to prevent duplicates
     bool pathsUpdated = false;
@@ -1378,18 +1502,50 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
     return _getArtworkPath(albumId);
   }
 
+  /// Whether an image file is present and non-empty (an interrupted write
+  /// from an older version could leave an empty file behind).
+  static Future<bool> _hasImageFile(File file) async {
+    try {
+      return await file.exists() && await file.length() > 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Write [bytes] to [path] through a temporary file and a rename, so a
+  /// reader (or a crash) never sees a partial image.
+  static Future<void> _writeFileAtomically(String path, List<int> bytes) async {
+    final tmp = File('$path.${DateTime.now().microsecondsSinceEpoch}.tmp');
+    try {
+      await tmp.writeAsBytes(bytes, flush: true);
+      await tmp.rename(path);
+    } catch (e) {
+      try {
+        if (await tmp.exists()) await tmp.delete();
+      } catch (_) {}
+      rethrow;
+    }
+  }
+
   /// Returns true if artwork is present (already cached or newly fetched).
-  Future<bool> _downloadArtwork(JellyfinTrack track) async {
+  /// Tracks of one album finishing together share one fetch.
+  Future<bool> _downloadArtwork(JellyfinTrack track) {
+    final albumId = track.albumId ?? track.id;
+    final inFlight = _artworkFetches[albumId];
+    if (inFlight != null) return inFlight;
+    final fetch = _fetchArtwork(track, albumId);
+    _artworkFetches[albumId] = fetch;
+    return fetch.whenComplete(() => _artworkFetches.remove(albumId));
+  }
+
+  Future<bool> _fetchArtwork(JellyfinTrack track, String albumId) async {
     try {
       final artworkUrl = track.artworkUrl();
       if (artworkUrl == null) return false;
 
       // Use albumId for artwork storage to avoid duplicates
-      final albumId = track.albumId ?? track.id;
       final artworkPath = await _getArtworkPath(albumId);
-      final file = File(artworkPath);
-
-      if (await file.exists()) {
+      if (await _hasImageFile(File(artworkPath))) {
         return true; // Already cached for this album
       }
 
@@ -1399,11 +1555,11 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
       if (response.statusCode == 200) {
         // Validate response is actually an image before caching
         final contentType = response.headers['content-type'] ?? '';
-        if (!contentType.startsWith('image/')) {
+        if (!contentType.startsWith('image/') || response.bodyBytes.isEmpty) {
           debugPrint('Artwork response is not an image ($contentType), skipping');
           return false;
         }
-        await file.writeAsBytes(response.bodyBytes, flush: true);
+        await _writeFileAtomically(artworkPath, response.bodyBytes);
         debugPrint('Artwork cached for album: $albumId');
         return true;
       }
@@ -1431,7 +1587,7 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
       final artistImagePath = await _getArtistImagePath(artistId);
       final file = File(artistImagePath);
 
-      if (await file.exists()) {
+      if (await _hasImageFile(file)) {
         return false; // Already cached for this artist
       }
 
@@ -1447,8 +1603,11 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
             headers: jellyfinService.imageHeaders(),
           )
           .timeout(_imageFetchTimeout);
-      if (response.statusCode == 200) {
-        await file.writeAsBytes(response.bodyBytes, flush: true);
+      final contentType = response.headers['content-type'] ?? '';
+      if (response.statusCode == 200 &&
+          contentType.startsWith('image/') &&
+          response.bodyBytes.isNotEmpty) {
+        await _writeFileAtomically(artistImagePath, response.bodyBytes);
         debugPrint('Artist image cached for: $artistId');
         return true;
       }
@@ -1466,9 +1625,17 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
       if (_disposed) return;
       if (await _downloadArtistImage(artistId)) fetchedAny = true;
     }
+    if (_disposed) return;
+    if (!_downloads.containsKey(track.id)) {
+      // Deleted while the images were being fetched: don't leave images
+      // behind that no download references.
+      await _deleteUnreferencedArtwork([track.albumId ?? track.id]);
+      await _deleteUnreferencedArtistImages(track.artistIds);
+      return;
+    }
     // Image files are addressed by album/artist id, not stored in records;
     // notify so offline artwork widgets reload.
-    if (fetchedAny && !_disposed) _throttledNotify();
+    if (fetchedAny) _throttledNotify();
   }
 
   /// Get artist image file for offline display
@@ -1505,17 +1672,34 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// Decoded length of a downloaded file, or null (probe failed or took
+  /// longer than [_durationProbeTimeout]).
+  Future<Duration?> _probeDuration(String path) async {
+    try {
+      return await _extractAudioDuration(path).timeout(_durationProbeTimeout);
+    } on TimeoutException {
+      debugPrint('Duration probe timed out for $path');
+      return null;
+    }
+  }
+
   /// Extract the waveform of a finished download, one file at a time.
   void _queueWaveform(String trackId, String path) {
     final waveforms = WaveformService.instance;
     if (!waveforms.isAvailable) return;
     _waveformChain = _waveformChain.then((_) async {
       if (_disposed || !(_downloads[trackId]?.isCompleted ?? false)) return;
+      final subscription =
+          waveforms.extractWaveform(trackId, path).listen(null);
       try {
-        await waveforms
-            .extractWaveform(trackId, path)
-            .drain<void>()
-            .timeout(_waveformTimeout);
+        await subscription.asFuture<void>().timeout(_waveformTimeout);
+      } on TimeoutException {
+        // Stop the extraction (not just stop waiting for it) so the next
+        // file never decodes in parallel with this one.
+        debugPrint('Waveform extraction timed out for $trackId');
+        await subscription
+            .cancel()
+            .timeout(const Duration(seconds: 5), onTimeout: () {});
       } catch (e) {
         debugPrint('Waveform extraction failed for $trackId: $e');
       }
@@ -1735,8 +1919,15 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
         _networkRetryTimer != null) {
       return;
     }
-    if (jellyfinService.session == null) {
+    final currentSession = jellyfinService.session;
+    if (currentSession == null) {
       _resumeRestoredQueue(); // waits for the session
+      return;
+    }
+    // Only other accounts' downloads are left: they wait (queued) for that
+    // account to sign in again, so for this session the queue has drained.
+    if (_activeDownloads == 0 && _onlyOtherAccountsQueued(currentSession)) {
+      _onQueueDrained();
       return;
     }
 
@@ -1758,15 +1949,45 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
       _setQueuePause(DownloadQueuePause.none);
     }
 
+    final session = jellyfinService.session;
+    if (session == null) return;
     final limit = _networkProbe ? 1 : _maxConcurrentDownloads;
-    while (_activeDownloads < limit && _downloadQueue.isNotEmpty) {
-      final trackId = _downloadQueue.removeAt(0);
+    // Downloads queued under another server or user stay queued (in order)
+    // until that account signs in again; they are never sent to this one.
+    final deferred = <String>[];
+    var next = 0;
+    while (_activeDownloads < limit && next < _downloadQueue.length) {
+      final trackId = _downloadQueue[next++];
       final item = _downloads[trackId];
-      if (item != null && item.isQueued && !_activeTokens.containsKey(trackId)) {
-        // Start download (unawaited, but increments _activeDownloads synchronously)
-        unawaited(_startDownload(trackId));
+      if (item == null || !item.isQueued || _activeTokens.containsKey(trackId)) {
+        continue; // dropped below
       }
+      if (!session.isDemo && !_belongsTo(item.track, session)) {
+        deferred.add(trackId);
+        continue;
+      }
+      // Start download (unawaited, but increments _activeDownloads synchronously)
+      unawaited(_startDownload(trackId));
     }
+    // Remove what was consumed from the head in one pass; foreign items go
+    // back in front, in their original order.
+    _downloadQueue
+      ..removeRange(0, next)
+      ..insertAll(0, deferred);
+  }
+
+  /// Whether every download still queued belongs to another account than
+  /// [session] (and at least one does).
+  bool _onlyOtherAccountsQueued(JellyfinSession session) {
+    if (session.isDemo) return false;
+    var foreign = false;
+    for (final id in _downloadQueue) {
+      final item = _downloads[id];
+      if (item == null || !item.isQueued) continue; // dropped by the queue
+      if (_belongsTo(item.track, session)) return false;
+      foreign = true;
+    }
+    return foreign;
   }
 
   /// The queue emptied: post a summary and reset per-batch state.
@@ -1949,6 +2170,25 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
 
+    // Final file renamed into place but not yet recorded as completed.
+    String? unownedFinalPath;
+    Future<void> deleteUnownedFinal() async {
+      final path = unownedFinalPath;
+      unownedFinalPath = null;
+      if (path == null) return;
+      // A newer attempt for the same track may already own this path.
+      final current = _downloads[trackId];
+      if (current != null && current.isCompleted && current.localPath == path) {
+        return;
+      }
+      try {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      } catch (e) {
+        debugPrint('DownloadService: unrecorded file cleanup failed: $e');
+      }
+    }
+
     Future<void> deleteTmp() async {
       // Only the tmp file this attempt created; never a path another attempt
       // for the same track might be writing.
@@ -1969,6 +2209,12 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
       if (response.statusCode != 200) {
         _discard(response);
         throw _HttpStatusException(response.statusCode);
+      }
+      final contentType = response.headers['content-type'];
+      if (!isAcceptableDownloadContentType(contentType)) {
+        // e.g. a reverse-proxy login page answered with 200: not audio.
+        _discard(response);
+        throw _UnexpectedContentException(contentType ?? '');
       }
       throwIfCancelled();
 
@@ -2051,18 +2297,40 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
       // Atomic rename: only moves the file to final path after fully written
       await tmpFile.rename(correctPath);
       activeTmpPath = null;
-
-      if (isCancelled()) {
-        // Deleted while finishing: don't leave an untracked file behind.
-        try {
-          await File(correctPath).delete();
-        } catch (_) {}
-        throw const _DownloadCancelled();
-      }
+      // From here until the download is marked completed, a cancellation or
+      // failure must delete the final file too (no record would own it).
+      unownedFinalPath = correctPath;
+      throwIfCancelled();
 
       // Get file size and cache it to avoid repeated file I/O in getTotalDownloadSize
       final fileSize = await File(correctPath).length();
       throwIfCancelled();
+
+      // A transcode of unknown length has no byte count to check: compare
+      // its decoded length with the server's instead, before accepting it.
+      final expectedTicks = _downloads[trackId]!.track.runTimeTicks ?? 0;
+      Duration? probed;
+      var probeAttempted = false;
+      if (source.viaUniversal && totalBytes <= 0 && expectedTicks > 0) {
+        probeAttempted = true;
+        probed = await _probeDuration(correctPath);
+        throwIfCancelled();
+        final probedTicks = (probed?.inMicroseconds ?? 0) * 10;
+        if (isLikelyTruncated(
+          probedTicks: probedTicks,
+          expectedTicks: expectedTicks,
+        )) {
+          final attempts = (_truncatedAttempts[trackId] ?? 0) + 1;
+          if (attempts < _maxTruncatedAttempts) {
+            _truncatedAttempts[trackId] = attempts;
+            throw _TruncatedDownloadException(probedTicks, expectedTicks);
+          }
+          // Consistently short: the server's length is probably wrong.
+          // Keep the file (its probed length replaces the server's below).
+          debugPrint('Keeping short transcode of ${item.track.name} after '
+              '$attempts attempts');
+        }
+      }
 
       // Completion: the audio is on disk. Everything after this point
       // (duration probe, images, lyrics, waveform) is best-effort and must
@@ -2076,59 +2344,40 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
         fileSizeBytes: fileSize,
         clearErrorKind: true,
       );
+      unownedFinalPath = null;
       _networkFailures.remove(trackId);
+      _truncatedAttempts.remove(trackId);
       _consecutiveNetworkFailures = 0;
       _batchCompleted++;
       _addToIndexes(_downloads[trackId]!.track);
+      // The transfer is over: drop the token now so pausing or re-queueing
+      // in-flight transfers can never touch this finished download.
+      if (identical(_activeTokens[trackId], cancelToken)) {
+        _activeTokens.remove(trackId);
+      }
       notifyListeners();
       await _saveDownloads();
       debugPrint('Download completed: ${item.track.name} ($extension)');
 
-      // Jellyfin's RunTimeTicks is authoritative for originals; only probe
-      // the file when it may be a transcode or the length is unknown (each
-      // probe spins up an AVPlayer).
-      JellyfinTrack updatedTrack = _downloads[trackId]?.track ?? item.track;
-      final needsProbe =
-          source.viaUniversal || (updatedTrack.runTimeTicks ?? 0) <= 0;
-      Duration? actualDuration;
-      if (needsProbe) {
-        try {
-          actualDuration = await _extractAudioDuration(correctPath)
-              .timeout(_durationProbeTimeout);
-        } on TimeoutException {
-          debugPrint('Duration probe timed out for ${item.track.name}');
-        }
-      }
-      final current = _downloads[trackId];
-      if (actualDuration != null && current != null && current.isCompleted) {
-        final actualTicks = actualDuration.inMicroseconds * 10;
-        if (actualTicks > 0 && actualTicks != current.track.runTimeTicks) {
-          updatedTrack = current.track.copyWith(runTimeTicks: actualTicks);
-          _downloads[trackId] = current.copyWith(track: updatedTrack);
-          notifyListeners();
-          await _saveDownloads();
-        }
-      }
-
-      // Artwork + artist images: best-effort, time-bounded, off the
-      // download slot so they never hold up the queue.
-      unawaited(_fetchImagesForTrack(updatedTrack));
-
-      // Pre-cache lyrics for offline playback
-      if (_lyricsService != null) {
-        unawaited(_lyricsService!.getLyrics(updatedTrack).then((_) {}).catchError(
-          (e) { debugPrint('Lyrics pre-cache failed for ${updatedTrack.name}: $e'); },
-        ));
-      }
-
-      _queueWaveform(trackId, correctPath);
+      // Duration probe, images, lyrics and waveform run off the download
+      // slot, one track at a time.
+      _queuePostCompletion(
+        trackId,
+        correctPath,
+        probed: probed,
+        probe: !probeAttempted &&
+            (source.viaUniversal ||
+                (_downloads[trackId]?.track.runTimeTicks ?? 0) <= 0),
+      );
     } on _DownloadCancelled {
       debugPrint('Download cancelled: ${item.track.name}');
       await closeSink();
       await deleteTmp();
+      await deleteUnownedFinal();
     } catch (e) {
       await closeSink();
       await deleteTmp();
+      await deleteUnownedFinal();
       if (isCancelled()) {
         // Deleted mid-transfer; the error is a side effect of cancellation.
         debugPrint('Download cancelled: ${item.track.name} ($e)');
@@ -2145,6 +2394,57 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// Best-effort work after a download completed, chained so only one
+  /// duration probe (an AVPlayer) runs at a time and none holds a download
+  /// slot. Skipped when the download was deleted or replaced meanwhile.
+  void _queuePostCompletion(
+    String trackId,
+    String path, {
+    required bool probe,
+    Duration? probed,
+  }) {
+    bool stillCompleted() {
+      final current = _downloads[trackId];
+      return !_disposed &&
+          current != null &&
+          current.isCompleted &&
+          current.localPath == path;
+    }
+
+    _postCompletionChain = _postCompletionChain.then((_) async {
+      if (!stillCompleted()) return;
+      var duration = probed;
+      if (duration == null && probe) duration = await _probeDuration(path);
+      if (!stillCompleted()) return;
+      final current = _downloads[trackId]!;
+      var track = current.track;
+      final actualTicks = (duration?.inMicroseconds ?? 0) * 10;
+      if (actualTicks > 0 && actualTicks != track.runTimeTicks) {
+        track = track.copyWith(runTimeTicks: actualTicks);
+        _downloads[trackId] = current.copyWith(track: track);
+        notifyListeners();
+        await _saveDownloads();
+      }
+
+      // Artwork + artist images: best-effort, time-bounded.
+      unawaited(_fetchImagesForTrack(track));
+
+      // Pre-cache lyrics for offline playback
+      final lyrics = _lyricsService;
+      if (lyrics != null) {
+        unawaited(lyrics.getLyrics(track).then((_) {}).catchError(
+          (Object e) {
+            debugPrint('Lyrics pre-cache failed for ${track.name}: $e');
+          },
+        ));
+      }
+
+      _queueWaveform(trackId, path);
+    }).catchError((Object e) {
+      debugPrint('DownloadService: post-download work failed for $trackId: $e');
+    });
+  }
+
   /// Network errors re-queue the track and pause the queue until the
   /// network is back (retried with backoff); a track that keeps failing
   /// while the network is up is eventually marked failed. Other errors fail
@@ -2155,6 +2455,24 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
     final current = _downloads[trackId] ?? item;
     if (current.isCompleted) return;
     debugPrint('Download failed for ${item.track.name} ($kind): $e');
+
+    if (e is _TruncatedDownloadException) {
+      // The network worked; the server's transcode ended early. Retry this
+      // track later (end of the queue) without pausing the whole queue.
+      _downloads[trackId] = current.copyWith(
+        status: DownloadStatus.queued,
+        progress: 0.0,
+        downloadedBytes: 0,
+        errorMessage: e.toString(),
+        errorKind: DownloadErrorKind.network,
+      );
+      _downloadQueue
+        ..remove(trackId)
+        ..add(trackId);
+      notifyListeners();
+      unawaited(_saveDownloads());
+      return;
+    }
 
     if (kind == DownloadErrorKind.network) {
       final failures = (_networkFailures[trackId] ?? 0) + 1;
@@ -2200,12 +2518,16 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
   /// number of records removed.
   Future<int> _removeDownloads(Iterable<String> ids) async {
     final removed = <DownloadItem>[];
-    for (final id in ids.toSet()) {
+    final idSet = ids.toSet();
+    // One pass over the queue (not a linear remove per id: cancelling a
+    // several-thousand-track queue would be quadratic).
+    _downloadQueue.removeWhere(idSet.contains);
+    for (final id in idSet) {
       final item = _downloads.remove(id);
       _cancelActive(id);
-      _downloadQueue.remove(id);
       _demoDownloadIds.remove(id);
       _networkFailures.remove(id);
+      _truncatedAttempts.remove(id);
       if (item == null) continue;
       if (item.isCompleted) _removeFromIndexes(item.track);
       removed.add(item);
@@ -2256,6 +2578,49 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
     _operationLocks.addAll(ids);
     try {
       return await _removeDownloads(ids);
+    } finally {
+      _operationLocks.removeAll(ids);
+    }
+  }
+
+  /// Release [ownerId]'s (album / playlist / artist) claim on [trackIds].
+  /// Tracks left without an owner — including ones downloaded on their own,
+  /// which have none — are deleted (or cancelled while queued or in
+  /// progress). Tracks another album or playlist still owns are kept.
+  Future<({int removed, int kept})> releaseDownloads(
+    Iterable<String> trackIds,
+    String ownerId,
+  ) async {
+    final ids = trackIds
+        .where((id) => _downloads.containsKey(id) && !_operationLocks.contains(id))
+        .toSet();
+    if (ids.isEmpty) return (removed: 0, kept: 0);
+    _operationLocks.addAll(ids);
+    try {
+      final toRemove = <String>[];
+      var kept = 0;
+      var ownersChanged = false;
+      for (final id in ids) {
+        final item = _downloads[id];
+        if (item == null) continue;
+        final owners = {...item.owners}..remove(ownerId);
+        if (owners.isEmpty) {
+          toRemove.add(id);
+          continue;
+        }
+        kept++;
+        if (owners.length != item.owners.length) {
+          _downloads[id] = item.copyWith(owners: owners);
+          ownersChanged = true;
+        }
+      }
+      // _removeDownloads notifies and saves (including the owner changes).
+      final removed = toRemove.isEmpty ? 0 : await _removeDownloads(toRemove);
+      if (ownersChanged && removed == 0) {
+        notifyListeners();
+        await _saveDownloads();
+      }
+      return (removed: removed, kept: kept);
     } finally {
       _operationLocks.removeAll(ids);
     }
@@ -2348,6 +2713,7 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
     _artistIndex.clear();
     _artistIdIndex.clear();
     _networkFailures.clear();
+    _truncatedAttempts.clear();
     _networkRetryTimer?.cancel();
     _networkRetryTimer = null;
     _networkProbe = false;
@@ -2431,9 +2797,13 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
   /// the queue, in order. A user retry also lifts a network/storage pause.
   int _requeue(List<String> ids) {
     final requeued = <String>[];
+    final requeuedSet = <String>{};
     for (final id in ids) {
       final item = _downloads[id];
-      if (item == null || item.isCompleted || _activeTokens.containsKey(id)) {
+      if (item == null ||
+          item.isCompleted ||
+          _activeTokens.containsKey(id) ||
+          !requeuedSet.add(id)) {
         continue;
       }
       _downloads[id] = item.copyWith(
@@ -2443,11 +2813,12 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
         clearErrorKind: true,
       );
       _networkFailures.remove(id);
-      _downloadQueue.remove(id);
       requeued.add(id);
     }
     if (requeued.isEmpty) return 0;
-    _downloadQueue.insertAll(0, requeued);
+    _downloadQueue
+      ..removeWhere(requeuedSet.contains)
+      ..insertAll(0, requeued);
     if (_queuePause == DownloadQueuePause.storageFull ||
         _queuePause == DownloadQueuePause.waitingForNetwork) {
       _networkProbe = false;
@@ -2578,6 +2949,64 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
       byArtist[artistName] = (byArtist[artistName] ?? 0) + fileSize;
     }
 
+    final aux = await _auxiliaryStorageStats();
+
+    return StorageStats(
+      totalBytes: totalBytes,
+      trackCount: trackCount,
+      byAlbum: byAlbum,
+      byArtist: byArtist,
+      albumNames: albumNames,
+      cacheBytes: aux.cacheBytes,
+      cacheFileCount: aux.cacheFileCount,
+      cachedTrackIds: aux.cachedTrackIds,
+      waveformBytes: aux.waveformBytes,
+      waveformFileCount: aux.waveformFileCount,
+      chartBytes: aux.chartBytes,
+      chartCount: aux.chartCount,
+    );
+  }
+
+  // Last scan of the audio cache, waveform and chart directories (the
+  // expensive part of [getStorageStats]).
+  _AuxStorageStats? _auxStats;
+  int _auxStatsRevision = -1;
+  DateTime _auxStatsAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Future<_AuxStorageStats>? _auxStatsInFlight;
+  static const _auxStatsMaxAge = Duration(seconds: 30);
+
+  /// Cache, waveform and chart usage. Concurrent calls share one scan, and
+  /// a call caused by downloads changing (new [revision]) reuses a recent
+  /// scan, so a batch finishing track after track doesn't rescan those
+  /// directories on every completion. Asking again at the same revision
+  /// (an explicit refresh) rescans.
+  Future<_AuxStorageStats> _auxiliaryStorageStats() {
+    final inFlight = _auxStatsInFlight;
+    if (inFlight != null) return inFlight;
+    final cached = _auxStats;
+    if (cached != null &&
+        canReuseStorageScan(
+          hasScan: true,
+          scanRevision: _auxStatsRevision,
+          currentRevision: _revision,
+          age: DateTime.now().difference(_auxStatsAt),
+          maxAge: _auxStatsMaxAge,
+        )) {
+      _auxStatsRevision = _revision;
+      return Future.value(cached);
+    }
+    final revision = _revision;
+    final scan = _scanAuxiliaryStorage().then((stats) {
+      _auxStats = stats;
+      _auxStatsRevision = revision;
+      _auxStatsAt = DateTime.now();
+      return stats;
+    });
+    _auxStatsInFlight = scan;
+    return scan.whenComplete(() => _auxStatsInFlight = null);
+  }
+
+  Future<_AuxStorageStats> _scanAuxiliaryStorage() async {
     // Get cache stats from AudioCacheService
     int cacheBytes = 0;
     int cacheFileCount = 0;
@@ -2617,12 +3046,7 @@ class DownloadService extends ChangeNotifier with WidgetsBindingObserver {
       debugPrint('Error getting chart stats: $e');
     }
 
-    return StorageStats(
-      totalBytes: totalBytes,
-      trackCount: trackCount,
-      byAlbum: byAlbum,
-      byArtist: byArtist,
-      albumNames: albumNames,
+    return _AuxStorageStats(
       cacheBytes: cacheBytes,
       cacheFileCount: cacheFileCount,
       cachedTrackIds: cachedTrackIds,
@@ -2769,6 +3193,28 @@ class _HttpStatusException implements Exception {
 
   @override
   String toString() => 'Failed to download: HTTP $statusCode';
+}
+
+/// A `200 OK` download response whose content type is not audio.
+class _UnexpectedContentException implements Exception {
+  const _UnexpectedContentException(this.contentType);
+
+  final String contentType;
+
+  @override
+  String toString() => 'Server did not send audio ($contentType)';
+}
+
+/// A transcode (no Content-Length) decoded shorter than the server's length.
+class _TruncatedDownloadException implements Exception {
+  const _TruncatedDownloadException(this.probedTicks, this.expectedTicks);
+
+  final int probedTicks;
+  final int expectedTicks;
+
+  @override
+  String toString() => 'Transcode ended early '
+      '(${probedTicks ~/ 10000000}s of ${expectedTicks ~/ 10000000}s)';
 }
 
 /// Internal signal: the download was deleted/cancelled while in flight.

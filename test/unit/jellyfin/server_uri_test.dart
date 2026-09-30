@@ -84,4 +84,25 @@ void main() {
       expect(normalizeServerBaseUrl('https://host:8096/'), 'https://host:8096');
     });
   });
+
+  group('serverIdentity / isSameServerUrl', () {
+    test('ignores scheme/host case, default port and trailing slashes', () {
+      expect(serverIdentity('HTTPS://Music.Example.com:443/jf/'),
+          'https://music.example.com/jf');
+      expect(isSameServerUrl('http://Host:80', 'http://host/'), isTrue);
+      expect(isSameServerUrl('https://host/jf', 'https://HOST/jf//'), isTrue);
+    });
+
+    test('keeps what identifies another server', () {
+      expect(isSameServerUrl('https://host', 'http://host'), isFalse);
+      expect(isSameServerUrl('https://host:8920', 'https://host'), isFalse);
+      expect(isSameServerUrl('https://host/jf', 'https://host/other'), isFalse);
+      // Base paths are case-sensitive behind some reverse proxies.
+      expect(isSameServerUrl('https://host/JF', 'https://host/jf'), isFalse);
+    });
+
+    test('unparseable input falls back to trimmed comparison', () {
+      expect(serverIdentity('not a url/'), 'not a url');
+    });
+  });
 }

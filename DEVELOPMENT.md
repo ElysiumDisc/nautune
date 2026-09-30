@@ -181,9 +181,10 @@ the same player (`appendNext`), so AVQueuePlayer starts it with no gap and
 timer ending on the current track, repeat-one and queue edits keep or take
 it off the player. **Crossfade** still uses a second player with volume
 curves. **Streams** without transcoding play through
-`LockCachingAudioSource`, which saves them while they play; finished files
-move into the audio cache (`AudioCacheService.adoptFile`), so a track is
-downloaded once. The Easter egg screens still use `audioplayers`. The decision logic is pure and
+`LockCachingAudioSource`, which saves them while they play (under the same
+Wi-Fi-only and Low Power Mode rules as background copies; each load gets its
+own file); finished files move into the audio cache
+(`AudioCacheService.adoptFile`), so a track is downloaded once. The Easter egg screens still use `audioplayers`. The decision logic is pure and
 lives in `lib/services/playback_logic.dart`. `NautuneAudioHandler`
 (`lib/services/audio_handler.dart`, `audio_service`) publishes the lock
 screen and Control Center state. `PlaybackReportingService` reports

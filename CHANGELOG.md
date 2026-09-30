@@ -1,3 +1,167 @@
+### v9.1.2 - Bug Hunt: Playback, Privacy, Scrobbling and Easter Eggs
+
+A full audit of the app. It fixes crashes in the player, plays counted
+twice on the server, lost scrobbles, account data leaking between logins,
+and a long list of Easter egg bugs, and makes scrolling and the player
+lighter on the battery.
+
+**Fixes: playback**
+- Leaving the Lyrics tab no longer breaks the Now Playing tab, and the mini
+  player's progress bar no longer breaks after clearing the queue.
+- Favoriting a song just as the next one starts no longer puts the old song
+  back in its place.
+- Skipping near the end of a gapless track no longer skips an extra track.
+  Pausing, seeking or unplugging headphones while the next track loads now
+  applies to that track.
+- Stalled streams recover again. A network dead zone (for example driving
+  with CarPlay) waits for the connection instead of stopping, and playback
+  resumes by itself when it's back.
+- Tracks whose reported length is too short are no longer cut off.
+- Turning crossfade off mid-fade no longer leaves playback stuck.
+- Removing the current song while paused no longer starts playback.
+- Infinite Radio keeps topping up the queue, and no longer adds songs to an
+  album you just started.
+- "Go offline" is remembered after an album ends or the queue is cleared.
+- Battery-saver overrides no longer stick after a restart. Changing
+  crossfade, gapless, pre-cache or the visualizer while it's on is kept.
+- Saved playback state is written in batches, keeps your queue when
+  upgrading, and is never overwritten with defaults after a failed read.
+- Clearing the audio cache no longer deletes artwork.
+- Streams are saved while they play only on Wi-Fi (or on cellular while
+  the visualizer is showing), so skipped songs no longer use cellular data
+  to finish downloading.
+- The equalizer no longer crackles while you drag a band.
+
+**Fixes: player**
+- The player fits small iPhones, large text sizes and landscape; iPhone
+  landscape gets a side-by-side layout.
+- Dragging the player down no longer jumps when you let go.
+- Lyrics no longer show the previous song's words after a quick skip, and
+  no longer reload when you favorite a song.
+- The mini player's waveform seeks once when you let go instead of on
+  every move.
+- Opening an album or artist from the player and tapping the mini player
+  returns to the open player instead of stacking another one.
+- iPad keyboard: holding an arrow keeps seeking or changing volume, and
+  held keys no longer trigger other buttons.
+- Spectrum visualizers no longer freeze, no longer jump every 10 seconds,
+  and fall back to track data when live analysis isn't available.
+- Visualizers pause while hidden behind the player or another page, which
+  saves battery.
+
+**Fixes: library and search**
+- Home shelves (For You, Discover, On This Day, and so on) update when
+  their data arrives, and their refresh buttons work.
+- Retrying while offline no longer replaces the library with an error
+  screen. Cached playlists and favorites stay visible when a refresh fails.
+- The Favorites tab no longer refetches on every visit or empties itself
+  offline. Tapping a favorite plays the list in the order shown.
+- Multi-select → Add to Playlist → Create New Playlist creates the
+  playlist.
+- Removing or reordering playlist songs works on Jellyfin 10.9 and 10.10,
+  and with the same song in a playlist twice.
+- CarPlay albums and "add album to playlist" keep track order instead of
+  A-Z.
+- The Favorites "Recently added" sort is now called "Default": it is the
+  server's name order.
+- Search keeps your query and results when you switch tabs, only saves
+  finished searches to history, and handles large libraries.
+- Albums and artists no longer repeat after a failed page load, and the
+  loading spinner no longer sticks after a sort change.
+- Long playlists and large selections no longer fail with URL-too-long
+  errors.
+- The Add to Playlist dialog, genre tiles and Storage screen no longer
+  overflow on small phones.
+- Artwork is loaded at the size it's shown (it was up to three times too
+  large), and grids are sharp on iPad.
+
+**Fixes: accounts, privacy and security**
+- Your Jellyfin access token is no longer saved in plain text with queues,
+  caches and profile stats, and logging out now revokes it on the server.
+- Switching accounts no longer carries over the previous account's play
+  history, offline playlist edits, cached playlists or queued downloads.
+- The remote-control connection no longer puts your token in the URL,
+  where it could reach device logs.
+- `http://` servers on public hostnames work for streaming and CarPlay
+  artwork (the network security settings only allowed local servers).
+- Remote-control commands no longer run twice after a brief network drop.
+- A turned-off Remote Control setting is respected from launch.
+
+**Fixes: scrobbling and stats**
+- Plays are no longer counted twice on the server.
+- ListenBrainz scrobbles are no longer lost after a cold launch (the
+  service wasn't started until you opened its settings), and queued
+  scrobbles are sent when you're back online.
+- Songs with several artists scrobble under their real artists instead of
+  "Artist & 1 more".
+- Connecting ListenBrainz uses the account the token belongs to, and says
+  so when the problem is the network rather than the token.
+- Last.fm: disconnecting during a send no longer crashes, and one bad
+  scrobble no longer blocks the queue.
+- Offline start and stop reports are no longer lost when the server is
+  briefly unreachable after reconnecting.
+- Lyrics are no longer hidden for three days after a failed lookup, and
+  aren't fetched offline.
+- Profile: artwork colours are no longer swapped (red covers came out
+  blue, across the whole app too). Streaks, the week start and the daily
+  chart are correct across daylight-saving changes. Revisiting the page no
+  longer shows 0 tracks, and it loads faster.
+- Light Lavender and custom themes keep secondary text readable.
+- The login form scrolls above the keyboard and submits with Return.
+
+**Fixes: downloads and offline**
+- A login page from an expired reverse-proxy session is no longer saved as
+  a song.
+- Removing a playlist's downloads keeps songs that another downloaded
+  album or playlist still needs.
+- A finished download no longer goes back to the queue when Wi-Fi drops.
+- Truncated transcodes are retried instead of kept.
+- Album artwork is written safely, so a crash can't leave a broken image.
+- Download records are no longer deleted when the downloads folder can't
+  be found at launch.
+- A server on a network without internet access no longer leaves the app
+  stuck offline, and launch no longer waits on a connectivity check.
+- Offline playlist edits and favorites are no longer dropped after a few
+  failed sync attempts, and are never replayed into another account.
+
+**Fixes: CarPlay and iOS**
+- The CarPlay playing indicator follows the current song.
+- CarPlay offline pages no longer request artwork from the server.
+- The visualizer works for downloaded songs on iOS 15 and 16.
+- Fixed rare crashes in the visualizer and the share sheet.
+
+**Fixes: Easter eggs**
+- Frets on Fire:
+  - The legendary unlock can be earned; bonus notes no longer count
+    against a perfect run.
+  - Analyzing a song uses a fraction of the memory, so long tracks (and the
+    legendary track itself) no longer crash the app.
+  - Notes land on the beat, chords can be played fully, and Lightning no
+    longer counts one note several times.
+  - Play Again no longer misses hundreds of notes at once, the game pauses
+    when you leave the app, and your music pauses when a game starts.
+  - Scores, play counts and the best multiplier are saved correctly.
+- The Network:
+  - Interrupted downloads are no longer saved as complete, and downloads
+    carry on correctly when you leave the screen.
+  - Downloads survive app updates.
+  - Channel 999 plays.
+  - Tuning in pauses your music.
+- Essential Mix: download progress updates, a stalled download can be
+  cancelled, and an interrupted download resumes where it stopped.
+- Piano keys respond immediately.
+- Healing Frequencies no longer clicks every 2 seconds, and the Solfeggio
+  syllables are labelled correctly.
+- Relax Mode sounds set to zero stop instead of playing silently.
+
+**Performance**
+- The full player, the visualizers and Frets on Fire redraw only what
+  changes, which matters most on 120 Hz iPhones.
+- Skipping no longer resends the whole queue to the lock screen, and
+  sliders no longer rewrite all saved state on every move.
+- Large server responses and listening history are processed off the main
+  thread.
+
 ### v9.1.0 - iOS-Native Design, Smarter Audio
 
 Nautune now looks and behaves like an iOS app, keeps every theme you had

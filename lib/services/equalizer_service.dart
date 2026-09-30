@@ -15,7 +15,16 @@ class EqualizerService extends ChangeNotifier {
 
   static const _channel = MethodChannel('com.nautune.audio_effects');
 
+  /// Slider drags change a band many times a second: the native tap gets at
+  /// most one update per [_applyInterval] (always ending with the latest
+  /// values), and the settings are saved once the changes settle.
+  static const Duration _applyInterval = Duration(milliseconds: 50);
+  static const Duration _saveDelay = Duration(milliseconds: 500);
+
   PlaybackStateStore? _store;
+  Timer? _applyTimer;
+  bool _applyPending = false;
+  Timer? _saveTimer;
   bool _enabled = false;
   List<double> _gains = List<double>.filled(kEqualizerBands.length, 0);
 
@@ -56,11 +65,51 @@ class EqualizerService extends ChangeNotifier {
 
   void _changed() {
     notifyListeners();
+    _scheduleApply();
+    _scheduleSave();
+  }
+
+  /// Throttle: apply now, then coalesce further changes within
+  /// [_applyInterval] into one trailing apply of the latest settings.
+  void _scheduleApply() {
+    if (_applyTimer != null) {
+      _applyPending = true;
+      return;
+    }
     unawaited(_apply());
-    unawaited(_store?.saveUiState(
+    _applyTimer = Timer(_applyInterval, () {
+      _applyTimer = null;
+      if (_applyPending) {
+        _applyPending = false;
+        _scheduleApply();
+      }
+    });
+  }
+
+  void _scheduleSave() {
+    _saveTimer?.cancel();
+    _saveTimer = Timer(_saveDelay, () {
+      _saveTimer = null;
+      unawaited(_save());
+    });
+  }
+
+  Future<void> _save() async {
+    final store = _store;
+    if (store == null) return;
+    await store.saveUiState(
       equalizerEnabled: _enabled,
       equalizerGains: List<double>.of(_gains),
-    ));
+    );
+  }
+
+  /// Save a pending change now (e.g. when a slider drag ends).
+  Future<void> flush() async {
+    final timer = _saveTimer;
+    if (timer == null) return;
+    timer.cancel();
+    _saveTimer = null;
+    await _save();
   }
 
   Future<void> _apply() async {

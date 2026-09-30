@@ -2,6 +2,7 @@ import Flutter
 import AVFoundation
 import Accelerate
 import MediaToolbox
+import os
 
 /// Native iOS FFT plugin using MTAudioProcessingTap.
 /// Creates a shadow AVPlayer with audio tap to capture real FFT data.
@@ -34,6 +35,12 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private var imagpBuffer: [Float]
     private var magnitudesBuffer: [Float]
     private var spectrumBuffer: [Float]
+
+    /// Serialises processAudioBuffer: while a shadow player is being replaced
+    /// the old and new taps can briefly render on different threads, and both
+    /// would write the shared buffers. Try-locked, so the audio thread never
+    /// blocks (a contended callback just skips a frame).
+    private let processingLock: UnsafeMutablePointer<os_unfair_lock>
 
     // Throttling at native level (~30fps max)
     private var lastEmitTime: CFTimeInterval = 0
@@ -70,6 +77,8 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         imagpBuffer = [Float](repeating: 0, count: fftSize / 2)
         magnitudesBuffer = [Float](repeating: 0, count: fftSize / 2)
         spectrumBuffer = [Float](repeating: 0, count: fftSize / 2)
+        processingLock = UnsafeMutablePointer<os_unfair_lock>.allocate(capacity: 1)
+        processingLock.initialize(to: os_unfair_lock())
 
         super.init()
         log2n = vDSP_Length(log2(Float(fftSize)))
@@ -84,6 +93,8 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         if let setup = fftSetup {
             vDSP_destroy_fftsetup(setup)
         }
+        processingLock.deinitialize(count: 1)
+        processingLock.deallocate()
     }
 
     // MARK: - FlutterPlugin
@@ -137,32 +148,68 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
     private func setAudioUrl(_ urlString: String) {
         guard urlString != currentUrl else { return }
-        currentUrl = urlString
 
-        // Clean up old player
+        // Clean up old player (also clears currentUrl)
         cleanupPlayer()
 
-        guard let url = URL(string: urlString) else {
+        guard let url = AudioFFTPlugin.makeURL(urlString) else {
             print("🎵 AudioFFTPlugin: Invalid URL")
             return
         }
+        // Only remember the URL once it could be built, so a retry isn't
+        // swallowed by the same-URL check above.
+        currentUrl = urlString
 
         print("🎵 AudioFFTPlugin: Setting up shadow player for \(url.lastPathComponent)")
 
         // Create player item
         let asset = AVURLAsset(url: url)
-        playerItem = AVPlayerItem(asset: asset)
+        let item = AVPlayerItem(asset: asset)
+        playerItem = item
 
-        // Setup audio tap when tracks are loaded
-        asset.loadValuesAsynchronously(forKeys: ["tracks"]) { [weak self] in
+        // Setup audio tap when tracks are loaded. The completion may arrive
+        // after another setAudioUrl replaced the item; it must then do
+        // nothing (attaching a second AVPlayer to the new item would throw).
+        asset.loadValuesAsynchronously(forKeys: ["tracks"]) { [weak self, weak item] in
             DispatchQueue.main.async {
-                self?.setupAudioTap()
+                guard let self = self, let item = item,
+                      self.playerItem === item, self.shadowPlayer == nil else { return }
+                var error: NSError?
+                guard asset.statusOfValue(forKey: "tracks", error: &error) == .loaded else {
+                    print("🎵 AudioFFTPlugin: Tracks failed to load")
+                    return
+                }
+                self.setupAudioTap()
             }
         }
     }
 
+    /// Builds a URL from either a `file://` string or a plain path (both are
+    /// file URLs, built with `URL(fileURLWithPath:)` so paths containing
+    /// spaces such as "Application Support" work on iOS 15/16), or any other
+    /// URL string.
+    private static func makeURL(_ string: String) -> URL? {
+        var path: String?
+        if string.hasPrefix("file://") {
+            path = String(string.dropFirst("file://".count))
+        } else if string.hasPrefix("/") {
+            path = string
+        }
+        guard var filePath = path, !filePath.isEmpty else {
+            return URL(string: string)
+        }
+        // Callers pass raw paths; only percent-decode when the raw path
+        // doesn't exist but the decoded one does.
+        if !FileManager.default.fileExists(atPath: filePath),
+           let decoded = filePath.removingPercentEncoding,
+           FileManager.default.fileExists(atPath: decoded) {
+            filePath = decoded
+        }
+        return URL(fileURLWithPath: filePath)
+    }
+
     private func setupAudioTap() {
-        guard let item = playerItem else { return }
+        guard let item = playerItem, shadowPlayer == nil else { return }
 
         // Get audio track
         guard let audioTrack = item.asset.tracks(withMediaType: .audio).first else {
@@ -328,6 +375,8 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
     fileprivate func processAudioBuffer(_ bufferList: UnsafeMutablePointer<AudioBufferList>, frames: CMItemCount) {
         guard let setup = fftSetup, isCapturing else { return }
+        guard os_unfair_lock_trylock(processingLock) else { return }
+        defer { os_unfair_lock_unlock(processingLock) }
 
         // Throttle at native level - skip if we emitted too recently (~30fps max)
         let now = CACurrentMediaTime()
@@ -386,7 +435,13 @@ public class AudioFFTPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         // === FFT ===
 
         // Apply pre-computed Hanning window (no allocation)
-        vDSP_vmul(processedBuffer, 1, hanningWindow, 1, &processedBuffer, 1, vDSP_Length(fftSize))
+        // In place through one mutable pointer: passing the array both as
+        // input and `&inout` would copy it (copy-on-write) on the audio thread.
+        let windowCount = vDSP_Length(fftSize)
+        processedBuffer.withUnsafeMutableBufferPointer { processedPtr in
+            guard let base = processedPtr.baseAddress else { return }
+            vDSP_vmul(base, 1, self.hanningWindow, 1, base, 1, windowCount)
+        }
 
         // Use pre-allocated buffers for FFT
         realpBuffer.withUnsafeMutableBufferPointer { realPtr in

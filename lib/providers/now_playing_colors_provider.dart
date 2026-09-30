@@ -1,77 +1,16 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'dart:ui' as ui show Image;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
-import 'package:material_color_utilities/material_color_utilities.dart';
 
 import '../jellyfin/jellyfin_service.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../services/audio_player_service.dart';
 import '../services/download_service.dart';
 import '../services/palette_cache_service.dart';
-
-/// Top-level function for compute() - extracts vibrant colors from image
-/// pixels in an isolate. Returns up to 4 distinct, saturated colours, most
-/// vibrant first.
-Future<List<int>> extractArtworkColorsInIsolate(Uint32List pixels) async {
-  // Run the quantization to find the dominant color clusters
-  final result = await QuantizerCelebi().quantize(pixels, 128);
-  final colorToCount = result.colorToCount;
-
-  // RAW VIBRANCY SCORING
-  // Score = Population * (Chroma^2)
-  final sortedEntries = colorToCount.entries.toList()
-    ..sort((a, b) {
-      final hctA = Hct.fromInt(a.key);
-      final hctB = Hct.fromInt(b.key);
-      final scoreA = a.value * (hctA.chroma * hctA.chroma);
-      final scoreB = b.value * (hctB.chroma * hctB.chroma);
-      return scoreB.compareTo(scoreA);
-    });
-
-  final selectedColors = <int>[];
-
-  for (final entry in sortedEntries) {
-    if (selectedColors.length >= 4) break;
-
-    final colorInt = entry.key;
-    final hct = Hct.fromInt(colorInt);
-
-    // Skip absolute greys
-    if (hct.chroma < 5) continue;
-
-    // Distinctness check
-    bool isDistinct = true;
-    for (final existing in selectedColors) {
-      final existingHct = Hct.fromInt(existing);
-      final hueDiff = (hct.hue - existingHct.hue).abs();
-      final normalizedHueDiff = hueDiff > 180 ? 360 - hueDiff : hueDiff;
-      if (normalizedHueDiff < 15) {
-        isDistinct = false;
-        break;
-      }
-    }
-
-    if (isDistinct) {
-      // Add with full alpha
-      selectedColors.add(colorInt | 0xFF000000);
-    }
-  }
-
-  // Fallback if we found nothing (e.g. B&W image)
-  if (selectedColors.isEmpty) {
-    final populationSorted = colorToCount.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    for (final entry in populationSorted.take(4)) {
-      selectedColors.add(entry.key | 0xFF000000);
-    }
-  }
-
-  return selectedColors;
-}
+import '../utils/artwork_colors.dart';
 
 /// Colours extracted from the current track's artwork, shared by the full
 /// player, mini player, queue and (optionally) the app accent.
@@ -160,8 +99,13 @@ class NowPlayingColorsProvider extends ChangeNotifier {
       _set(cached);
       return;
     }
-    // Clear old colors immediately to prevent showing a stale gradient
-    _set(null);
+    // Keep the previous colours until the new ones are ready: clearing them
+    // first re-themed the whole app twice per track (with the Now Playing
+    // accent) and flashed the palette colour in between. They are cleared
+    // below only when this artwork yields no colours.
+    void clearIfCurrent() {
+      if (_artworkKey == key) _set(null);
+    }
 
     try {
       ImageProvider? imageProvider;
@@ -179,14 +123,15 @@ class NowPlayingColorsProvider extends ChangeNotifier {
           headers: _jellyfinService.imageHeaders(),
         );
       }
-      if (imageProvider == null) return;
+      if (imageProvider == null) return clearIfCurrent();
 
       final image = await _resolve(imageProvider);
       final byteData = await image.toByteData();
-      if (byteData == null) return;
+      if (byteData == null) return clearIfCurrent();
       final colorInts = await compute(
         extractArtworkColorsInIsolate,
-        byteData.buffer.asUint32List(),
+        byteData.buffer
+            .asUint8List(byteData.offsetInBytes, byteData.lengthInBytes),
       );
       final colors = colorInts.map(Color.new).toList();
       if (colors.isNotEmpty) _cache.put(key, colors);
@@ -194,6 +139,7 @@ class NowPlayingColorsProvider extends ChangeNotifier {
       if (_artworkKey == key) _set(colors);
     } catch (e) {
       debugPrint('Failed to extract artwork colors: $e');
+      clearIfCurrent();
     }
   }
 

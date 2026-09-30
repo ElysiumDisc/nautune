@@ -59,6 +59,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   Set<String>? _hotTrackIds;
 
   bool _hasMultipleDiscs = false;
+
+  /// Bumped per [_loadTracks]; overlapping loads (connectivity flapping)
+  /// only apply the latest one's result.
+  int _loadGeneration = 0;
   Map<int, int> _discTrackStartIndex = {};
 
   @override
@@ -178,6 +182,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   Future<void> _loadTracks() async {
     if (_appState == null) return;
+    final generation = ++_loadGeneration;
+    bool isCurrent() => mounted && generation == _loadGeneration;
 
     setState(() {
       _isLoading = true;
@@ -204,7 +210,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         // Offline: the downloaded tracks of this album.
         tracks = downloadedTracks();
         if (tracks.isEmpty) {
-          if (mounted) {
+          if (isCurrent()) {
             setState(() {
               _tracks = const [];
               _notAvailableOffline = true;
@@ -242,7 +248,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           }
           return a.name.compareTo(b.name);
         });
-      if (mounted) {
+      if (isCurrent()) {
         final startMap = <int, int>{};
         for (var i = 0; i < sorted.length; i++) {
           startMap.putIfAbsent(sorted[i].discNumber ?? 1, () => i);
@@ -261,7 +267,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         _loadTrackPopularities(sorted);
       }
     } catch (error) {
-      if (mounted) {
+      if (isCurrent()) {
         setState(() {
           _error = error;
           _isLoading = false;
@@ -370,7 +376,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final album = widget.album;
-    final isWide = MediaQuery.of(context).size.width > 600;
+    final isWide = MediaQuery.sizeOf(context).width > 600;
     final List<JellyfinTrack> tracks = _tracks ?? const <JellyfinTrack>[];
 
     Widget artwork;
@@ -380,7 +386,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         itemId: album.id,
         imageTag: tag,
         albumId: album.id,
-        maxWidth: 800,
+        // The header spans the screen width.
+        maxWidth: MediaQuery.sizeOf(context).width.ceil(),
         boxFit: BoxFit.cover,
         errorBuilder: (context, url, error) => const _TritonArtwork(),
       );

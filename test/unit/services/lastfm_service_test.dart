@@ -1,4 +1,12 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hive/hive.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:nautune/jellyfin/jellyfin_track.dart';
 import 'package:nautune/services/lastfm_service.dart';
 
 void main() {
@@ -38,5 +46,68 @@ void main() {
     final back = LastFmScrobble.fromJson(s.toJson())!;
     expect(back.toJson(), s.toJson());
     expect(LastFmScrobble.fromJson({'artist': 'A'}), isNull);
+  });
+
+  group('queue flushing', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    setUpAll(() => Hive.init(
+        Directory.systemTemp.createTempSync('lastfm_test').path));
+    setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+
+    const s1 = LastFmScrobble(artist: 'A', track: 'One', timestamp: 1);
+    const s2 = LastFmScrobble(artist: 'B', track: 'Two', timestamp: 2);
+
+    test('disconnect during an in-flight flush neither throws nor eats the '
+        'new account\'s queue', () async {
+      final service = LastFmService.instance;
+      final gate = Completer<void>();
+      service.httpClient = MockClient((_) async {
+        await gate.future;
+        return http.Response('{"scrobbles":{}}', 200);
+      });
+      service.debugConfigure(
+          apiKey: 'k', secret: 's', sessionKey: 'sk', pending: const [s1]);
+      final flushing = service.flush();
+      await service.disconnect();
+      // A new account connects and queues a play before the old batch ends.
+      service.debugConfigure(
+          apiKey: 'k2', secret: 's2', sessionKey: 'sk2', pending: const [s2]);
+      gate.complete();
+      await flushing; // must not throw a RangeError
+      expect(service.pendingCount, greaterThanOrEqualTo(1));
+    });
+
+    test('an invalid-parameters error isolates and drops only the bad play',
+        () async {
+      final service = LastFmService.instance;
+      final sent = <String>[];
+      service.httpClient = MockClient((request) async {
+        final body = Uri.splitQueryString(request.body);
+        if (body['track[0]'] == 'Bad' || body['track[1]'] == 'Bad') {
+          return http.Response('{"error":6,"message":"Invalid parameters"}', 200);
+        }
+        sent.add(body['track[0]']!);
+        return http.Response('{"scrobbles":{}}', 200);
+      });
+      service.debugConfigure(apiKey: 'k', secret: 's', sessionKey: 'sk', pending: const [
+        LastFmScrobble(artist: 'A', track: 'Good1', timestamp: 1),
+        LastFmScrobble(artist: 'A', track: 'Bad', timestamp: 2),
+        LastFmScrobble(artist: 'A', track: 'Good2', timestamp: 3),
+      ]);
+      await service.flush();
+      expect(sent, ['Good1', 'Good2']);
+      expect(service.pendingCount, 0);
+    });
+
+    test('plays without a usable artist are not queued', () async {
+      final service = LastFmService.instance;
+      service.httpClient = MockClient((_) async => http.Response('{}', 200));
+      service.debugConfigure(apiKey: 'k', secret: 's', sessionKey: 'sk');
+      await service.scrobble(
+        JellyfinTrack(id: 't', name: 'T', album: null, artists: const []),
+        DateTime(2026),
+      );
+      expect(service.pendingCount, 0);
+    });
   });
 }

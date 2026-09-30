@@ -6,7 +6,10 @@ import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_track.dart';
 
 enum FavoritesSort {
-  recent('Recently Added'),
+  /// The server's order. The favorites request sorts by name, so this is
+  /// labelled "Default" rather than claiming a date order. (The enum name
+  /// stays `recent`: it's what users' saved preference holds.)
+  recent('Default'),
   title('Title'),
   artist('Artist'),
   album('Album');

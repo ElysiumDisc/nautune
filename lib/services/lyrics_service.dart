@@ -62,6 +62,17 @@ class LyricsResult {
   );
 }
 
+/// Outcome of one lyrics source: lyrics found, a definitive "this source
+/// has none", or an error (network, 5xx, …) that says nothing about the
+/// track and must not be cached as "no lyrics".
+enum LyricsLookup { found, notFound, error }
+
+/// Whether a lookup chain that found nothing may be cached as "no lyrics":
+/// only when every source answered definitively.
+@visibleForTesting
+bool canCacheNoLyrics(Iterable<LyricsLookup> outcomes) =>
+    outcomes.every((o) => o == LyricsLookup.notFound);
+
 /// Cached lyrics entry
 class _CachedLyrics {
   final LyricsResult? result; // null means "no lyrics found"
@@ -99,19 +110,29 @@ class LyricsService {
   static const _lyricsOvhBaseUrl = 'https://api.lyrics.ovh/v1';
 
   final JellyfinService _jellyfinService;
+  final bool Function()? _isOfflineProvider;
   Box? _box;
   bool _initialized = false;
-  bool _isOffline = false;
+  bool _offlineFlag = false;
 
   // In-flight requests to prevent duplicate fetches
   final Map<String, Completer<LyricsResult?>> _pendingRequests = {};
 
-  LyricsService({required JellyfinService jellyfinService})
-      : _jellyfinService = jellyfinService;
+  /// [isOffline], when given, is consulted on every lookup (preferred over
+  /// [setOffline], which instances created outside the audio service never
+  /// receive).
+  LyricsService({
+    required JellyfinService jellyfinService,
+    bool Function()? isOffline,
+  })  : _jellyfinService = jellyfinService,
+        _isOfflineProvider = isOffline;
 
-  /// Update offline state so cached lyrics are returned even if expired
+  bool get _isOffline => _offlineFlag || (_isOfflineProvider?.call() ?? false);
+
+  /// Update offline state: cached lyrics (even expired) are returned and no
+  /// network lookups are made.
   void setOffline(bool offline) {
-    _isOffline = offline;
+    _offlineFlag = offline;
   }
 
   /// Initialize the service
@@ -161,73 +182,78 @@ class LyricsService {
       return cached.result;
     }
 
-    // 2. Try Jellyfin API (server may have embedded lyrics)
-    debugPrint('LyricsService: Trying Jellyfin for "${track.name}"');
-    var result = await _fetchFromJellyfin(track);
-    if (result != null && result.isNotEmpty) {
-      _saveToCache(cacheKey, result);
-      return result;
+    // Offline: no network lookups (offline mode silences all traffic), and
+    // nothing is cached — a miss here says nothing about the track.
+    if (_isOffline) return null;
+
+    final outcomes = <LyricsLookup>[];
+
+    // 2. Jellyfin (embedded / sidecar lyrics), 3. LRCLIB (synced),
+    // 4. lyrics.ovh (plain text).
+    for (final source in <Future<(LyricsLookup, LyricsResult?)> Function(JellyfinTrack)>[
+      _fetchFromJellyfin,
+      _fetchFromLrclib,
+      _fetchFromLyricsOvh,
+    ]) {
+      final (outcome, result) = await source(track);
+      if (outcome == LyricsLookup.found && result != null && result.isNotEmpty) {
+        _saveToCache(cacheKey, result);
+        return result;
+      }
+      outcomes.add(outcome);
     }
 
-    // 3. Try LRCLIB (synchronized lyrics)
-    debugPrint('LyricsService: Trying LRCLIB for "${track.name}"');
-    result = await _fetchFromLrclib(track);
-    if (result != null && result.isNotEmpty) {
-      _saveToCache(cacheKey, result);
-      return result;
+    // 5. Cache "no lyrics found" only when every source said so; after a
+    // network/server error, keep whatever we had (even expired) and retry
+    // next time.
+    if (canCacheNoLyrics(outcomes)) {
+      debugPrint('LyricsService: No lyrics found for "${track.name}"');
+      _saveToCache(cacheKey, null);
+      return null;
     }
-
-    // 4. Try lyrics.ovh (plain text fallback)
-    debugPrint('LyricsService: Trying lyrics.ovh for "${track.name}"');
-    result = await _fetchFromLyricsOvh(track);
-    if (result != null && result.isNotEmpty) {
-      _saveToCache(cacheKey, result);
-      return result;
-    }
-
-    // 5. Cache "no lyrics found" to avoid repeated lookups
-    debugPrint('LyricsService: No lyrics found for "${track.name}"');
-    _saveToCache(cacheKey, null);
-    return null;
+    debugPrint('LyricsService: Lookup failed for "${track.name}" (not cached)');
+    return cached?.result;
   }
 
   /// Fetch lyrics from Jellyfin server
-  Future<LyricsResult?> _fetchFromJellyfin(JellyfinTrack track) async {
+  Future<(LyricsLookup, LyricsResult?)> _fetchFromJellyfin(JellyfinTrack track) async {
     try {
       final response = await _jellyfinService.getLyrics(track.id);
-      if (response == null || response['Lyrics'] == null) {
-        return null;
+      if (response == null || response['Lyrics'] is! List) {
+        return (LyricsLookup.notFound, null);
       }
 
       final rawLyrics = response['Lyrics'] as List<dynamic>;
-      if (rawLyrics.isEmpty) return null;
+      final lines = rawLyrics
+          .whereType<Map>()
+          .map((map) {
+            final start = map['Start'];
+            return LyricLine(
+              text: map['Text'] is String ? map['Text'] as String : '',
+              startTicks: start is num ? start.toInt() : null,
+            );
+          })
+          .where((l) => l.text.isNotEmpty)
+          .toList();
 
-      final lines = rawLyrics.map((item) {
-        final map = item as Map<String, dynamic>;
-        return LyricLine(
-          text: map['Text'] as String? ?? '',
-          startTicks: map['Start'] as int?,
-        );
-      }).where((l) => l.text.isNotEmpty).toList();
+      if (lines.isEmpty) return (LyricsLookup.notFound, null);
 
-      if (lines.isEmpty) return null;
-
-      return LyricsResult(lines: lines, source: 'jellyfin');
+      return (LyricsLookup.found, LyricsResult(lines: lines, source: 'jellyfin'));
     } catch (e) {
-      debugPrint('LyricsService: Jellyfin fetch failed: $e');
-      return null;
+      debugPrint('LyricsService: Jellyfin fetch failed: ${e.runtimeType}');
+      return (LyricsLookup.error, null);
     }
   }
 
   /// Fetch lyrics from LRCLIB (returns synchronized LRC format)
-  Future<LyricsResult?> _fetchFromLrclib(JellyfinTrack track) async {
+  Future<(LyricsLookup, LyricsResult?)> _fetchFromLrclib(JellyfinTrack track) async {
     try {
       final artist = _normalizeArtist(track.artists.firstOrNull ?? '');
       final title = track.name;
       final album = track.album ?? '';
       final durationSeconds = track.duration?.inSeconds;
 
-      if (artist.isEmpty || title.isEmpty) return null;
+      if (artist.isEmpty || title.isEmpty) return (LyricsLookup.notFound, null);
 
       final uri = Uri.parse('$_lrclibBaseUrl/get').replace(queryParameters: {
         'artist_name': artist,
@@ -238,7 +264,8 @@ class LyricsService {
 
       final response = await http.get(uri).timeout(const Duration(seconds: 10));
 
-      if (response.statusCode != 200) return null;
+      if (response.statusCode == 404) return (LyricsLookup.notFound, null);
+      if (response.statusCode != 200) return (LyricsLookup.error, null);
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
 
@@ -249,7 +276,7 @@ class LyricsService {
       if (syncedLyrics != null && syncedLyrics.isNotEmpty) {
         final lines = _parseLrcFormat(syncedLyrics);
         if (lines.isNotEmpty) {
-          return LyricsResult(lines: lines, source: 'lrclib');
+          return (LyricsLookup.found, LyricsResult(lines: lines, source: 'lrclib'));
         }
       }
 
@@ -260,24 +287,24 @@ class LyricsService {
             .where((l) => l.text.isNotEmpty)
             .toList();
         if (lines.isNotEmpty) {
-          return LyricsResult(lines: lines, source: 'lrclib');
+          return (LyricsLookup.found, LyricsResult(lines: lines, source: 'lrclib'));
         }
       }
 
-      return null;
+      return (LyricsLookup.notFound, null);
     } catch (e) {
-      debugPrint('LyricsService: LRCLIB fetch failed: $e');
-      return null;
+      debugPrint('LyricsService: LRCLIB fetch failed: ${e.runtimeType}');
+      return (LyricsLookup.error, null);
     }
   }
 
   /// Fetch lyrics from lyrics.ovh (plain text only)
-  Future<LyricsResult?> _fetchFromLyricsOvh(JellyfinTrack track) async {
+  Future<(LyricsLookup, LyricsResult?)> _fetchFromLyricsOvh(JellyfinTrack track) async {
     try {
       final artist = _normalizeArtist(track.artists.firstOrNull ?? '');
       final title = track.name;
 
-      if (artist.isEmpty || title.isEmpty) return null;
+      if (artist.isEmpty || title.isEmpty) return (LyricsLookup.notFound, null);
 
       // URL encode the artist and title
       final encodedArtist = Uri.encodeComponent(artist);
@@ -287,12 +314,13 @@ class LyricsService {
 
       final response = await http.get(uri).timeout(const Duration(seconds: 10));
 
-      if (response.statusCode != 200) return null;
+      if (response.statusCode == 404) return (LyricsLookup.notFound, null);
+      if (response.statusCode != 200) return (LyricsLookup.error, null);
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final lyrics = data['lyrics'] as String?;
 
-      if (lyrics == null || lyrics.isEmpty) return null;
+      if (lyrics == null || lyrics.isEmpty) return (LyricsLookup.notFound, null);
 
       final lines = lyrics
           .split('\n')
@@ -300,12 +328,12 @@ class LyricsService {
           .where((l) => l.text.isNotEmpty)
           .toList();
 
-      if (lines.isEmpty) return null;
+      if (lines.isEmpty) return (LyricsLookup.notFound, null);
 
-      return LyricsResult(lines: lines, source: 'lyricsovh');
+      return (LyricsLookup.found, LyricsResult(lines: lines, source: 'lyricsovh'));
     } catch (e) {
-      debugPrint('LyricsService: lyrics.ovh fetch failed: $e');
-      return null;
+      debugPrint('LyricsService: lyrics.ovh fetch failed: ${e.runtimeType}');
+      return (LyricsLookup.error, null);
     }
   }
 

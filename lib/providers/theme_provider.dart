@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/appearance.dart';
+import '../models/playback_state.dart';
 import '../services/playback_state_store.dart';
 import '../theme/nautune_theme.dart';
 
@@ -129,12 +130,13 @@ class ThemeProvider extends ChangeNotifier {
 
   /// Initialize by loading persisted theme preference.
   ///
-  /// This should be called once during app startup.
-  Future<void> initialize() async {
+  /// This should be called once during app startup. Pass [storedState] when
+  /// the caller already loaded it, to avoid decoding it again.
+  Future<void> initialize({PlaybackState? storedState}) async {
     debugPrint('ThemeProvider: Initializing...');
 
     try {
-      final storedState = await _playbackStateStore.load();
+      storedState ??= await _playbackStateStore.load();
       if (storedState != null) {
         // Load custom colors if they exist
         if (storedState.customPrimaryColor != null) {

@@ -83,6 +83,13 @@ enum FrequencyBand {
 
 /// Complete chart data for a track
 class ChartData {
+  /// Version of the chart generator output. Bump whenever the generator
+  /// changes in a way that should invalidate cached charts.
+  static const int currentVersion = 2;
+
+  /// Generator version this chart was built with (1 = pre-versioning).
+  final int version;
+
   /// Unique ID for this chart (track ID + difficulty)
   final String id;
 
@@ -116,7 +123,11 @@ class ChartData {
   /// Number of times played
   final int playCount;
 
+  /// Notes actually hit across all plays
+  final int totalNotesHit;
+
   const ChartData({
+    this.version = currentVersion,
     required this.id,
     required this.trackId,
     required this.trackName,
@@ -128,15 +139,24 @@ class ChartData {
     this.highScore = 0,
     this.maxMultiplier = 1,
     this.playCount = 0,
+    this.totalNotesHit = 0,
   });
+
+  /// Whether this chart was built by the current generator version.
+  bool get isCurrentVersion => version == currentVersion;
+
+  /// Number of notes that count toward accuracy (golden bonus notes excluded).
+  int get scorableNoteCount => notes.where((n) => !n.isBonus).length;
 
   /// Create a copy with updated scores
   ChartData copyWithScore({
     int? highScore,
     int? maxMultiplier,
     int? playCount,
+    int? totalNotesHit,
   }) =>
       ChartData(
+        version: version,
         id: id,
         trackId: trackId,
         trackName: trackName,
@@ -148,10 +168,12 @@ class ChartData {
         highScore: highScore ?? this.highScore,
         maxMultiplier: maxMultiplier ?? this.maxMultiplier,
         playCount: playCount ?? this.playCount,
+        totalNotesHit: totalNotesHit ?? this.totalNotesHit,
       );
 
   /// Convert to JSON for caching
   Map<String, dynamic> toJson() => {
+        'v': version,
         'id': id,
         'trackId': trackId,
         'trackName': trackName,
@@ -163,10 +185,12 @@ class ChartData {
         'highScore': highScore,
         'maxMultiplier': maxMultiplier,
         'playCount': playCount,
+        'hits': totalNotesHit,
       };
 
   /// Create from JSON
   factory ChartData.fromJson(Map<String, dynamic> json) => ChartData(
+        version: json['v'] as int? ?? 1,
         id: json['id'] as String,
         trackId: json['trackId'] as String,
         trackName: json['trackName'] as String,
@@ -180,6 +204,7 @@ class ChartData {
         highScore: json['highScore'] as int? ?? 0,
         maxMultiplier: json['maxMultiplier'] as int? ?? 1,
         playCount: json['playCount'] as int? ?? 0,
+        totalNotesHit: json['hits'] as int? ?? 0,
       );
 
   /// Formatted duration string
@@ -200,5 +225,69 @@ class ChartData {
       return '${(highScore / 1000).toStringAsFixed(1)}K';
     }
     return highScore.toString();
+  }
+}
+
+/// Tracks which notes of a chart have been judged (hit, collected or missed)
+/// during one play-through.
+///
+/// Every note is judged exactly once, so chord partners are never skipped and
+/// auto-hits can't double count. [cursor] is the first unjudged note; all
+/// notes before it are judged.
+class ChartJudge {
+  ChartJudge(this.notes) : _judged = List<bool>.filled(notes.length, false);
+
+  /// Notes sorted by timestamp.
+  final List<ChartNote> notes;
+  final List<bool> _judged;
+  int _cursor = 0;
+
+  /// Index of the first unjudged note.
+  int get cursor => _cursor;
+
+  bool isJudged(int index) => _judged[index];
+
+  /// Mark [index] as judged and move the cursor past judged notes.
+  void markJudged(int index) {
+    _judged[index] = true;
+    while (_cursor < notes.length && _judged[_cursor]) {
+      _cursor++;
+    }
+  }
+
+  /// Earliest unjudged note in [lane] within [windowMs] of [nowMs], or -1.
+  int findHittable(int lane, int nowMs, int windowMs, {bool includeBonus = true}) {
+    for (int i = _cursor; i < notes.length; i++) {
+      final note = notes[i];
+      // Sorted by time: nothing later can be in the window.
+      if (note.timestampMs > nowMs + windowMs) break;
+      if (_judged[i] || note.lane != lane) continue;
+      if (!includeBonus && note.isBonus) continue;
+      if ((note.timestampMs - nowMs).abs() <= windowMs) return i;
+    }
+    return -1;
+  }
+
+  /// Judge every unjudged note whose late window ([windowMs]) has passed at
+  /// [nowMs] and return their indices, oldest first.
+  List<int> expire(int nowMs, int windowMs) {
+    final expired = <int>[];
+    for (int i = _cursor; i < notes.length; i++) {
+      if (notes[i].timestampMs >= nowMs - windowMs) break;
+      if (!_judged[i]) expired.add(i);
+    }
+    for (final i in expired) {
+      markJudged(i);
+    }
+    return expired;
+  }
+
+  /// Unjudged notes that count toward accuracy (bonus notes excluded).
+  int get remainingScorable {
+    int count = 0;
+    for (int i = _cursor; i < notes.length; i++) {
+      if (!_judged[i] && !notes[i].isBonus) count++;
+    }
+    return count;
   }
 }

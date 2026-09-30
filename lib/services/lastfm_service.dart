@@ -59,6 +59,7 @@ class LastFmScrobble {
     final track = json['track'];
     final ts = json['timestamp'];
     if (artist is! String || track is! String || ts is! num) return null;
+    if (artist.trim().isEmpty || track.trim().isEmpty) return null;
     return LastFmScrobble(
       artist: artist,
       track: track,
@@ -121,6 +122,21 @@ class LastFmService extends ChangeNotifier {
   @visibleForTesting
   set httpClient(http.Client client) => _http = client;
 
+  /// Test hook: set credentials and queue without Keychain/Hive.
+  @visibleForTesting
+  void debugConfigure({
+    String? apiKey,
+    String? secret,
+    String? sessionKey,
+    List<LastFmScrobble> pending = const [],
+  }) {
+    _apiKey = apiKey;
+    _secret = secret;
+    _sessionKey = sessionKey;
+    _enabled = true;
+    _pending = [...pending];
+  }
+
   Future<void> initialize() async {
     if (_initialized) return;
     _initialized = true;
@@ -146,6 +162,8 @@ class LastFmService extends ChangeNotifier {
       debugPrint('Last.fm: failed to load config: $e');
     }
     notifyListeners();
+    // Send plays queued in a previous run (offline / Last.fm outage).
+    if (_pending.isNotEmpty) unawaited(flush());
   }
 
   Future<void> _saveConfig() => _secure.write(
@@ -238,11 +256,13 @@ class LastFmService extends ChangeNotifier {
 
   Future<void> updateNowPlaying(JellyfinTrack track) async {
     if (!isScrobblingEnabled) return;
+    final artist = track.scrobbleArtist;
+    if (artist == null || track.name.trim().isEmpty) return;
     try {
       await _call(
         {
           'method': 'track.updateNowPlaying',
-          'artist': track.displayArtist,
+          'artist': artist,
           'track': track.name,
           if (track.album != null) 'album': track.album!,
           if (track.duration != null) 'duration': '${track.duration!.inSeconds}',
@@ -259,8 +279,11 @@ class LastFmService extends ChangeNotifier {
   /// Queue a play (started at [startedAt]) and try to send the queue.
   Future<void> scrobble(JellyfinTrack track, DateTime startedAt) async {
     if (!isScrobblingEnabled) return;
+    // No usable artist/title: Last.fm would reject the whole batch (error 6).
+    final artist = track.scrobbleArtist;
+    if (artist == null || track.name.trim().isEmpty) return;
     _pending.add(LastFmScrobble(
-      artist: track.displayArtist,
+      artist: artist,
       track: track.name,
       album: track.album,
       timestamp: startedAt.millisecondsSinceEpoch ~/ 1000,
@@ -278,8 +301,13 @@ class LastFmService extends ChangeNotifier {
   Future<void> flush() => _flushing ??= _flush().whenComplete(() => _flushing = null);
 
   Future<void> _flush() async {
+    var batchSize = _batchSize;
     while (_pending.isNotEmpty && isScrobblingEnabled) {
-      final batch = _pending.take(_batchSize).toList();
+      // The queue list this batch came from: disconnect() replaces it, and
+      // a reconnect may fill the new one, so never remove from a list the
+      // batch wasn't taken from.
+      final queue = _pending;
+      final batch = queue.take(batchSize).toList();
       try {
         await _call(
           {
@@ -291,9 +319,23 @@ class LastFmService extends ChangeNotifier {
           secret: _secret!,
         );
       } on LastFmException catch (e) {
+        debugPrint('Last.fm scrobble failed: $e');
+        if (!identical(queue, _pending)) return;
+        if (e.code == 6) {
+          // Invalid parameters: one bad entry fails the whole batch. Retry
+          // one by one to isolate it, then drop just that scrobble so it
+          // can't block the queue forever.
+          if (batch.length > 1) {
+            batchSize = 1;
+            continue;
+          }
+          queue.removeAt(0);
+          await _saveQueue();
+          notifyListeners();
+          continue;
+        }
         // 9 = invalid session: the user must log in again. Other errors
         // (rate limits, outages) are retried later.
-        debugPrint('Last.fm scrobble failed: $e');
         if (e.code == 9) {
           _sessionKey = null;
           await _saveConfig();
@@ -301,10 +343,11 @@ class LastFmService extends ChangeNotifier {
         }
         return;
       } catch (e) {
-        debugPrint('Last.fm scrobble failed (will retry): $e');
+        debugPrint('Last.fm scrobble failed (will retry): ${e.runtimeType}');
         return;
       }
-      _pending.removeRange(0, batch.length);
+      if (!identical(queue, _pending)) return; // disconnected meanwhile
+      queue.removeRange(0, batch.length.clamp(0, queue.length));
       await _saveQueue();
       notifyListeners();
     }

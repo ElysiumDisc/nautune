@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 import 'package:audio_service/audio_service.dart' as audio_service;
 import 'package:flutter/foundation.dart';
 import '../jellyfin/jellyfin_track.dart';
@@ -31,10 +30,6 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
   /// A reported position further than this from the OS's extrapolated
   /// position is treated as a jump (seek, A-B loop, new track) and pushed.
   static const Duration _positionDriftTolerance = Duration(milliseconds: 1500);
-
-  /// Completer that resolves when the media session update is broadcast.
-  /// Used by gapless transition to wait deterministically instead of a fixed delay.
-  Completer<void>? _mediaUpdateCompleter;
 
   NautuneAudioHandler({
     required EnginePlayer player,
@@ -197,30 +192,6 @@ class NautuneAudioHandler extends audio_service.BaseAudioHandler with audio_serv
       artUri: artUri,
     );
     mediaItem.add(item);
-    // Signal that media session update has been broadcast
-    _mediaUpdateCompleter?.complete();
-    _mediaUpdateCompleter = null;
-  }
-
-  /// Wait for the media session to process an update (used by gapless transition).
-  /// Returns immediately if no update is pending, with a platform-aware timeout.
-  /// iOS needs more time for audio session configuration; Android is faster.
-  Future<void> awaitMediaSessionUpdate() {
-    // Complete any previous pending completer to avoid orphaned awaiters
-    if (_mediaUpdateCompleter != null && !_mediaUpdateCompleter!.isCompleted) {
-      _mediaUpdateCompleter!.complete();
-    }
-    _mediaUpdateCompleter = Completer<void>();
-    final timeout = Platform.isIOS
-        ? const Duration(milliseconds: 750)
-        : const Duration(milliseconds: 300);
-    return _mediaUpdateCompleter!.future.timeout(
-      timeout,
-      onTimeout: () {
-        debugPrint('⚠️ Media session update timed out (${timeout.inMilliseconds}ms), proceeding anyway');
-        _mediaUpdateCompleter = null;
-      },
-    );
   }
 
   void updateNautuneQueue(List<JellyfinTrack> tracks) {

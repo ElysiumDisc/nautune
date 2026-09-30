@@ -9,7 +9,12 @@ class _SearchTab extends StatefulWidget {
   State<_SearchTab> createState() => _SearchTabState();
 }
 
-class _SearchTabState extends State<_SearchTab> {
+class _SearchTabState extends State<_SearchTab>
+    with AutomaticKeepAliveClientMixin {
+  // Keep the query and results while other tabs are shown.
+  @override
+  bool get wantKeepAlive => true;
+
   final TextEditingController _controller = TextEditingController();
   final Debouncer _debouncer = Debouncer();
   List<String> _recentQueries = [];
@@ -24,6 +29,9 @@ class _SearchTabState extends State<_SearchTab> {
   /// Result filter; null shows every kind (with a Top result).
   SearchKind? _scope;
   static const int _previewCount = 5;
+
+  /// Results per kind requested from the server.
+  static const int _resultLimit = 100;
   static const int _historyLimit = 10;
   static const String _boxName = 'nautune_search_history';
   static const String _historyKey = 'global_search_history';
@@ -90,10 +98,19 @@ class _SearchTabState extends State<_SearchTab> {
     await _persistRecentQueries();
   }
 
+  /// Saves the current query to the history. Called when the user commits
+  /// to it (submit, or opening a result), not on every debounced keystroke.
+  void _rememberCurrentQuery() {
+    if (_lastQuery.isNotEmpty) unawaited(_rememberQuery(_lastQuery));
+  }
+
   Future<void> _performSearch(String query) async {
     final trimmed = query.trim();
     final lowerQuery = trimmed.toLowerCase();
     setState(() {
+      // A scope picked for the previous query could hide every result of
+      // this one.
+      if (trimmed != _lastQuery) _scope = null;
       _lastQuery = trimmed;
       _error = null;
     });
@@ -114,7 +131,6 @@ class _SearchTabState extends State<_SearchTab> {
       // Easter eggs: show a special card when the whole query is a keyword
       _easterEgg = matchEasterEgg(trimmed);
     });
-    unawaited(_rememberQuery(trimmed));
 
     // Demo mode: search bundled showcase data (all types)
     if (widget.appState.isDemoMode) {
@@ -245,6 +261,7 @@ class _SearchTabState extends State<_SearchTab> {
       final results = await widget.appState.jellyfinService.searchAllBatch(
         libraryId: libraryId,
         query: trimmed,
+        limit: _resultLimit,
       );
       if (!mounted || _lastQuery != trimmed) return;
       setState(() {
@@ -267,6 +284,7 @@ class _SearchTabState extends State<_SearchTab> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final theme = Theme.of(context);
     final libraryId = widget.appState.session?.selectedLibraryId;
 
@@ -299,6 +317,7 @@ class _SearchTabState extends State<_SearchTab> {
             onSubmitted: (value) {
               _debouncer.cancel();
               _performSearch(value);
+              _rememberCurrentQuery();
             },
             onSuffixTap: () {
               _controller.clear();
@@ -371,8 +390,10 @@ class _SearchTabState extends State<_SearchTab> {
                 ActionChip(
                   label: Text(query),
                   onPressed: () {
+                    _debouncer.cancel();
                     _controller.text = query;
                     _performSearch(query);
+                    _rememberCurrentQuery();
                   },
                 ),
             ],
@@ -420,29 +441,43 @@ class _SearchTabState extends State<_SearchTab> {
         scope == null ? items.take(_previewCount).toList() : items;
     bool show(SearchKind kind) => scope == null || scope == kind;
 
-    return ListView(
+    // Rows are built lazily: a scope can list every result.
+    final rows = <Widget Function()>[
+      if (_easterEgg != null)
+        () => Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _buildEasterEggCard(theme, _easterEgg!),
+            ),
+      if (top != null) () => _buildTopResult(theme, top),
+      if (show(SearchKind.artist) && _artistResults.isNotEmpty) ...[
+        () => _buildSectionHeader(theme, 'Artists', SearchKind.artist, _artistResults.length),
+        for (final artist in limit(_artistResults)) () => _buildArtistTile(theme, artist),
+      ],
+      if (show(SearchKind.album) && _albumResults.isNotEmpty) ...[
+        () => _buildSectionHeader(theme, 'Albums', SearchKind.album, _albumResults.length),
+        for (final album in limit(_albumResults)) () => _buildAlbumTile(theme, album),
+      ],
+      if (show(SearchKind.track) && _trackResults.isNotEmpty) ...[
+        () => _buildSectionHeader(theme, 'Songs', SearchKind.track, _trackResults.length),
+        for (final track in limit(_trackResults)) () => _buildTrackTile(theme, track),
+      ],
+    ];
+
+    if (rows.isEmpty) {
+      return Center(
+        child: Text(
+          'No results in this category for "$_lastQuery"',
+          style: theme.textTheme.titleMedium,
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+
+    return ListView.builder(
       padding: const EdgeInsets.only(bottom: 24),
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-      children: [
-        if (_easterEgg != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _buildEasterEggCard(theme, _easterEgg!),
-          ),
-        if (top != null) _buildTopResult(theme, top),
-        if (show(SearchKind.artist) && _artistResults.isNotEmpty) ...[
-          _buildSectionHeader(theme, 'Artists', SearchKind.artist, _artistResults.length),
-          for (final artist in limit(_artistResults)) _buildArtistTile(theme, artist),
-        ],
-        if (show(SearchKind.album) && _albumResults.isNotEmpty) ...[
-          _buildSectionHeader(theme, 'Albums', SearchKind.album, _albumResults.length),
-          for (final album in limit(_albumResults)) _buildAlbumTile(theme, album),
-        ],
-        if (show(SearchKind.track) && _trackResults.isNotEmpty) ...[
-          _buildSectionHeader(theme, 'Songs', SearchKind.track, _trackResults.length),
-          for (final track in limit(_trackResults)) _buildTrackTile(theme, track),
-        ],
-      ],
+      itemCount: rows.length,
+      itemBuilder: (context, index) => rows[index](),
     );
   }
 
@@ -489,24 +524,33 @@ class _SearchTabState extends State<_SearchTab> {
     final item = top.item;
     final (Widget art, String title, String subtitle, VoidCallback onTap) = switch (item) {
       JellyfinArtist a => (
-          _artistArtwork(a, maxWidth: 200),
+          _artistArtwork(a, maxWidth: 88),
           a.name,
           'Artist',
-          () => _openArtist(context, a),
+          () {
+            _rememberCurrentQuery();
+            _openArtist(context, a);
+          },
         ),
       JellyfinAlbum a => (
-          _albumArtwork(a, maxWidth: 200),
+          _albumArtwork(a, maxWidth: 88),
           a.name,
           'Album · ${a.displayArtist}',
-          () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: a)),
-              ),
+          () {
+            _rememberCurrentQuery();
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: a)),
+            );
+          },
         ),
       JellyfinTrack t => (
           _trackArtwork(t),
           t.name,
           'Song · ${t.displayArtist}',
-          () => widget.appState.audioPlayerService.playTrack(t, queueContext: _trackResults),
+          () {
+            _rememberCurrentQuery();
+            widget.appState.audioPlayerService.playTrack(t, queueContext: _trackResults);
+          },
         ),
       _ => (const SizedBox(), '', '', () {}),
     };
@@ -740,7 +784,7 @@ class _SearchTabState extends State<_SearchTab> {
       itemId: track.albumPrimaryImageTag != null ? (albumId ?? track.id) : track.id,
       imageTag: tag,
       trackId: track.id,
-      maxWidth: 100,
+      maxWidth: JellyfinImage.listArtwork,
       boxFit: BoxFit.cover,
       errorBuilder: (context, url, error) =>
           Image.asset('assets/no_album_art.png', fit: BoxFit.cover),
@@ -751,11 +795,14 @@ class _SearchTabState extends State<_SearchTab> {
     return SizedBox(
       height: LibraryTileMetrics.of(context).listRowExtent,
       child: LibraryListRow(
-        artwork: _artistArtwork(artist, maxWidth: 100),
+        artwork: _artistArtwork(artist, maxWidth: JellyfinImage.listArtwork),
         circular: true,
         title: artist.name,
         subtitle: artist.songCount != null ? '${artist.songCount} songs' : 'Artist',
-        onTap: () => _openArtist(context, artist),
+        onTap: () {
+          _rememberCurrentQuery();
+          _openArtist(context, artist);
+        },
       ),
     );
   }
@@ -764,13 +811,14 @@ class _SearchTabState extends State<_SearchTab> {
     return SizedBox(
       height: LibraryTileMetrics.of(context).listRowExtent,
       child: LibraryListRow(
-        artwork: _albumArtwork(album, maxWidth: 100),
+        artwork: _albumArtwork(album, maxWidth: JellyfinImage.listArtwork),
         title: album.name,
         subtitle: [
           album.displayArtist,
           if (album.productionYear != null) '${album.productionYear}',
         ].join(' · '),
         onTap: () {
+          _rememberCurrentQuery();
           Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)),
           );
@@ -799,6 +847,7 @@ class _SearchTabState extends State<_SearchTab> {
             ? Text(_formatDuration(track.duration!), style: theme.textTheme.footnote)
             : null,
         onTap: () {
+          _rememberCurrentQuery();
           widget.appState.audioPlayerService.playTrack(
             track,
             queueContext: _trackResults,

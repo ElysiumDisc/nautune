@@ -14,7 +14,10 @@ import 'wav_builder.dart';
 
 /// Programmatic piano synthesizer using additive synthesis + ADSR envelope.
 /// Generates WAV audio in-memory (no asset files needed).
-/// Uses a pool of AudioPlayer instances for polyphony (round-robin).
+///
+/// Each key of the visible range gets its own [AudioPlayer] with the note's
+/// source already loaded, so a key press is a single `resume` (or a seek to 0
+/// when the note is still ringing) instead of loading a new player item.
 class PianoSynthService {
   static const int _sampleRate = 44100;
   static const int _channels = 1;
@@ -26,44 +29,69 @@ class PianoSynthService {
   static const double _sustainLevel = 0.6;
   static const double _release = 0.2;
 
-  // Player pool for polyphony
-  static const int _poolSize = 6;
+  /// Players for the keys of the current range (one per key, reused when
+  /// the octave changes).
   final List<AudioPlayer> _players = [];
-  int _nextPlayer = 0;
+  final Map<int, AudioPlayer> _notePlayers = {};
 
-  // Cache generated WAV bytes per MIDI note
+  // Cache generated WAV bytes per MIDI note, and their temp files.
   final Map<int, Uint8List> _noteCache = {};
-  // Cache file paths for written WAV files
   String? _tempDir;
   final Map<int, String> _fileCache = {};
 
+  Future<void>? _initFuture;
+  int _preloadGeneration = 0;
   bool _disposed = false;
 
-  /// Initialize the player pool and temp directory for WAV files.
-  Future<void> init() async {
+  /// Initialize the temp directory and iOS audio context. Safe to call once;
+  /// a [dispose] that races it is honoured.
+  Future<void> init() => _initFuture ??= _init();
+
+  Future<void> _init() async {
     final dir = await getTemporaryDirectory();
-    _tempDir = p.join(dir.path, 'piano_synth');
-    await Directory(_tempDir!).create(recursive: true);
+    if (_disposed) return;
+    // Per-instance directory: a closing screen's cleanup can't delete the
+    // files of a piano that was reopened right away.
+    final parent = p.join(dir.path, 'piano_synth');
+    final tempDir = p.join(
+      parent,
+      DateTime.now().microsecondsSinceEpoch.toString(),
+    );
+    await _removeStaleEntries(parent, keep: tempDir);
+    await Directory(tempDir).create(recursive: true);
+    _tempDir = tempDir;
+  }
 
-    for (int i = 0; i < _poolSize; i++) {
-      final player = AudioPlayer();
-      await player.setReleaseMode(ReleaseMode.stop);
-      _players.add(player);
+  /// Delete what earlier instances left in [parent] (directories of sessions
+  /// that ended without dispose, e.g. the app was killed, and loose files
+  /// from older builds), except [keep]. Best effort: errors are ignored.
+  static Future<void> _removeStaleEntries(String parent, {required String keep}) async {
+    try {
+      final dir = Directory(parent);
+      if (!await dir.exists()) return;
+      await for (final entity in dir.list(followLinks: false)) {
+        if (p.equals(entity.path, keep)) continue;
+        try {
+          await entity.delete(recursive: true);
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('PianoSynthService: stale temp cleanup failed: $e');
     }
+  }
 
-    // On iOS, configure audio context so piano can actually produce sound.
-    // Uses playback category with mixWithOthers so it won't interrupt music.
-    if (Platform.isIOS) {
-      final context = AudioContext(
+  /// On iOS the audio context is global. Use playback + mixWithOthers so the
+  /// piano doesn't interrupt other apps' audio.
+  Future<void> _applyAudioContext(AudioPlayer player) async {
+    if (!Platform.isIOS) return;
+    await player.setAudioContext(
+      AudioContext(
         iOS: AudioContextIOS(
           category: AVAudioSessionCategory.playback,
           options: {AVAudioSessionOptions.mixWithOthers},
         ),
-      );
-      for (final player in _players) {
-        await player.setAudioContext(context);
-      }
-    }
+      ),
+    );
   }
 
   /// Our players switched the shared iOS AVAudioSession to
@@ -79,45 +107,87 @@ class PianoSynthService {
     }
   }
 
-  /// Get or create a WAV temp file for a note, returning its path.
-  Future<String> _getOrCreateNoteFile(int midiNote) async {
-    if (_fileCache.containsKey(midiNote)) return _fileCache[midiNote]!;
-    final wav = _noteCache[midiNote] ?? _generateNoteWav(midiNote);
-    _noteCache[midiNote] = wav;
-    final filePath = p.join(_tempDir!, 'note_$midiNote.wav');
-    await File(filePath).writeAsBytes(wav);
-    _fileCache[midiNote] = filePath;
-    return filePath;
-  }
-
-  /// Play a note by MIDI number (e.g., 60 = C4).
+  /// Play a note by MIDI number (e.g., 60 = C4). Notes outside the loaded
+  /// range are ignored until [preloadRange] covers them.
   Future<void> playNote(int midiNote) async {
-    if (_disposed || _players.isEmpty || _tempDir == null) return;
-
-    final filePath = await _getOrCreateNoteFile(midiNote);
-
-    final player = _players[_nextPlayer];
-    _nextPlayer = (_nextPlayer + 1) % _poolSize;
+    if (_disposed) return;
+    final player = _notePlayers[midiNote];
+    if (player == null) return;
 
     try {
-      await player.stop();
-      await player.play(DeviceFileSource(filePath, mimeType: 'audio/wav'));
+      if (player.state == PlayerState.playing) {
+        // Still ringing: restart from the top.
+        await player.seek(Duration.zero);
+      } else {
+        await player.resume();
+      }
     } catch (e) {
       debugPrint('PianoSynthService: Error playing note $midiNote: $e');
     }
   }
 
-  /// Pre-generate and cache WAV data + temp files for a range of notes.
+  /// Synthesize (off the UI isolate), write and load [count] notes starting
+  /// at [startMidi], one player per key. A newer call supersedes an older
+  /// one still in progress.
   Future<void> preloadRange(int startMidi, int count) async {
-    for (int i = startMidi; i < startMidi + count; i++) {
-      _noteCache[i] = _generateNoteWav(i);
-      if (_tempDir != null) {
-        final filePath = p.join(_tempDir!, 'note_$i.wav');
-        await File(filePath).writeAsBytes(_noteCache[i]!);
-        _fileCache[i] = filePath;
-      }
+    try {
+      await _preloadRange(startMidi, count);
+    } catch (e) {
+      // Expected if the screen closed mid-load (players disposed).
+      if (!_disposed) debugPrint('PianoSynthService: preload failed: $e');
     }
   }
+
+  Future<void> _preloadRange(int startMidi, int count) async {
+    await init();
+    final generation = ++_preloadGeneration;
+    bool superseded() => _disposed || generation != _preloadGeneration;
+    if (superseded()) return;
+    final tempDir = _tempDir;
+    if (tempDir == null) return;
+
+    final notes = [for (var i = 0; i < count; i++) startMidi + i];
+    final missing = notes.where((n) => !_noteCache.containsKey(n)).toList();
+    if (missing.isNotEmpty) {
+      // Static tear-off (no closure) so nothing from `this` is sent.
+      final generated = await compute(_generateNotes, missing);
+      for (var i = 0; i < missing.length; i++) {
+        _noteCache[missing[i]] = generated[i];
+      }
+      if (superseded()) return;
+    }
+
+    for (var i = 0; i < notes.length; i++) {
+      final note = notes[i];
+      var path = _fileCache[note];
+      if (path == null) {
+        path = p.join(tempDir, 'note_$note.wav');
+        await File(path).writeAsBytes(_noteCache[note]!);
+        _fileCache[note] = path;
+        if (superseded()) return;
+      }
+
+      final AudioPlayer player;
+      if (i < _players.length) {
+        player = _players[i];
+      } else {
+        player = AudioPlayer();
+        _players.add(player);
+        await player.setReleaseMode(ReleaseMode.stop);
+        if (_players.length == 1) await _applyAudioContext(player);
+        if (_disposed) return;
+      }
+
+      if (_notePlayers[note] == player) continue;
+      _notePlayers.removeWhere((_, v) => v == player);
+      await player.setSource(DeviceFileSource(path, mimeType: 'audio/wav'));
+      if (superseded()) return;
+      _notePlayers[note] = player;
+    }
+  }
+
+  static List<Uint8List> _generateNotes(List<int> notes) =>
+      [for (final n in notes) generateNoteWav(n)];
 
   /// Convert MIDI note number to frequency in Hz.
   /// A4 (MIDI 69) = 440 Hz.
@@ -126,7 +196,8 @@ class PianoSynthService {
   }
 
   /// Generate a complete WAV file as Uint8List for a single note.
-  Uint8List _generateNoteWav(int midiNote) {
+  @visibleForTesting
+  static Uint8List generateNoteWav(int midiNote) {
     final frequency = midiToFrequency(midiNote);
     final numSamples = (_sampleRate * _noteDuration).toInt();
     final pcmData = Int16List(numSamples);
@@ -141,19 +212,17 @@ class PianoSynthService {
       sample += 0.25 * sin(2 * pi * frequency * 3 * t); // 3rd harmonic
 
       // ADSR envelope
-      final envelope = _envelope(t);
-      sample *= envelope;
+      sample *= _envelope(t);
 
-      // Normalize and convert to 16-bit
-      final clamped = (sample * 0.4 * 32767).round().clamp(-32768, 32767);
-      pcmData[i] = clamped;
+      // Normalize and convert to 16-bit (peak 1.75 * 0.4 = 0.7: no clipping)
+      pcmData[i] = (sample * 0.4 * 32767).round().clamp(-32768, 32767);
     }
 
     return buildWavPcm16(pcmData, sampleRate: _sampleRate, channels: _channels);
   }
 
   /// ADSR envelope function.
-  double _envelope(double t) {
+  static double _envelope(double t) {
     if (t < _attack) {
       return t / _attack;
     } else if (t < _attack + _decay) {
@@ -167,16 +236,27 @@ class PianoSynthService {
     }
   }
 
-  /// Release all resources.
+  /// Release all resources. Waits for an in-flight [init] so nothing it
+  /// creates afterwards is leaked.
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
-    for (final player in _players) {
-      await player.stop();
-      await player.dispose();
-    }
+    _preloadGeneration++;
+    try {
+      await _initFuture;
+    } catch (_) {}
+
+    final players = List<AudioPlayer>.of(_players);
     _players.clear();
-    await _restoreMusicSession();
+    _notePlayers.clear();
+    for (final player in players) {
+      try {
+        await player.dispose();
+      } catch (e) {
+        debugPrint('PianoSynthService: player dispose failed: $e');
+      }
+    }
+    if (players.isNotEmpty) await _restoreMusicSession();
     _noteCache.clear();
     _fileCache.clear();
     if (_tempDir != null) {

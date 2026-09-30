@@ -32,15 +32,19 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   // so the background-time request for saving playback state lives here.
   func sceneDidEnterBackground(_ scene: UIScene) {
     endBackgroundTask()
-    backgroundTaskIdentifier = UIApplication.shared.beginBackgroundTask(
+    let taskId = UIApplication.shared.beginBackgroundTask(
       withName: "SavePlaybackState"
     ) { [weak self] in
       self?.endBackgroundTask()
     }
+    backgroundTaskIdentifier = taskId
 
-    // Allow 3 seconds for Flutter to save state
+    // Allow 3 seconds for Flutter to save state. Only end the task this call
+    // started: after a quick background -> foreground -> background, an older
+    // timer must not end the newer task early.
     DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-      self?.endBackgroundTask()
+      guard let self = self, self.backgroundTaskIdentifier == taskId else { return }
+      self.endBackgroundTask()
     }
   }
 

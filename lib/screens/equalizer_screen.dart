@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../services/equalizer_service.dart';
@@ -78,6 +80,7 @@ class EqualizerScreen extends StatelessWidget {
                                   value: eq.gains[i],
                                   enabled: eq.enabled,
                                   onChanged: (v) => eq.setGain(i, v),
+                                  onChangeEnd: (_) => unawaited(eq.flush()),
                                 ),
                               ),
                           ],
@@ -107,12 +110,14 @@ class _BandSlider extends StatelessWidget {
     required this.value,
     required this.enabled,
     required this.onChanged,
+    required this.onChangeEnd,
   });
 
   final String label;
   final double value;
   final bool enabled;
   final ValueChanged<double> onChanged;
+  final ValueChanged<double> onChangeEnd;
 
   @override
   Widget build(BuildContext context) {
@@ -137,6 +142,7 @@ class _BandSlider extends StatelessWidget {
                 divisions: 24,
                 semanticFormatterCallback: (v) => '$label hertz, ${v.round()} decibels',
                 onChanged: enabled ? onChanged : null,
+                onChangeEnd: enabled ? onChangeEnd : null,
               ),
             ),
           ),

@@ -553,7 +553,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final artist = widget.artist;
-    final isWide = MediaQuery.of(context).size.width > 600;
+    final isWide = MediaQuery.sizeOf(context).width > 600;
 
     Widget artwork;
     final tag = artist.primaryImageTag;
@@ -576,7 +576,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
             itemId: artist.id,
             imageTag: tag,
             artistId: artist.id,
-            maxWidth: 800,
+            maxWidth: 220, // the header's circle (180pt, 220pt when wide)
             boxFit: BoxFit.cover,
             errorBuilder: (context, url, error) => _DefaultArtistArtwork(),
           ),
@@ -1210,7 +1210,8 @@ class _AlbumCard extends StatelessWidget {
       artwork = JellyfinImage(
         itemId: album.id,
         imageTag: tag,
-        maxWidth: 200,
+        albumId: album.id,
+        maxWidth: 140, // three or five columns
         boxFit: BoxFit.cover,
         errorBuilder: (context, url, error) => Container(
           color: theme.colorScheme.surfaceContainerHighest,
@@ -1321,6 +1322,7 @@ class _TopTrackTile extends StatelessWidget {
                               itemId: track.albumId ?? track.id,
                               imageTag: track.albumPrimaryImageTag ?? track.primaryImageTag ?? '',
                               trackId: track.id,
+                              maxWidth: JellyfinImage.listArtwork,
                               boxFit: BoxFit.cover,
                               errorBuilder: (context, url, error) => Container(
                                 color: theme.colorScheme.surfaceContainerHighest,
@@ -1468,6 +1470,7 @@ class _LibraryTrackTile extends StatelessWidget {
                               itemId: track.albumId ?? track.id,
                               imageTag: track.albumPrimaryImageTag ?? track.primaryImageTag ?? '',
                               trackId: track.id,
+                              maxWidth: JellyfinImage.listArtwork,
                               boxFit: BoxFit.cover,
                               errorBuilder: (context, url, error) => Container(
                                 color: theme.colorScheme.surfaceContainerHighest,

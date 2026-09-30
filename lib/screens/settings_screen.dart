@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../services/listening_analytics_service.dart';
 import '../services/network_download_service.dart';
+import '../services/power_mode_service.dart';
 import '../models/appearance.dart';
 import '../models/now_playing_layout.dart';
 import '../models/replay_gain_mode.dart';
@@ -344,16 +345,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ],
+              // The switch is the user's preference; Low Power Mode or the
+              // offline battery saver may pause the visualizer meanwhile.
               _NautuneToggleTile(
                 icon: Icons.waves,
                 title: 'Audio Visualizer',
-                subtitle: appState.visualizerEnabled
-                    ? appState.visualizerType.label
-                    : 'Disabled for battery savings',
-                value: appState.visualizerEnabled,
+                subtitle: appState.isVisualizerPausedByPowerSaving
+                    ? (PowerModeService.instance.isLowPowerMode
+                        ? 'Paused by Low Power Mode'
+                        : 'Paused by battery saver')
+                    : appState.visualizerEnabledByUser
+                        ? appState.visualizerType.label
+                        : 'Disabled for battery savings',
+                value: appState.visualizerEnabledByUser,
                 onChanged: appState.setVisualizerEnabled,
               ),
-              if (appState.visualizerEnabled)
+              if (appState.visualizerEnabledByUser)
                 ListTile(
                   leading: Icon(appState.visualizerType.icon, color: theme.colorScheme.primary),
                   title: const Text('Visualizer Style'),
@@ -361,7 +368,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => _showVisualizerPicker(context),
                 ),
-              if (appState.visualizerEnabled)
+              if (appState.visualizerEnabledByUser)
                 ListTile(
                   leading: Icon(appState.visualizerPosition.icon, color: theme.colorScheme.primary),
                   title: const Text('Visualizer Position'),
@@ -442,13 +449,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const Icon(Icons.chevron_right),
                   ],
                 ),
-                onTap: () {
-                  Navigator.push(
+                onTap: () async {
+                  await Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (context) => const ListenBrainzSettingsScreen(),
                     ),
                   );
+                  // ListenBrainzService isn't listenable: refresh the
+                  // connected / scrobbling state after the user returns.
+                  if (mounted) setState(() {});
                 },
               ),
               ListenableBuilder(
@@ -530,11 +540,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Backup saved to ${backupFile.path}'),
-            backgroundColor: Theme.of(context).colorScheme.primary,
             duration: const Duration(seconds: 5),
             action: SnackBarAction(
               label: 'Copy Path',
-              textColor: Theme.of(context).colorScheme.onPrimary,
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: backupFile.path));
               },
@@ -556,52 +564,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _importStats(BuildContext context) async {
     final theme = Theme.of(context);
-    final controller = TextEditingController();
-
     final result = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Import Stats'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Paste your backup JSON below, or enter the path to a backup file:',
-              style: TextStyle(fontSize: 14),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: controller,
-              maxLines: 5,
-              decoration: const InputDecoration(
-                hintText: 'Paste backup JSON or file path...',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () async {
-              // Try to paste from clipboard
-              final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
-              if (clipboardData?.text != null) {
-                controller.text = clipboardData!.text!;
-              }
-            },
-            child: const Text('Paste'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Import'),
-          ),
-        ],
-      ),
+      builder: (context) => const _ImportStatsDialog(),
     );
 
     if (result == null || result.isEmpty) return;
@@ -663,7 +628,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Imported $importedEvents events, $networkImported channel stats'),
-            backgroundColor: Theme.of(context).colorScheme.primary,
           ),
         );
       }
@@ -1800,7 +1764,16 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
     return _statsFuture!;
   }
 
-  void _refreshStats() => setState(() => _statsFuture = null);
+  // Per-view data, loaded once and reloaded only by _refreshStats() — never
+  // on the download service's progress ticks.
+  Future<void>? _loopsReady;
+  Future<Map<String, dynamic>>? _waveformStatsFuture;
+  Future<void>? _chartsReady;
+
+  void _refreshStats() => setState(() {
+    _statsFuture = null;
+    _waveformStatsFuture = null;
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1821,7 +1794,9 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                 context: context,
                 builder: (context) => AlertDialog(
                   title: const Text('Clear All Downloads?'),
-                  content: const Text('This will permanently delete all downloaded tracks. This action cannot be undone.'),
+                  content: const Text(
+                    'This will permanently delete all downloaded tracks. This action cannot be undone.',
+                  ),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(context, false),
@@ -1858,327 +1833,389 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
 
               final stats = snapshot.data!;
 
-              return Column(
-                children: [
-                  // Storage summary card
-                  Card(
-                    margin: const EdgeInsets.all(16),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceAround,
-                            children: [
-                              _StatItem(
-                                icon: Icons.download,
-                                label: 'Downloads',
-                                value: stats.formattedTotal,
-                              ),
-                              _StatItem(
-                                icon: Icons.cached,
-                                label: 'Cache',
-                                value: stats.formattedCache,
-                              ),
-                              _StatItem(
-                                icon: Icons.storage,
-                                label: 'Total',
-                                value: stats.formattedCombined,
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceAround,
-                            children: [
-                              _StatItem(
-                                icon: Icons.music_note,
-                                label: 'Downloaded',
-                                value: '${stats.trackCount} tracks',
-                              ),
-                              _StatItem(
-                                icon: Icons.queue_music,
-                                label: 'Cached',
-                                value: '${stats.cacheFileCount} tracks',
-                              ),
-                              _StatItem(
-                                icon: Icons.waves,
-                                label: 'Waveforms',
-                                value: stats.formattedWaveforms,
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceAround,
-                            children: [
-                              _StatItem(
-                                icon: Icons.gamepad,
-                                label: 'Charts',
-                                value: '${stats.chartCount} (${stats.formattedCharts})',
-                              ),
-                            ],
-                          ),
-                          if (downloadService.storageLimitMB > 0) ...[
-                            const SizedBox(height: 16),
-                            LinearProgressIndicator(
-                              value: (stats.totalBytes / (downloadService.storageLimitMB * 1024 * 1024)).clamp(0.0, 1.0),
-                              backgroundColor: theme.colorScheme.surfaceContainerHighest,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Downloads: ${stats.formattedTotal} of ${_formatBytes(downloadService.storageLimitMB * 1024 * 1024)}'
-                              '${downloadService.queuePause == DownloadQueuePause.storageLimit ? ' • limit reached, downloads paused' : ''}',
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  // Storage settings
-                  Card(
-                    margin: const EdgeInsets.symmetric(horizontal: 16),
+              // One scroll view for the header and the list, so the list
+              // stays usable on small phones and with large text.
+              return CustomScrollView(
+                slivers: [
+                  SliverToBoxAdapter(
                     child: Column(
                       children: [
-                        ListTile(
-                          leading: const Icon(Icons.storage),
-                          title: const Text('Storage Limit'),
-                          subtitle: Text(
-                            downloadService.storageLimitMB == 0
-                                ? 'Unlimited'
-                                : downloadService.storageLimitMB >= 1024
-                                    ? '${(downloadService.storageLimitMB / 1024).toStringAsFixed(1)} GB'
-                                    : '${downloadService.storageLimitMB} MB'
-                          ),
-                          trailing: SizedBox(
-                            width: 150,
-                            child: _StorageLimitSlider(
-                              currentMB: downloadService.storageLimitMB,
-                              onChanged: (mb) {
-                                downloadService.setStorageLimitMB(mb);
-                                uiStateProvider.setStorageLimitMB(mb);
-                                setState(() {});
-                              },
+                        // Storage summary card
+                        Card(
+                          margin: const EdgeInsets.all(16),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              children: [
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceAround,
+                                  children: [
+                                    _StatItem(
+                                      icon: Icons.download,
+                                      label: 'Downloads',
+                                      value: stats.formattedTotal,
+                                    ),
+                                    _StatItem(
+                                      icon: Icons.cached,
+                                      label: 'Cache',
+                                      value: stats.formattedCache,
+                                    ),
+                                    _StatItem(
+                                      icon: Icons.storage,
+                                      label: 'Total',
+                                      value: stats.formattedCombined,
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceAround,
+                                  children: [
+                                    _StatItem(
+                                      icon: Icons.music_note,
+                                      label: 'Downloaded',
+                                      value: '${stats.trackCount} tracks',
+                                    ),
+                                    _StatItem(
+                                      icon: Icons.queue_music,
+                                      label: 'Cached',
+                                      value: '${stats.cacheFileCount} tracks',
+                                    ),
+                                    _StatItem(
+                                      icon: Icons.waves,
+                                      label: 'Waveforms',
+                                      value: stats.formattedWaveforms,
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceAround,
+                                  children: [
+                                    _StatItem(
+                                      icon: Icons.gamepad,
+                                      label: 'Charts',
+                                      value:
+                                          '${stats.chartCount} (${stats.formattedCharts})',
+                                    ),
+                                  ],
+                                ),
+                                if (downloadService.storageLimitMB > 0) ...[
+                                  const SizedBox(height: 16),
+                                  LinearProgressIndicator(
+                                    value:
+                                        (stats.totalBytes /
+                                                (downloadService
+                                                        .storageLimitMB *
+                                                    1024 *
+                                                    1024))
+                                            .clamp(0.0, 1.0),
+                                    backgroundColor: theme
+                                        .colorScheme
+                                        .surfaceContainerHighest,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Downloads: ${stats.formattedTotal} of ${_formatBytes(downloadService.storageLimitMB * 1024 * 1024)}'
+                                    '${downloadService.queuePause == DownloadQueuePause.storageLimit ? ' • limit reached, downloads paused' : ''}',
+                                    style: theme.textTheme.bodySmall,
+                                  ),
+                                ],
+                              ],
                             ),
                           ),
                         ),
-                        _NautuneToggleTile(
-                          icon: Icons.auto_delete,
-                          title: 'Auto-Cleanup',
-                          subtitle: downloadService.autoCleanupEnabled
-                              ? 'At launch, remove single-track downloads older than ${downloadService.autoCleanupDays} days (albums and playlists are kept)'
-                              : 'Keep all downloads',
-                          value: downloadService.autoCleanupEnabled,
-                          onChanged: (value) {
-                            downloadService.setAutoCleanup(enabled: value);
-                            uiStateProvider.setAutoCleanup(enabled: value);
-                            setState(() {});
-                          },
-                        ),
-                        if (downloadService.autoCleanupEnabled)
-                          Padding(
-                            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 12),
-                            child: Row(
-                              children: [
-                                const Text('7d'),
-                                Expanded(
-                                  child: Slider(
-                                    value: downloadService.autoCleanupDays.toDouble(),
-                                    min: 7,
-                                    max: 90,
-                                    divisions: 11,
-                                    label: '${downloadService.autoCleanupDays} days',
-                                    onChanged: (value) {
-                                      final days = value.round();
-                                      downloadService.setAutoCleanup(days: days);
-                                      uiStateProvider.setAutoCleanup(days: days);
+
+                        // Storage settings
+                        Card(
+                          margin: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Column(
+                            children: [
+                              ListTile(
+                                leading: const Icon(Icons.storage),
+                                title: const Text('Storage Limit'),
+                                subtitle: Text(
+                                  downloadService.storageLimitMB == 0
+                                      ? 'Unlimited'
+                                      : downloadService.storageLimitMB >= 1024
+                                      ? '${(downloadService.storageLimitMB / 1024).toStringAsFixed(1)} GB'
+                                      : '${downloadService.storageLimitMB} MB',
+                                ),
+                                trailing: SizedBox(
+                                  width: 150,
+                                  child: _StorageLimitSlider(
+                                    currentMB: downloadService.storageLimitMB,
+                                    onChanged: (mb) {
+                                      downloadService.setStorageLimitMB(mb);
+                                      uiStateProvider.setStorageLimitMB(mb);
                                       setState(() {});
                                     },
                                   ),
                                 ),
-                                const Text('90d'),
+                              ),
+                              _NautuneToggleTile(
+                                icon: Icons.auto_delete,
+                                title: 'Auto-Cleanup',
+                                subtitle: downloadService.autoCleanupEnabled
+                                    ? 'At launch, remove single-track downloads older than ${downloadService.autoCleanupDays} days (albums and playlists are kept)'
+                                    : 'Keep all downloads',
+                                value: downloadService.autoCleanupEnabled,
+                                onChanged: (value) {
+                                  downloadService.setAutoCleanup(
+                                    enabled: value,
+                                  );
+                                  uiStateProvider.setAutoCleanup(
+                                    enabled: value,
+                                  );
+                                  setState(() {});
+                                },
+                              ),
+                              if (downloadService.autoCleanupEnabled)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    left: 16,
+                                    right: 16,
+                                    bottom: 12,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Text('7d'),
+                                      Expanded(
+                                        child: Slider(
+                                          value: downloadService.autoCleanupDays
+                                              .toDouble(),
+                                          min: 7,
+                                          max: 90,
+                                          divisions: 11,
+                                          label:
+                                              '${downloadService.autoCleanupDays} days',
+                                          onChanged: (value) {
+                                            final days = value.round();
+                                            downloadService.setAutoCleanup(
+                                              days: days,
+                                            );
+                                            uiStateProvider.setAutoCleanup(
+                                              days: days,
+                                            );
+                                            setState(() {});
+                                          },
+                                        ),
+                                      ),
+                                      const Text('90d'),
+                                    ],
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // Main view toggle
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Row(
+                            children: [
+                              for (final view in _StorageView.values)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: FilterChip(
+                                    selected: _currentView == view,
+                                    label: Text(_storageViewLabel(view)),
+                                    avatar: Icon(
+                                      _storageViewIcon(view),
+                                      size: 18,
+                                    ),
+                                    onSelected: (_) =>
+                                        setState(() => _currentView = view),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        // View-specific content
+                        if (_currentView == _StorageView.downloads) ...[
+                          // Quick actions for downloads
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: FilledButton.tonalIcon(
+                                    onPressed: () async {
+                                      final deleted = await downloadService
+                                          .cleanupByAge(
+                                            const Duration(days: 30),
+                                          );
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              'Removed $deleted single-track downloads older than 30 days (albums and playlists are kept)',
+                                            ),
+                                          ),
+                                        );
+                                        _refreshStats();
+                                      }
+                                    },
+                                    icon: const Icon(Icons.history),
+                                    label: const Text('Clean Old'),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: FilledButton.tonalIcon(
+                                    onPressed: () async {
+                                      final deleted = await downloadService
+                                          .cleanupToFreeSpace(500);
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              'Removed $deleted single-track downloads (albums and playlists are kept)',
+                                            ),
+                                          ),
+                                        );
+                                        _refreshStats();
+                                      }
+                                    },
+                                    icon: const Icon(Icons.cleaning_services),
+                                    label: const Text('Free 500MB'),
+                                  ),
+                                ),
                               ],
                             ),
                           ),
-                      ],
-                    ),
-                  ),
 
-                  const SizedBox(height: 16),
+                          const SizedBox(height: 12),
 
-                  // Main view toggle
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      children: [
-                        for (final view in _StorageView.values)
+                          // Toggle between album/artist view
                           Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: FilterChip(
-                              selected: _currentView == view,
-                              label: Text(_storageViewLabel(view)),
-                              avatar: Icon(_storageViewIcon(view), size: 18),
-                              onSelected: (_) => setState(() => _currentView = view),
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: SegmentedButton<bool>(
+                              segments: const [
+                                ButtonSegment(
+                                  value: true,
+                                  label: Text('By Album'),
+                                  icon: Icon(Icons.album),
+                                ),
+                                ButtonSegment(
+                                  value: false,
+                                  label: Text('By Artist'),
+                                  icon: Icon(Icons.person),
+                                ),
+                              ],
+                              selected: {_showByAlbum},
+                              onSelectionChanged: (selection) {
+                                setState(() => _showByAlbum = selection.first);
+                              },
                             ),
                           ),
+
+                          const SizedBox(height: 8),
+                        ] else if (_currentView == _StorageView.cache) ...[
+                          // Cache view
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: FilledButton.tonalIcon(
+                                    onPressed: () async {
+                                      final confirm = await showDialog<bool>(
+                                        context: context,
+                                        builder: (context) => AlertDialog(
+                                          title: const Text('Clear All Cache?'),
+                                          content: const Text(
+                                            'This will remove all pre-cached tracks and waveforms. Downloads will not be affected.',
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () =>
+                                                  Navigator.pop(context, false),
+                                              child: const Text('Cancel'),
+                                            ),
+                                            TextButton(
+                                              onPressed: () =>
+                                                  Navigator.pop(context, true),
+                                              child: const Text('Clear'),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                      if (confirm == true) {
+                                        await AudioCacheService.instance
+                                            .clearCache();
+                                        await WaveformService.instance
+                                            .clearAllWaveforms();
+                                        TrackWaveform.clearCache();
+                                        if (context.mounted) {
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                                const SnackBar(
+                                                  content: Text(
+                                                    'All cache cleared',
+                                                  ),
+                                                ),
+                                              );
+                                          _refreshStats();
+                                        }
+                                      }
+                                    },
+                                    icon: const Icon(Icons.delete_sweep),
+                                    label: const Text('Clear All Cache'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          const SizedBox(height: 8),
+
+                          // Cache info note
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Text(
+                              'Audio cache auto-expires after 7 days. Waveforms are stored until cleared.',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+
+                          const SizedBox(height: 8),
+                        ],
                       ],
                     ),
                   ),
-
-                  const SizedBox(height: 12),
-
-                  // View-specific content
-                  if (_currentView == _StorageView.downloads) ...[
-                    // Quick actions for downloads
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: FilledButton.tonalIcon(
-                              onPressed: () async {
-                                final deleted = await downloadService.cleanupByAge(const Duration(days: 30));
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Removed $deleted single-track downloads older than 30 days (albums and playlists are kept)')),
-                                  );
-                                  _refreshStats();
-                                }
-                              },
-                              icon: const Icon(Icons.history),
-                              label: const Text('Clean Old'),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: FilledButton.tonalIcon(
-                              onPressed: () async {
-                                final deleted = await downloadService.cleanupToFreeSpace(500);
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Removed $deleted single-track downloads (albums and playlists are kept)')),
-                                  );
-                                  _refreshStats();
-                                }
-                              },
-                              icon: const Icon(Icons.cleaning_services),
-                              label: const Text('Free 500MB'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    // Toggle between album/artist view
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: SegmentedButton<bool>(
-                        segments: const [
-                          ButtonSegment(value: true, label: Text('By Album'), icon: Icon(Icons.album)),
-                          ButtonSegment(value: false, label: Text('By Artist'), icon: Icon(Icons.person)),
-                        ],
-                        selected: {_showByAlbum},
-                        onSelectionChanged: (selection) {
-                          setState(() => _showByAlbum = selection.first);
-                        },
-                      ),
-                    ),
-
-                    const SizedBox(height: 8),
-
-                    // List of albums/artists with storage usage
-                    Expanded(
-                      child: _showByAlbum
+                  // List for the selected view
+                  switch (_currentView) {
+                    _StorageView.downloads =>
+                      _showByAlbum
                           ? _buildAlbumList(stats, downloadService, theme)
                           : _buildArtistList(stats, downloadService, theme),
+                    _StorageView.cache => _buildCacheList(stats, theme),
+                    _StorageView.loops => _buildLoopsView(theme),
+                    _StorageView.waveforms => _buildWaveformsView(theme),
+                    _StorageView.charts => _buildChartsView(theme),
+                  },
+                  SliverToBoxAdapter(
+                    child: SizedBox(
+                      height: MediaQuery.paddingOf(context).bottom + 16,
                     ),
-                  ] else if (_currentView == _StorageView.cache) ...[
-                    // Cache view
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: FilledButton.tonalIcon(
-                              onPressed: () async {
-                                final confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (context) => AlertDialog(
-                                    title: const Text('Clear All Cache?'),
-                                    content: const Text('This will remove all pre-cached tracks and waveforms. Downloads will not be affected.'),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(context, false),
-                                        child: const Text('Cancel'),
-                                      ),
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(context, true),
-                                        child: const Text('Clear'),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                                if (confirm == true) {
-                                  await AudioCacheService.instance.clearCache();
-                                  await WaveformService.instance.clearAllWaveforms();
-                                  TrackWaveform.clearCache();
-                                  if (context.mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(content: Text('All cache cleared')),
-                                    );
-                                    _refreshStats();
-                                  }
-                                }
-                              },
-                              icon: const Icon(Icons.delete_sweep),
-                              label: const Text('Clear All Cache'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 8),
-
-                    // Cache info note
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Text(
-                        'Audio cache auto-expires after 7 days. Waveforms are stored until cleared.',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-
-                    const SizedBox(height: 8),
-
-                    // List of cached tracks
-                    Expanded(
-                      child: _buildCacheList(stats, theme),
-                    ),
-                  ] else if (_currentView == _StorageView.loops) ...[
-                    // Loops view
-                    Expanded(
-                      child: _buildLoopsView(theme),
-                    ),
-                  ] else if (_currentView == _StorageView.waveforms) ...[
-                    // Waveforms view
-                    Expanded(
-                      child: _buildWaveformsView(theme),
-                    ),
-                  ] else if (_currentView == _StorageView.charts) ...[
-                    // Charts view
-                    Expanded(
-                      child: _buildChartsView(theme),
-                    ),
-                  ],
+                  ),
                 ],
               );
             },
@@ -2188,15 +2225,24 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
     );
   }
 
-  Widget _buildAlbumList(StorageStats stats, DownloadService downloadService, ThemeData theme) {
+  Widget _buildAlbumList(
+    StorageStats stats,
+    DownloadService downloadService,
+    ThemeData theme,
+  ) {
     final sortedAlbums = stats.byAlbum.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
     if (sortedAlbums.isEmpty) {
-      return const Center(child: Text('No downloads'));
+      return const SliverToBoxAdapter(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 48),
+          child: Center(child: Text('No downloads')),
+        ),
+      );
     }
 
-    return ListView.builder(
+    return SliverList.builder(
       itemCount: sortedAlbums.length,
       itemBuilder: (context, index) {
         final entry = sortedAlbums[index];
@@ -2220,7 +2266,9 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                     context: context,
                     builder: (context) => AlertDialog(
                       title: const Text('Delete Album?'),
-                      content: Text('Remove all $trackCount downloaded tracks from "$albumName"?'),
+                      content: Text(
+                        'Remove all $trackCount downloaded tracks from "$albumName"?',
+                      ),
                       actions: [
                         TextButton(
                           onPressed: () => Navigator.pop(context, false),
@@ -2248,15 +2296,24 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
     );
   }
 
-  Widget _buildArtistList(StorageStats stats, DownloadService downloadService, ThemeData theme) {
+  Widget _buildArtistList(
+    StorageStats stats,
+    DownloadService downloadService,
+    ThemeData theme,
+  ) {
     final sortedArtists = stats.byArtist.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
     if (sortedArtists.isEmpty) {
-      return const Center(child: Text('No downloads'));
+      return const SliverToBoxAdapter(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 48),
+          child: Center(child: Text('No downloads')),
+        ),
+      );
     }
 
-    return ListView.builder(
+    return SliverList.builder(
       itemCount: sortedArtists.length,
       itemBuilder: (context, index) {
         final entry = sortedArtists[index];
@@ -2279,7 +2336,9 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
                     context: context,
                     builder: (context) => AlertDialog(
                       title: const Text('Delete Artist?'),
-                      content: Text('Remove all $trackCount downloaded tracks from "$artistName"?'),
+                      content: Text(
+                        'Remove all $trackCount downloaded tracks from "$artistName"?',
+                      ),
                       actions: [
                         TextButton(
                           onPressed: () => Navigator.pop(context, false),
@@ -2311,32 +2370,37 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
     final cachedTrackIds = stats.cachedTrackIds;
 
     if (cachedTrackIds.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.cached, size: 48, color: theme.colorScheme.outline),
-            const SizedBox(height: 8),
-            Text(
-              'No cached tracks',
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
+      return SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 48),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.cached, size: 48, color: theme.colorScheme.outline),
+                const SizedBox(height: 8),
+                Text(
+                  'No cached tracks',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Play music to start pre-caching upcoming tracks',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
             ),
-            const SizedBox(height: 4),
-            Text(
-              'Play music to start pre-caching upcoming tracks',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
+          ),
         ),
       );
     }
 
-    return ListView.builder(
+    return SliverList.builder(
       itemCount: cachedTrackIds.length,
       itemBuilder: (context, index) {
         final trackId = cachedTrackIds[index];
@@ -2344,7 +2408,10 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
         return ListTile(
           leading: CircleAvatar(
             backgroundColor: theme.colorScheme.secondaryContainer,
-            child: Icon(Icons.music_note, color: theme.colorScheme.onSecondaryContainer),
+            child: Icon(
+              Icons.music_note,
+              color: theme.colorScheme.onSecondaryContainer,
+            ),
           ),
           title: Text(
             'Track ID: ${trackId.length > 20 ? '${trackId.substring(0, 20)}...' : trackId}',
@@ -2369,152 +2436,193 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
   Widget _buildLoopsView(ThemeData theme) {
     final savedLoopsService = SavedLoopsService();
 
-    return FutureBuilder(
-      future: savedLoopsService.initialize().then((_) => savedLoopsService.getAllLoops()),
+    return FutureBuilder<void>(
+      future: _loopsReady ??= savedLoopsService.initialize(),
       builder: (context, snapshot) {
-        final loops = snapshot.data ?? [];
+        // getAllLoops() is an in-memory, cached read once initialized.
+        final loops =
+            snapshot.connectionState == ConnectionState.done &&
+                !snapshot.hasError
+            ? savedLoopsService.getAllLoops()
+            : const <SavedLoop>[];
 
-        return Column(
-          children: [
-            // Clear all loops button
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
+        return SliverMainAxisGroup(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Column(
                 children: [
-                  Expanded(
-                    child: FilledButton.tonalIcon(
-                      onPressed: loops.isEmpty
-                          ? null
-                          : () async {
-                              final confirm = await showDialog<bool>(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                  title: const Text('Delete All Saved Loops?'),
-                                  content: Text('This will remove all ${loops.length} saved loops. This cannot be undone.'),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, false),
-                                      child: const Text('Cancel'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, true),
-                                      child: const Text('Delete All'),
-                                    ),
-                                  ],
-                                ),
-                              );
-                              if (confirm == true) {
-                                // Delete all loops for each track
-                                final trackIds = loops.map((l) => l.trackId).toSet();
-                                for (final trackId in trackIds) {
-                                  await savedLoopsService.deleteAllLoopsForTrack(trackId);
-                                }
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('All saved loops deleted')),
-                                  );
-                                  _refreshStats();
-                                }
-                              }
-                            },
-                      icon: const Icon(Icons.delete_sweep),
-                      label: const Text('Delete All Loops'),
+                  // Clear all loops button
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.tonalIcon(
+                            onPressed: loops.isEmpty
+                                ? null
+                                : () async {
+                                    final confirm = await showDialog<bool>(
+                                      context: context,
+                                      builder: (context) => AlertDialog(
+                                        title: const Text(
+                                          'Delete All Saved Loops?',
+                                        ),
+                                        content: Text(
+                                          'This will remove all ${loops.length} saved loops. This cannot be undone.',
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context, false),
+                                            child: const Text('Cancel'),
+                                          ),
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context, true),
+                                            child: const Text('Delete All'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    if (confirm == true) {
+                                      // Delete all loops for each track
+                                      final trackIds = loops
+                                          .map((l) => l.trackId)
+                                          .toSet();
+                                      for (final trackId in trackIds) {
+                                        await savedLoopsService
+                                            .deleteAllLoopsForTrack(trackId);
+                                      }
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  'All saved loops deleted',
+                                                ),
+                                              ),
+                                            );
+                                        _refreshStats();
+                                      }
+                                    }
+                                  },
+                            icon: const Icon(Icons.delete_sweep),
+                            label: const Text('Delete All Loops'),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
+
+                  const SizedBox(height: 8),
+
+                  // Info note
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      'Saved loops are stored as bookmarks. Long-press a loop to delete it.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  // List of saved loops
                 ],
               ),
             ),
-
-            const SizedBox(height: 8),
-
-            // Info note
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                'Saved loops are stored as bookmarks. Long-press a loop to delete it.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
-
-            const SizedBox(height: 8),
-
-            // List of saved loops
-            Expanded(
-              child: loops.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.repeat, size: 48, color: theme.colorScheme.outline),
-                          const SizedBox(height: 8),
-                          Text(
-                            'No saved loops',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Create A-B loops in the player and tap "Save Loop"',
-                            style: theme.textTheme.bodySmall?.copyWith(
+            loops.isEmpty
+                ? SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 48),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.repeat,
+                              size: 48,
                               color: theme.colorScheme.outline,
                             ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: loops.length,
-                      itemBuilder: (context, index) {
-                        final loop = loops[index];
-                        return ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: theme.colorScheme.primaryContainer,
-                            child: Icon(Icons.repeat_one, color: theme.colorScheme.onPrimaryContainer),
-                          ),
-                          title: Text(
-                            loop.trackName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          subtitle: Text('${loop.formattedStart} - ${loop.formattedEnd}'),
-                          trailing: Text(
-                            _formatLoopDate(loop.createdAt),
-                            style: theme.textTheme.bodySmall,
-                          ),
-                          onLongPress: () async {
-                            final confirm = await showDialog<bool>(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                title: const Text('Delete Loop?'),
-                                content: Text('Delete "${loop.displayName}"?'),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(context, false),
-                                    child: const Text('Cancel'),
-                                  ),
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(context, true),
-                                    child: const Text('Delete'),
-                                  ),
-                                ],
+                            const SizedBox(height: 8),
+                            Text(
+                              'No saved loops',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
                               ),
-                            );
-                            if (confirm == true) {
-                              await savedLoopsService.deleteLoop(loop.trackId, loop.id);
-                              if (context.mounted) {
-                                _refreshStats();
-                              }
-                            }
-                          },
-                        );
-                      },
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Create A-B loops in the player and tap "Save Loop"',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-            ),
+                  )
+                : SliverList.builder(
+                    itemCount: loops.length,
+                    itemBuilder: (context, index) {
+                      final loop = loops[index];
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: theme.colorScheme.primaryContainer,
+                          child: Icon(
+                            Icons.repeat_one,
+                            color: theme.colorScheme.onPrimaryContainer,
+                          ),
+                        ),
+                        title: Text(
+                          loop.trackName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          '${loop.formattedStart} - ${loop.formattedEnd}',
+                        ),
+                        trailing: Text(
+                          _formatLoopDate(loop.createdAt),
+                          style: theme.textTheme.bodySmall,
+                        ),
+                        onLongPress: () async {
+                          final confirm = await showDialog<bool>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('Delete Loop?'),
+                              content: Text('Delete "${loop.displayName}"?'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(context, false),
+                                  child: const Text('Cancel'),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context, true),
+                                  child: const Text('Delete'),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (confirm == true) {
+                            await savedLoopsService.deleteLoop(
+                              loop.trackId,
+                              loop.id,
+                            );
+                            if (context.mounted) {
+                              _refreshStats();
+                            }
+                          }
+                        },
+                      );
+                    },
+                  ),
           ],
         );
       },
@@ -2532,122 +2640,163 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
 
   String _storageViewLabel(_StorageView view) {
     switch (view) {
-      case _StorageView.downloads: return 'Downloads';
-      case _StorageView.cache: return 'Cache';
-      case _StorageView.loops: return 'Loops';
-      case _StorageView.waveforms: return 'Waveforms';
-      case _StorageView.charts: return 'Charts';
+      case _StorageView.downloads:
+        return 'Downloads';
+      case _StorageView.cache:
+        return 'Cache';
+      case _StorageView.loops:
+        return 'Loops';
+      case _StorageView.waveforms:
+        return 'Waveforms';
+      case _StorageView.charts:
+        return 'Charts';
     }
   }
 
   IconData _storageViewIcon(_StorageView view) {
     switch (view) {
-      case _StorageView.downloads: return Icons.download;
-      case _StorageView.cache: return Icons.cached;
-      case _StorageView.loops: return Icons.repeat;
-      case _StorageView.waveforms: return Icons.waves;
-      case _StorageView.charts: return Icons.gamepad;
+      case _StorageView.downloads:
+        return Icons.download;
+      case _StorageView.cache:
+        return Icons.cached;
+      case _StorageView.loops:
+        return Icons.repeat;
+      case _StorageView.waveforms:
+        return Icons.waves;
+      case _StorageView.charts:
+        return Icons.gamepad;
     }
   }
 
   Widget _buildWaveformsView(ThemeData theme) {
     return FutureBuilder<Map<String, dynamic>>(
-      future: WaveformService.instance.getStorageStats(),
+      future: _waveformStatsFuture ??= WaveformService.instance
+          .getStorageStats(),
       builder: (context, snapshot) {
         final waveformStats = snapshot.data;
         final fileCount = waveformStats?['fileCount'] as int? ?? 0;
         final totalBytes = waveformStats?['totalBytes'] as int? ?? 0;
 
-        return Column(
-          children: [
-            // Clear all waveforms button
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
+        return SliverMainAxisGroup(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Column(
                 children: [
-                  Expanded(
-                    child: FilledButton.tonalIcon(
-                      onPressed: fileCount == 0
-                          ? null
-                          : () async {
-                              final confirm = await showDialog<bool>(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                  title: const Text('Clear All Waveforms?'),
-                                  content: Text('This will remove all $fileCount cached waveforms. They will be re-generated when needed.'),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, false),
-                                      child: const Text('Cancel'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, true),
-                                      child: const Text('Clear'),
-                                    ),
-                                  ],
-                                ),
-                              );
-                              if (confirm == true) {
-                                await WaveformService.instance.clearAllWaveforms();
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('All waveforms cleared')),
-                                  );
-                                  _refreshStats();
-                                }
-                              }
-                            },
-                      icon: const Icon(Icons.delete_sweep),
-                      label: const Text('Clear All Waveforms'),
+                  // Clear all waveforms button
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.tonalIcon(
+                            onPressed: fileCount == 0
+                                ? null
+                                : () async {
+                                    final confirm = await showDialog<bool>(
+                                      context: context,
+                                      builder: (context) => AlertDialog(
+                                        title: const Text(
+                                          'Clear All Waveforms?',
+                                        ),
+                                        content: Text(
+                                          'This will remove all $fileCount cached waveforms. They will be re-generated when needed.',
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context, false),
+                                            child: const Text('Cancel'),
+                                          ),
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context, true),
+                                            child: const Text('Clear'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    if (confirm == true) {
+                                      await WaveformService.instance
+                                          .clearAllWaveforms();
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  'All waveforms cleared',
+                                                ),
+                                              ),
+                                            );
+                                        _refreshStats();
+                                      }
+                                    }
+                                  },
+                            icon: const Icon(Icons.delete_sweep),
+                            label: const Text('Clear All Waveforms'),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      'Waveforms are generated from audio data and cached locally for instant display. They can be safely cleared and will regenerate on next play.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                 ],
               ),
             ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                'Waveforms are generated from audio data and cached locally for instant display. They can be safely cleared and will regenerate on next play.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: fileCount == 0
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.waves, size: 48, color: theme.colorScheme.outline),
-                          const SizedBox(height: 8),
-                          Text(
-                            'No cached waveforms',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Play music with the waveform visualizer to generate waveform data',
-                            style: theme.textTheme.bodySmall?.copyWith(
+            fileCount == 0
+                ? SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 48),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.waves,
+                              size: 48,
                               color: theme.colorScheme.outline,
                             ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    )
-                  : Center(
-                      child: Text(
-                        '$fileCount waveforms (${_formatBytes(totalBytes)})',
-                        style: theme.textTheme.titleMedium,
+                            const SizedBox(height: 8),
+                            Text(
+                              'No cached waveforms',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Play music with the waveform visualizer to generate waveform data',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-            ),
+                  )
+                : SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 48),
+                      child: Center(
+                        child: Text(
+                          '$fileCount waveforms (${_formatBytes(totalBytes)})',
+                          style: theme.textTheme.titleMedium,
+                        ),
+                      ),
+                    ),
+                  ),
           ],
         );
       },
@@ -2657,129 +2806,218 @@ class _StorageManagementScreenState extends State<_StorageManagementScreen> {
   Widget _buildChartsView(ThemeData theme) {
     final chartService = ChartCacheService.instance;
 
-    return FutureBuilder(
-      future: chartService.isInitialized
-          ? Future.value(true)
+    return FutureBuilder<void>(
+      future: _chartsReady ??= chartService.isInitialized
+          ? Future<void>.value()
           : chartService.initialize(),
       builder: (context, _) {
         final charts = chartService.getAllCharts();
 
-        return Column(
-          children: [
-            // Clear all charts button
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
+        return SliverMainAxisGroup(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Column(
                 children: [
-                  Expanded(
-                    child: FilledButton.tonalIcon(
-                      onPressed: charts.isEmpty
-                          ? null
-                          : () async {
-                              final confirm = await showDialog<bool>(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                  title: const Text('Clear All Charts?'),
-                                  content: Text('This will remove all ${charts.length} cached game charts and their scores. This cannot be undone.'),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, false),
-                                      child: const Text('Cancel'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, true),
-                                      child: const Text('Clear'),
-                                    ),
-                                  ],
-                                ),
-                              );
-                              if (confirm == true) {
-                                await chartService.clearAllCharts();
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('All charts cleared')),
-                                  );
-                                  _refreshStats();
-                                }
-                              }
-                            },
-                      icon: const Icon(Icons.delete_sweep),
-                      label: const Text('Clear All Charts'),
+                  // Clear all charts button
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.tonalIcon(
+                            onPressed: charts.isEmpty
+                                ? null
+                                : () async {
+                                    final confirm = await showDialog<bool>(
+                                      context: context,
+                                      builder: (context) => AlertDialog(
+                                        title: const Text('Clear All Charts?'),
+                                        content: Text(
+                                          'This will remove all ${charts.length} cached game charts and their scores. This cannot be undone.',
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context, false),
+                                            child: const Text('Cancel'),
+                                          ),
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context, true),
+                                            child: const Text('Clear'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    if (confirm == true) {
+                                      await chartService.clearAllCharts();
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text('All charts cleared'),
+                                          ),
+                                        );
+                                        _refreshStats();
+                                      }
+                                    }
+                                  },
+                            icon: const Icon(Icons.delete_sweep),
+                            label: const Text('Clear All Charts'),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      'Charts are generated rhythm game patterns for Frets on Fire mode. Clearing them will also reset your high scores.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                 ],
               ),
             ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                'Charts are generated rhythm game patterns for Frets on Fire mode. Clearing them will also reset your high scores.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: charts.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.gamepad, size: 48, color: theme.colorScheme.outline),
-                          const SizedBox(height: 8),
-                          Text(
-                            'No cached charts',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Play Frets on Fire mode to generate rhythm game charts',
-                            style: theme.textTheme.bodySmall?.copyWith(
+            charts.isEmpty
+                ? SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 48),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.gamepad,
+                              size: 48,
                               color: theme.colorScheme.outline,
                             ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
+                            const SizedBox(height: 8),
+                            Text(
+                              'No cached charts',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Play Frets on Fire mode to generate rhythm game charts',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ),
                       ),
-                    )
-                  : ListView.builder(
-                      itemCount: charts.length,
-                      itemBuilder: (context, index) {
-                        final chart = charts[index];
-                        return ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: theme.colorScheme.tertiaryContainer,
-                            child: Icon(Icons.music_note, color: theme.colorScheme.onTertiaryContainer),
-                          ),
-                          title: Text(
-                            chart.trackName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          subtitle: Text(
-                            '${chart.artistName} \u2022 Score: ${chart.highScore} \u2022 ${chart.notes.length} notes',
-                          ),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete_outline),
-                            onPressed: () async {
-                              await chartService.deleteChart(chart.trackId);
-                              if (context.mounted) {
-                                _refreshStats();
-                              }
-                            },
-                          ),
-                        );
-                      },
                     ),
-            ),
+                  )
+                : SliverList.builder(
+                    itemCount: charts.length,
+                    itemBuilder: (context, index) {
+                      final chart = charts[index];
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: theme.colorScheme.tertiaryContainer,
+                          child: Icon(
+                            Icons.music_note,
+                            color: theme.colorScheme.onTertiaryContainer,
+                          ),
+                        ),
+                        title: Text(
+                          chart.trackName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          '${chart.artistName} \u2022 Score: ${chart.highScore} \u2022 ${chart.notes.length} notes',
+                        ),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () async {
+                            await chartService.deleteChart(chart.trackId);
+                            if (context.mounted) {
+                              _refreshStats();
+                            }
+                          },
+                        ),
+                      );
+                    },
+                  ),
           ],
         );
       },
+    );
+  }
+}
+
+/// Import dialog; owns (and disposes) its text controller.
+class _ImportStatsDialog extends StatefulWidget {
+  const _ImportStatsDialog();
+
+  @override
+  State<_ImportStatsDialog> createState() => _ImportStatsDialogState();
+}
+
+class _ImportStatsDialogState extends State<_ImportStatsDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Import Stats'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Paste your backup JSON below, or enter the path to a backup file:',
+            style: TextStyle(fontSize: 14),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _controller,
+            maxLines: 5,
+            decoration: const InputDecoration(
+              hintText: 'Paste backup JSON or file path...',
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () async {
+            // Try to paste from clipboard
+            final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
+            if (!mounted) return;
+            if (clipboardData?.text != null) {
+              _controller.text = clipboardData!.text!;
+            }
+          },
+          child: const Text('Paste'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _controller.text),
+          child: const Text('Import'),
+        ),
+      ],
     );
   }
 }

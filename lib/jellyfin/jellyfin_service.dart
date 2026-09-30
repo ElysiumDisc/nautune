@@ -11,6 +11,7 @@ import 'jellyfin_playlist.dart';
 import 'jellyfin_session.dart';
 import 'jellyfin_track.dart';
 import 'jellyfin_user.dart';
+import 'order_by_ids.dart';
 import 'paged_fetch.dart';
 import 'server_uri.dart';
 
@@ -94,6 +95,7 @@ class JellyfinService {
     _session = session;
     _clearCaches();
     _clearInFlight();
+    _installTokenResolver();
 
     return session;
   }
@@ -107,6 +109,7 @@ class JellyfinService {
     _session = session;
     _clearCaches();
     _clearInFlight();
+    _installTokenResolver();
   }
 
   void clearSession() {
@@ -114,6 +117,66 @@ class JellyfinService {
     _session = null;
     _clearCaches();
     _clearInFlight();
+    _installTokenResolver();
+  }
+
+  /// Lets tracks restored from storage (which never persist the access
+  /// token) build stream/artwork URLs with the active session's token, but
+  /// only for the same server and user.
+  void _installTokenResolver() {
+    JellyfinTrack.sessionTokenResolver = (serverUrl, userId) {
+      final session = _session;
+      if (session == null || serverUrl == null) return null;
+      if (!isSameServerUrl(serverUrl, session.serverUrl)) return null;
+      if (userId != null && userId != session.credentials.userId) return null;
+      final token = session.credentials.accessToken;
+      return token.isEmpty ? null : token;
+    };
+  }
+
+  /// Revokes [session]'s access token on its server
+  /// (`POST /Sessions/Logout`), best effort with a short timeout. Safe to
+  /// call after [clearSession] (it uses its own client for [session]).
+  /// [delay] lets a just-fired stop report go out with the token first.
+  Future<bool> revokeSessionToken(
+    JellyfinSession session, {
+    Duration delay = Duration.zero,
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    if (session.isDemo || session.serverUrl.startsWith('demo://')) {
+      return false;
+    }
+    if (delay > Duration.zero) await Future<void>.delayed(delay);
+    final client = JellyfinClient(
+      serverUrl: session.serverUrl,
+      httpClient: _httpClient,
+      deviceId: session.deviceId,
+    );
+    return client.logout(session.credentials, timeout: timeout);
+  }
+
+  /// Cache / in-flight key for the first page of albums or artists.
+  @visibleForTesting
+  static String firstPageCacheKey(
+    String libraryId,
+    String sortBy,
+    String sortOrder,
+    int limit,
+  ) =>
+      '$libraryId-$sortBy-$sortOrder#$limit';
+
+  /// Whether a result fetched for [session] may still be cached (the
+  /// session wasn't replaced or cleared while the request was in flight).
+  bool _isCurrent(JellyfinSession session) => identical(_session, session);
+
+  /// Removes [key] from [inFlight] only if it still maps to [request] (a
+  /// newer session may have registered its own request under that key).
+  static void _releaseInFlight<T>(
+    Map<String, Future<T>> inFlight,
+    String key,
+    Future<T> request,
+  ) {
+    if (identical(inFlight[key], request)) inFlight.remove(key);
   }
 
   /// Check server health - useful before heavy operations
@@ -197,6 +260,7 @@ class JellyfinService {
   searchAllBatch({
     required String libraryId,
     required String query,
+    int? limit,
   }) async {
     if (query.trim().isEmpty) {
       return (albums: <JellyfinAlbum>[], artists: <JellyfinArtist>[], tracks: <JellyfinTrack>[]);
@@ -206,9 +270,9 @@ class JellyfinService {
     final stopwatch = Stopwatch()..start();
 
     final results = await Future.wait([
-      searchAlbums(libraryId: libraryId, query: query),
-      searchArtists(libraryId: libraryId, query: query),
-      searchTracks(libraryId: libraryId, query: query),
+      searchAlbums(libraryId: libraryId, query: query, limit: limit),
+      searchArtists(libraryId: libraryId, query: query, limit: limit),
+      searchTracks(libraryId: libraryId, query: query, limit: limit),
     ]);
 
     stopwatch.stop();
@@ -250,7 +314,7 @@ class JellyfinService {
     try {
       return await request;
     } finally {
-      _libraryRequests.remove(cacheKey);
+      _releaseInFlight(_libraryRequests, cacheKey, request);
     }
   }
 
@@ -268,8 +332,10 @@ class JellyfinService {
       throw StateError('Authenticate before requesting albums.');
     }
 
-    // Only use cache for first page with default sorting and when not forcing refresh
-    final cacheKey = '$libraryId-$sortBy-$sortOrder';
+    // Only the first page is cached. The key includes [limit]: callers ask
+    // for different first-page sizes (50 for the library, 500 for CarPlay's
+    // index) and must never get a page of another size back.
+    final cacheKey = firstPageCacheKey(libraryId, sortBy, sortOrder, limit);
     if (!forceRefresh && startIndex == 0) {
       final cached = _albumCache[cacheKey];
       if (cached != null && !cached.isExpired(_cacheTtl)) {
@@ -303,7 +369,7 @@ class JellyfinService {
       final albums = await request;
 
       // Only cache first page
-      if (startIndex == 0) {
+      if (startIndex == 0 && _isCurrent(session)) {
         _addToCacheWithEviction(_albumCache, _albumCacheOrder, cacheKey, albums);
       }
 
@@ -311,7 +377,7 @@ class JellyfinService {
     } finally {
       // Clean up in-flight tracking
       if (startIndex == 0) {
-        _albumRequests.remove(cacheKey);
+        _releaseInFlight(_albumRequests, cacheKey, request);
       }
     }
   }
@@ -330,8 +396,8 @@ class JellyfinService {
       throw StateError('Authenticate before requesting artists.');
     }
 
-    // Only use cache for first page with default sorting and when not forcing refresh
-    final cacheKey = '$libraryId-$sortBy-$sortOrder';
+    // First page only; keyed by [limit] too (see [loadAlbums]).
+    final cacheKey = firstPageCacheKey(libraryId, sortBy, sortOrder, limit);
     if (!forceRefresh && startIndex == 0) {
       final cached = _artistCache[cacheKey];
       if (cached != null && !cached.isExpired(_cacheTtl)) {
@@ -365,7 +431,7 @@ class JellyfinService {
       final artists = await request;
 
       // Only cache first page
-      if (startIndex == 0) {
+      if (startIndex == 0 && _isCurrent(session)) {
         _addToCacheWithEviction(_artistCache, _artistCacheOrder, cacheKey, artists);
       }
 
@@ -373,7 +439,7 @@ class JellyfinService {
     } finally {
       // Clean up in-flight tracking
       if (startIndex == 0) {
-        _artistRequests.remove(cacheKey);
+        _releaseInFlight(_artistRequests, cacheKey, request);
       }
     }
   }
@@ -426,10 +492,13 @@ class JellyfinService {
 
     try {
       final playlists = await request;
-      _addToCacheWithEviction(_playlistCache, _playlistCacheOrder, cacheKey, playlists);
+      if (_isCurrent(session)) {
+        _addToCacheWithEviction(
+            _playlistCache, _playlistCacheOrder, cacheKey, playlists);
+      }
       return playlists;
     } finally {
-      _playlistRequests.remove(cacheKey);
+      _releaseInFlight(_playlistRequests, cacheKey, request);
     }
   }
 
@@ -456,7 +525,9 @@ class JellyfinService {
       libraryId: libraryId,
       limit: limit,
     );
-    _addToCacheWithEviction(_recentCache, _recentCacheOrder, cacheKey, recent);
+    if (_isCurrent(session)) {
+      _addToCacheWithEviction(_recentCache, _recentCacheOrder, cacheKey, recent);
+    }
     return recent;
   }
 
@@ -495,7 +566,9 @@ class JellyfinService {
       libraryId: libraryId,
       limit: limit,
     );
-    _addToCacheWithEviction(_recentCache, _recentCacheOrder, cacheKey, recent);
+    if (_isCurrent(session)) {
+      _addToCacheWithEviction(_recentCache, _recentCacheOrder, cacheKey, recent);
+    }
     return recent;
   }
 
@@ -522,7 +595,9 @@ class JellyfinService {
       libraryId: libraryId,
       limit: limit,
     );
-    _addToCacheWithEviction(_albumCache, _albumCacheOrder, cacheKey, recent);
+    if (_isCurrent(session)) {
+      _addToCacheWithEviction(_albumCache, _albumCacheOrder, cacheKey, recent);
+    }
     return recent;
   }
 
@@ -563,6 +638,7 @@ class JellyfinService {
   Future<List<JellyfinAlbum>> searchAlbums({
     required String libraryId,
     required String query,
+    int? limit,
   }) async {
     final client = _client;
     final session = _session;
@@ -576,12 +652,14 @@ class JellyfinService {
       credentials: session.credentials,
       libraryId: libraryId,
       query: query,
+      limit: limit,
     );
   }
 
   Future<List<JellyfinArtist>> searchArtists({
     required String libraryId,
     required String query,
+    int? limit,
   }) async {
     final client = _client;
     final session = _session;
@@ -595,12 +673,14 @@ class JellyfinService {
       credentials: session.credentials,
       libraryId: libraryId,
       query: query,
+      limit: limit,
     );
   }
   
   Future<List<JellyfinTrack>> searchTracks({
     required String libraryId,
     required String query,
+    int? limit,
   }) async {
     final client = _client;
     final session = _session;
@@ -614,6 +694,7 @@ class JellyfinService {
       credentials: session.credentials,
       libraryId: libraryId,
       query: query,
+      limit: limit,
     );
   }
 
@@ -793,18 +874,26 @@ class JellyfinService {
     final session = _session;
     if (session == null) throw StateError('No session');
 
-    await client.request(
-      method: 'POST',
-      path: '/Playlists/$playlistId/Items',
-      credentials: session.credentials,
-      queryParams: {
-        'ids': itemIds.join(','),
-        'userId': session.credentials.userId,
-        'position': ?position,
-      },
-    );
-
-    _clearPlaylistCache();
+    // Chunked so a large selection can't exceed request-line limits (414).
+    // Each chunk is inserted after the previous one when [position] is set.
+    try {
+      var offset = 0;
+      for (final chunk in chunkIds(itemIds)) {
+        await client.request(
+          method: 'POST',
+          path: '/Playlists/$playlistId/Items',
+          credentials: session.credentials,
+          queryParams: {
+            'ids': chunk.join(','),
+            'userId': session.credentials.userId,
+            if (position != null) 'position': position + offset,
+          },
+        );
+        offset += chunk.length;
+      }
+    } finally {
+      _clearPlaylistCache();
+    }
   }
 
   /// `DELETE /Playlists/{playlistId}/Items?entryIds=…`. Entry ids are the
@@ -820,16 +909,20 @@ class JellyfinService {
     final session = _session;
     if (session == null) throw StateError('No session');
     
-    await client.request(
-      method: 'DELETE',
-      path: '/Playlists/$playlistId/Items',
-      credentials: session.credentials,
-      queryParams: {
-        'entryIds': entryIds.join(','),
-      },
-    );
-
-    _clearPlaylistCache();
+    try {
+      for (final chunk in chunkIds(entryIds)) {
+        await client.request(
+          method: 'DELETE',
+          path: '/Playlists/$playlistId/Items',
+          credentials: session.credentials,
+          queryParams: {
+            'entryIds': chunk.join(','),
+          },
+        );
+      }
+    } finally {
+      _clearPlaylistCache();
+    }
   }
 
   Future<void> movePlaylistItem({
@@ -886,103 +979,96 @@ class JellyfinService {
         .toList();
   }
 
-  Future<List<JellyfinTrack>> getAlbumTracks(String albumId) async {
-    final client = _client;
-    if (client == null) throw StateError('Not connected');
-    final session = _session;
-    if (session == null) throw StateError('No session');
-
-    final response = await client.request(
-      method: 'GET',
-      path: '/Items',
-      credentials: session.credentials,
-      queryParams: {
-        'userId': session.credentials.userId,
-        'parentId': albumId,
-        'sortBy': 'SortName',
-        'fields':
-            'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams',
-        'enableImageTypes': 'Primary,Thumb',
-        'enableUserData': 'true',
-      },
-    );
-
-    final items = (response['Items'] as List?) ?? [];
-    return items
-        .whereType<Map<String, dynamic>>()
-        .map(
-          (json) => JellyfinTrack.fromJson(
-            json,
-            serverUrl: session.serverUrl,
-            token: session.credentials.accessToken,
-            userId: session.credentials.userId,
-          ),
-        )
-        .toList();
+  /// Album tracks in disc/track order (same query and fallbacks as
+  /// [loadAlbumTracks]). Used by CarPlay, add-to-playlist and the online
+  /// repository, which play/insert the list as returned.
+  Future<List<JellyfinTrack>> getAlbumTracks(String albumId) {
+    return loadAlbumTracks(albumId: albumId);
   }
 
   Future<void> markFavorite(String itemId, bool shouldBeFavorite) async {
     final session = _session;
     if (session == null) throw Exception('Not connected');
-    
-    debugPrint('🔵 markFavorite called: itemId=$itemId, shouldBeFavorite=$shouldBeFavorite');
-    
+
     // Reuse existing _client instead of creating a new JellyfinClient per call
     final activeClient = _client;
     if (activeClient == null) throw Exception('Client not initialized');
 
+    // Spec-documented favorites endpoint (Jellyfin 10.9+):
+    // `/UserFavoriteItems/{itemId}` with `userId` as a query parameter.
+    // Both POST and DELETE return the updated `UserItemDataDto`.
+    final favoritePath = '/UserFavoriteItems/$itemId';
+    final favoriteQuery = {'userId': session.credentials.userId};
+
+    bool? confirmed;
     try {
-      // Spec-documented favorites endpoint (Jellyfin 10.9+):
-      // `/UserFavoriteItems/{itemId}` with `userId` as a query parameter.
-      // (The older `/Users/{userId}/FavoriteItems/{itemId}` alias was retired
-      // here during the v8.9.5 cleanup.) Verified against the 12.1.0 spec in
-      // docs/jellyfin-openapi-12.1.json.
-      final favoritePath = '/UserFavoriteItems/$itemId';
-      final favoriteQuery = {'userId': session.credentials.userId};
-
-      if (shouldBeFavorite) {
-        debugPrint('🔵 Adding favorite - Sending POST to $favoritePath');
-        final response = await activeClient.request(
-          method: 'POST',
-          path: favoritePath,
-          credentials: session.credentials,
-          queryParams: favoriteQuery,
+      final response = await activeClient.request(
+        method: shouldBeFavorite ? 'POST' : 'DELETE',
+        path: favoritePath,
+        credentials: session.credentials,
+        queryParams: favoriteQuery,
+      );
+      final serverFavorite = response['IsFavorite'];
+      if (serverFavorite is bool && serverFavorite != shouldBeFavorite) {
+        confirmed = serverFavorite;
+        throw Exception(
+          'Failed to ${shouldBeFavorite ? 'favorite' : 'unfavorite'}: '
+          'server reports IsFavorite=$serverFavorite',
         );
-        debugPrint('✅ Add favorite response: $response');
-        debugPrint('✅ Successfully added item $itemId to Jellyfin favorites');
-      } else {
-        debugPrint('🔵 Removing favorite - Sending DELETE to $favoritePath');
-        final response = await activeClient.request(
-          method: 'DELETE',
-          path: favoritePath,
-          credentials: session.credentials,
-          queryParams: favoriteQuery,
-        );
-        debugPrint('✅ Delete favorite response: $response');
-
-        // VERIFY: Fetch the item again to confirm it was unfavorited
-        debugPrint('🔍 Verifying item was actually unfavorited...');
-        final verifyResponse = await activeClient.request(
-          method: 'GET',
-          path: '/Items/$itemId',
-          credentials: session.credentials,
-          queryParams: {'userId': session.credentials.userId},
-        );
-        final actualIsFavorite = verifyResponse['UserData']?['IsFavorite'] ?? false;
-        debugPrint('🔍 Server confirms IsFavorite=$actualIsFavorite');
-
-        if (actualIsFavorite) {
-          throw Exception('Failed to unfavorite: Server still shows as favorite!');
-        }
-
-        debugPrint('✅ Successfully removed item $itemId from Jellyfin favorites');
       }
+      confirmed = shouldBeFavorite;
     } finally {
-      // Clear caches so next fetch gets updated data, even on error
-      _clearCaches();
-      debugPrint('🧹 Cleared caches after favorite update');
+      // Patch (or, when the outcome is unknown, drop) only the cached
+      // entries containing this item, instead of every cache: the library
+      // sample behind smart playlists is several MB and ~10 requests.
+      if (_isCurrent(session)) _applyFavoriteToCaches(itemId, confirmed);
     }
   }
+
+  /// Updates cached tracks/albums for [itemId] to [isFavorite]; when null
+  /// (request failed, state unknown) removes the cache entries holding it.
+  void _applyFavoriteToCaches(String itemId, bool? isFavorite) {
+    for (final key in _recentCache.keys.toList()) {
+      final entry = _recentCache[key]!;
+      if (!entry.value.any((t) => t.id == itemId)) continue;
+      if (isFavorite == null) {
+        _recentCache.remove(key);
+        _recentCacheOrder.remove(key);
+      } else {
+        _recentCache[key] = entry.withValue([
+          for (final t in entry.value)
+            t.id == itemId ? t.copyWith(isFavorite: isFavorite) : t,
+        ]);
+      }
+    }
+    for (final key in _albumCache.keys.toList()) {
+      final entry = _albumCache[key]!;
+      if (!entry.value.any((a) => a.id == itemId)) continue;
+      if (isFavorite == null) {
+        _albumCache.remove(key);
+        _albumCacheOrder.remove(key);
+      } else {
+        _albumCache[key] = entry.withValue([
+          for (final a in entry.value)
+            a.id == itemId ? _albumWithFavorite(a, isFavorite) : a,
+        ]);
+      }
+    }
+  }
+
+  static JellyfinAlbum _albumWithFavorite(JellyfinAlbum a, bool isFavorite) =>
+      JellyfinAlbum(
+        id: a.id,
+        name: a.name,
+        artists: a.artists,
+        artistIds: a.artistIds,
+        productionYear: a.productionYear,
+        primaryImageTag: a.primaryImageTag,
+        isFavorite: isFavorite,
+        genres: a.genres,
+        playCount: a.playCount,
+        sortName: a.sortName,
+      );
 
   Future<List<JellyfinAlbum>> getFavoriteAlbums() async {
     final session = _session;
@@ -1083,10 +1169,12 @@ class JellyfinService {
 
     try {
       final genres = await request;
-      _addToCacheWithEviction(_genreCache, _genreCacheOrder, cacheKey, genres);
+      if (_isCurrent(session)) {
+        _addToCacheWithEviction(_genreCache, _genreCacheOrder, cacheKey, genres);
+      }
       return genres;
     } finally {
-      _genreRequests.remove(cacheKey);
+      _releaseInFlight(_genreRequests, cacheKey, request);
     }
   }
 
@@ -1524,9 +1612,13 @@ int bucketImageDimension(int px) {
 
 class _CacheEntry<T> {
   _CacheEntry(this.value) : timestamp = DateTime.now();
+  _CacheEntry._(this.value, this.timestamp);
 
   final T value;
   final DateTime timestamp;
+
+  /// Same age, new value (in-place patch that doesn't extend the TTL).
+  _CacheEntry<T> withValue(T newValue) => _CacheEntry._(newValue, timestamp);
 
   bool isExpired(Duration ttl) {
     return DateTime.now().difference(timestamp) > ttl;

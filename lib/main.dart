@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'app_state.dart';
 import 'jellyfin/jellyfin_service.dart';
 import 'jellyfin/jellyfin_session_store.dart';
+import 'models/playback_state.dart';
 import 'models/appearance.dart';
 import 'providers/connectivity_provider.dart';
 import 'providers/demo_mode_provider.dart';
@@ -26,6 +27,7 @@ import 'services/connectivity_service.dart';
 import 'services/download_service.dart';
 import 'services/equalizer_service.dart';
 import 'services/lastfm_service.dart';
+import 'services/listenbrainz_service.dart';
 import 'services/listening_analytics_service.dart';
 import 'services/local_cache_service.dart';
 import 'services/notification_service.dart';
@@ -117,6 +119,22 @@ Future<void> _migrateHiveFiles() async {
   await markerFile.create();
 }
 
+/// Awaits [future], logging instead of propagating a failure so one broken
+/// service can't stop the app from launching.
+Future<void> _guard(Future<Object?> future, String label) async {
+  try {
+    await future;
+  } catch (error, stackTrace) {
+    debugPrint('⚠️ $label initialization failed: $error');
+    FlutterError.reportError(FlutterErrorDetails(
+      exception: error,
+      stack: stackTrace,
+      library: 'main',
+      context: ErrorDescription('initializing $label'),
+    ));
+  }
+}
+
 Future<void> main() async {
   final stopwatch = Stopwatch()..start();
   WidgetsFlutterBinding.ensureInitialized();
@@ -128,11 +146,15 @@ Future<void> main() async {
   PaintingBinding.instance.imageCache.maximumSize = 1500;
   PaintingBinding.instance.imageCache.maximumSizeBytes = 100 * 1024 * 1024; // 100MB
 
+  // The Hive file migration must finish before any box is opened: opening
+  // a box first creates a file in the new location, which makes the
+  // migration think it already ran (and skip the user's old data).
+  await _guard(_migrateHiveFiles(), 'Hive file migration');
+
   // Parallelize non-dependent initializations
   final results = await Future.wait([
     AppVersion.init(),
     LocalCacheService.create(),
-    _migrateHiveFiles(),
   ]);
 
   final cacheService = results[1] as LocalCacheService;
@@ -147,7 +169,7 @@ Future<void> main() async {
   final playbackStateStore = PlaybackStateStore();
   final sessionStore = JellyfinSessionStore();
   final notificationService = NotificationService();
-  await notificationService.initialize();
+  await _guard(notificationService.initialize(), 'Notifications');
 
   // Initialize providers
   final sessionProvider = SessionProvider(
@@ -197,7 +219,8 @@ Future<void> main() async {
     demoModeProvider: demoModeProvider,
     sessionProvider: sessionProvider,
     libraryDataProvider: libraryDataProvider,
-    );
+    syncStatusProvider: syncStatusProvider,
+  );
 
   final nowPlayingColorsProvider = NowPlayingColorsProvider(
     audioService: appState.audioPlayerService,
@@ -205,19 +228,36 @@ Future<void> main() async {
     downloadService: downloadService,
   );
 
-  // Initialize providers/services in parallel
+  // Read the persisted playback/UI state once and share it.
+  PlaybackState? storedPlaybackState;
+  try {
+    storedPlaybackState = await playbackStateStore.load();
+  } catch (error) {
+    debugPrint('⚠️ Failed to load playback state: $error');
+  }
+
+  // Before the session is restored: loads that start on the session change
+  // must already see the user's offline choice.
+  appState.primeStoredPreferences(storedPlaybackState);
+
+  // Connectivity only asks the OS for a network transport (fast), but it
+  // must never hold up the first frame.
+  unawaited(_guard(connectivityProvider.initialize(), 'Connectivity'));
+
+  // Initialize providers/services in parallel. A failing service must not
+  // keep the app from starting, so each one is guarded.
   await Future.wait<void>([
-    sessionProvider.initialize(),
-    connectivityProvider.initialize(),
-    uiStateProvider.initialize(),
-    themeProvider.initialize(),
-    ListeningAnalyticsService().initialize(),
-    LastFmService.instance.initialize(),
-    EqualizerService.instance.initialize(playbackStateStore),
+    _guard(sessionProvider.initialize(), 'Session'),
+    _guard(uiStateProvider.initialize(storedState: storedPlaybackState), 'UI state'),
+    _guard(themeProvider.initialize(storedState: storedPlaybackState), 'Theme'),
+    _guard(ListeningAnalyticsService().initialize(), 'Listening analytics'),
+    _guard(LastFmService.instance.initialize(), 'Last.fm'),
+    _guard(ListenBrainzService().initialize(), 'ListenBrainz'),
+    _guard(EqualizerService.instance.initialize(playbackStateStore), 'Equalizer'),
   ]);
 
   // Initialize legacy app state
-  unawaited(appState.initialize());
+  unawaited(appState.initialize(storedPlaybackState: storedPlaybackState));
 
   debugPrint('🚀 App initialization took: ${stopwatch.elapsedMilliseconds}ms');
 

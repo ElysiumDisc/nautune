@@ -11,6 +11,8 @@ class PendingPlaylistAction {
     required this.payload,
     required this.timestamp,
     String? id,
+    this.attempts = 0,
+    this.maybeApplied = false,
   }) : id = id ?? _generateId();
 
   final String id;
@@ -18,12 +20,33 @@ class PendingPlaylistAction {
   final Map<String, dynamic> payload;
   final DateTime timestamp;
 
+  /// Failed attempts the server answered with an error (5xx) so far; network
+  /// failures don't count (see [decidePendingActionFailure]).
+  final int attempts;
+
+  /// A previous attempt may have been applied by the server even though it
+  /// failed from the app's point of view (timed out or broke after being
+  /// sent, or a 5xx). Used to avoid re-creating a playlist.
+  final bool maybeApplied;
+
+  PendingPlaylistAction copyWith({int? attempts, bool? maybeApplied}) =>
+      PendingPlaylistAction(
+        id: id,
+        type: type,
+        payload: payload,
+        timestamp: timestamp,
+        attempts: attempts ?? this.attempts,
+        maybeApplied: maybeApplied ?? this.maybeApplied,
+      );
+
   factory PendingPlaylistAction.fromJson(Map<String, dynamic> json) {
     return PendingPlaylistAction(
       id: json['id'] as String?,
       type: json['type'] as String,
       payload: Map<String, dynamic>.from(json['payload'] as Map),
       timestamp: DateTime.parse(json['timestamp'] as String),
+      attempts: (json['attempts'] as num?)?.toInt() ?? 0,
+      maybeApplied: json['maybeApplied'] == true,
     );
   }
 
@@ -33,6 +56,8 @@ class PendingPlaylistAction {
       'type': type,
       'payload': payload,
       'timestamp': timestamp.toIso8601String(),
+      'attempts': attempts,
+      if (maybeApplied) 'maybeApplied': true,
     };
   }
 
@@ -115,10 +140,30 @@ class PlaylistSyncQueue {
     );
   }
 
+  /// Queue [action]. A favorite toggle replaces any queued toggle for the
+  /// same item (only the last state matters, and replaying stale toggles in
+  /// a different order could leave the wrong state on the server).
   Future<void> add(PendingPlaylistAction action) {
     return _serialize(() async {
       final actions = await load();
+      if (action.type == 'favorite') {
+        final itemId = action.payload['itemId'];
+        actions.removeWhere(
+          (a) => a.type == 'favorite' && a.payload['itemId'] == itemId,
+        );
+      }
       actions.add(action);
+      await save(actions);
+    });
+  }
+
+  /// Replace the stored action with the same id (e.g. to bump [attempts]).
+  Future<void> update(PendingPlaylistAction action) {
+    return _serialize(() async {
+      final actions = await load();
+      final index = actions.indexWhere((a) => a.id == action.id);
+      if (index < 0) return;
+      actions[index] = action;
       await save(actions);
     });
   }
@@ -140,4 +185,72 @@ class PlaylistSyncQueue {
       await box.delete(_queueKey);
     });
   }
+}
+
+/// Outcome of a failed sync attempt for a queued action.
+@immutable
+class PendingActionFailureDecision {
+  const PendingActionFailureDecision({required this.drop, required this.attempts});
+
+  /// Remove the action from the queue (it can never succeed, or is too old).
+  final bool drop;
+
+  /// The action's new [PendingPlaylistAction.attempts] when kept.
+  final int attempts;
+}
+
+/// Server errors (5xx) tolerated before a queued action is given up.
+const int kMaxPendingActionServerErrors = 8;
+
+/// A queued action that still fails after this long is given up.
+const Duration kPendingActionMaxAge = Duration(days: 90);
+
+/// Decides what happens to a queued action whose sync attempt failed.
+///
+/// - Rejected by the server (4xx other than 401/408/429) or malformed
+///   ([invalidPayload]): dropped, retrying can never succeed.
+/// - Server error (5xx): counted; dropped after
+///   [kMaxPendingActionServerErrors].
+/// - Anything else (no response: network error, timeout; 401/408/429): kept
+///   and not counted, so flaky connectivity can't make edits disappear.
+/// - Kept actions older than [kPendingActionMaxAge] are dropped.
+PendingActionFailureDecision decidePendingActionFailure({
+  required int attempts,
+  required DateTime queuedAt,
+  required DateTime now,
+  int? httpStatus,
+  bool invalidPayload = false,
+}) {
+  final status = httpStatus;
+  final rejected = invalidPayload ||
+      (status != null &&
+          status >= 400 &&
+          status < 500 &&
+          status != 401 &&
+          status != 408 &&
+          status != 429);
+  if (rejected) {
+    return PendingActionFailureDecision(drop: true, attempts: attempts + 1);
+  }
+  final serverError = status != null && status >= 500;
+  final next = serverError ? attempts + 1 : attempts;
+  final drop = (serverError && next >= kMaxPendingActionServerErrors) ||
+      now.difference(queuedAt) > kPendingActionMaxAge;
+  return PendingActionFailureDecision(drop: drop, attempts: next);
+}
+
+/// Whether a retried "create playlist" action was already applied by an
+/// earlier attempt: only when that attempt may have reached the server
+/// ([maybeApplied]) and a playlist named [name] was created on the server
+/// at or after [queuedAt]. When unsure it returns false: a duplicate
+/// playlist is better than a lost one.
+bool retriedCreateAlreadyApplied({
+  required bool maybeApplied,
+  required String name,
+  required DateTime queuedAt,
+  required Iterable<({String name, DateTime? created})> serverPlaylists,
+}) {
+  if (!maybeApplied) return false;
+  return serverPlaylists.any((p) =>
+      p.name == name && p.created != null && !p.created!.isBefore(queuedAt));
 }

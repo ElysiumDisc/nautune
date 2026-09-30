@@ -7,10 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../app_state.dart';
 import '../data/network_channels.dart';
 import '../models/network_channel.dart';
 import '../providers/connectivity_provider.dart';
 import '../providers/demo_mode_provider.dart';
+import '../services/audio_player_service.dart';
 import '../services/network_download_service.dart';
 
 /// Network easter egg screen - mimics other-people.network radio interface.
@@ -34,50 +36,72 @@ class _NetworkScreenState extends State<NetworkScreen>
   bool _isLoading = false;
   String? _errorMessage;
 
-  // Download service
-  late NetworkDownloadService _downloadService;
+  // Download service (app-wide singleton, so downloads outlive this screen)
+  final NetworkDownloadService _downloadService =
+      NetworkDownloadService.instance;
+
+  // Cached storage stats for the downloads sheet; refreshed when the
+  // downloaded count changes instead of re-statting every file per build.
+  Future<NetworkStorageStats>? _statsFuture;
+  int _statsForCount = -1;
+
+  // Main music player. The radio plays on its own AVPlayer, so the music is
+  // paused while tuned in (and resumed on exit if we paused it).
+  late final AudioPlayerService _mainPlayer;
+  StreamSubscription<bool>? _mainPlayingSub;
+  bool _pausedMainPlayer = false;
+
+  // Incremented per tune request; stale requests stop touching state.
+  int _tuneRequest = 0;
+
+  final List<StreamSubscription<Object?>> _playerSubs = [];
 
   // Listening time tracking
   DateTime? _playStartTime;
 
-  // Ticker animation for scrolling text
+  // Ticker animation for scrolling text (runs only while a channel is shown)
   late AnimationController _tickerController;
 
   @override
   void initState() {
     super.initState();
-    _downloadService = NetworkDownloadService();
+    _mainPlayer = context.read<NautuneAppState>().audioService;
 
     _tickerController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 10),
-    )..repeat();
+    );
     WidgetsBinding.instance.addObserver(this);
 
     // Listen to player state changes
-    _audioPlayer.onPlayerStateChanged.listen((state) {
-      if (mounted) {
-        final wasPlaying = _isPlaying;
-        setState(() {
-          _isPlaying = state == PlayerState.playing;
-        });
+    _playerSubs.add(_audioPlayer.onPlayerStateChanged.listen((state) {
+      if (!mounted) return;
+      final wasPlaying = _isPlaying;
+      setState(() {
+        _isPlaying = state == PlayerState.playing;
+      });
 
-        // Track listening time
-        if (_isPlaying && !wasPlaying) {
-          // Started playing
-          _playStartTime = DateTime.now();
-        } else if (!_isPlaying && wasPlaying) {
-          // Stopped playing
-          _recordListenTime();
-        }
+      // Track listening time
+      if (_isPlaying && !wasPlaying) {
+        _playStartTime = DateTime.now();
+      } else if (!_isPlaying && wasPlaying) {
+        _recordListenTime();
       }
-    });
+    }));
 
     // Listen for errors (only log actual errors, not spam)
-    _audioPlayer.onLog.listen((msg) {
+    _playerSubs.add(_audioPlayer.onLog.listen((msg) {
       if (!msg.contains('Could not query')) {
         debugPrint('AudioPlayer: $msg');
       }
+    }));
+
+    // If the music starts (mini player, lock screen, CarPlay) while the radio
+    // plays, pause the radio so the two never play on top of each other.
+    _mainPlayingSub = _mainPlayer.playingStream.listen((playing) {
+      if (!playing || !mounted) return;
+      _pausedMainPlayer = false;
+      if (_isPlaying) unawaited(_audioPlayer.pause());
     });
 
     // Listen to download service changes
@@ -93,12 +117,28 @@ class _NetworkScreenState extends State<NetworkScreen>
     WidgetsBinding.instance.removeObserver(this);
     // Record any remaining listen time before disposing
     _recordListenTime();
+    _tuneRequest++;
     _tickerController.dispose();
+    for (final sub in _playerSubs) {
+      sub.cancel();
+    }
+    _mainPlayingSub?.cancel();
     _audioPlayer.dispose();
+    if (_pausedMainPlayer && !_mainPlayer.isPlaying) {
+      unawaited(_mainPlayer.resume());
+    }
     _channelController.dispose();
     _scrollController.dispose();
     _downloadService.removeListener(_onDownloadServiceChanged);
     super.dispose();
+  }
+
+  void _syncTicker() {
+    if (_currentChannel != null) {
+      if (!_tickerController.isAnimating) _tickerController.repeat();
+    } else if (_tickerController.isAnimating) {
+      _tickerController.stop();
+    }
   }
 
   @override
@@ -110,9 +150,7 @@ class _NetworkScreenState extends State<NetworkScreen>
         if (_tickerController.isAnimating) _tickerController.stop();
         break;
       case AppLifecycleState.resumed:
-        if (mounted && !_tickerController.isAnimating) {
-          _tickerController.repeat();
-        }
+        if (mounted) _syncTicker();
         break;
       case AppLifecycleState.detached:
         break;
@@ -130,13 +168,17 @@ class _NetworkScreenState extends State<NetworkScreen>
     }
   }
 
-  Future<void> _tuneToChannel(int channelNumber) async {
+  /// Tune to a typed channel number: an exact channel if one exists,
+  /// otherwise the nearest one in the 0-333 dial range.
+  Future<void> _tuneToNumber(int channelNumber) {
+    final channel = networkChannelsByNumber[channelNumber] ??
+        findNearestChannel(channelNumber.clamp(0, 333));
+    return _tuneToChannel(channel);
+  }
+
+  Future<void> _tuneToChannel(NetworkChannel channel) async {
     // Record listening time for previous channel before switching
     _recordListenTime();
-
-    // Clamp to valid range
-    final clampedNumber = channelNumber.clamp(0, 333);
-    final channel = findNearestChannel(clampedNumber);
 
     // Offline guard: if we're offline and this channel isn't downloaded,
     // surface a clear message instead of silently failing the stream attempt.
@@ -157,16 +199,28 @@ class _NetworkScreenState extends State<NetworkScreen>
       return;
     }
 
+    final request = ++_tuneRequest;
+    bool stale() => !mounted || request != _tuneRequest;
+
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
 
     try {
+      // Pause the music so radio and library don't play on top of each other.
+      if (_mainPlayer.isPlaying) {
+        _pausedMainPlayer = true;
+        await _mainPlayer.pause();
+        if (stale()) return;
+      }
+
       await _audioPlayer.stop();
+      if (stale()) return;
 
       // Get playback URL (local if downloaded, stream otherwise)
       final playbackUrl = await _downloadService.getPlaybackUrl(channel);
+      if (stale()) return;
       final isLocal = playbackUrl.startsWith('/') || playbackUrl.startsWith('file://');
 
       debugPrint('📻 Network Radio: Tuning to channel ${channel.number}');
@@ -180,20 +234,25 @@ class _NetworkScreenState extends State<NetworkScreen>
       } else {
         await _audioPlayer.setSourceUrl(playbackUrl);
       }
+      if (stale()) return;
 
       await _audioPlayer.setVolume(_isMuted ? 0.0 : 1.0);
+      if (stale()) return;
       await _audioPlayer.resume();
+      if (stale()) return;
 
       setState(() {
         _currentChannel = channel;
         _isLoading = false;
       });
+      _syncTicker();
     } catch (e) {
+      debugPrint('Network radio error: $e');
+      if (stale()) return;
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Failed to tune to channel $clampedNumber';
+        _errorMessage = 'Failed to tune to channel ${channel.number}';
       });
-      debugPrint('Network radio error: $e');
     }
   }
 
@@ -210,7 +269,7 @@ class _NetworkScreenState extends State<NetworkScreen>
 
     final number = int.tryParse(text);
     if (number != null) {
-      _tuneToChannel(number);
+      _tuneToNumber(number);
       _channelController.clear();
       FocusScope.of(context).unfocus();
     }
@@ -223,8 +282,21 @@ class _NetworkScreenState extends State<NetworkScreen>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (context) => _buildSettingsSheet(),
+      // Rebuild the sheet whenever download state changes (progress, counts).
+      builder: (context) => ListenableBuilder(
+        listenable: _downloadService,
+        builder: (context, _) => _buildSettingsSheet(),
+      ),
     );
+  }
+
+  Future<NetworkStorageStats> _storageStats() {
+    final count = _downloadService.downloadedCount;
+    if (_statsFuture == null || _statsForCount != count) {
+      _statsForCount = count;
+      _statsFuture = _downloadService.getStorageStats();
+    }
+    return _statsFuture!;
   }
 
   @override
@@ -374,8 +446,8 @@ class _NetworkScreenState extends State<NetworkScreen>
   }
 
   Widget _buildSettingsSheet() {
-    return StatefulBuilder(
-      builder: (context, setSheetState) {
+    return Builder(
+      builder: (context) {
         // Calculate download progress
         final totalChannels = networkChannels.length;
         final downloadedCount = _downloadService.downloadedCount;
@@ -465,9 +537,9 @@ class _NetworkScreenState extends State<NetworkScreen>
                             onPressed: downloadedCount >= totalChannels
                                 ? null
                                 : () async {
+                                    // The sheet and screen listen to the
+                                    // service, so no manual refresh.
                                     await _downloadService.downloadAllChannels();
-                                    setSheetState(() {});
-                                    setState(() {});
                                   },
                             icon: Icon(
                               downloadedCount >= totalChannels
@@ -499,8 +571,6 @@ class _NetworkScreenState extends State<NetworkScreen>
                           IconButton(
                             onPressed: () {
                               _downloadService.cancelAllDownloads();
-                              setSheetState(() {});
-                              setState(() {});
                             },
                             icon: const Icon(Icons.stop, color: Colors.red),
                             tooltip: 'Cancel downloads',
@@ -516,7 +586,7 @@ class _NetworkScreenState extends State<NetworkScreen>
 
               // Storage info
               FutureBuilder<NetworkStorageStats>(
-                future: _downloadService.getStorageStats(),
+                future: _storageStats(),
                 builder: (context, snapshot) {
                   final stats = snapshot.data;
                   final downloadedChannels = _downloadService.downloadedChannels;
@@ -565,9 +635,6 @@ class _NetworkScreenState extends State<NetworkScreen>
                                   );
                                   if (confirm == true) {
                                     await _downloadService.deleteAllChannels();
-                                    if (!mounted) return;
-                                    setSheetState(() {});
-                                    setState(() {});
                                   }
                                 },
                                 child: const Text(
@@ -625,8 +692,6 @@ class _NetworkScreenState extends State<NetworkScreen>
                                   icon: const Icon(Icons.delete, color: Colors.red, size: 18),
                                   onPressed: () async {
                                     await _downloadService.deleteChannel(channel.number);
-                                    setSheetState(() {});
-                                    setState(() {});
                                   },
                                 ),
                               );
@@ -780,27 +845,37 @@ class _NetworkScreenState extends State<NetworkScreen>
   }
 
   Widget _buildTickerText(String text, {required TextStyle style}) {
-    // Repeat text to create ticker effect
+    // Repeat text to create ticker effect. Scroll by exactly one repetition
+    // per cycle so the wrap from 1.0 back to 0.0 is seamless (no jump).
     final repeated = text * 10;
+    final textScaler = MediaQuery.textScalerOf(context);
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: TextDirection.ltr,
+      textScaler: textScaler,
+      maxLines: 1,
+    )..layout();
+    final unitWidth = painter.width;
+    painter.dispose();
 
     return SizedBox(
       height: style.fontSize! * 1.5,
-      child: AnimatedBuilder(
-        animation: _tickerController,
-        builder: (context, child) {
-          return ClipRect(
-            child: Transform.translate(
-              offset: Offset(-_tickerController.value * 200, 0),
-              child: Text(
-                repeated,
-                style: style,
-                maxLines: 1,
-                overflow: TextOverflow.visible,
-                softWrap: false,
-              ),
-            ),
-          );
-        },
+      child: ClipRect(
+        child: AnimatedBuilder(
+          animation: _tickerController,
+          builder: (context, child) => Transform.translate(
+            offset: Offset(-_tickerController.value * unitWidth, 0),
+            child: child,
+          ),
+          child: Text(
+            repeated,
+            style: style,
+            maxLines: 1,
+            overflow: TextOverflow.visible,
+            softWrap: false,
+            textScaler: textScaler,
+          ),
+        ),
       ),
     );
   }
@@ -1124,7 +1199,7 @@ class _NetworkScreenState extends State<NetworkScreen>
                       final progress = _downloadService.getDownloadProgress(channel.number);
 
                       return InkWell(
-                        onTap: () => _tuneToChannel(channel.number),
+                        onTap: () => _tuneToChannel(channel),
                         onLongPress: isDownloaded
                             ? () => _showChannelOptions(channel)
                             : null,

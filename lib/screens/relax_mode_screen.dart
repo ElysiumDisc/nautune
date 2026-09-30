@@ -87,21 +87,29 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
     _wavePlayer = AudioPlayer();
     _loonPlayer = AudioPlayer();
 
-    await Future.wait([
-      _rainPlayer.setReleaseMode(ReleaseMode.loop),
-      _thunderPlayer.setReleaseMode(ReleaseMode.loop),
-      _campfirePlayer.setReleaseMode(ReleaseMode.loop),
-      _wavePlayer.setReleaseMode(ReleaseMode.loop),
-      _loonPlayer.setReleaseMode(ReleaseMode.loop),
-    ]);
+    try {
+      // Note: audioplayers loops by seeking back to 0 at the end of the file,
+      // so each wrap has a short gap. Acceptable for long ambient beds.
+      await Future.wait([
+        _rainPlayer.setReleaseMode(ReleaseMode.loop),
+        _thunderPlayer.setReleaseMode(ReleaseMode.loop),
+        _campfirePlayer.setReleaseMode(ReleaseMode.loop),
+        _wavePlayer.setReleaseMode(ReleaseMode.loop),
+        _loonPlayer.setReleaseMode(ReleaseMode.loop),
+      ]);
 
-    await Future.wait([
-      _rainPlayer.setSource(AssetSource('relax/rain.mp3')),
-      _thunderPlayer.setSource(AssetSource('relax/thunder.mp3')),
-      _campfirePlayer.setSource(AssetSource('relax/campfire.mp3')),
-      _wavePlayer.setSource(AssetSource('relax/wave.mp3')),
-      _loonPlayer.setSource(AssetSource('relax/loon.mp3')),
-    ]);
+      await Future.wait([
+        _rainPlayer.setSource(AssetSource('relax/rain.mp3')),
+        _thunderPlayer.setSource(AssetSource('relax/thunder.mp3')),
+        _campfirePlayer.setSource(AssetSource('relax/campfire.mp3')),
+        _wavePlayer.setSource(AssetSource('relax/wave.mp3')),
+        _loonPlayer.setSource(AssetSource('relax/loon.mp3')),
+      ]);
+    } catch (e) {
+      // Expected if the screen was closed (players disposed) mid-load.
+      debugPrint('RelaxMode: audio init failed: $e');
+      if (!mounted) return;
+    }
 
     if (mounted) {
       setState(() => _initialized = true);
@@ -132,25 +140,32 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
       );
     }
 
-    // Dispose audio players
-    if (_initialized) {
-      _rainPlayer.dispose();
-      _thunderPlayer.dispose();
-      _campfirePlayer.dispose();
-      _wavePlayer.dispose();
-      _loonPlayer.dispose();
-    }
+    // Dispose audio players. They are assigned synchronously at the start of
+    // _initAudio, so this is safe even if loading hasn't finished yet.
+    _rainPlayer.dispose();
+    _thunderPlayer.dispose();
+    _campfirePlayer.dispose();
+    _wavePlayer.dispose();
+    _loonPlayer.dispose();
     super.dispose();
+  }
+
+  /// Set a loop's volume; a silent loop is paused rather than left decoding
+  /// at volume 0 (which would keep the app playing audio in the background).
+  void _applyVolume(AudioPlayer player, double value) {
+    player.setVolume(value);
+    if (value > 0) {
+      if (player.state != PlayerState.playing) player.resume();
+    } else if (player.state == PlayerState.playing) {
+      player.pause();
+    }
   }
 
   void _onRainVolumeChanged(double value) {
     final wasOn = _rainVolume > 0;
     final isOn = value > 0;
     setState(() => _rainVolume = value);
-    _rainPlayer.setVolume(value);
-    if (isOn && _rainPlayer.state != PlayerState.playing) {
-      _rainPlayer.resume();
-    }
+    _applyVolume(_rainPlayer, value);
     if (isOn && !wasOn) {
       _rainStartedAt = DateTime.now();
     } else if (!isOn && wasOn) {
@@ -165,10 +180,7 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
     final wasOn = _thunderVolume > 0;
     final isOn = value > 0;
     setState(() => _thunderVolume = value);
-    _thunderPlayer.setVolume(value);
-    if (isOn && _thunderPlayer.state != PlayerState.playing) {
-      _thunderPlayer.resume();
-    }
+    _applyVolume(_thunderPlayer, value);
     if (isOn && !wasOn) {
       _thunderStartedAt = DateTime.now();
     } else if (!isOn && wasOn) {
@@ -183,10 +195,7 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
     final wasOn = _campfireVolume > 0;
     final isOn = value > 0;
     setState(() => _campfireVolume = value);
-    _campfirePlayer.setVolume(value);
-    if (isOn && _campfirePlayer.state != PlayerState.playing) {
-      _campfirePlayer.resume();
-    }
+    _applyVolume(_campfirePlayer, value);
     if (isOn && !wasOn) {
       _campfireStartedAt = DateTime.now();
     } else if (!isOn && wasOn) {
@@ -201,10 +210,7 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
     final wasOn = _waveVolume > 0;
     final isOn = value > 0;
     setState(() => _waveVolume = value);
-    _wavePlayer.setVolume(value);
-    if (isOn && _wavePlayer.state != PlayerState.playing) {
-      _wavePlayer.resume();
-    }
+    _applyVolume(_wavePlayer, value);
     if (isOn && !wasOn) {
       _waveStartedAt = DateTime.now();
     } else if (!isOn && wasOn) {
@@ -219,10 +225,7 @@ class _RelaxModeScreenState extends State<RelaxModeScreen> {
     final wasOn = _loonVolume > 0;
     final isOn = value > 0;
     setState(() => _loonVolume = value);
-    _loonPlayer.setVolume(value);
-    if (isOn && _loonPlayer.state != PlayerState.playing) {
-      _loonPlayer.resume();
-    }
+    _applyVolume(_loonPlayer, value);
     if (isOn && !wasOn) {
       _loonStartedAt = DateTime.now();
     } else if (!isOn && wasOn) {

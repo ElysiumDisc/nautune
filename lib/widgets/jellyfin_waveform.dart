@@ -52,6 +52,11 @@ class _TrackWaveformState extends State<TrackWaveform> {
   void didUpdateWidget(TrackWaveform oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.trackId != widget.trackId) {
+      // Drop the previous track's waveform and any load still running for
+      // it: its result is ignored (see _loadWaveform) and must not block
+      // this track's load.
+      _waveformData = null;
+      _isLoading = false;
       _loadWaveform();
     }
   }
@@ -67,43 +72,36 @@ class _TrackWaveformState extends State<TrackWaveform> {
   }
 
   Future<void> _loadWaveform() async {
+    final trackId = widget.trackId;
     // Check local cache first
-    if (_cache.containsKey(widget.trackId)) {
-      if (mounted) {
-        setState(() {
-          _waveformData = _cache[widget.trackId];
-        });
-      }
+    final cached = _cache[trackId];
+    if (cached != null) {
+      if (mounted) setState(() => _waveformData = cached);
       return;
     }
 
     if (_isLoading) return;
-    setState(() => _isLoading = true);
+    _isLoading = true;
 
     try {
       // Initialize service if needed
       await WaveformService.instance.initialize();
 
       // Load waveform from service
-      final data = await WaveformService.instance.getWaveform(widget.trackId);
+      final data = await WaveformService.instance.getWaveform(trackId);
+      final usable = data != null && data.amplitudes.isNotEmpty;
+      if (usable) _cache[trackId] = data;
 
-      if (data != null && data.amplitudes.isNotEmpty) {
-        _cache[widget.trackId] = data;
-
-        if (mounted) {
-          setState(() {
-            _waveformData = data;
-            _isLoading = false;
-          });
-        }
-      } else {
-        if (mounted) {
-          setState(() => _isLoading = false);
-        }
-      }
+      // The widget may have moved on to another track meanwhile; that
+      // track's own load owns _isLoading and _waveformData now.
+      if (!mounted || widget.trackId != trackId) return;
+      setState(() {
+        if (usable) _waveformData = data;
+        _isLoading = false;
+      });
     } catch (e) {
       debugPrint('Failed to load waveform: $e');
-      if (mounted) {
+      if (mounted && widget.trackId == trackId) {
         setState(() => _isLoading = false);
       }
     }

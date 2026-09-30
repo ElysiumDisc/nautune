@@ -98,12 +98,6 @@ class AudioCacheService {
     return keys;
   }
 
-  /// Check if a track is cached (at any quality)
-  Future<bool> isCached(String trackId) async {
-    final file = await getCachedFile(trackId);
-    return file != null;
-  }
-  
   /// Pre-cache a single track in the background
   /// Returns the cached file, or null if caching failed
   /// [streamUrl] is the URL to cache from — callers pass the URL playback
@@ -174,54 +168,6 @@ class AudioCacheService {
     }
   }
   
-  /// Pre-cache multiple tracks in the background (e.g., album tracks)
-  /// Caches tracks in order, starting from the specified index
-  /// Uses a semaphore to allow 2 concurrent downloads for better performance
-  Future<void> cacheAlbumTracks(
-    List<JellyfinTrack> tracks, {
-    int startIndex = 0,
-    int? maxTracks,
-    String? Function(JellyfinTrack track)? urlFor,
-  }) async {
-    if (tracks.isEmpty) return;
-
-    final endIndex = maxTracks != null
-        ? (startIndex + maxTracks).clamp(0, tracks.length)
-        : tracks.length;
-
-    final trackCount = endIndex - startIndex;
-    debugPrint('🎵 Pre-caching $trackCount tracks starting from index $startIndex');
-
-    // Allow 2 concurrent precache operations for better performance
-    const maxConcurrent = 2;
-    int activeCount = 0;
-    int nextIndex = startIndex;
-    final allDone = Completer<void>();
-
-    void startNext() {
-      while (activeCount < maxConcurrent && nextIndex < endIndex) {
-        final trackIndex = nextIndex++;
-        activeCount++;
-        final track = tracks[trackIndex];
-        _cacheTrackSilently(track, streamUrl: urlFor?.call(track)).whenComplete(() {
-          activeCount--;
-          if (nextIndex < endIndex) {
-            startNext();
-          } else if (activeCount == 0) {
-            if (!allDone.isCompleted) allDone.complete();
-          }
-        });
-      }
-    }
-
-    startNext();
-
-    // If no tracks to cache, complete immediately
-    if (trackCount == 0) return;
-
-    await allDone.future;
-  }
-
   /// Smart pre-cache of upcoming tracks, honouring the user's settings.
   ///
   /// [tracks] - the upcoming tracks to cache, already limited to the user's
@@ -318,13 +264,10 @@ class AudioCacheService {
       if (_cacheManager != null) {
         await _cacheManager!.emptyCache();
       }
-      // Also manually delete files from all cache directories
-      final tempDir = await getTemporaryDirectory();
-      final possibleDirs = [
-        Directory(path.join(tempDir.path, _cacheKey)),
-        Directory(path.join(tempDir.path, 'libCachedImageData')),
-        Directory(path.join(tempDir.path, 'flutter_cache')),
-      ];
+      // Also delete files the database no longer tracks. Only the audio
+      // cache's own folder: other caches (e.g. artwork in
+      // libCachedImageData) are not ours to clear.
+      final possibleDirs = [Directory(await _cacheDirPath())];
 
       for (final dir in possibleDirs) {
         if (await dir.exists()) {
@@ -364,20 +307,13 @@ class AudioCacheService {
     }
 
     try {
-      // flutter_cache_manager stores files in temp dir with cache key subfolder
-      final tempDir = await getTemporaryDirectory();
       int fileCount = 0;
       int totalSize = 0;
       final List<String> cachedFiles = [];
 
-      // Search for cache files in flutter_cache_manager's location
-      // It stores files in: temp_dir/libCachedImageData (for images) and similar for audio
-      // Also check the cache key folder
-      final possibleDirs = [
-        Directory(path.join(tempDir.path, _cacheKey)),
-        Directory(path.join(tempDir.path, 'libCachedImageData')),
-        Directory(path.join(tempDir.path, 'flutter_cache')),
-      ];
+      // flutter_cache_manager keeps this cache's files in tmp/<cache key>
+      // (artwork caches live elsewhere and are not counted).
+      final possibleDirs = [Directory(await _cacheDirPath())];
 
       for (final dir in possibleDirs) {
         if (await dir.exists()) {

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' show Random, max, min, log, sqrt;
+import 'dart:math' show Random, cos, log, max, min, pi, sqrt;
+import 'dart:typed_data' show Float64x2, Float64x2List;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:fftea/fftea.dart';
@@ -27,6 +28,10 @@ class ChartGeneratorService {
   static const double _threshold = 1.8;  // Threshold above moving average
   static const int _minOnsetGapMs = 120; // Minimum gap between notes
 
+  /// Maximum notes per chart. Denser charts are thinned evenly across the
+  /// whole song rather than truncated.
+  static const int _maxNotes = 3000;
+
   // Lane assignment - 5 frequency bands mapped to musical pitch ranges
   // These are optimized for typical pop/rock music frequency distribution
   static const double _subBassMaxFreq = 100;   // Lane 0 - Green (kick drums, sub-bass)
@@ -40,6 +45,13 @@ class ChartGeneratorService {
 
   /// Progress callback for UI updates (0.0 - 1.0)
   ValueNotifier<double> progress = ValueNotifier(0.0);
+
+  /// Human-readable reason for the most recent failed generation, if any.
+  String? lastFailureMessage;
+
+  /// Generations in progress, keyed by track ID, so the same track is never
+  /// decoded twice at once.
+  final Map<String, Future<ChartData?>> _inFlight = {};
 
   /// Check if track duration is within safe limits for current platform
   /// Returns error message if too long, null if OK
@@ -115,21 +127,48 @@ class ChartGeneratorService {
     return result;
   }
 
-  /// Generate a chart from an audio file
+  /// Generate a chart from an audio file.
+  ///
+  /// Concurrent calls for the same [trackId] share one generation. On failure
+  /// returns null and sets [lastFailureMessage].
   Future<ChartData?> generateChart({
     required String audioPath,
     required String trackId,
     required String trackName,
     required String artistName,
     required int durationMs,
+  }) {
+    final pending = _inFlight[trackId];
+    if (pending != null) return pending;
+
+    final future = _generateChart(
+      audioPath: audioPath,
+      trackId: trackId,
+      trackName: trackName,
+      artistName: artistName,
+      durationMs: durationMs,
+    ).whenComplete(() => _inFlight.remove(trackId));
+    _inFlight[trackId] = future;
+    return future;
+  }
+
+  Future<ChartData?> _generateChart({
+    required String audioPath,
+    required String trackId,
+    required String trackName,
+    required String artistName,
+    required int durationMs,
   }) async {
+    lastFailureMessage = null;
     try {
       progress.value = 0.0;
 
-      // Check duration limit to prevent memory crashes
+      // Check duration limit to prevent memory crashes. The metadata may be
+      // missing or wrong; the native decoder enforces the real length too.
       final durationError = checkDurationLimit(durationMs);
       if (durationError != null) {
         debugPrint('🎮 ChartGenerator: $durationError');
+        lastFailureMessage = durationError;
         return null;
       }
 
@@ -137,8 +176,12 @@ class ChartGeneratorService {
       final audioData = await _readAudioFile(audioPath);
       if (audioData == null || audioData.isEmpty) {
         debugPrint('🎮 ChartGenerator: Failed to read audio file');
+        lastFailureMessage ??= 'Could not decode this audio file';
         return null;
       }
+
+      // Use the real decoded length rather than (possibly missing) metadata.
+      final decodedDurationMs = audioData.length * 1000 ~/ _sampleRate;
 
       progress.value = 0.1;
 
@@ -153,6 +196,7 @@ class ChartGeneratorService {
         avgFilterFuture: _avgFilterFuture,
         threshold: _threshold,
         minOnsetGapMs: _minOnsetGapMs,
+        maxNotes: _maxNotes,
         subBassMaxFreq: _subBassMaxFreq,
         bassMaxFreq: _bassMaxFreq,
         lowMidMaxFreq: _lowMidMaxFreq,
@@ -163,11 +207,12 @@ class ChartGeneratorService {
 
       if (result.notes.isEmpty) {
         debugPrint('🎮 ChartGenerator: No notes detected');
+        lastFailureMessage = 'No beats detected (track too short or quiet)';
         return null;
       }
 
       // Insert bonus notes (approximately 1 per 30-60 seconds)
-      final notesWithBonuses = _insertBonusNotes(result.notes, durationMs);
+      final notesWithBonuses = _insertBonusNotes(result.notes, decodedDurationMs);
 
       progress.value = 1.0;
 
@@ -180,12 +225,13 @@ class ChartGeneratorService {
         artistName: artistName,
         notes: notesWithBonuses,
         bpm: result.bpm,
-        durationMs: durationMs,
+        durationMs: decodedDurationMs,
         generatedAt: DateTime.now(),
       );
     } catch (e, stack) {
       debugPrint('🎮 ChartGenerator: Error - $e');
       debugPrint('$stack');
+      lastFailureMessage = 'Analysis failed';
       return null;
     }
   }
@@ -194,11 +240,12 @@ class ChartGeneratorService {
   static const _iosChannel = MethodChannel('com.elysiumdisc.nautune/audio_decoder');
 
   /// Read raw PCM samples from audio file
-  Future<Float64List?> _readAudioFile(String path) async {
+  Future<Float32List?> _readAudioFile(String path) async {
     try {
       final file = File(path);
       if (!await file.exists()) {
         debugPrint('🎮 ChartGenerator: File not found: $path');
+        lastFailureMessage = 'Audio file not found';
         return null;
       }
 
@@ -209,14 +256,15 @@ class ChartGeneratorService {
     }
   }
 
-  /// iOS: Decode audio using native AVFoundation
-  Future<Float64List?> _readAudioFileIOS(String path) async {
+  /// iOS: Decode audio to mono float32 PCM using native AVFoundation
+  Future<Float32List?> _readAudioFileIOS(String path) async {
     try {
       debugPrint('🎮 ChartGenerator: Decoding audio with AVFoundation (iOS)...');
 
       final result = await _iosChannel.invokeMethod<Map>('decodeAudio', {
         'path': path,
         'sampleRate': _sampleRate,
+        'maxDurationSeconds': _maxDurationMinutesIOS * 60,
       });
 
       if (result == null) {
@@ -224,36 +272,26 @@ class ChartGeneratorService {
         return null;
       }
 
-      // iOS returns List<dynamic> which needs to be converted to Float64List
+      // The decoder sends a typed float32 buffer (arrives as Float32List,
+      // no per-sample boxing).
       final rawSamples = result['samples'];
-      if (rawSamples == null) {
-        debugPrint('🎮 ChartGenerator: No samples in result');
-        return null;
-      }
-
-      // Convert from List<dynamic> (List<double>) to Float64List
-      Float64List samples;
-      if (rawSamples is Float64List) {
-        samples = rawSamples;
-      } else if (rawSamples is List) {
-        samples = Float64List(rawSamples.length);
-        for (int i = 0; i < rawSamples.length; i++) {
-          samples[i] = (rawSamples[i] as num).toDouble();
-        }
-      } else {
+      if (rawSamples is! Float32List) {
         debugPrint('🎮 ChartGenerator: Unexpected samples type: ${rawSamples.runtimeType}');
         return null;
       }
 
-      if (samples.isEmpty) {
+      if (rawSamples.isEmpty) {
         debugPrint('🎮 ChartGenerator: No samples decoded');
         return null;
       }
 
-      debugPrint('🎮 ChartGenerator: Decoded ${samples.length} samples (${(samples.length / _sampleRate).toStringAsFixed(1)}s)');
-      return samples;
+      debugPrint('🎮 ChartGenerator: Decoded ${rawSamples.length} samples (${(rawSamples.length / _sampleRate).toStringAsFixed(1)}s)');
+      return rawSamples;
     } on PlatformException catch (e) {
       debugPrint('🎮 ChartGenerator: iOS decode error: ${e.message}');
+      lastFailureMessage = e.code == 'TOO_LONG'
+          ? 'Track is longer than $_maxDurationMinutesIOS minutes'
+          : 'Unsupported or unreadable audio format';
       return null;
     }
   }
@@ -261,7 +299,7 @@ class ChartGeneratorService {
 
 /// Parameters for audio processing
 class _AudioProcessingParams {
-  final Float64List samples;
+  final Float32List samples;
   final int sampleRate;
   final int windowSize;
   final int hopSize;
@@ -270,6 +308,7 @@ class _AudioProcessingParams {
   final int avgFilterFuture;
   final double threshold;
   final int minOnsetGapMs;
+  final int maxNotes;
   final double subBassMaxFreq;
   final double bassMaxFreq;
   final double lowMidMaxFreq;
@@ -285,6 +324,7 @@ class _AudioProcessingParams {
     required this.avgFilterFuture,
     required this.threshold,
     required this.minOnsetGapMs,
+    required this.maxNotes,
     required this.subBassMaxFreq,
     required this.bassMaxFreq,
     required this.lowMidMaxFreq,
@@ -318,15 +358,18 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
   // Pre-compute Hanning window
   final window = Float64List(windowSize);
   for (int i = 0; i < windowSize; i++) {
-    window[i] = 0.5 * (1 - _cos(2 * 3.14159265359 * i / (windowSize - 1)));
+    window[i] = 0.5 * (1 - cos(2 * pi * i / (windowSize - 1)));
   }
 
   // Compute STFT
   final numFrames = (samples.length - windowSize) ~/ hopSize + 1;
+  final numBins = windowSize ~/ 2 + 1;
   final binFreq = sampleRate.toDouble() / windowSize;
 
-  // Store log-magnitude spectra for spectral flux
-  final logMagSpectra = <Float64List>[];
+  // Frame time is the window centre, not its start, so notes aren't early.
+  int frameToMs(int frame) =>
+      ((frame * hopSize + windowSize / 2) * 1000 / sampleRate).round();
+
   // Store centroid for each frame (for pitch tracking)
   final spectroids = Float64List(numFrames);
 
@@ -336,80 +379,66 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
   final lowMidMaxBin = (params.lowMidMaxFreq / binFreq).round();
   final highMidMaxBin = (params.highMidMaxFreq / binFreq).round();
 
+  // SuperFlux only looks back maxFilter frames, so keep a small ring of
+  // log-magnitude spectra instead of the whole spectrogram.
+  final maxFilter = params.maxFilterSize;
+  final ringSize = maxFilter + 1;
+  final ring = List.generate(ringSize, (_) => Float64List(numBins));
+  final complexBuf = Float64x2List(windowSize);
+
+  final spectralFlux = Float64List(numFrames);
+  final bandFlux = List.generate(5, (_) => Float64List(numFrames));
+
   for (int frame = 0; frame < numFrames; frame++) {
     final start = frame * hopSize;
 
-    // Apply window
-    final windowed = Float64List(windowSize);
+    // Apply window (reusing one complex buffer, imaginary part zero)
     for (int i = 0; i < windowSize; i++) {
-      windowed[i] = samples[start + i] * window[i];
+      complexBuf[i] = Float64x2(samples[start + i] * window[i], 0);
     }
-
-    // Compute FFT
-    final spectrum = fft.realFft(windowed);
-    final magnitudes = spectrum.discardConjugates().magnitudes();
+    fft.inPlaceFft(complexBuf);
 
     // Convert to log-magnitude (add small epsilon to avoid log(0))
-    final logMags = Float64List(magnitudes.length);
+    final logMags = ring[frame % ringSize];
     double sumMag = 0;
     double sumFreqMag = 0;
 
-    for (int i = 0; i < magnitudes.length; i++) {
-      final mag = magnitudes[i];
+    for (int i = 0; i < numBins; i++) {
+      final c = complexBuf[i];
+      final mag = sqrt(c.x * c.x + c.y * c.y);
       logMags[i] = log(mag + 1e-10);
 
       // Compute spectral centroid (weighted average frequency)
-      final freq = i * binFreq;
       sumMag += mag;
-      sumFreqMag += freq * mag;
+      sumFreqMag += i * binFreq * mag;
     }
-
-    logMagSpectra.add(logMags);
 
     // Spectral centroid - the "center of mass" of the spectrum
     // This tells us if the sound is predominantly low or high pitched
     spectroids[frame] = sumMag > 0 ? sumFreqMag / sumMag : 500.0;
-  }
 
-  // Compute SuperFlux-style spectral flux
-  // This uses a maximum filter to track spectral trajectories,
-  // making it robust to vibrato and gradual changes
-  final spectralFlux = Float64List(numFrames);
-  final maxFilter = params.maxFilterSize;
+    if (frame == 0) continue;
 
-  for (int frame = 1; frame < numFrames; frame++) {
-    final curr = logMagSpectra[frame];
-    final prev = logMagSpectra[frame - 1];
-
+    // SuperFlux-style spectral flux: max filter over previous frames tracks
+    // spectral trajectories, making it robust to vibrato and gradual changes.
+    // Per-band flux uses the plain previous frame.
+    final prev = ring[(frame - 1) % ringSize];
     double flux = 0;
-    for (int bin = 0; bin < curr.length; bin++) {
-      // Get maximum of previous frames (trajectory tracking)
+    double subBassF = 0, bassF = 0, lowMidF = 0, highMidF = 0, trebleF = 0;
+
+    for (int bin = 0; bin < numBins; bin++) {
+      final curr = logMags[bin];
       double maxPrev = prev[bin];
       for (int m = 2; m <= maxFilter && frame - m >= 0; m++) {
-        final older = logMagSpectra[frame - m][bin];
+        final older = ring[(frame - m) % ringSize][bin];
         if (older > maxPrev) maxPrev = older;
       }
 
       // Only count positive differences (energy increases)
-      final diff = curr[bin] - maxPrev;
-      if (diff > 0) {
-        flux += diff;
-      }
-    }
-    spectralFlux[frame] = flux;
-  }
+      final superDiff = curr - maxPrev;
+      if (superDiff > 0) flux += superDiff;
 
-  // Compute per-band flux for weighting
-  final bandFlux = List.generate(5, (_) => Float64List(numFrames));
-
-  for (int frame = 1; frame < numFrames; frame++) {
-    final curr = logMagSpectra[frame];
-    final prev = logMagSpectra[frame - 1];
-
-    double subBassF = 0, bassF = 0, lowMidF = 0, highMidF = 0, trebleF = 0;
-
-    for (int bin = 0; bin < curr.length; bin++) {
-      final diff = curr[bin] - prev[bin];
+      final diff = curr - prev[bin];
       if (diff > 0) {
         if (bin < subBassMaxBin) {
           subBassF += diff;
@@ -425,6 +454,7 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
       }
     }
 
+    spectralFlux[frame] = flux;
     bandFlux[0][frame] = subBassF;
     bandFlux[1][frame] = bassF;
     bandFlux[2][frame] = lowMidF;
@@ -510,10 +540,8 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
 
     if (isLocalMax && aboveThreshold) {
       // Enforce minimum gap
-      final timestampMs = (frame * hopSize * 1000 / sampleRate).round();
-      final lastTimestampMs = lastOnsetFrame >= 0
-          ? (lastOnsetFrame * hopSize * 1000 / sampleRate).round()
-          : -1000;
+      final timestampMs = frameToMs(frame);
+      final lastTimestampMs = lastOnsetFrame >= 0 ? frameToMs(lastOnsetFrame) : -1000;
 
       if (timestampMs - lastTimestampMs >= params.minOnsetGapMs) {
         onsetFrames.add(frame);
@@ -524,15 +552,29 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
 
   debugPrint('🎮 Detected ${onsetFrames.length} raw onsets');
 
+  // Align the 16th-note grid to where the onsets actually fall.
+  final onsetTimes = [for (final f in onsetFrames) frameToMs(f)];
+  final gridPhaseMs = estimateGridPhaseMs(onsetTimes, sixteenthNoteMs);
+  // Only snap onsets that are already close to the grid, so tempo drift or
+  // off-grid notes are never moved further than this.
+  final maxSnapMs = sixteenthNoteMs ~/ 4;
+
   // STEP 3: Create notes with beat-quantized timing and pitch-based lanes
   final notes = <ChartNote>[];
+  const weights = [3.0, 2.5, 2.0, 1.5, 0.5]; // sub-bass, bass, low-mid, high-mid, treble
+  final weightedFluxes = List<double>.filled(5, 0.0);
 
   for (int i = 0; i < onsetFrames.length; i++) {
     final frame = onsetFrames[i];
-    final rawTimestampMs = (frame * hopSize * 1000 / sampleRate).round();
+    final rawTimestampMs = onsetTimes[i];
 
-    // Quantize to 16th note grid
-    final quantizedMs = ((rawTimestampMs + sixteenthNoteMs ~/ 2) ~/ sixteenthNoteMs) * sixteenthNoteMs;
+    // Quantize to the phase-aligned 16th note grid
+    final quantizedMs = quantizeToGrid(
+      rawTimestampMs,
+      sixteenthNoteMs,
+      gridPhaseMs,
+      maxSnapMs: maxSnapMs,
+    );
 
     // Determine lane based on BOTH spectral centroid (pitch) and band flux
     // The centroid tells us the "pitch feel" of this moment in the song
@@ -554,13 +596,9 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
 
     // Also check which band had the strongest onset
     // Weight: bass gets boost, treble gets reduced
-    final weights = [3.0, 2.5, 2.0, 1.5, 0.5]; // sub-bass, bass, low-mid, high-mid, treble
     double maxWeightedFlux = 0;
     int fluxLane = 2; // default to middle
     double totalBandFlux = 0;
-
-    // Store weighted fluxes for chord detection
-    final weightedFluxes = List<double>.filled(5, 0.0);
 
     for (int b = 0; b < 5; b++) {
       final flux = bandFlux[b][frame];
@@ -584,8 +622,7 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
     // SUSTAIN CALCULATION
     int? sustainMs;
     if (i < onsetFrames.length - 1) {
-      final nextRawMs = (onsetFrames[i + 1] * hopSize * 1000 / sampleRate).round();
-      final gap = nextRawMs - rawTimestampMs;
+      final gap = onsetTimes[i + 1] - rawTimestampMs;
       // If gap is longer than a beat, make it a sustain
       if (gap > beatIntervalMs) {
         sustainMs = min(gap - 50, beatIntervalMs * 4); // Cap at 4 beats
@@ -616,31 +653,130 @@ _ProcessingResult _processAudioAdvanced(_AudioProcessingParams params) {
         break; // Max 2 notes per chord to keep it playable
       }
     }
-
-    // Cap at 3000 notes for very long tracks
-    if (notes.length >= 3000) break;
   }
 
   // Remove exact duplicates (same timestamp AND lane)
   final uniqueNotes = <ChartNote>[];
-  final seenNotes = <String>{};
+  final seenNotes = <int>{};
 
   for (final note in notes) {
-    final key = '${note.timestampMs}_${note.lane}';
-    if (!seenNotes.contains(key)) {
-      seenNotes.add(key);
+    final key = note.timestampMs * 8 + note.lane;
+    if (seenNotes.add(key)) {
       uniqueNotes.add(note);
     }
   }
 
+  // Keep dense/long tracks playable to the end
+  final finalNotes = thinNotesEvenly(uniqueNotes, params.maxNotes);
+
   // Debug: Lane distribution
   final laneCounts = [0, 0, 0, 0, 0];
-  for (final note in uniqueNotes) {
+  for (final note in finalNotes) {
     laneCounts[note.lane]++;
   }
-  debugPrint('🎮 Final: ${uniqueNotes.length} notes, lanes: $laneCounts');
+  debugPrint('🎮 Final: ${finalNotes.length} notes (from ${uniqueNotes.length}), lanes: $laneCounts');
 
-  return _ProcessingResult(notes: uniqueNotes, bpm: bpm);
+  return _ProcessingResult(notes: finalNotes, bpm: bpm);
+}
+
+/// Runs the full onset analysis synchronously on 44.1kHz mono [samples] with
+/// the production parameters. Returns the notes and estimated BPM.
+@visibleForTesting
+({List<ChartNote> notes, double bpm}) analyzeSamplesForTesting(Float32List samples) {
+  final result = _processAudioAdvanced(_AudioProcessingParams(
+    samples: samples,
+    sampleRate: ChartGeneratorService._sampleRate,
+    windowSize: ChartGeneratorService._windowSize,
+    hopSize: ChartGeneratorService._hopSize,
+    maxFilterSize: ChartGeneratorService._maxFilterSize,
+    avgFilterPast: ChartGeneratorService._avgFilterPast,
+    avgFilterFuture: ChartGeneratorService._avgFilterFuture,
+    threshold: ChartGeneratorService._threshold,
+    minOnsetGapMs: ChartGeneratorService._minOnsetGapMs,
+    maxNotes: ChartGeneratorService._maxNotes,
+    subBassMaxFreq: ChartGeneratorService._subBassMaxFreq,
+    bassMaxFreq: ChartGeneratorService._bassMaxFreq,
+    lowMidMaxFreq: ChartGeneratorService._lowMidMaxFreq,
+    highMidMaxFreq: ChartGeneratorService._highMidMaxFreq,
+  ));
+  return (notes: result.notes, bpm: result.bpm);
+}
+
+/// Grid offset in [0, gridMs) that best fits [onsetMs], i.e. minimises the
+/// total distance from each onset to its nearest grid line.
+@visibleForTesting
+int estimateGridPhaseMs(List<int> onsetMs, int gridMs) {
+  if (gridMs <= 1 || onsetMs.isEmpty) return 0;
+  int bestPhase = 0;
+  double bestCost = double.infinity;
+  for (int phase = 0; phase < gridMs; phase++) {
+    double cost = 0;
+    for (final t in onsetMs) {
+      final r = (t - phase) % gridMs; // Dart % is non-negative for positive divisor
+      cost += r < gridMs - r ? r : gridMs - r;
+    }
+    if (cost < bestCost) {
+      bestCost = cost;
+      bestPhase = phase;
+    }
+  }
+  return bestPhase;
+}
+
+/// Snap [ms] to the nearest line of a [gridMs] grid offset by [phaseMs].
+/// If that line is more than [maxSnapMs] away, [ms] is returned unchanged.
+@visibleForTesting
+int quantizeToGrid(int ms, int gridMs, int phaseMs, {int? maxSnapMs}) {
+  if (gridMs <= 0) return ms;
+  final steps = ((ms - phaseMs) / gridMs).round();
+  final snapped = max(0, phaseMs + steps * gridMs);
+  if (maxSnapMs != null && (snapped - ms).abs() > maxSnapMs) return ms;
+  return snapped;
+}
+
+/// Reduce [notes] (sorted by time) to at most [maxNotes], spread evenly over
+/// the whole song instead of cutting the end off. Chord partners are dropped
+/// first; if that isn't enough, whole onsets are sampled evenly.
+@visibleForTesting
+List<ChartNote> thinNotesEvenly(List<ChartNote> notes, int maxNotes) {
+  if (notes.length <= maxNotes) return notes;
+
+  // Group notes that share a timestamp (chords); first note is the primary.
+  final groups = <List<ChartNote>>[];
+  for (final note in notes) {
+    if (groups.isNotEmpty && groups.last.first.timestampMs == note.timestampMs) {
+      groups.last.add(note);
+    } else {
+      groups.add([note]);
+    }
+  }
+
+  // Drop chord partners, as evenly as possible, until we fit.
+  final chordGroups = [for (int g = 0; g < groups.length; g++) if (groups[g].length > 1) g];
+  var excess = notes.length - maxNotes;
+  final keepChord = List<bool>.filled(groups.length, true);
+  if (excess > 0 && chordGroups.isNotEmpty) {
+    final toDrop = min(excess, chordGroups.length);
+    final step = chordGroups.length / toDrop;
+    for (int k = 0; k < toDrop; k++) {
+      keepChord[chordGroups[(k * step).floor()]] = false;
+    }
+    excess -= toDrop;
+  }
+
+  List<ChartNote> flatten(Iterable<int> groupIndices) => [
+        for (final g in groupIndices)
+          ...(keepChord[g] ? groups[g] : [groups[g].first]),
+      ];
+
+  if (excess <= 0) return flatten(List.generate(groups.length, (g) => g));
+
+  // Still too many single-note onsets: keep an evenly spaced subset.
+  final step = groups.length / maxNotes;
+  final kept = <int>{for (int k = 0; k < maxNotes; k++) (k * step).floor()};
+  return [
+    for (final g in kept.toList()..sort()) groups[g].first,
+  ];
 }
 
 /// Estimate BPM from spectral flux using autocorrelation
@@ -693,15 +829,4 @@ double _estimateBpmFromFlux(Float64List flux, int hopSize, int sampleRate) {
 
   // Clamp to reasonable range
   return bpm.clamp(70.0, 180.0);
-}
-
-double _cos(double x) {
-  x = x % (2 * 3.14159265359);
-  double result = 1.0;
-  double term = 1.0;
-  for (int i = 1; i <= 10; i++) {
-    term *= -x * x / ((2 * i - 1) * (2 * i));
-    result += term;
-  }
-  return result;
 }

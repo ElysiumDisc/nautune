@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 import '../jellyfin/jellyfin_service.dart';
 import '../jellyfin/jellyfin_track.dart';
 import '../jellyfin/jellyfin_album.dart';
+import '../widgets/jellyfin_image.dart';
 
 /// Service for pre-warming (pre-caching) images to improve perceived performance
 class ImagePrewarmService {
@@ -59,10 +60,15 @@ class ImagePrewarmService {
   /// Pre-warm a single image by URL
   void _prewarmImage(String itemId, String imageTag) {
     if (!enabled) return;
+    // Same URL and decode size as a library grid cell's JellyfinImage, so the
+    // prewarmed disk and memory cache entries are the ones the grid uses.
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    final dpr = views.isEmpty ? 3.0 : views.first.devicePixelRatio;
+    final pixels = JellyfinImage.pixelSizeFor(JellyfinImage.gridArtwork, dpr);
     final imageUrl = _jellyfinService.buildImageUrl(
       itemId: itemId,
       tag: imageTag,
-      maxWidth: 400,
+      maxWidth: pixels,
     );
 
     // Skip if already prewarming or prewarmed
@@ -73,9 +79,13 @@ class ImagePrewarmService {
     _prewarmingUrls.add(imageUrl);
 
     try {
-      final provider = CachedNetworkImageProvider(
-        imageUrl,
-        headers: _jellyfinService.imageHeaders(),
+      final provider = ResizeImage.resizeIfNeeded(
+        pixels,
+        null,
+        CachedNetworkImageProvider(
+          imageUrl,
+          headers: _jellyfinService.imageHeaders(),
+        ),
       );
 
       // Use resolve to trigger the image load into cache

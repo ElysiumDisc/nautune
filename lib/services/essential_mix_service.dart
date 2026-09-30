@@ -110,6 +110,13 @@ class EssentialMixStorageStats {
   }
 }
 
+/// Thrown inside a download when the user cancels it.
+class _EssentialMixCancelled implements Exception {
+  const _EssentialMixCancelled();
+  @override
+  String toString() => 'Download cancelled';
+}
+
 /// Service for downloading and managing the Essential Mix easter egg content.
 class EssentialMixService extends ChangeNotifier {
   static EssentialMixService? _instance;
@@ -120,6 +127,14 @@ class EssentialMixService extends ChangeNotifier {
   }
 
   final http.Client _httpClient = http.Client();
+
+  static const Duration _connectTimeout = Duration(seconds: 30);
+  static const Duration _idleTimeout = Duration(seconds: 60);
+  static const String _audioFileName = 'essential_mix_soulwax_2017.mp3';
+  static const String _artworkFileName = 'essential_mix_soulwax_2017.jpg';
+
+  /// Aborts the in-flight transfer (set while a file is downloading).
+  void Function()? _abortActive;
 
   static const _boxName = 'nautune_essential_mix';
   static const _stateKey = 'download_state';
@@ -143,23 +158,21 @@ class EssentialMixService extends ChangeNotifier {
   double _lastNotifiedProgress = -1.0;
 
   void _scheduleNotify({bool force = false}) {
-    final progress = _state.progress;
-    if (!force &&
-        (progress - _lastNotifiedProgress).abs() < 0.01 &&
-        _notifyTimer != null) {
+    if (force) {
+      _notifyTimer?.cancel();
+      _notifyTimer = null;
+      _lastNotifiedProgress = _state.progress;
+      notifyListeners();
       return;
     }
-    _notifyTimer?.cancel();
+    // Throttle (not debounce): a pending timer is left alone, so steady
+    // chunk arrival still produces an update every 100 ms.
+    if (_notifyTimer?.isActive ?? false) return;
+    if ((_state.progress - _lastNotifiedProgress).abs() < 0.01) return;
     _notifyTimer = Timer(const Duration(milliseconds: 100), () {
       _lastNotifiedProgress = _state.progress;
       notifyListeners();
     });
-    if (force) {
-      _notifyTimer?.cancel();
-      _notifyTimer = null;
-      _lastNotifiedProgress = progress;
-      notifyListeners();
-    }
   }
 
   final EssentialMixTrack track = const EssentialMixTrack();
@@ -185,12 +198,17 @@ class EssentialMixService extends ChangeNotifier {
   }
 
   Future<void> _initializeAndLoad() async {
-    await _initHive();
-    await _loadState();
-    await _loadListenTime();
-    await _verifyDownload();
-    _isInitialized = true;
-    notifyListeners();
+    try {
+      await _initHive();
+      await _loadState();
+      await _loadListenTime();
+      await _verifyDownload();
+    } catch (e) {
+      debugPrint('EssentialMixService: init failed: $e');
+    } finally {
+      _isInitialized = true;
+      notifyListeners();
+    }
   }
 
   Future<void> _initHive() async {
@@ -239,6 +257,29 @@ class EssentialMixService extends ChangeNotifier {
   /// Verify downloaded files still exist.
   Future<void> _verifyDownload() async {
     if (_state.status != EssentialMixDownloadStatus.downloaded) return;
+
+    // Stored paths are absolute; the app container path can change between
+    // installs/updates. Remap to the current Documents directory when the
+    // stored path is gone but the file is where we'd save it today.
+    final storedAudio = _state.audioPath;
+    if (storedAudio != null && !await File(storedAudio).exists()) {
+      final audioDir = await _getAudioDirectory();
+      final artworkDir = await _getArtworkDirectory();
+      final currentAudio = '${audioDir.path}/$_audioFileName';
+      if (await File(currentAudio).exists()) {
+        final currentArtwork = '${artworkDir.path}/$_artworkFileName';
+        final hasArtwork =
+            _state.artworkPath != null && await File(currentArtwork).exists();
+        _state = EssentialMixDownloadState(
+          status: EssentialMixDownloadStatus.downloaded,
+          progress: 1.0,
+          audioPath: currentAudio,
+          artworkPath: hasArtwork ? currentArtwork : null,
+          downloadedAt: _state.downloadedAt,
+        );
+        await _saveState();
+      }
+    }
 
     bool audioExists = true;
     if (_state.audioPath != null) {
@@ -315,6 +356,11 @@ class EssentialMixService extends ChangeNotifier {
   }
 
   /// Start downloading the Essential Mix.
+  ///
+  /// The audio streams into a `.part` file; if a previous attempt failed
+  /// (network drop, app suspended) the next attempt resumes it with an HTTP
+  /// Range request instead of starting the 234 MB over. Stalls time out, and
+  /// [cancelDownload] aborts the transfer immediately.
   Future<void> startDownload() async {
     if (_state.isDownloading) return;
     if (_state.isDownloaded) return;
@@ -324,14 +370,14 @@ class EssentialMixService extends ChangeNotifier {
       status: EssentialMixDownloadStatus.downloading,
       progress: 0.0,
     );
-    notifyListeners();
+    _scheduleNotify(force: true);
 
     try {
       final audioDir = await _getAudioDirectory();
       final artworkDir = await _getArtworkDirectory();
 
-      final audioPath = '${audioDir.path}/essential_mix_soulwax_2017.mp3';
-      final artworkPath = '${artworkDir.path}/essential_mix_soulwax_2017.jpg';
+      final audioPath = '${audioDir.path}/$_audioFileName';
+      final artworkPath = '${artworkDir.path}/$_artworkFileName';
 
       // Download artwork first (small, quick)
       String? savedArtworkPath;
@@ -339,27 +385,26 @@ class EssentialMixService extends ChangeNotifier {
         await _downloadFile(
           track.artworkUrl,
           artworkPath,
+          resumable: false,
           onProgress: (progress) {
-            if (_isCancelled) throw Exception('Cancelled');
             _state = _state.copyWith(progress: progress * 0.02); // 2% for artwork
             _scheduleNotify();
           },
         );
         savedArtworkPath = artworkPath;
+      } on _EssentialMixCancelled {
+        rethrow;
       } catch (e) {
         debugPrint('Artwork download failed (non-critical): $e');
       }
 
-      if (_isCancelled) {
-        throw Exception('Cancelled');
-      }
+      if (_isCancelled) throw const _EssentialMixCancelled();
 
       // Download audio (main file)
       await _downloadFile(
         track.audioUrl,
         audioPath,
         onProgress: (progress) {
-          if (_isCancelled) throw Exception('Cancelled');
           _state = _state.copyWith(
             progress: 0.02 + (progress * 0.98), // 98% for audio
           );
@@ -376,11 +421,11 @@ class EssentialMixService extends ChangeNotifier {
         downloadedAt: DateTime.now(),
       );
       await _saveState();
-      notifyListeners();
+      _scheduleNotify(force: true);
 
       debugPrint('Essential Mix downloaded successfully');
     } catch (e) {
-      if (_isCancelled) {
+      if (_isCancelled || e is _EssentialMixCancelled) {
         _state = const EssentialMixDownloadState(
           status: EssentialMixDownloadStatus.notDownloaded,
         );
@@ -391,15 +436,18 @@ class EssentialMixService extends ChangeNotifier {
         );
       }
       await _saveState();
-      notifyListeners();
+      _scheduleNotify(force: true);
       debugPrint('Essential Mix download failed: $e');
+    } finally {
+      _abortActive = null;
     }
   }
 
-  /// Cancel ongoing download.
+  /// Cancel ongoing download. Takes effect immediately, even mid-stall.
   void cancelDownload() {
     if (_state.isDownloading) {
       _isCancelled = true;
+      _abortActive?.call();
     }
   }
 
@@ -477,43 +525,120 @@ class EssentialMixService extends ChangeNotifier {
     return _cachedStats!;
   }
 
-  /// Download a file with progress callback.
+  /// Download [url] to [savePath] through `savePath.part`, renamed into
+  /// place only once the whole body arrived.
+  ///
+  /// With [resumable], a leftover `.part` from a failed attempt is continued
+  /// via an HTTP Range request (and kept on failure for the next attempt);
+  /// a cancel always deletes it. The request times out after
+  /// [_connectTimeout] and a stalled body after [_idleTimeout].
   Future<void> _downloadFile(
     String url,
     String savePath, {
+    bool resumable = true,
     void Function(double)? onProgress,
   }) async {
-    final request = http.Request('GET', Uri.parse(url));
-    // Add User-Agent header to avoid 403 from archive.org
-    request.headers['User-Agent'] = 'Nautune/5.7.0 (Music Player)';
-    final response = await _httpClient.send(request);
+    final part = File('$savePath.part');
+    final done = Completer<void>();
+    _abortActive = () {
+      if (!done.isCompleted) done.completeError(const _EssentialMixCancelled());
+    };
+    IOSink? sink;
+    StreamSubscription<List<int>>? subscription;
+    // Keep a resumable partial across failures; drop it on cancel/success.
+    var keepPart = resumable;
 
-    if (response.statusCode != 200) {
-      throw Exception('HTTP ${response.statusCode}');
-    }
-
-    final contentLength = response.contentLength ?? 0;
-    int receivedBytes = 0;
-
-    final file = File(savePath);
-    final sink = file.openWrite();
-
-    await for (final chunk in response.stream) {
-      if (_isCancelled) {
-        await sink.close();
-        await file.delete();
-        throw Exception('Cancelled');
+    try {
+      var existing = 0;
+      if (resumable && await part.exists()) {
+        existing = await part.length();
+      } else if (await part.exists()) {
+        await part.delete();
       }
 
-      sink.add(chunk);
-      receivedBytes += chunk.length;
+      final request = http.Request('GET', Uri.parse(url));
+      // Add User-Agent header to avoid 403 from archive.org
+      request.headers['User-Agent'] = 'Nautune/5.7.0 (Music Player)';
+      if (existing > 0) request.headers['Range'] = 'bytes=$existing-';
 
-      if (contentLength > 0 && onProgress != null) {
-        onProgress(receivedBytes / contentLength);
+      final response = await Future.any([
+        _httpClient.send(request).timeout(_connectTimeout),
+        done.future.then<http.StreamedResponse>(
+          (_) => throw const _EssentialMixCancelled(),
+        ),
+      ]);
+
+      final bool append;
+      if (response.statusCode == 206 && existing > 0) {
+        append = true;
+      } else if (response.statusCode == 200) {
+        append = false;
+        existing = 0;
+      } else if (response.statusCode == 416 && existing > 0) {
+        // Our partial is unusable (e.g. file changed upstream): start over.
+        unawaited(response.stream.drain<void>().catchError((_) {}));
+        await part.delete();
+        throw HttpException('HTTP 416 (restarting)', uri: request.url);
+      } else {
+        unawaited(response.stream.drain<void>().catchError((_) {}));
+        throw HttpException('HTTP ${response.statusCode}', uri: request.url);
       }
-    }
 
-    await sink.close();
+      final bodyLength = response.contentLength ?? 0;
+      final totalLength = bodyLength > 0 ? existing + bodyLength : 0;
+      var receivedBytes = existing;
+
+      final out = part.openWrite(mode: append ? FileMode.append : FileMode.write);
+      sink = out;
+
+      subscription = response.stream.timeout(_idleTimeout).listen(
+        (chunk) {
+          out.add(chunk);
+          receivedBytes += chunk.length;
+          if (totalLength > 0 && onProgress != null) {
+            onProgress(receivedBytes / totalLength);
+          }
+        },
+        onError: (Object e, StackTrace st) {
+          if (!done.isCompleted) done.completeError(e, st);
+        },
+        onDone: () {
+          if (!done.isCompleted) done.complete();
+        },
+        cancelOnError: true,
+      );
+
+      await done.future;
+      await out.flush();
+      await out.close();
+      sink = null;
+
+      if (totalLength > 0 && receivedBytes != totalLength) {
+        throw HttpException(
+          'Incomplete download ($receivedBytes of $totalLength bytes)',
+          uri: request.url,
+        );
+      }
+      await part.rename(savePath);
+      keepPart = false;
+    } on _EssentialMixCancelled {
+      keepPart = false;
+      rethrow;
+    } finally {
+      _abortActive = null;
+      await subscription?.cancel();
+      if (sink != null) {
+        try {
+          await sink.close();
+        } catch (_) {}
+      }
+      if (!keepPart || _isCancelled) {
+        try {
+          if (await part.exists()) await part.delete();
+        } catch (_) {}
+      }
+      if (!done.isCompleted) done.complete();
+    }
   }
 
   /// Get the audio download directory.

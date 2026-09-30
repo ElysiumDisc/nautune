@@ -92,8 +92,14 @@ public class SharePlugin: NSObject, FlutterPlugin {
                 popover.permittedArrowDirections = []
             }
 
-            // Completion handler
+            // Completion handler. Since iOS 13 it can run more than once:
+            // dismissing a share extension (e.g. cancelling Mail) calls it
+            // while the sheet stays up, and picking another target calls it
+            // again. A FlutterResult may only be replied to once.
+            var replied = false
             activityVC.completionWithItemsHandler = { activityType, completed, returnedItems, error in
+                guard !replied else { return }
+                replied = true
                 if let error = error {
                     print("SharePlugin: Error - \(error.localizedDescription)")
                     result(FlutterError(code: "SHARE_ERROR", message: error.localizedDescription, details: nil))

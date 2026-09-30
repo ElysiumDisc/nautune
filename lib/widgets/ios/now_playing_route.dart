@@ -14,6 +14,29 @@ class NowPlayingRoute<T> extends PageRoute<T> {
 
   final WidgetBuilder builder;
 
+  /// Player routes currently in a navigator (see [show]).
+  static final Set<NowPlayingRoute<dynamic>> _installed = {};
+
+  /// Opens the player built by [builder] from [context]. When a player is
+  /// already open in that navigator (an album or artist page was pushed from
+  /// it, and its mini player was tapped), returns to that player instead of
+  /// stacking a second one.
+  static void show(BuildContext context, WidgetBuilder builder) {
+    final nav = Navigator.of(context);
+    for (final route in _installed) {
+      if (route.navigator == nav && route.isActive) {
+        nav.popUntil((r) => identical(r, route));
+        return;
+      }
+    }
+    nav.push(NowPlayingRoute<void>(builder: builder));
+  }
+
+  // Created once: buildTransitions runs on every animation tick, and a
+  // CurvedAnimation made per call would leave a status listener behind on
+  // the route's controller each time.
+  CurvedAnimation? _curved;
+
   @override
   Color? get barrierColor => null;
 
@@ -31,6 +54,19 @@ class NowPlayingRoute<T> extends PageRoute<T> {
 
   @override
   Duration get reverseTransitionDuration => const Duration(milliseconds: 320);
+
+  @override
+  void install() {
+    super.install();
+    _installed.add(this);
+  }
+
+  @override
+  void dispose() {
+    _installed.remove(this);
+    _curved?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget buildPage(
@@ -52,19 +88,22 @@ class NowPlayingRoute<T> extends PageRoute<T> {
     if (reduceMotion) {
       return FadeTransition(opacity: animation, child: child);
     }
-    // While the user drags, follow the finger linearly; otherwise ease.
-    final curved = navigator?.userGestureInProgress ?? false
+    // While the user drags, and while the release settles (the gesture only
+    // ends once that animation finishes, see _dragEnd), follow the
+    // controller linearly: it is already eased there. Switching to the
+    // curve mid-flight would make the sheet jump.
+    final Animation<double> position = navigator?.userGestureInProgress ?? false
         ? animation
-        : CurvedAnimation(
+        : (_curved ??= CurvedAnimation(
             parent: animation,
             curve: Curves.easeOutCubic,
             reverseCurve: Curves.easeInCubic,
-          );
+          ));
     return SlideTransition(
       position: Tween<Offset>(
         begin: const Offset(0, 1),
         end: Offset.zero,
-      ).animate(curved),
+      ).animate(position),
       child: child,
     );
   }
@@ -74,17 +113,42 @@ class NowPlayingRoute<T> extends PageRoute<T> {
     controller!.value = (controller!.value - fraction).clamp(0.0, 1.0);
   }
 
+  /// Settles the sheet after a drag, the way CupertinoPageRoute's back swipe
+  /// does: the controller animates with an ease while the transition stays
+  /// linear, and the user gesture ends only when that animation is done.
   void _dragEnd(double velocityFraction) {
     final nav = navigator;
+    final ctrl = controller;
+    if (nav == null || ctrl == null) return;
     final shouldClose =
-        velocityFraction > 1.2 || (controller!.value < 0.7 && velocityFraction > -0.5);
-    if (shouldClose) {
+        velocityFraction > 1.2 || (ctrl.value < 0.7 && velocityFraction > -0.5);
+    if (shouldClose && isCurrent) {
       HapticService.lightTap();
-      nav?.pop();
+      nav.pop();
+      if (ctrl.isAnimating) {
+        ctrl.animateBack(
+          0.0,
+          duration: reverseTransitionDuration * ctrl.value,
+          curve: Curves.easeOutCubic,
+        );
+      }
     } else {
-      controller!.forward();
+      ctrl.animateTo(
+        1.0,
+        duration: transitionDuration * (1.0 - ctrl.value),
+        curve: Curves.easeOutCubic,
+      );
     }
-    nav?.didStopUserGesture();
+    if (ctrl.isAnimating) {
+      late final AnimationStatusListener onStatus;
+      onStatus = (AnimationStatus status) {
+        nav.didStopUserGesture();
+        ctrl.removeStatusListener(onStatus);
+      };
+      ctrl.addStatusListener(onStatus);
+    } else {
+      nav.didStopUserGesture();
+    }
   }
 }
 

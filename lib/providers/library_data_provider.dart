@@ -28,17 +28,29 @@ import 'session_provider.dart';
 /// It does NOT handle:
 /// - Authentication (SessionProvider's job)
 /// - UI state (UIStateProvider's job)
-/// - Demo mode (DemoModeProvider's job)
+/// - Demo mode (DemoModeProvider's job): in demo mode it holds no data, so
+///   NautuneAppState's demo collections show through.
+///
+/// Every load captures the session generation (bumped whenever the session
+/// or the selected library changes) and drops its result if the generation
+/// moved while it was waiting, so one account's or library's data never
+/// lands in another's state or cache. While [offlineCheck] reports offline,
+/// loads read the local cache instead of the network.
+///
+/// Errors are only exposed when there is nothing to show: a failed refresh
+/// that still has earlier or cached data keeps that data and no error.
 class LibraryDataProvider extends ChangeNotifier {
   LibraryDataProvider({
     required SessionProvider sessionProvider,
     required JellyfinService jellyfinService,
     required LocalCacheService cacheService,
     JellyfinPlaylistStore? playlistStore,
+    bool Function()? isOffline,
   })  : _sessionProvider = sessionProvider,
         _jellyfinService = jellyfinService,
         _cacheService = cacheService,
-        _playlistStore = playlistStore ?? JellyfinPlaylistStore() {
+        _playlistStore = playlistStore ?? JellyfinPlaylistStore(),
+        _isOffline = isOffline ?? _alwaysOnline {
     _sessionProvider.addListener(_onSessionChanged);
   }
 
@@ -46,40 +58,77 @@ class LibraryDataProvider extends ChangeNotifier {
   final JellyfinService _jellyfinService;
   final LocalCacheService _cacheService;
   final JellyfinPlaylistStore _playlistStore;
+
+  bool Function() _isOffline;
+  static bool _alwaysOnline() => false;
+
+  /// Replaces the offline check (for owners created after this provider,
+  /// e.g. `provider.offlineCheck = () => appState.isOfflineMode`).
+  set offlineCheck(bool Function() check) => _isOffline = check;
+
+  bool get _offline => _isOffline();
+  bool get _isDemo => _sessionProvider.isDemoMode;
+
   String? _lastSessionId;
   String? _lastLibraryId;
+  String? _lastAccountKey;
+
+  /// Bumped on every session / library change; loads started under an older
+  /// generation discard their results.
+  int _generation = 0;
 
   void _onSessionChanged() {
     final session = _sessionProvider.session;
     final sessionId = session?.credentials.accessToken; // Using token as session ID
     final libraryId = session?.selectedLibraryId;
+    final sessionChanged = sessionId != _lastSessionId;
+    final libraryChanged = libraryId != _lastLibraryId;
+    if (!sessionChanged && !libraryChanged) return;
 
-    if (sessionId != _lastSessionId) {
-      _lastSessionId = sessionId;
-      _lastLibraryId = libraryId;
-      if (sessionId == null) {
-        clearAllData();
-      } else {
-        loadLibraries();
-        if (libraryId != null) {
-          loadAllLibraryData(forceRefresh: true);
-        }
+    _lastSessionId = sessionId;
+    _lastLibraryId = libraryId;
+    _generation++;
+    // Loads of the old generation will never clear their flags.
+    _resetLoadingFlags();
+
+    if (session == null || session.isDemo) {
+      // Logged out, or demo mode: NautuneAppState serves the demo library.
+      _lastAccountKey = null;
+      clearAllData();
+      return;
+    }
+
+    if (sessionChanged) {
+      // Another account (not just a refreshed token): its data must not
+      // show, or be cached, under this one. The first session of the run
+      // keeps whatever the bootstrap snapshot already applied.
+      final accountKey = _cacheService.cacheKeyForSession(session);
+      if (_lastAccountKey != null && _lastAccountKey != accountKey) {
+        _clearLibraryData();
+        _libraries = null;
+        _playlists = null;
+        _favoriteTracks = null;
+        _librariesError = null;
+        _playlistsError = null;
+        _favoritesError = null;
       }
-    } else if (libraryId != _lastLibraryId) {
-      _lastLibraryId = libraryId;
+      _lastAccountKey = accountKey;
+      loadLibraries();
       if (libraryId != null) {
         loadAllLibraryData(forceRefresh: true);
       } else {
-        // Clear library-dependent data but keep libraries list
-        _albums = null;
-        _artists = null;
-        _playlists = null;
-        _recentTracks = null;
-        _recentlyAddedAlbums = null;
-        _favoriteTracks = null;
-        _genres = null;
+        _clearLibraryData();
         notifyListeners();
       }
+      return;
+    }
+
+    // Same session, another library: drop the old library's data first so
+    // it never shows (or gets cached) under the new one.
+    _clearLibraryData();
+    notifyListeners();
+    if (libraryId != null) {
+      loadAllLibraryData(forceRefresh: true);
     }
   }
 
@@ -94,7 +143,6 @@ class LibraryDataProvider extends ChangeNotifier {
   List<JellyfinAlbum>? _albums;
   bool _isLoadingMoreAlbums = false;
   bool _hasMoreAlbums = true;
-  int _albumsPage = 0;
   static const int _albumsPageSize = 50;
   SortOption _albumSortBy = SortOption.name;
   SortOrder _albumSortOrder = SortOrder.ascending;
@@ -105,7 +153,6 @@ class LibraryDataProvider extends ChangeNotifier {
   List<JellyfinArtist>? _artists;
   bool _isLoadingMoreArtists = false;
   bool _hasMoreArtists = true;
-  int _artistsPage = 0;
   static const int _artistsPageSize = 50;
   SortOption _artistSortBy = SortOption.name;
   SortOrder _artistSortOrder = SortOrder.ascending;
@@ -234,6 +281,23 @@ class LibraryDataProvider extends ChangeNotifier {
     return _cacheService.cacheKeyForSession(session);
   }
 
+  /// Reads a cached list, treating a missing key or a read failure as "none".
+  Future<List<T>?> _readCache<T>(
+    String? cacheKey,
+    Future<List<T>?> Function(String key) read,
+  ) async {
+    if (cacheKey == null) return null;
+    try {
+      final cached = await read(cacheKey);
+      return (cached == null || cached.isEmpty) ? null : cached;
+    } catch (error) {
+      debugPrint('LibraryDataProvider: cache read failed: $error');
+      return null;
+    }
+  }
+
+  static bool _isEmpty(List<Object?>? list) => list == null || list.isEmpty;
+
   /// Apply a bootstrap snapshot for fast startup.
   void applySnapshot(BootstrapSnapshot snapshot) {
     if (snapshot.libraries != null) {
@@ -275,75 +339,103 @@ class LibraryDataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Clear all library data (called on logout or library change).
-  void clearAllData() {
-    _libraries = null;
-    _albums = null;
-    _artists = null;
-    _playlists = null;
-    _recentTracks = null;
-    _recentlyAddedAlbums = null;
-    _favoriteTracks = null;
-    _genres = null;
-
-    _librariesError = null;
-    _albumsError = null;
-    _artistsError = null;
-    _playlistsError = null;
-    _recentError = null;
-    _recentlyAddedError = null;
-    _favoritesError = null;
-    _genresError = null;
-
+  void _resetLoadingFlags() {
     _isLoadingLibraries = false;
     _isLoadingAlbums = false;
     _isLoadingArtists = false;
+    _isLoadingMoreAlbums = false;
+    _isLoadingMoreArtists = false;
     _isLoadingPlaylists = false;
     _isLoadingRecent = false;
     _isLoadingRecentlyAdded = false;
     _isLoadingFavorites = false;
     _isLoadingGenres = false;
+  }
 
+  /// Clears the data that belongs to the selected library (albums, artists,
+  /// recent, recently added, genres). Playlists and favorites are per user.
+  void _clearLibraryData() {
+    // Invalidate in-flight album/artist loads and pages.
+    _albumsLoadId++;
+    _artistsLoadId++;
+    _albums = null;
+    _artists = null;
+    _recentTracks = null;
+    _recentlyAddedAlbums = null;
+    _genres = null;
+    _albumsError = null;
+    _artistsError = null;
+    _recentError = null;
+    _recentlyAddedError = null;
+    _genresError = null;
+    _isLoadingAlbums = false;
+    _isLoadingArtists = false;
+    _isLoadingMoreAlbums = false;
+    _isLoadingMoreArtists = false;
+    _isLoadingRecent = false;
+    _isLoadingRecentlyAdded = false;
+    _isLoadingGenres = false;
     _hasMoreAlbums = true;
     _hasMoreArtists = true;
-    _albumsPage = 0;
-    _artistsPage = 0;
+  }
+
+  /// Clear all library data (called on logout or library change).
+  void clearAllData() {
+    _generation++;
+    _clearLibraryData();
+    _libraries = null;
+    _playlists = null;
+    _favoriteTracks = null;
+
+    _librariesError = null;
+    _playlistsError = null;
+    _favoritesError = null;
+
+    _resetLoadingFlags();
 
     notifyListeners();
   }
 
   /// Load libraries from Jellyfin.
   Future<void> loadLibraries() async {
+    if (_isDemo) return;
+    final gen = _generation;
+    final cacheKey = _sessionCacheKey;
     _librariesError = null;
     _isLoadingLibraries = true;
     notifyListeners();
 
     try {
+      if (_offline) {
+        final cached = await _readCache(cacheKey, _cacheService.readLibraries);
+        if (gen != _generation) return;
+        if (cached != null) _libraries = cached;
+        return;
+      }
       final results = await _jellyfinService.loadLibraries();
+      if (gen != _generation) return;
       final audioLibraries = results.where((lib) => lib.isAudioLibrary).toList();
       _libraries = audioLibraries;
 
-      final cacheKey = _sessionCacheKey;
       if (cacheKey != null) {
         await _cacheService.saveLibraries(cacheKey, audioLibraries);
       }
+      if (gen != _generation) return;
 
       await _ensureSelectedLibraryStillValid();
     } catch (error) {
+      if (gen != _generation) return;
       debugPrint('LibraryDataProvider: Failed to load libraries: $error');
-      _librariesError = error;
 
-      // Try loading from cache
-      final cacheKey = _sessionCacheKey;
-      if (cacheKey != null) {
-        final cached = await _cacheService.readLibraries(cacheKey);
-        if (cached != null && cached.isNotEmpty) {
-          _libraries = cached;
-        }
-      }
+      final cached = await _readCache(cacheKey, _cacheService.readLibraries);
+      if (gen != _generation) return;
+      if (cached != null) _libraries = cached;
+      if (_isEmpty(_libraries)) _librariesError = error;
     } finally {
-      _isLoadingLibraries = false;
-      notifyListeners();
+      if (gen == _generation) {
+        _isLoadingLibraries = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -359,18 +451,15 @@ class LibraryDataProvider extends ChangeNotifier {
 
     final stillExists = libs.any((lib) => lib.id == currentId);
     if (!stillExists) {
+      // The session listener clears the library's data when the selection
+      // goes away.
       await _sessionProvider.clearSelectedLibrary();
-      // Clear library-dependent data
-      _albums = null;
-      _artists = null;
-      _recentTracks = null;
-      _recentlyAddedAlbums = null;
-      notifyListeners();
     }
   }
 
   /// Load albums for the currently selected library.
   Future<void> loadAlbums({bool forceRefresh = false}) async {
+    if (_isDemo) return;
     final libraryId = _sessionProvider.session?.selectedLibraryId;
     if (libraryId == null) {
       _albums = null;
@@ -380,14 +469,31 @@ class LibraryDataProvider extends ChangeNotifier {
       return;
     }
 
+    final gen = _generation;
+    final cacheKey = _sessionCacheKey;
     _albumsError = null;
     _isLoadingAlbums = true;
-    _albumsPage = 0;
     _hasMoreAlbums = true;
     final loadId = ++_albumsLoadId;
+    // A page still loading for the previous load id is discarded and won't
+    // clear its flag (it only clears its own), so clear it here.
+    _isLoadingMoreAlbums = false;
     notifyListeners();
+    bool current() => gen == _generation && loadId == _albumsLoadId;
+
+    Future<List<JellyfinAlbum>?> readCached() => _readCache(
+        cacheKey, (key) => _cacheService.readAlbums(key, libraryId: libraryId));
 
     try {
+      if (_offline) {
+        final cached = await readCached();
+        if (!current()) return;
+        if (cached != null) {
+          _albums = cached;
+          _hasMoreAlbums = cached.length >= _albumsPageSize;
+        }
+        return;
+      }
       final albums = await _jellyfinService.loadAlbums(
         libraryId: libraryId,
         forceRefresh: forceRefresh,
@@ -397,11 +503,10 @@ class LibraryDataProvider extends ChangeNotifier {
         sortOrder: sortOrderToJellyfin(_albumSortOrder),
       );
       // Discard if a newer load started while awaiting.
-      if (loadId != _albumsLoadId) return;
+      if (!current()) return;
       _albums = albums;
       _hasMoreAlbums = albums.length == _albumsPageSize;
 
-      final cacheKey = _sessionCacheKey;
       if (cacheKey != null) {
         await _cacheService.saveAlbums(
           cacheKey,
@@ -410,101 +515,74 @@ class LibraryDataProvider extends ChangeNotifier {
         );
       }
     } catch (error) {
-      if (loadId != _albumsLoadId) return;
+      if (!current()) return;
       debugPrint('LibraryDataProvider: Failed to load albums: $error');
-      _albumsError = error;
 
-      // Try loading from cache
-      final cacheKey = _sessionCacheKey;
-      if (cacheKey != null) {
-        final cached = await _cacheService.readAlbums(cacheKey, libraryId: libraryId);
-        if (cached != null && cached.isNotEmpty) {
-          _albums = cached;
-        }
-      }
+      final cached = await readCached();
+      if (!current()) return;
+      if (cached != null) _albums = cached;
+      if (_isEmpty(_albums)) _albumsError = error;
     } finally {
-      if (loadId == _albumsLoadId) {
+      if (current()) {
         _isLoadingAlbums = false;
         notifyListeners();
       }
     }
   }
 
-  /// Load more albums (pagination).
-  Future<void> loadMoreAlbums() async {
-    final libraryId = _sessionProvider.session?.selectedLibraryId;
-    if (libraryId == null ||
-        _isLoadingMoreAlbums ||
-        _isLoadingAlbums ||
-        !_hasMoreAlbums ||
-        _albums == null) {
-      return;
-    }
-
-    _isLoadingMoreAlbums = true;
-    final loadId = _albumsLoadId;
-    notifyListeners();
-
-    try {
-      _albumsPage++;
-      final newAlbums = await _jellyfinService.loadAlbums(
-        libraryId: libraryId,
-        startIndex: _albumsPage * _albumsPageSize,
-        limit: _albumsPageSize,
-        sortBy: sortOptionToJellyfin(_albumSortBy),
-        sortOrder: sortOrderToJellyfin(_albumSortOrder),
-      );
-
-      // Discard if sort/load changed while awaiting.
-      if (loadId != _albumsLoadId) return;
-
-      if (newAlbums.isEmpty || newAlbums.length < _albumsPageSize) {
-        _hasMoreAlbums = false;
-      }
-
-      _albums = List.of(_albums!)..addAll(newAlbums);
-    } catch (error) {
-      debugPrint('LibraryDataProvider: Error loading more albums: $error');
-      _albumsPage--; // Revert page on error
-    } finally {
-      _isLoadingMoreAlbums = false;
-      notifyListeners();
-    }
-  }
+  /// Load the next page of albums. Pages continue from the loaded count,
+  /// so a failed or discarded request never skips or repeats items.
+  Future<void> loadMoreAlbums() => _pageAlbums(loadAll: false);
 
   /// Load every remaining album page (in large chunks), e.g. before an A-Z
-  /// jump to a letter that isn't loaded yet. Later pages continue from the
-  /// loaded count, so ordinary pagination stays consistent afterwards.
-  Future<void> loadAllAlbums() async {
+  /// jump to a letter that isn't loaded yet. Waits for a page that is
+  /// already loading instead of giving up.
+  Future<void> loadAllAlbums() => _pageAlbums(loadAll: true);
+
+  Future<void>? _albumsPaging;
+
+  Future<void> _pageAlbums({required bool loadAll}) async {
+    while (_albumsPaging != null) {
+      if (!loadAll) return;
+      await _albumsPaging;
+    }
     final libraryId = _sessionProvider.session?.selectedLibraryId;
-    if (libraryId == null ||
-        _isLoadingMoreAlbums ||
+    if (_isDemo ||
+        _offline ||
+        libraryId == null ||
         _isLoadingAlbums ||
         !_hasMoreAlbums ||
         _albums == null) {
       return;
     }
+
+    final done = Completer<void>();
+    _albumsPaging = done.future;
     _isLoadingMoreAlbums = true;
     final loadId = _albumsLoadId;
     notifyListeners();
+
     try {
-      while (_hasMoreAlbums) {
-        final chunk = await _jellyfinService.loadAlbums(
+      do {
+        final limit = loadAll ? _loadAllChunk : _albumsPageSize;
+        final page = await _jellyfinService.loadAlbums(
           libraryId: libraryId,
           startIndex: _albums!.length,
-          limit: _loadAllChunk,
+          limit: limit,
           sortBy: sortOptionToJellyfin(_albumSortBy),
           sortOrder: sortOrderToJellyfin(_albumSortOrder),
         );
-        if (loadId != _albumsLoadId) return;
-        _albums = List.of(_albums!)..addAll(chunk);
-        _hasMoreAlbums = chunk.length == _loadAllChunk;
-      }
-      _albumsPage = (_albums!.length / _albumsPageSize).ceil() - 1;
+        // Discard if sort/load changed (or data was cleared) while awaiting.
+        if (loadId != _albumsLoadId || _albums == null) return;
+        _albums = List.of(_albums!)..addAll(page);
+        _hasMoreAlbums = page.length == limit;
+      } while (loadAll && _hasMoreAlbums);
     } catch (error) {
-      debugPrint('LibraryDataProvider: Error loading all albums: $error');
+      debugPrint('LibraryDataProvider: Error loading more albums: $error');
     } finally {
-      _isLoadingMoreAlbums = false;
+      _albumsPaging = null;
+      if (loadId == _albumsLoadId) _isLoadingMoreAlbums = false;
+      done.complete();
       notifyListeners();
     }
   }
@@ -513,6 +591,7 @@ class LibraryDataProvider extends ChangeNotifier {
 
   /// Load artists for the currently selected library.
   Future<void> loadArtists({bool forceRefresh = false}) async {
+    if (_isDemo) return;
     final libraryId = _sessionProvider.session?.selectedLibraryId;
     if (libraryId == null) {
       _artists = null;
@@ -522,14 +601,31 @@ class LibraryDataProvider extends ChangeNotifier {
       return;
     }
 
+    final gen = _generation;
+    final cacheKey = _sessionCacheKey;
     _artistsError = null;
     _isLoadingArtists = true;
-    _artistsPage = 0;
     _hasMoreArtists = true;
     final loadId = ++_artistsLoadId;
+    // A page still loading for the previous load id is discarded and won't
+    // clear its flag (it only clears its own), so clear it here.
+    _isLoadingMoreArtists = false;
     notifyListeners();
+    bool current() => gen == _generation && loadId == _artistsLoadId;
+
+    Future<List<JellyfinArtist>?> readCached() => _readCache(
+        cacheKey, (key) => _cacheService.readArtists(key, libraryId: libraryId));
 
     try {
+      if (_offline) {
+        final cached = await readCached();
+        if (!current()) return;
+        if (cached != null) {
+          _artists = cached;
+          _hasMoreArtists = cached.length >= _artistsPageSize;
+        }
+        return;
+      }
       final artists = await _jellyfinService.loadArtists(
         libraryId: libraryId,
         forceRefresh: forceRefresh,
@@ -538,11 +634,10 @@ class LibraryDataProvider extends ChangeNotifier {
         sortBy: sortOptionToJellyfin(_artistSortBy),
         sortOrder: sortOrderToJellyfin(_artistSortOrder),
       );
-      if (loadId != _artistsLoadId) return;
+      if (!current()) return;
       _artists = artists;
       _hasMoreArtists = artists.length == _artistsPageSize;
 
-      final cacheKey = _sessionCacheKey;
       if (cacheKey != null) {
         await _cacheService.saveArtists(
           cacheKey,
@@ -551,144 +646,124 @@ class LibraryDataProvider extends ChangeNotifier {
         );
       }
     } catch (error) {
-      if (loadId != _artistsLoadId) return;
+      if (!current()) return;
       debugPrint('LibraryDataProvider: Failed to load artists: $error');
-      _artistsError = error;
 
-      // Try loading from cache
-      final cacheKey = _sessionCacheKey;
-      if (cacheKey != null) {
-        final cached = await _cacheService.readArtists(cacheKey, libraryId: libraryId);
-        if (cached != null && cached.isNotEmpty) {
-          _artists = cached;
-        }
-      }
+      final cached = await readCached();
+      if (!current()) return;
+      if (cached != null) _artists = cached;
+      if (_isEmpty(_artists)) _artistsError = error;
     } finally {
-      if (loadId == _artistsLoadId) {
+      if (current()) {
         _isLoadingArtists = false;
         notifyListeners();
       }
     }
   }
 
-  /// Load more artists (pagination).
-  Future<void> loadMoreArtists() async {
-    final libraryId = _sessionProvider.session?.selectedLibraryId;
-    if (libraryId == null ||
-        _isLoadingMoreArtists ||
-        _isLoadingArtists ||
-        !_hasMoreArtists ||
-        _artists == null) {
-      return;
-    }
-
-    _isLoadingMoreArtists = true;
-    final loadId = _artistsLoadId;
-    notifyListeners();
-
-    try {
-      _artistsPage++;
-      final newArtists = await _jellyfinService.loadArtists(
-        libraryId: libraryId,
-        startIndex: _artistsPage * _artistsPageSize,
-        limit: _artistsPageSize,
-        sortBy: sortOptionToJellyfin(_artistSortBy),
-        sortOrder: sortOrderToJellyfin(_artistSortOrder),
-      );
-
-      if (loadId != _artistsLoadId) return;
-
-      if (newArtists.isEmpty || newArtists.length < _artistsPageSize) {
-        _hasMoreArtists = false;
-      }
-
-      _artists = List.of(_artists!)..addAll(newArtists);
-    } catch (error) {
-      debugPrint('LibraryDataProvider: Error loading more artists: $error');
-      _artistsPage--; // Revert page on error
-    } finally {
-      _isLoadingMoreArtists = false;
-      notifyListeners();
-    }
-  }
+  /// Load the next page of artists (see [loadMoreAlbums]).
+  Future<void> loadMoreArtists() => _pageArtists(loadAll: false);
 
   /// Load every remaining artist page (see [loadAllAlbums]).
-  Future<void> loadAllArtists() async {
+  Future<void> loadAllArtists() => _pageArtists(loadAll: true);
+
+  Future<void>? _artistsPaging;
+
+  Future<void> _pageArtists({required bool loadAll}) async {
+    while (_artistsPaging != null) {
+      if (!loadAll) return;
+      await _artistsPaging;
+    }
     final libraryId = _sessionProvider.session?.selectedLibraryId;
-    if (libraryId == null ||
-        _isLoadingMoreArtists ||
+    if (_isDemo ||
+        _offline ||
+        libraryId == null ||
         _isLoadingArtists ||
         !_hasMoreArtists ||
         _artists == null) {
       return;
     }
+
+    final done = Completer<void>();
+    _artistsPaging = done.future;
     _isLoadingMoreArtists = true;
     final loadId = _artistsLoadId;
     notifyListeners();
+
     try {
-      while (_hasMoreArtists) {
-        final chunk = await _jellyfinService.loadArtists(
+      do {
+        final limit = loadAll ? _loadAllChunk : _artistsPageSize;
+        final page = await _jellyfinService.loadArtists(
           libraryId: libraryId,
           startIndex: _artists!.length,
-          limit: _loadAllChunk,
+          limit: limit,
           sortBy: sortOptionToJellyfin(_artistSortBy),
           sortOrder: sortOrderToJellyfin(_artistSortOrder),
         );
-        if (loadId != _artistsLoadId) return;
-        _artists = List.of(_artists!)..addAll(chunk);
-        _hasMoreArtists = chunk.length == _loadAllChunk;
-      }
-      _artistsPage = (_artists!.length / _artistsPageSize).ceil() - 1;
+        if (loadId != _artistsLoadId || _artists == null) return;
+        _artists = List.of(_artists!)..addAll(page);
+        _hasMoreArtists = page.length == limit;
+      } while (loadAll && _hasMoreArtists);
     } catch (error) {
-      debugPrint('LibraryDataProvider: Error loading all artists: $error');
+      debugPrint('LibraryDataProvider: Error loading more artists: $error');
     } finally {
-      _isLoadingMoreArtists = false;
+      _artistsPaging = null;
+      if (loadId == _artistsLoadId) _isLoadingMoreArtists = false;
+      done.complete();
       notifyListeners();
     }
   }
 
   /// Load playlists (global, not library-specific).
   Future<void> loadPlaylists({bool forceRefresh = false}) async {
+    if (_isDemo) return;
+    final gen = _generation;
+    final cacheKey = _sessionCacheKey;
     _playlistsError = null;
     _isLoadingPlaylists = true;
     notifyListeners();
 
+    Future<List<JellyfinPlaylist>?> readCached() async =>
+        await _readCache(cacheKey, _cacheService.readPlaylists) ??
+        await _readCache<JellyfinPlaylist>('store', (_) => _playlistStore.load());
+
     try {
+      if (_offline) {
+        final cached = await readCached();
+        if (gen != _generation) return;
+        if (cached != null) _playlists = cached;
+        return;
+      }
       final playlists = await _jellyfinService.loadPlaylists(
         libraryId: null,
         forceRefresh: forceRefresh,
       );
+      if (gen != _generation) return;
       _playlists = playlists;
       await _playlistStore.save(playlists);
 
-      final cacheKey = _sessionCacheKey;
       if (cacheKey != null) {
         await _cacheService.savePlaylists(cacheKey, playlists);
       }
     } catch (error) {
+      if (gen != _generation) return;
       debugPrint('LibraryDataProvider: Failed to load playlists: $error');
-      _playlistsError = error;
 
-      // Try loading from cache
-      final cacheKey = _sessionCacheKey;
-      if (cacheKey != null) {
-        final cached = await _cacheService.readPlaylists(cacheKey);
-        if (cached != null && cached.isNotEmpty) {
-          _playlists = cached;
-        } else {
-          _playlists = await _playlistStore.load();
-        }
-      } else {
-        _playlists = await _playlistStore.load();
-      }
+      final cached = await readCached();
+      if (gen != _generation) return;
+      if (cached != null) _playlists = cached;
+      if (_isEmpty(_playlists)) _playlistsError = error;
     } finally {
-      _isLoadingPlaylists = false;
-      notifyListeners();
+      if (gen == _generation) {
+        _isLoadingPlaylists = false;
+        notifyListeners();
+      }
     }
   }
 
   /// Load recent tracks for the currently selected library.
   Future<void> loadRecentTracks({bool forceRefresh = false}) async {
+    if (_isDemo) return;
     final libraryId = _sessionProvider.session?.selectedLibraryId;
     if (libraryId == null) {
       _recentTracks = null;
@@ -698,18 +773,29 @@ class LibraryDataProvider extends ChangeNotifier {
       return;
     }
 
+    final gen = _generation;
+    final cacheKey = _sessionCacheKey;
     _recentError = null;
     _isLoadingRecent = true;
     notifyListeners();
 
+    Future<List<JellyfinTrack>?> readCached() => _readCache(cacheKey,
+        (key) => _cacheService.readRecentTracks(key, libraryId: libraryId));
+
     try {
+      if (_offline) {
+        final cached = await readCached();
+        if (gen != _generation) return;
+        if (cached != null) _recentTracks = cached;
+        return;
+      }
       final tracks = await _jellyfinService.loadRecentTracks(
         libraryId: libraryId,
         forceRefresh: forceRefresh,
       );
+      if (gen != _generation) return;
       _recentTracks = tracks;
 
-      final cacheKey = _sessionCacheKey;
       if (cacheKey != null) {
         await _cacheService.saveRecentTracks(
           cacheKey,
@@ -718,28 +804,24 @@ class LibraryDataProvider extends ChangeNotifier {
         );
       }
     } catch (error) {
+      if (gen != _generation) return;
       debugPrint('LibraryDataProvider: Failed to load recent tracks: $error');
-      _recentError = error;
 
-      // Try loading from cache
-      final cacheKey = _sessionCacheKey;
-      if (cacheKey != null) {
-        final cached = await _cacheService.readRecentTracks(
-          cacheKey,
-          libraryId: libraryId,
-        );
-        if (cached != null && cached.isNotEmpty) {
-          _recentTracks = cached;
-        }
-      }
+      final cached = await readCached();
+      if (gen != _generation) return;
+      if (cached != null) _recentTracks = cached;
+      if (_isEmpty(_recentTracks)) _recentError = error;
     } finally {
-      _isLoadingRecent = false;
-      notifyListeners();
+      if (gen == _generation) {
+        _isLoadingRecent = false;
+        notifyListeners();
+      }
     }
   }
 
   /// Load recently added albums for the currently selected library.
   Future<void> loadRecentlyAddedAlbums({bool forceRefresh = false}) async {
+    if (_isDemo) return;
     final libraryId = _sessionProvider.session?.selectedLibraryId;
     if (libraryId == null) {
       _recentlyAddedAlbums = null;
@@ -749,19 +831,30 @@ class LibraryDataProvider extends ChangeNotifier {
       return;
     }
 
+    final gen = _generation;
+    final cacheKey = _sessionCacheKey;
     _recentlyAddedError = null;
     _isLoadingRecentlyAdded = true;
     notifyListeners();
 
+    Future<List<JellyfinAlbum>?> readCached() => _readCache(cacheKey,
+        (key) => _cacheService.readRecentlyAddedAlbums(key, libraryId: libraryId));
+
     try {
+      if (_offline) {
+        final cached = await readCached();
+        if (gen != _generation) return;
+        if (cached != null) _recentlyAddedAlbums = cached;
+        return;
+      }
       final albums = await _jellyfinService.loadRecentlyAddedAlbums(
         libraryId: libraryId,
         forceRefresh: forceRefresh,
         limit: 20,
       );
+      if (gen != _generation) return;
       _recentlyAddedAlbums = albums;
 
-      final cacheKey = _sessionCacheKey;
       if (cacheKey != null) {
         await _cacheService.saveRecentlyAddedAlbums(
           cacheKey,
@@ -770,47 +863,51 @@ class LibraryDataProvider extends ChangeNotifier {
         );
       }
     } catch (error) {
+      if (gen != _generation) return;
       debugPrint('LibraryDataProvider: Failed to load recently added: $error');
-      _recentlyAddedError = error;
 
-      // Try loading from cache
-      final cacheKey = _sessionCacheKey;
-      if (cacheKey != null) {
-        final cached = await _cacheService.readRecentlyAddedAlbums(
-          cacheKey,
-          libraryId: libraryId,
-        );
-        if (cached != null && cached.isNotEmpty) {
-          _recentlyAddedAlbums = cached;
-        }
-      }
+      final cached = await readCached();
+      if (gen != _generation) return;
+      if (cached != null) _recentlyAddedAlbums = cached;
+      if (_isEmpty(_recentlyAddedAlbums)) _recentlyAddedError = error;
     } finally {
-      _isLoadingRecentlyAdded = false;
-      notifyListeners();
+      if (gen == _generation) {
+        _isLoadingRecentlyAdded = false;
+        notifyListeners();
+      }
     }
   }
 
-  /// Load favorite tracks.
+  /// Load favorite tracks. Offline this keeps the current list (there is no
+  /// local copy to refresh from).
   Future<void> loadFavorites({bool forceRefresh = false}) async {
+    if (_isDemo || _offline) return;
+    final gen = _generation;
     _favoritesError = null;
     _isLoadingFavorites = true;
     notifyListeners();
 
     try {
       final tracks = await _jellyfinService.getFavoriteTracks();
+      if (gen != _generation) return;
       _favoriteTracks = tracks;
     } catch (error) {
+      if (gen != _generation) return;
       debugPrint('LibraryDataProvider: Failed to load favorites: $error');
-      _favoritesError = error;
-      _favoriteTracks = null;
+      // Keep the list we had: a failed refresh must not wipe favorites that
+      // are still browsable.
+      if (_isEmpty(_favoriteTracks)) _favoritesError = error;
     } finally {
-      _isLoadingFavorites = false;
-      notifyListeners();
+      if (gen == _generation) {
+        _isLoadingFavorites = false;
+        notifyListeners();
+      }
     }
   }
 
   /// Load genres for the currently selected library.
   Future<void> loadGenres({bool forceRefresh = false}) async {
+    if (_isDemo) return;
     final libraryId = _sessionProvider.session?.selectedLibraryId;
     if (libraryId == null) {
       _genres = null;
@@ -819,7 +916,9 @@ class LibraryDataProvider extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (_offline) return; // Genres aren't browsable offline.
 
+    final gen = _generation;
     _genresError = null;
     _isLoadingGenres = true;
     notifyListeners();
@@ -829,19 +928,23 @@ class LibraryDataProvider extends ChangeNotifier {
         libraryId: libraryId,
         forceRefresh: forceRefresh,
       );
+      if (gen != _generation) return;
       _genres = genres;
     } catch (error) {
+      if (gen != _generation) return;
       debugPrint('LibraryDataProvider: Failed to load genres: $error');
-      _genresError = error;
-      _genres = null;
+      if (_isEmpty(_genres)) _genresError = error;
     } finally {
-      _isLoadingGenres = false;
-      notifyListeners();
+      if (gen == _generation) {
+        _isLoadingGenres = false;
+        notifyListeners();
+      }
     }
   }
 
   /// Load all library-dependent content at once.
   Future<void> loadAllLibraryData({bool forceRefresh = false}) async {
+    if (_isDemo) return;
     final libraryId = _sessionProvider.session?.selectedLibraryId;
     if (libraryId == null) {
       clearAllData();

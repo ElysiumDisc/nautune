@@ -12,6 +12,20 @@ class QueueScreen extends StatefulWidget {
 }
 
 class _QueueScreenState extends State<QueueScreen> {
+  // Bumped on every swipe-delete so no row can inherit the dismissed
+  // Dismissible (see the keys in itemBuilder).
+  int _dismissEpoch = 0;
+
+  /// Row keys that stay stable when rows move: the track id plus which
+  /// occurrence of that id it is, so a track queued twice gets two keys.
+  static List<String> _entryKeys(List<JellyfinTrack> queue) {
+    final seen = <String, int>{};
+    return [
+      for (final track in queue)
+        '${track.id}#${seen.update(track.id, (n) => n + 1, ifAbsent: () => 0)}',
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -187,6 +201,7 @@ class _QueueScreenState extends State<QueueScreen> {
             stream: audioService.currentTrackStream,
             builder: (context, trackSnapshot) {
               final currentIndex = audioService.currentIndex;
+              final entryKeys = _entryKeys(queue);
 
               return ReorderableListView.builder(
                 itemCount: queue.length,
@@ -197,11 +212,15 @@ class _QueueScreenState extends State<QueueScreen> {
                 itemBuilder: (context, index) {
                   final track = queue[index];
                   final isCurrentTrack = index == currentIndex;
+                  final entryKey = entryKeys[index];
 
                   return RepaintBoundary(
-                    key: ValueKey('queue-${track.id}-$index'),
+                    key: ValueKey('queue-$entryKey'),
                     child: Dismissible(
-                      key: ValueKey('dismiss-${track.id}-$index'),
+                      // After a delete, the next copy of the same track takes
+                      // over the removed row's entry key; the epoch keeps it
+                      // from reusing the dismissed Dismissible.
+                      key: ValueKey('dismiss-$entryKey-$_dismissEpoch'),
                     direction: queue.length > 1 ? DismissDirection.endToStart : DismissDirection.none,
                     background: Container(
                       color: theme.colorScheme.error,
@@ -222,6 +241,7 @@ class _QueueScreenState extends State<QueueScreen> {
                       final removedTrack = track;
                       final removedIndex = index;
                       audioService.removeFromQueue(index);
+                      setState(() => _dismissEpoch++);
                       ScaffoldMessenger.of(context).clearSnackBars();
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
@@ -271,8 +291,12 @@ class _QueueScreenState extends State<QueueScreen> {
                               ),
                           ],
                         ),
+                        // Rows have a fixed 72 pt extent: keep to one line each
+                        // so long names don't draw over the next row.
                         title: Text(
                           track.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: isCurrentTrack 
                                 ? theme.colorScheme.primary
@@ -284,6 +308,8 @@ class _QueueScreenState extends State<QueueScreen> {
                         ),
                         subtitle: Text(
                           track.artists.join(', '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: isCurrentTrack
                                 ? theme.colorScheme.primary.withValues(alpha: 0.7)

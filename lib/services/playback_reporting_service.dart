@@ -9,6 +9,9 @@ import '../jellyfin/jellyfin_track.dart';
 import '../jellyfin/server_uri.dart';
 import 'pending_report_store.dart';
 
+/// Result of sending one playback report.
+enum ReportOutcome { delivered, retryLater, drop }
+
 /// One started (and not yet stopped) Jellyfin playback session.
 class _ReportSession {
   _ReportSession({
@@ -63,6 +66,11 @@ class PlaybackReportingService {
   /// arrived (e.g. the stop call completed after the next track's start).
   /// Keyed by track id; bounded so it can't grow without limit.
   final Map<String, _ReportSession> _unstopped = {};
+
+  /// Start reports still in flight, by play session id. A stop for the same
+  /// session waits for its start, so a start that fails and gets queued can
+  /// never be delivered after its own stop.
+  final Map<String, Future<void>> _startsInFlight = {};
   static const int _maxUnstopped = 8;
 
   Timer? _progressTimer;
@@ -338,23 +346,28 @@ class PlaybackReportingService {
 
     debugPrint('📡 Reporting playback start: ${track.name} (${track.id}) [$playMethod]');
 
+    final startEvent = {
+      'type': 'start',
+      'trackId': track.id,
+      'playMethod': playMethod,
+      'sessionId': session.sessionId,
+    };
+    final startDone = Completer<void>();
+    _startsInFlight[session.sessionId] = startDone.future;
     try {
-      final response = await _post(
-        '/Sessions/Playing',
-        startBody(
-          itemId: track.id,
-          playSessionId: session.sessionId,
-          playMethod: playMethod,
-        ),
-      );
-
-      if (response.statusCode == 200 || response.statusCode == 204) {
-        debugPrint('✅ Playback start reported successfully!');
-      } else {
-        debugPrint('⚠️ Playback start failed: ${response.statusCode}');
+      final outcome = await _send(startEvent);
+      if (outcome == ReportOutcome.retryLater && !_retired && !_disposed) {
+        // Transient failure (network drop, 5xx): keep it so the play is still
+        // counted; the matching stop is queued behind it.
+        _queueEvent(startEvent);
+        debugPrint('📡 Playback start failed, queued for retry');
+      } else if (outcome == ReportOutcome.delivered) {
+        _flushIfPending();
       }
-    } catch (e) {
-      debugPrint('❌ Failed to report playback start: $e');
+    } finally {
+      // Settled (delivered, dropped or queued): release a waiting stop.
+      _startsInFlight.remove(session.sessionId);
+      startDone.complete();
     }
 
     // Only arm progress reporting if this is still the active session (a stop
@@ -447,11 +460,14 @@ class PlaybackReportingService {
 
       if (response.statusCode == 200 || response.statusCode == 204) {
         debugPrint('✅ Progress reported: ${position.inSeconds}s, paused: $isPaused');
+        // The server is reachable again: deliver anything a transient
+        // failure left queued.
+        _flushIfPending();
       } else {
         debugPrint('⚠️ Progress report failed: ${response.statusCode}');
       }
     } catch (e) {
-      debugPrint('❌ Failed to report playback progress: $e');
+      debugPrint('❌ Failed to report playback progress: ${e.runtimeType}');
     }
   }
 
@@ -479,69 +495,135 @@ class PlaybackReportingService {
 
     final positionTicks = position.inMicroseconds * 10;
 
-    if (!_enabled) {
+    final stopEvent = {
+      'type': 'stop',
+      'trackId': track.id,
+      'positionTicks': positionTicks,
+      'sessionId': session.sessionId,
+      'playMethod': session.playMethod,
+    };
+
+    // Let this session's start settle first (it may end up queued).
+    final sessionId = session.sessionId;
+    final startInFlight = _startsInFlight[sessionId];
+    if (startInFlight != null) {
+      await startInFlight;
+      if (_disposed) return;
+    }
+
+    // Offline, or this session's start is still queued: the stop must go
+    // out after it, so queue it too.
+    final startPending = _pendingEvents.any(
+      (e) => e['type'] == 'start' && e['sessionId'] == sessionId,
+    );
+    if (!_enabled || startPending) {
       if (_retired) return; // Logged out: don't queue for later.
-      _queueEvent({
-        'type': 'stop',
-        'trackId': track.id,
-        'positionTicks': positionTicks,
-        'sessionId': session.sessionId,
-        'playMethod': session.playMethod,
-      });
-      debugPrint('📡 Playback stop queued (offline): ${track.name}');
+      _queueEvent(stopEvent);
+      debugPrint('📡 Playback stop queued: ${track.name}');
+      if (_enabled) _flushIfPending();
       return;
     }
 
-    try {
-      await _post(
-        '/Sessions/Playing/Stopped',
-        stopBody(
-          itemId: track.id,
-          playSessionId: session.sessionId,
-          positionTicks: positionTicks,
-        ),
-      );
-    } catch (e) {
-      debugPrint('Failed to report playback stopped: $e');
+    final outcome = await _send(stopEvent);
+    if (outcome == ReportOutcome.retryLater && !_retired && !_disposed) {
+      _queueEvent(stopEvent);
+      debugPrint('📡 Playback stop failed, queued for retry');
+    } else if (outcome == ReportOutcome.delivered) {
+      _flushIfPending();
     }
   }
 
-  /// Flush queued start/stop events when coming back online.
-  Future<void> flushPendingReports() async {
+  /// Classifies a report response: 2xx delivered; network errors, 5xx and
+  /// 401/408/429 are worth retrying later; other 4xx are permanent (the
+  /// event is malformed or the item is gone) and are dropped.
+  @visibleForTesting
+  static ReportOutcome outcomeForStatus(int statusCode) {
+    if (statusCode >= 200 && statusCode < 300) return ReportOutcome.delivered;
+    if (statusCode >= 500 ||
+        statusCode == 401 ||
+        statusCode == 408 ||
+        statusCode == 429) {
+      return ReportOutcome.retryLater;
+    }
+    return ReportOutcome.drop;
+  }
+
+  /// Sends one queued-format start/stop event.
+  Future<ReportOutcome> _send(Map<String, dynamic> event) async {
+    final trackId = event['trackId'];
+    final sessionId = event['sessionId'];
+    if (trackId is! String || sessionId is! String) return ReportOutcome.drop;
+    try {
+      final http.Response response;
+      if (event['type'] == 'start') {
+        response = await _post(
+          '/Sessions/Playing',
+          startBody(
+            itemId: trackId,
+            playSessionId: sessionId,
+            playMethod: event['playMethod'] as String? ?? 'DirectPlay',
+          ),
+        );
+      } else if (event['type'] == 'stop') {
+        final ticks = event['positionTicks'];
+        response = await _post(
+          '/Sessions/Playing/Stopped',
+          stopBody(
+            itemId: trackId,
+            playSessionId: sessionId,
+            positionTicks: ticks is num ? ticks.toInt() : 0,
+          ),
+        );
+      } else {
+        return ReportOutcome.drop;
+      }
+      final outcome = outcomeForStatus(response.statusCode);
+      if (outcome != ReportOutcome.delivered) {
+        debugPrint('📡 ${event['type']} report: HTTP ${response.statusCode}');
+      }
+      return outcome;
+    } catch (e) {
+      debugPrint('📡 ${event['type']} report failed: ${e.runtimeType}');
+      return ReportOutcome.retryLater;
+    }
+  }
+
+  void _flushIfPending() {
+    if (_pendingEvents.isNotEmpty && _enabled && !_disposed && !_retired) {
+      unawaited(flushPendingReports());
+    }
+  }
+
+  Future<void>? _flushing;
+
+  /// Flush queued start/stop events when coming back online. Single-flight.
+  ///
+  /// Events are sent oldest first and each is removed (and the queue
+  /// re-persisted) only once the server accepted it or rejected it
+  /// permanently; on a transient failure the flush stops and the remaining
+  /// events stay queued for the next attempt.
+  Future<void> flushPendingReports() =>
+      _flushing ??= _flush().whenComplete(() => _flushing = null);
+
+  Future<void> _flush() async {
     await _pendingLoaded;
     if (_pendingEvents.isEmpty || _disposed || _retired) return;
 
     debugPrint('📡 Flushing ${_pendingEvents.length} pending playback reports...');
-    final events = List<Map<String, dynamic>>.from(_pendingEvents);
-    _pendingEvents.clear();
-    _persistPending();
-
-    for (final event in events) {
-      try {
-        if (event['type'] == 'start') {
-          await _post(
-            '/Sessions/Playing',
-            startBody(
-              itemId: event['trackId'] as String,
-              playSessionId: event['sessionId'] as String,
-              playMethod: event['playMethod'] as String? ?? 'DirectPlay',
-            ),
-          );
-        } else if (event['type'] == 'stop') {
-          await _post(
-            '/Sessions/Playing/Stopped',
-            stopBody(
-              itemId: event['trackId'] as String,
-              playSessionId: event['sessionId'] as String,
-              positionTicks: event['positionTicks'] as int,
-            ),
-          );
-        }
-      } catch (e) {
-        debugPrint('📡 Failed to flush event: $e');
+    var sent = 0;
+    while (_pendingEvents.isNotEmpty && _enabled && !_disposed && !_retired) {
+      final event = _pendingEvents.first;
+      final outcome = await _send(event);
+      if (outcome == ReportOutcome.retryLater) {
+        debugPrint('📡 Flush paused: ${_pendingEvents.length} still queued');
+        return;
       }
+      // Identity removal: the queue may have been trimmed meanwhile.
+      _pendingEvents.remove(event);
+      _persistPending();
+      sent++;
     }
-    debugPrint('📡 Flush complete');
+    debugPrint('📡 Flush complete ($sent sent)');
   }
 
   /// Drop queued offline events (e.g. on logout, so they aren't sent later

@@ -78,6 +78,8 @@ class SyncStatusProvider extends ChangeNotifier {
       _status = SyncStatus.offline;
       notifyListeners();
     } else if (!isOffline && _status == SyncStatus.offline) {
+      // _updateStatus() preserves the offline state, so leave it first.
+      _status = SyncStatus.idle;
       _updateStatus();
       notifyListeners();
     }

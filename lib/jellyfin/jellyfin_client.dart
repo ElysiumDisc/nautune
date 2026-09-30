@@ -50,6 +50,24 @@ class JellyfinClient {
     }
   }
 
+  /// Bodies above this size are decoded on a background isolate so large
+  /// pages (500 tracks with MediaStreams, whole playlists) don't jank the UI.
+  static const int _isolateDecodeThreshold = 256 * 1024;
+
+  /// [_decodeJsonMap], off the UI isolate for large bodies.
+  Future<Map<String, dynamic>> _decodeJsonMapAsync(http.Response response) async {
+    final body = response.body;
+    if (body.length < _isolateDecodeThreshold) return _decodeJsonMap(response);
+    try {
+      return await compute(_decodeMapInIsolate, body);
+    } on FormatException {
+      throw Exception(
+        'Invalid JSON response (status ${response.statusCode}): '
+        '${body.substring(0, 200)}',
+      );
+    }
+  }
+
   /// Safely decode a JSON list response, throwing a descriptive error on failure.
   List<dynamic> _decodeJsonList(http.Response response) {
     try {
@@ -375,7 +393,7 @@ class JellyfinClient {
       'IncludeItemTypes': 'Playlist',
       'Recursive': 'true',
       'SortBy': 'SortName',
-      'Fields': 'ChildCount,ImageTags',
+      'Fields': 'ChildCount,ImageTags,DateCreated',
     };
     
     // Only filter by library if specified (optional)
@@ -437,35 +455,41 @@ class JellyfinClient {
       return const [];
     }
 
-    final uri = _buildUri('/Items', {
-      'userId': credentials.userId,
-      'Ids': ids.join(','),
-      'Fields': 'RunTimeTicks,Albums,Album,Artists,ImageTags,AlbumPrimaryImageTag,ParentThumbImageTag,IndexNumber,ParentIndexNumber,UserData,MediaStreams,Tags',
-      'IncludeItemTypes': 'Audio',
-    });
+    // Large id lists (a remote "Play" of an artist expands to thousands of
+    // track ids) would exceed request-line limits (414): fetch in chunks.
+    final tracks = <JellyfinTrack>[];
+    for (final chunk in chunkIds(ids.toSet().toList())) {
+      final uri = _buildUri('/Items', {
+        'userId': credentials.userId,
+        'Ids': chunk.join(','),
+        'Fields': 'RunTimeTicks,Albums,Album,Artists,ImageTags,AlbumPrimaryImageTag,ParentThumbImageTag,IndexNumber,ParentIndexNumber,UserData,MediaStreams,Tags,ProviderIds',
+        'IncludeItemTypes': 'Audio',
+      });
 
-    final response = await _robustClient.get(
-      uri,
-      headers: _defaultHeaders(credentials),
-    );
-
-    if (response.statusCode != 200) {
-      throw JellyfinRequestException(
-        'Unable to fetch tracks: ${response.statusCode}',
+      final response = await _robustClient.get(
+        uri,
+        headers: _defaultHeaders(credentials),
       );
+
+      if (response.statusCode != 200) {
+        throw JellyfinRequestException(
+          'Unable to fetch tracks: ${response.statusCode}',
+        );
+      }
+
+      final data =
+          response.body.isNotEmpty ? await _decodeJsonMapAsync(response) : null;
+      final items = data?['Items'] as List<dynamic>? ?? const [];
+
+      tracks.addAll(items
+          .whereType<Map<String, dynamic>>()
+          .map((json) => JellyfinTrack.fromJson(
+                json,
+                serverUrl: serverUrl,
+                token: credentials.accessToken,
+                userId: credentials.userId,
+              )));
     }
-
-    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
-    final items = data?['Items'] as List<dynamic>? ?? const [];
-
-    final tracks = items
-        .whereType<Map<String, dynamic>>()
-        .map((json) => JellyfinTrack.fromJson(
-              json,
-              serverUrl: serverUrl,
-              token: credentials.accessToken,
-              userId: credentials.userId,
-            ));
     // Jellyfin returns Ids results in its own order; callers (queue restore,
     // "On This Day") rely on the requested order.
     return orderByIds(ids, tracks, (t) => t.id);
@@ -686,6 +710,7 @@ class JellyfinClient {
     required JellyfinCredentials credentials,
     required String libraryId,
     required String query,
+    int? limit,
   }) async {
     final uri = _buildUri('/Items', {
       'userId': credentials.userId,
@@ -693,6 +718,7 @@ class JellyfinClient {
       'IncludeItemTypes': 'MusicAlbum',
       'Recursive': 'true',
       'SearchTerm': query,
+      if (limit != null) 'Limit': '$limit',
       'SortBy': 'SortName',
       'Fields':
           'PrimaryImageAspectRatio,ProductionYear,Artists,AlbumArtists,ImageTags,Tags',
@@ -722,6 +748,7 @@ class JellyfinClient {
     required JellyfinCredentials credentials,
     required String libraryId,
     required String query,
+    int? limit,
   }) async {
     final uri = _buildUri('/Items', {
       'userId': credentials.userId,
@@ -729,6 +756,7 @@ class JellyfinClient {
       'IncludeItemTypes': 'MusicArtist',
       'Recursive': 'true',
       'SearchTerm': query,
+      if (limit != null) 'Limit': '$limit',
       'SortBy': 'SortName',
       'Fields': 'ImageTags,Overview,Genres,ChildCount,SongCount,ProviderIds',
     });
@@ -757,6 +785,7 @@ class JellyfinClient {
     required JellyfinCredentials credentials,
     required String libraryId,
     required String query,
+    int? limit,
   }) async {
     final uri = _buildUri('/Items', {
       'userId': credentials.userId,
@@ -764,6 +793,7 @@ class JellyfinClient {
       'IncludeItemTypes': 'Audio',
       'Recursive': 'true',
       'SearchTerm': query,
+      if (limit != null) 'Limit': '$limit',
       'SortBy': 'Album,ParentIndexNumber,IndexNumber,SortName',
       'Fields':
           'Album,AlbumId,AlbumPrimaryImageTag,ParentThumbImageTag,Artists,RunTimeTicks,ImageTags,IndexNumber,ParentIndexNumber,MediaStreams,Tags,ProviderIds',
@@ -860,7 +890,30 @@ class JellyfinClient {
       return {};
     }
 
-    return _decodeJsonMap(response);
+    return _decodeJsonMapAsync(response);
+  }
+
+  /// Revokes [credentials]' access token on the server
+  /// (`POST /Sessions/Logout`). Best effort: a single attempt with a short
+  /// timeout; failures are swallowed (the local logout proceeds anyway).
+  /// Returns whether the server confirmed the logout.
+  Future<bool> logout(
+    JellyfinCredentials credentials, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    if (credentials.accessToken.isEmpty) return false;
+    try {
+      final response = await _robustClient.client
+          .post(
+            _buildUri('/Sessions/Logout'),
+            headers: _defaultHeaders(credentials),
+          )
+          .timeout(timeout);
+      return response.statusCode == 204 || response.statusCode == 200;
+    } catch (e) {
+      debugPrint('Jellyfin logout (token revoke) failed: ${e.runtimeType}');
+      return false;
+    }
   }
 
   /// Fetches genres for a library
@@ -1237,7 +1290,8 @@ class JellyfinClient {
         'Unable to fetch $errorLabel: ${response.statusCode}',
       );
     }
-    final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
+    final data =
+        response.body.isNotEmpty ? await _decodeJsonMapAsync(response) : null;
     final items = (data?['Items'] as List<dynamic>? ?? const [])
         .whereType<Map<String, dynamic>>()
         .toList();
@@ -1247,7 +1301,9 @@ class JellyfinClient {
 
   /// Fetch lyrics for a track
   /// Returns a map with 'Lyrics' (List<Map>) containing lyric lines
-  /// Each line has 'Start' (timestamp in ticks) and 'Text'
+  /// Each line has 'Start' (timestamp in ticks) and 'Text'.
+  /// Returns null when the track has no lyrics (404); throws on other
+  /// failures (network, 5xx, auth).
   Future<Map<String, dynamic>?> fetchLyrics({
     required JellyfinCredentials credentials,
     required String itemId,
@@ -1264,8 +1320,11 @@ class JellyfinClient {
     }
 
     if (response.statusCode != 200) {
-      debugPrint('⚠️ Failed to fetch lyrics: ${response.statusCode}');
-      return null;
+      // Not "no lyrics": a server/auth problem. Throw so callers don't
+      // remember this track as having no lyrics.
+      throw JellyfinRequestException(
+        'Unable to fetch lyrics: ${response.statusCode}',
+      );
     }
 
     try {
@@ -1376,42 +1435,44 @@ class JellyfinClient {
   }) async {
     if (itemIds.isEmpty) return {};
 
-    final uri = _buildUri('/Items', {
-      'userId': credentials.userId,
-      'Ids': itemIds.join(','),
-      'EnableUserData': 'true',
-      'Fields': 'UserData',
-    });
+    final result = <String, Map<String, dynamic>>{};
+    for (final chunk in chunkIds(itemIds.toSet().toList())) {
+      final uri = _buildUri('/Items', {
+        'userId': credentials.userId,
+        'Ids': chunk.join(','),
+        'EnableUserData': 'true',
+        'Fields': 'UserData',
+      });
 
-    try {
-      final response = await _robustClient.get(
-        uri,
-        headers: _defaultHeaders(credentials),
-      );
+      try {
+        final response = await _robustClient.get(
+          uri,
+          headers: _defaultHeaders(credentials),
+        );
 
-      if (response.statusCode == 200) {
-        final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
-        final items = data?['Items'] as List<dynamic>? ?? [];
+        if (response.statusCode == 200) {
+          final data = response.body.isNotEmpty
+              ? await _decodeJsonMapAsync(response)
+              : null;
+          final items = data?['Items'] as List<dynamic>? ?? [];
 
-        final result = <String, Map<String, dynamic>>{};
-        for (final item in items) {
-          if (item is Map<String, dynamic>) {
-            final id = item['Id'] as String?;
-            final userData = item['UserData'] as Map<String, dynamic>?;
-            if (id != null && userData != null) {
-              result[id] = userData;
+          for (final item in items) {
+            if (item is Map<String, dynamic>) {
+              final id = item['Id'] as String?;
+              final userData = item['UserData'] as Map<String, dynamic>?;
+              if (id != null && userData != null) {
+                result[id] = userData;
+              }
             }
           }
+        } else {
+          debugPrint('⚠️ Failed to get batch user data: ${response.statusCode}');
         }
-        return result;
-      } else {
-        debugPrint('⚠️ Failed to get batch user data: ${response.statusCode}');
-        return {};
+      } catch (e) {
+        debugPrint('❌ Error getting batch user data: $e');
       }
-    } catch (e) {
-      debugPrint('❌ Error getting batch user data: $e');
-      return {};
     }
+    return result;
   }
 
   /// Get full item data for multiple items at once (batch) - includes track metadata
@@ -1423,42 +1484,44 @@ class JellyfinClient {
   }) async {
     if (itemIds.isEmpty) return {};
 
-    final uri = _buildUri('/Items', {
-      'userId': credentials.userId,
-      'Ids': itemIds.join(','),
-      'EnableUserData': 'true',
-      'Fields': 'UserData,Artists,Genres,RunTimeTicks,Album,AlbumId,Tags',
-    });
+    final result = <String, Map<String, dynamic>>{};
+    for (final chunk in chunkIds(itemIds.toSet().toList())) {
+      final uri = _buildUri('/Items', {
+        'userId': credentials.userId,
+        'Ids': chunk.join(','),
+        'EnableUserData': 'true',
+        'Fields': 'UserData,Artists,Genres,RunTimeTicks,Album,AlbumId,Tags',
+      });
 
-    try {
-      final response = await _robustClient.get(
-        uri,
-        headers: _defaultHeaders(credentials),
-      );
+      try {
+        final response = await _robustClient.get(
+          uri,
+          headers: _defaultHeaders(credentials),
+        );
 
-      if (response.statusCode == 200) {
-        final data = response.body.isNotEmpty ? _decodeJsonMap(response) : null;
-        final items = data?['Items'] as List<dynamic>? ?? [];
+        if (response.statusCode == 200) {
+          final data = response.body.isNotEmpty
+              ? await _decodeJsonMapAsync(response)
+              : null;
+          final items = data?['Items'] as List<dynamic>? ?? [];
 
-        final result = <String, Map<String, dynamic>>{};
-        for (final item in items) {
-          if (item is Map<String, dynamic>) {
-            final id = item['Id'] as String?;
-            if (id != null) {
-              // Return the full item data, not just userData
-              result[id] = item;
+          for (final item in items) {
+            if (item is Map<String, dynamic>) {
+              final id = item['Id'] as String?;
+              if (id != null) {
+                // Return the full item data, not just userData
+                result[id] = item;
+              }
             }
           }
+        } else {
+          debugPrint('⚠️ Failed to get batch user data: ${response.statusCode}');
         }
-        return result;
-      } else {
-        debugPrint('⚠️ Failed to get batch user data: ${response.statusCode}');
-        return {};
+      } catch (e) {
+        debugPrint('❌ Error getting batch user data: $e');
       }
-    } catch (e) {
-      debugPrint('❌ Error getting batch user data: $e');
-      return {};
     }
+    return result;
   }
 
   /// Clear the HTTP cache (ETag/Last-Modified)
@@ -1471,6 +1534,9 @@ class JellyfinClient {
     _robustClient.close();
   }
 }
+
+Map<String, dynamic> _decodeMapInIsolate(String body) =>
+    jsonDecode(body) as Map<String, dynamic>;
 
 /// Server health check result
 class ServerHealth {

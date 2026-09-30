@@ -46,11 +46,15 @@ public class AppIconPlugin: NSObject, FlutterPlugin {
         // nil = primary/default icon, otherwise use the alternate icon name
         let newIconName: String? = (iconName == "default") ? nil : iconName
 
+        // The completion handler runs on a UIKit-provided queue, not
+        // necessarily the main queue; reply to Flutter on the main thread.
         UIApplication.shared.setAlternateIconName(newIconName) { error in
-            if let error = error {
-                result(FlutterError(code: "SET_FAILED", message: error.localizedDescription, details: nil))
-            } else {
-                result(true)
+            DispatchQueue.main.async {
+                if let error = error {
+                    result(FlutterError(code: "SET_FAILED", message: error.localizedDescription, details: nil))
+                } else {
+                    result(true)
+                }
             }
         }
     }

@@ -40,11 +40,10 @@ void main() {
     expect(parseRemoteMessage('{"MessageType":"Play","Data":{"ItemIds":[]}}'), isNull);
   });
 
-  test('socket URL keeps the base path and switches scheme', () {
-    expect(
-      RemoteControlService.socketUri('https://host/jellyfin', 'tok', 'dev').toString(),
-      'wss://host/jellyfin/socket?ApiKey=tok&deviceId=dev',
-    );
-    expect(RemoteControlService.socketUri('http://10.0.0.2:8096', 't', 'd').scheme, 'ws');
+  test('socket URL keeps the base path, switches scheme, carries no token', () {
+    final uri = RemoteControlService.socketUri('https://host/jellyfin', 'dev');
+    expect(uri.toString(), 'wss://host/jellyfin/socket?deviceId=dev');
+    expect(uri.queryParameters.keys, isNot(contains('ApiKey')));
+    expect(RemoteControlService.socketUri('http://10.0.0.2:8096', 'd').scheme, 'ws');
   });
 }

@@ -28,11 +28,16 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   bool? _previousOfflineMode;
   bool? _previousNetworkAvailable;
   bool _hasInitialized = false;
+  int _loadGeneration = 0;
 
-  @override
-  void initState() {
-    super.initState();
-  }
+  /// Shown in the app bar; follows renames made here.
+  late String _name = widget.playlist.name;
+
+  /// The id the server needs to move/remove this entry: its playlist entry
+  /// id where the server sent one (older servers require it), else the item
+  /// id (10.11+ accept that).
+  static String _entryId(JellyfinTrack track) =>
+      track.playlistItemId ?? track.id;
 
   @override
   void didChangeDependencies() {
@@ -67,6 +72,9 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
 
   Future<void> _loadTracks() async {
     if (_appState == null) return;
+    // Overlapping loads (connectivity flapping, reorder reverts): only the
+    // latest one lands.
+    final generation = ++_loadGeneration;
 
     setState(() {
       _isLoading = true;
@@ -75,14 +83,14 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
 
     try {
       final tracks = await _appState!.getPlaylistTracks(widget.playlist.id);
-      if (mounted) {
+      if (mounted && generation == _loadGeneration) {
         setState(() {
           _tracks = tracks;
           _isLoading = false;
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && generation == _loadGeneration) {
         setState(() {
           _error = e;
           _isLoading = false;
@@ -92,15 +100,18 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   }
 
   void _onReorder(int oldIndex, int newIndex) async {
-    if (_tracks == null) return;
-    final item = _tracks!.removeAt(oldIndex);
-    _tracks!.insert(newIndex, item);
-    setState(() {}); // Optimistic update
+    final current = _tracks;
+    if (current == null) return;
+    // Optimistic update on a copy (a queue may hold the old list).
+    final reordered = List<JellyfinTrack>.of(current);
+    final item = reordered.removeAt(oldIndex);
+    reordered.insert(newIndex, item);
+    setState(() => _tracks = reordered);
 
     try {
       await _appState!.jellyfinService.movePlaylistItem(
         playlistId: widget.playlist.id,
-        itemId: item.id,
+        itemId: _entryId(item),
         newIndex: newIndex,
       );
     } catch (e) {
@@ -113,11 +124,11 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     }
   }
 
-  Future<void> _removeTrack(String trackId) async {
+  Future<void> _removeTrack(JellyfinTrack track) async {
     try {
       await _appState!.jellyfinService.removeItemsFromPlaylist(
         playlistId: widget.playlist.id,
-        entryIds: [trackId],
+        entryIds: [_entryId(track)],
       );
       await _loadTracks(); // Reload
       if (mounted) {
@@ -148,7 +159,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.playlist.name),
+        title: Text(_name),
         actions: [
           CollectionDownloadButton(
             style: CollectionDownloadButtonStyle.icon,
@@ -248,7 +259,9 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                         final durationText = duration != null ? _formatDuration(duration) : '--:--';
 
                         return ListTile(
-                          key: ValueKey(track.id), // Important for ReorderableListView
+                          // Entry ids are unique even when a song is in the
+                          // playlist twice.
+                          key: ValueKey(track.playlistItemId ?? '${track.id}#$index'),
                           leading: ClipRRect(
                             borderRadius: BorderRadius.circular(8),
                             child: SizedBox(
@@ -259,6 +272,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                       itemId: track.primaryImageTag != null ? track.id : (track.albumId ?? track.id),
                                       imageTag: track.primaryImageTag ?? track.albumPrimaryImageTag ?? '',
                                       trackId: track.id,
+                                      maxWidth: JellyfinImage.listArtwork,
                                       boxFit: BoxFit.cover,
                                       errorBuilder: (context, url, error) => Container(
                                         color: theme.colorScheme.secondaryContainer,
@@ -300,7 +314,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                 IconButton(
                                   icon: const Icon(Icons.remove_circle_outline),
                                   tooltip: 'Remove from playlist',
-                                  onPressed: () => _removeTrack(track.id),
+                                  onPressed: () => _removeTrack(track),
                                 ),
                                 const SizedBox(width: 8),
                                 Icon(Icons.drag_handle, color: theme.colorScheme.onSurfaceVariant),
@@ -335,8 +349,13 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     );
   }
 
+  /// Offline, app state queues playlist edits and throws to say so.
+  static bool _isQueuedOffline(Object error) =>
+      error.toString().contains('queued');
+
   Future<void> _showRenameDialog() async {
-    final nameController = TextEditingController(text: widget.playlist.name);
+    final nameController = TextEditingController(text: _name);
+    String? newName;
     try {
       final result = await showDialog<bool>(
         context: context,
@@ -362,36 +381,34 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
           ],
         ),
       );
-
-      if (result == true && nameController.text.isNotEmpty && mounted) {
-        try {
-          await _appState!.updatePlaylist(
-            playlistId: widget.playlist.id,
-            newName: nameController.text,
-          );
-          if (mounted) {
-            setState(() {
-              // Update local name
-            });
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Renamed to "${nameController.text}"'),
-              ),
-            );
-          }
-        } catch (e) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Failed to rename: $e'),
-                backgroundColor: Theme.of(context).colorScheme.error,
-              ),
-            );
-          }
-        }
-      }
+      final name = nameController.text.trim();
+      if (result == true && name.isNotEmpty) newName = name;
     } finally {
       nameController.dispose();
+    }
+    if (newName == null || !mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final errorColor = Theme.of(context).colorScheme.error;
+    try {
+      await _appState!.updatePlaylist(
+        playlistId: widget.playlist.id,
+        newName: newName,
+      );
+      if (mounted) setState(() => _name = newName!);
+      messenger.showSnackBar(SnackBar(content: Text('Renamed to "$newName"')));
+    } catch (e) {
+      if (_isQueuedOffline(e)) {
+        if (mounted) setState(() => _name = newName!);
+        messenger.showSnackBar(const SnackBar(
+          content: Text('Offline: the rename will sync when you\'re online'),
+        ));
+      } else {
+        messenger.showSnackBar(SnackBar(
+          content: Text('Failed to rename: $e'),
+          backgroundColor: errorColor,
+        ));
+      }
     }
   }
 
@@ -400,7 +417,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete Playlist?'),
-        content: Text('Are you sure you want to delete "${widget.playlist.name}"? This cannot be undone.'),
+        content: Text('Are you sure you want to delete "$_name"? This cannot be undone.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -417,26 +434,25 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
       ),
     );
 
-    if (result == true && mounted) {
-      try {
-        await _appState!.deletePlaylist(widget.playlist.id);
-        if (mounted) {
-          Navigator.pop(context); // Go back to playlist list
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Deleted "${widget.playlist.name}"'),
-            ),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to delete: $e'),
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ),
-          );
-        }
+    if (result != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final errorColor = Theme.of(context).colorScheme.error;
+    try {
+      await _appState!.deletePlaylist(widget.playlist.id);
+      if (mounted) navigator.pop(); // Go back to playlist list
+      messenger.showSnackBar(SnackBar(content: Text('Deleted "$_name"')));
+    } catch (e) {
+      if (_isQueuedOffline(e)) {
+        if (mounted) navigator.pop();
+        messenger.showSnackBar(SnackBar(
+          content: Text('Offline: "$_name" will be deleted when you\'re online'),
+        ));
+      } else {
+        messenger.showSnackBar(SnackBar(
+          content: Text('Failed to delete: $e'),
+          backgroundColor: errorColor,
+        ));
       }
     }
   }

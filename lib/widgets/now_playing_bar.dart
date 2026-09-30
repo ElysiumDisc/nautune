@@ -19,6 +19,7 @@ import 'ios/now_playing_route.dart';
 import 'jellyfin_image.dart';
 import 'visualizers/visualizer_factory.dart';
 import 'jellyfin_waveform.dart';
+import 'position_data_builder.dart';
 
 /// Compact control surface that mirrors the full player while staying unobtrusive.
 class NowPlayingBar extends StatefulWidget {
@@ -42,9 +43,10 @@ class NowPlayingBar extends StatefulWidget {
 class _NowPlayingBarState extends State<NowPlayingBar> {
   StreamSubscription<String>? _errorSubscription;
   // Cached so rebuilds don't resubscribe. The bar rebuilds on track /
-  // playing changes only; position drives just the waveform strip.
+  // playing changes only; position drives just the waveform strip / progress
+  // line, each through its own PositionDataBuilder (which gets its own
+  // stream, so they can come and go safely).
   late Stream<TrackPlayingState> _trackPlayingStream;
-  late Stream<PositionData> _positionDataStream;
 
   AudioPlayerService get audioService => widget.audioService;
   NautuneAppState get appState => widget.appState;
@@ -53,7 +55,6 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
   void initState() {
     super.initState();
     _trackPlayingStream = audioService.trackPlayingStream;
-    _positionDataStream = audioService.positionDataStream;
     _errorSubscription = audioService.playbackErrorStream.listen((message) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -71,7 +72,6 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.audioService, widget.audioService)) {
       _trackPlayingStream = audioService.trackPlayingStream;
-      _positionDataStream = audioService.positionDataStream;
     }
   }
 
@@ -84,9 +84,9 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
   void _openFullPlayer(BuildContext context) {
     if (!mounted) return;
     HapticService.lightTap();
-    Navigator.of(context).push(
-      NowPlayingRoute<void>(builder: (_) => const FullPlayerScreen()),
-    );
+    // Returns to an already-open player (this bar may sit on an album or
+    // artist page pushed from it) instead of stacking another one.
+    NowPlayingRoute.show(context, (_) => const FullPlayerScreen());
   }
 
   @override
@@ -97,7 +97,10 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
     // builder so position ticks don't rebuild the whole bar.
     return StreamBuilder<TrackPlayingState>(
       stream: _trackPlayingStream,
-      initialData: (track: audioService.currentTrack, isPlaying: false),
+      initialData: (
+        track: audioService.currentTrack,
+        isPlaying: audioService.isPlaying,
+      ),
       builder: (context, snapshot) {
         final data = snapshot.data;
         final track = data?.track ?? audioService.currentTrack;
@@ -175,7 +178,6 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
                         padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
                         child: _WaveformStrip(
                           audioService: audioService,
-                          positionDataStream: _positionDataStream,
                           track: track,
                           isPlaying: isPlaying,
                         ),
@@ -255,7 +257,7 @@ class _NowPlayingBarState extends State<NowPlayingBar> {
                       ),
                     ),
                     if (!showWaveform)
-                      _ProgressLine(positionDataStream: _positionDataStream),
+                      _ProgressLine(audioService: audioService),
                   ],
                 ),
               ),
@@ -344,7 +346,7 @@ class _MiniArtwork extends StatelessWidget {
                 itemId: itemId,
                 imageTag: tag,
                 trackId: track.id,
-                maxWidth: 100,
+                maxWidth: 44, // logical points: the size it is drawn at
                 boxFit: BoxFit.cover,
                 errorBuilder: (context, url, error) => placeholder,
               ),
@@ -355,20 +357,19 @@ class _MiniArtwork extends StatelessWidget {
 
 /// Thin playback progress line along the bottom of the mini player.
 class _ProgressLine extends StatelessWidget {
-  const _ProgressLine({required this.positionDataStream});
+  const _ProgressLine({required this.audioService});
 
-  final Stream<PositionData> positionDataStream;
+  final AudioPlayerService audioService;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return StreamBuilder<PositionData>(
-      stream: positionDataStream,
-      builder: (context, snapshot) {
-        final data = snapshot.data;
-        final total = data?.duration.inMilliseconds ?? 0;
+    return PositionDataBuilder(
+      audioService: audioService,
+      builder: (context, data) {
+        final total = data.duration.inMilliseconds;
         final value = total > 0
-            ? (data!.position.inMilliseconds / total).clamp(0.0, 1.0)
+            ? (data.position.inMilliseconds / total).clamp(0.0, 1.0)
             : 0.0;
         return SizedBox(
           height: 2,
@@ -422,27 +423,24 @@ class _SleepTimerChip extends StatelessWidget {
 class _WaveformStrip extends StatelessWidget {
   const _WaveformStrip({
     required this.audioService,
-    required this.positionDataStream,
     required this.track,
     required this.isPlaying,
   });
 
   final AudioPlayerService audioService;
-  final Stream<PositionData> positionDataStream;
   final JellyfinTrack track;
   final bool isPlaying;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // The only position-driven part of the bar (same stream as the
+    // The only position-driven part of the bar (same data as the
     // fullscreen player's progress bar).
-    return StreamBuilder<PositionData>(
-      stream: positionDataStream,
-      builder: (context, snapshot) {
-        final positionData = snapshot.data;
-        final duration = positionData?.duration ?? Duration.zero;
-        final position = positionData?.position ?? Duration.zero;
+    return PositionDataBuilder(
+      audioService: audioService,
+      builder: (context, positionData) {
+        final duration = positionData.duration;
+        final position = positionData.position;
         final progress = duration.inMilliseconds > 0
             ? position.inMilliseconds / duration.inMilliseconds
             : 0.0;
@@ -482,6 +480,11 @@ class _WaveformDisplay extends StatefulWidget {
 }
 
 class _WaveformDisplayState extends State<_WaveformDisplay> {
+  // Where the finger is while scrubbing (0-1). Shown instead of the playback
+  // position, and sought to once, on release: seeking on every drag update
+  // flooded the engine with seeks and snapshot writes.
+  double? _scrubFraction;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -503,22 +506,31 @@ class _WaveformDisplayState extends State<_WaveformDisplay> {
     // Only show visualizer overlay when position is set to controlsBar
     final showVisualizerOverlay = visualizerEnabled &&
         visualizerPosition == VisualizerPosition.controlsBar;
+    // The full player is a non-opaque route, so this bar stays on screen
+    // (and its tickers running) underneath it. Pause the visualizer (and
+    // let it release the iOS FFT capture) whenever this page isn't on top.
+    final routeIsCurrent = ModalRoute.of(context)?.isCurrent ?? true;
 
     return SizedBox(
       height: 40,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final clampedProgress = widget.progress.clamp(0.0, 1.0);
+          final clampedProgress = (_scrubFraction ?? widget.progress).clamp(0.0, 1.0);
           final indicatorLeft =
               (clampedProgress * constraints.maxWidth).clamp(0.0, constraints.maxWidth);
 
           return GestureDetector(
             behavior: HitTestBehavior.translucent,
-            onTapDown: (details) => _scrubTo(details.localPosition.dx, constraints.maxWidth),
+            onTapUp: (details) {
+              _setScrub(details.localPosition.dx, constraints.maxWidth);
+              _commitScrub();
+            },
             onHorizontalDragStart: (details) =>
-                _scrubTo(details.localPosition.dx, constraints.maxWidth),
+                _setScrub(details.localPosition.dx, constraints.maxWidth),
             onHorizontalDragUpdate: (details) =>
-                _scrubTo(details.localPosition.dx, constraints.maxWidth),
+                _setScrub(details.localPosition.dx, constraints.maxWidth),
+            onHorizontalDragEnd: (_) => _commitScrub(),
+            onHorizontalDragCancel: () => setState(() => _scrubFraction = null),
             child: ClipRRect(
               borderRadius: borderRadius,
               child: Stack(
@@ -536,10 +548,13 @@ class _WaveformDisplayState extends State<_WaveformDisplay> {
                   if (showVisualizerOverlay)
                     Positioned.fill(
                       child: RepaintBoundary(
-                        child: VisualizerFactory(
-                          type: visualizerType,
-                          audioService: widget.audioService,
-                          opacity: 0.5,
+                        child: TickerMode(
+                          enabled: routeIsCurrent,
+                          child: VisualizerFactory(
+                            type: visualizerType,
+                            audioService: widget.audioService,
+                            opacity: 0.5,
+                          ),
                         ),
                       ),
                     ),
@@ -595,12 +610,17 @@ class _WaveformDisplayState extends State<_WaveformDisplay> {
     );
   }
 
-  void _scrubTo(double dx, double maxWidth) {
-    if (maxWidth <= 0) return;
+  void _setScrub(double dx, double maxWidth) {
+    if (maxWidth <= 0 || widget.duration.inMilliseconds <= 0) return;
+    setState(() => _scrubFraction = (dx / maxWidth).clamp(0.0, 1.0));
+  }
+
+  void _commitScrub() {
+    final fraction = _scrubFraction;
+    if (fraction == null) return;
+    setState(() => _scrubFraction = null);
     final durationMs = widget.duration.inMilliseconds;
     if (durationMs <= 0) return;
-    final ratio = (dx / maxWidth).clamp(0.0, 1.0);
-    final target = Duration(milliseconds: (durationMs * ratio).round());
-    widget.audioService.seek(target);
+    widget.audioService.seek(Duration(milliseconds: (durationMs * fraction).round()));
   }
 }

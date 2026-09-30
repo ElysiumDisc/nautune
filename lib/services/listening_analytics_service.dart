@@ -7,6 +7,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import '../jellyfin/jellyfin_client.dart';
 import '../jellyfin/jellyfin_credentials.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../jellyfin/server_uri.dart';
 
 /// Represents a single play event recorded locally
 class PlayEvent {
@@ -21,6 +22,16 @@ class PlayEvent {
   final bool synced; // Whether this play has been synced to server
   final String? eventId; // Unique ID for deduplication
 
+  /// Account the play belongs to (null for events recorded before v9 —
+  /// "untagged"). Used so one account's plays are never pushed to, or shown
+  /// for, another account.
+  final String? userId;
+  final String? serverUrl;
+
+  /// Synthetic event reconstructed from the server's PlayCount (its
+  /// timestamp is invented), excluded from time-of-day / calendar stats.
+  final bool isCatchUp;
+
   PlayEvent({
     required this.trackId,
     required this.trackName,
@@ -32,6 +43,9 @@ class PlayEvent {
     required this.durationMs,
     this.synced = false,
     String? eventId,
+    this.userId,
+    this.serverUrl,
+    this.isCatchUp = false,
   }) : eventId = eventId ?? '${trackId}_${timestamp.millisecondsSinceEpoch}';
 
   /// Create a copy with updated sync status
@@ -46,7 +60,29 @@ class PlayEvent {
     durationMs: durationMs,
     synced: synced ?? this.synced,
     eventId: eventId,
+    userId: userId,
+    serverUrl: serverUrl,
+    isCatchUp: isCatchUp,
   );
+
+  /// Whether this event belongs to the account ([serverUrl], [userId]).
+  ///
+  /// Jellyfin user ids are GUIDs, so when both sides have one it alone
+  /// decides (the same account reached through a different server address
+  /// stays the same account). The server address is only compared when a
+  /// user id is missing. Untagged (legacy) events belong to no account.
+  bool belongsTo({String? serverUrl, String? userId}) {
+    final mine = this.userId;
+    if (mine != null && userId != null) return mine == userId;
+    final myServer = this.serverUrl;
+    if (myServer != null && serverUrl != null) {
+      return normalizeServerBaseUrl(myServer) ==
+          normalizeServerBaseUrl(serverUrl);
+    }
+    return false;
+  }
+
+  bool get isUntagged => userId == null && serverUrl == null;
 
   Map<String, dynamic> toJson() => {
     'trackId': trackId,
@@ -59,6 +95,9 @@ class PlayEvent {
     'durationMs': durationMs,
     'synced': synced,
     'eventId': eventId,
+    if (userId != null) 'userId': userId,
+    if (serverUrl != null) 'serverUrl': serverUrl,
+    if (isCatchUp) 'isCatchUp': true,
   };
 
   factory PlayEvent.fromJson(Map<String, dynamic> json) => PlayEvent(
@@ -72,7 +111,89 @@ class PlayEvent {
     durationMs: json['durationMs'] as int? ?? 0,
     synced: json['synced'] as bool? ?? false,
     eventId: json['eventId'] as String?,
+    userId: json['userId'] as String?,
+    serverUrl: json['serverUrl'] as String?,
+    isCatchUp: json['isCatchUp'] as bool? ?? false,
   );
+}
+
+/// Whole calendar days from [from] to [to] (local dates), immune to DST:
+/// a 23- or 25-hour day still counts as one day.
+int calendarDaysBetween(DateTime from, DateTime to) {
+  final a = DateTime.utc(from.year, from.month, from.day);
+  final b = DateTime.utc(to.year, to.month, to.day);
+  return b.difference(a).inDays;
+}
+
+/// Local calendar date of [t] shifted by [days] (DST-safe: built with the
+/// calendar constructor, not by subtracting 24-hour durations).
+DateTime localDateOffset(DateTime t, int days) =>
+    DateTime(t.year, t.month, t.day + days);
+
+/// Current and longest listening streak for play [timestamps] as of [now].
+/// Pure (and DST-safe) so it can be tested.
+ListeningStreak computeListeningStreak(
+  Iterable<DateTime> timestamps,
+  DateTime now,
+) {
+  final days = <DateTime>{
+    for (final t in timestamps) DateTime(t.year, t.month, t.day),
+  };
+  if (days.isEmpty) {
+    return ListeningStreak(currentStreak: 0, longestStreak: 0, listenedToday: false);
+  }
+  final sortedDays = days.toList()..sort((a, b) => b.compareTo(a));
+  final today = DateTime(now.year, now.month, now.day);
+  final yesterday = localDateOffset(today, -1);
+  final listenedToday = sortedDays.first == today;
+
+  var currentStreak = 0;
+  if (listenedToday || sortedDays.first == yesterday) {
+    var checkDate = listenedToday ? today : yesterday;
+    for (final day in sortedDays) {
+      if (day == checkDate) {
+        currentStreak++;
+        checkDate = localDateOffset(checkDate, -1);
+      } else if (day.isBefore(checkDate)) {
+        break;
+      }
+    }
+  }
+
+  var longestStreak = 0;
+  var tempStreak = 0;
+  DateTime? prevDay;
+  for (final day in sortedDays.reversed) {
+    if (prevDay != null && calendarDaysBetween(prevDay, day) == 1) {
+      tempStreak++;
+    } else {
+      tempStreak = 1;
+    }
+    if (tempStreak > longestStreak) longestStreak = tempStreak;
+    prevDay = day;
+  }
+
+  return ListeningStreak(
+    currentStreak: currentStreak,
+    longestStreak: longestStreak,
+    lastListeningDate: sortedDays.first,
+    listenedToday: listenedToday,
+  );
+}
+
+/// Start (local midnight) of the Monday-based week containing [now].
+DateTime startOfWeek(DateTime now) =>
+    DateTime(now.year, now.month, now.day - (now.weekday - 1));
+
+/// Play counts per calendar day for the [days] days ending today (index 0 =
+/// oldest), DST-safe.
+List<int> dailyPlayCounts(Iterable<DateTime> timestamps, DateTime now, int days) {
+  final counts = List<int>.filled(days, 0);
+  for (final t in timestamps) {
+    final daysAgo = calendarDaysBetween(t, now);
+    if (daysAgo >= 0 && daysAgo < days) counts[days - 1 - daysAgo]++;
+  }
+  return counts;
 }
 
 /// Listening streak information
@@ -242,13 +363,24 @@ class RelaxModeStats {
   );
 }
 
+
 /// Service for recording and querying local listening analytics
 class ListeningAnalyticsService extends ChangeNotifier {
   static const _boxName = 'nautune_analytics';
+
+  /// Legacy storage: the whole history as one JSON string under one key
+  /// (rewritten in full on every play). Migrated to per-event keys.
   static const _eventsKey = 'play_events';
+
+  /// Each event is stored under `ev:<eventId>` so recording a play writes
+  /// one small record instead of re-encoding the whole year of history.
+  static const _eventKeyPrefix = 'ev:';
   static const _streakKey = 'streak_data';
   static const _relaxModeKey = 'relax_mode_stats';
   static const _pianoStatsKey = 'piano_stats';
+
+  /// Events older than this are pruned.
+  static const Duration _retention = Duration(days: 365);
 
   // Legacy Hive keys from the retired milestone/badge system. Kept here only
   // so initialize() can best-effort delete them from existing installs.
@@ -266,6 +398,11 @@ class ListeningAnalyticsService extends ChangeNotifier {
   int _pianoTotalNotes = 0;
   int _pianoTotalSessionMs = 0;
   bool _initialized = false;
+  Future<void>? _initializing;
+  Future<SyncResult>? _syncing;
+
+  String? _accountServerUrl;
+  String? _accountUserId;
 
   /// Singleton instance
   static final ListeningAnalyticsService _instance = ListeningAnalyticsService._internal();
@@ -273,6 +410,31 @@ class ListeningAnalyticsService extends ChangeNotifier {
   ListeningAnalyticsService._internal();
 
   bool get isInitialized => _initialized;
+
+  /// Scope the stats getters to one account: events tagged with another
+  /// account are hidden (untagged legacy events stay visible). Pass nulls
+  /// (e.g. on logout) to show everything.
+  void setCurrentAccount({String? serverUrl, String? userId}) {
+    if (_accountServerUrl == serverUrl && _accountUserId == userId) return;
+    _accountServerUrl = serverUrl;
+    _accountUserId = userId;
+    notifyListeners();
+  }
+
+  bool _isVisible(PlayEvent e) {
+    final server = _accountServerUrl;
+    final user = _accountUserId;
+    if ((server == null && user == null) || e.isUntagged) return true;
+    return e.belongsTo(serverUrl: server, userId: user);
+  }
+
+  /// Events of the current account (newest first).
+  Iterable<PlayEvent> get _visibleEvents => _events.where(_isVisible);
+
+  /// Real (non-synthetic) events of the current account, for stats that
+  /// depend on when a play happened.
+  Iterable<PlayEvent> get _timedEvents =>
+      _visibleEvents.where((e) => !e.isCatchUp);
 
   /// Check if a track ID belongs to an easter egg (not a real Jellyfin track)
   bool _isEasterEggTrack(String trackId) {
@@ -282,9 +444,12 @@ class ListeningAnalyticsService extends ChangeNotifier {
   }
 
   /// Initialize the service and load existing data
-  Future<void> initialize() async {
-    if (_initialized) return;
+  Future<void> initialize() {
+    if (_initialized) return Future.value();
+    return _initializing ??= _initialize().whenComplete(() => _initializing = null);
+  }
 
+  Future<void> _initialize() async {
     try {
       _box = await Hive.openBox(_boxName);
       await _loadEvents();
@@ -304,7 +469,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
     if (!_initialized) return;
     try {
       await Future.wait([
-        _saveEvents(),
+        _pruneOldEvents(),
         _saveRelaxModeStats(),
         _savePianoStats(),
       ]);
@@ -432,63 +597,106 @@ class ListeningAnalyticsService extends ChangeNotifier {
     debugPrint('ListeningAnalyticsService: Recorded piano session ($notesPlayed notes, ${sessionDuration.inSeconds}s)');
   }
 
+  static String _eventKey(PlayEvent e) => '$_eventKeyPrefix${e.eventId}';
+
   Future<void> _loadEvents() async {
-    final raw = _box?.get(_eventsKey);
-    if (raw == null) {
+    final box = _box;
+    if (box == null) {
       _events = [];
       return;
     }
+    final loaded = <String, PlayEvent>{};
 
-    try {
-      final List<dynamic> jsonList;
-      if (raw is String) {
-        jsonList = jsonDecode(raw) as List<dynamic>;
-      } else if (raw is List) {
-        jsonList = raw;
-      } else {
-        _events = [];
-        return;
-      }
-
-      // Decode per-event so one malformed row can't wipe the whole history.
-      _events = [];
-      for (final raw in jsonList) {
-        try {
-          _events.add(
-            PlayEvent.fromJson(Map<String, dynamic>.from(raw as Map)),
-          );
-        } catch (e) {
-          debugPrint('ListeningAnalyticsService: skipping bad event: $e');
+    PlayEvent? decode(Object? raw) {
+      try {
+        if (raw is String) {
+          return PlayEvent.fromJson(
+              Map<String, dynamic>.from(jsonDecode(raw) as Map));
         }
+        if (raw is Map) return PlayEvent.fromJson(Map<String, dynamic>.from(raw));
+      } catch (e) {
+        debugPrint('ListeningAnalyticsService: skipping bad event: $e');
       }
-
-      // Sort by timestamp descending (most recent first)
-      _events.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-    } catch (e) {
-      debugPrint('ListeningAnalyticsService: Error loading events: $e');
-      _events = [];
+      return null;
     }
+
+    // Per-event records (current format).
+    for (final key in box.keys) {
+      if (key is String && key.startsWith(_eventKeyPrefix)) {
+        final event = decode(box.get(key));
+        if (event != null) loaded[event.eventId!] = event;
+      }
+    }
+
+    // One-time migration of the legacy single-blob history. Decoded per
+    // event so one malformed row can't wipe the whole history.
+    final legacy = box.get(_eventsKey);
+    if (legacy != null) {
+      List<dynamic> list = const [];
+      try {
+        if (legacy is String) {
+          list = jsonDecode(legacy) as List<dynamic>;
+        } else if (legacy is List) {
+          list = legacy;
+        }
+      } catch (e) {
+        debugPrint('ListeningAnalyticsService: Error loading legacy events: $e');
+      }
+      final migrated = <String, dynamic>{};
+      for (final raw in list) {
+        var event = decode(raw);
+        if (event == null) continue;
+        // Legacy events carry no account. Pushing them would risk sending
+        // account A's plays to account B's server, and online plays were
+        // already counted by the Jellyfin playback reports, so they are
+        // treated as already synced.
+        if (!event.synced) event = event.copyWith(synced: true);
+        loaded.putIfAbsent(event.eventId!, () => event!);
+        migrated[_eventKey(event)] = event.toJson();
+      }
+      await box.putAll(migrated);
+      await box.delete(_eventsKey);
+      debugPrint('ListeningAnalyticsService: Migrated ${migrated.length} events to per-event storage');
+    }
+
+    _events = loaded.values.toList()
+      // Sort by timestamp descending (most recent first)
+      ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    await _pruneOldEvents();
   }
 
-  Future<void> _saveEvents() async {
-    if (_box == null) return;
+  /// Persist [events] (new or changed) as individual records.
+  Future<void> _persistEvents(Iterable<PlayEvent> events) async {
+    final box = _box;
+    if (box == null) return;
+    final entries = {for (final e in events) _eventKey(e): e.toJson()};
+    if (entries.isEmpty) return;
+    await box.putAll(entries);
+  }
 
-    // Keep last 365 days of events for streak / period-comparison / top-content
-    // stats on the Profile dashboard.
-    final cutoff = DateTime.now().subtract(const Duration(days: 365));
+  /// Drop events older than [_retention] (keeps a year for streaks, period
+  /// comparisons and top content on the Profile dashboard).
+  Future<void> _pruneOldEvents() async {
+    final cutoff = DateTime.now().subtract(_retention);
+    final old = _events.where((e) => e.timestamp.isBefore(cutoff)).toList();
+    if (old.isEmpty) return;
     _events.removeWhere((e) => e.timestamp.isBefore(cutoff));
-
-    final jsonList = _events.map((e) => e.toJson()).toList();
-    await _box!.put(_eventsKey, jsonEncode(jsonList));
+    await _box?.deleteAll(old.map(_eventKey));
   }
 
   /// Record a play event for a track with actual listening duration
   /// [actualDurationMs] - The actual time listened in milliseconds (not full track length)
   /// [playStartTime] - When the track started playing (for accurate timestamp)
+  /// [reportedToServer] - whether Jellyfin already counts this play through
+  /// the playback start/stop reports (sent live, or queued offline and
+  /// replayed later). Such events are stored as synced and are never pushed
+  /// again with `markPlayed`, which would count the play a second time.
+  /// Pass false only when no playback reporting covered the play.
   Future<void> recordPlay(
     JellyfinTrack track, {
     int? actualDurationMs,
     DateTime? playStartTime,
+    bool reportedToServer = true,
   }) async {
     if (!_initialized) {
       debugPrint('ListeningAnalyticsService: Not initialized, skipping record');
@@ -514,12 +722,15 @@ class ListeningAnalyticsService extends ChangeNotifier {
       genres: track.genres ?? [],
       timestamp: playStartTime ?? DateTime.now(),
       durationMs: durationMs,
+      synced: reportedToServer,
+      userId: track.userId,
+      serverUrl: track.serverUrl,
     );
 
     _events.insert(0, event); // Add to front (most recent)
 
-    // Save asynchronously
-    unawaited(_saveEvents());
+    // One small write instead of re-encoding the whole history.
+    unawaited(_persistEvents([event]));
 
     final minutes = durationMs ~/ 60000;
     final seconds = (durationMs % 60000) ~/ 1000;
@@ -535,7 +746,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
       counts[i] = 0;
     }
 
-    for (final event in _events) {
+    for (final event in _timedEvents) {
       if (event.timestamp.isAfter(cutoff)) {
         final hour = event.timestamp.hour;
         counts[hour] = (counts[hour] ?? 0) + 1;
@@ -554,7 +765,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
       counts[i] = 0;
     }
 
-    for (final event in _events) {
+    for (final event in _timedEvents) {
       if (event.timestamp.isAfter(cutoff)) {
         // DateTime.weekday is 1-7 (Monday-Sunday), convert to 0-6
         final day = event.timestamp.weekday - 1;
@@ -580,7 +791,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
     }
 
     // Count events
-    for (final event in _events) {
+    for (final event in _timedEvents) {
       if (event.timestamp.isAfter(cutoff)) {
         final day = event.timestamp.weekday - 1; // 0-6
         final hour = event.timestamp.hour; // 0-23
@@ -594,88 +805,19 @@ class ListeningAnalyticsService extends ChangeNotifier {
     return ListeningHeatmap(data: data, maxCount: maxCount);
   }
 
-  /// Get listening streak information
+  /// Get listening streak information (DST-safe calendar-day arithmetic).
   ListeningStreak getStreakInfo() {
-    if (_events.isEmpty) {
-      return ListeningStreak(
-        currentStreak: 0,
-        longestStreak: 0,
-        listenedToday: false,
-      );
-    }
-
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final yesterday = today.subtract(const Duration(days: 1));
-
-    // Get unique days with listening activity
-    final listeningDays = <DateTime>{};
-    for (final event in _events) {
-      final day = DateTime(event.timestamp.year, event.timestamp.month, event.timestamp.day);
-      listeningDays.add(day);
-    }
-
-    final sortedDays = listeningDays.toList()..sort((a, b) => b.compareTo(a));
-
-    final listenedToday = sortedDays.isNotEmpty && sortedDays.first == today;
-
-    // Calculate current streak
-    int currentStreak = 0;
-    DateTime checkDate = listenedToday ? today : yesterday;
-
-    for (final day in sortedDays) {
-      if (day == checkDate) {
-        currentStreak++;
-        checkDate = checkDate.subtract(const Duration(days: 1));
-      } else if (day.isBefore(checkDate)) {
-        break;
-      }
-    }
-
-    // If we didn't listen today or yesterday, streak is broken
-    if (!listenedToday && (sortedDays.isEmpty || sortedDays.first != yesterday)) {
-      currentStreak = 0;
-    }
-
-    // Calculate longest streak
-    int longestStreak = 0;
-    int tempStreak = 0;
-    DateTime? prevDay;
-
-    for (final day in sortedDays.reversed) {
-      if (prevDay == null) {
-        tempStreak = 1;
-      } else {
-        final diff = day.difference(prevDay).inDays;
-        if (diff == 1) {
-          tempStreak++;
-        } else {
-          if (tempStreak > longestStreak) {
-            longestStreak = tempStreak;
-          }
-          tempStreak = 1;
-        }
-      }
-      prevDay = day;
-    }
-    if (tempStreak > longestStreak) {
-      longestStreak = tempStreak;
-    }
-
-    return ListeningStreak(
-      currentStreak: currentStreak,
-      longestStreak: longestStreak,
-      lastListeningDate: sortedDays.isNotEmpty ? sortedDays.first : null,
-      listenedToday: listenedToday,
+    return computeListeningStreak(
+      _timedEvents.map((e) => e.timestamp),
+      DateTime.now(),
     );
   }
 
   /// Compare this week vs last week
   PeriodComparison getWeekOverWeekComparison() {
     final now = DateTime.now();
-    final startOfThisWeek = DateTime(now.year, now.month, now.day)
-        .subtract(Duration(days: now.weekday - 1));
-    final startOfLastWeek = startOfThisWeek.subtract(const Duration(days: 7));
+    final startOfThisWeek = startOfWeek(now);
+    final startOfLastWeek = localDateOffset(startOfThisWeek, -7);
 
     return _comparePeriods(
       currentStart: startOfThisWeek,
@@ -727,7 +869,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
     final currentTracks = <String>{};
     final previousTracks = <String>{};
 
-    for (final event in _events) {
+    for (final event in _timedEvents) {
       final ts = event.timestamp;
       // Use inclusive comparison: start <= timestamp <= end
       // This ensures events at exactly midnight or exactly now are counted
@@ -756,14 +898,14 @@ class ListeningAnalyticsService extends ChangeNotifier {
   /// Get total plays in the given date range
   int getTotalPlays({DateTime? since}) {
     final cutoff = since ?? DateTime(2000);
-    return _events.where((e) => e.timestamp.isAfter(cutoff)).length;
+    return _visibleEvents.where((e) => e.timestamp.isAfter(cutoff)).length;
   }
 
   /// Get total listening time in the given date range
   Duration getTotalListeningTime({DateTime? since}) {
     final cutoff = since ?? DateTime(2000);
     int totalMs = 0;
-    for (final event in _events) {
+    for (final event in _visibleEvents) {
       if (event.timestamp.isAfter(cutoff)) {
         totalMs += event.durationMs;
       }
@@ -808,19 +950,11 @@ class ListeningAnalyticsService extends ChangeNotifier {
   /// Get play counts for each of the last [days] days, ordered chronologically.
   /// Index 0 = oldest day, last index = today.
   List<int> getDailyPlayCounts({int days = 28}) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final counts = List<int>.filled(days, 0);
-
-    for (final event in _events) {
-      final eventDay = DateTime(
-          event.timestamp.year, event.timestamp.month, event.timestamp.day);
-      final daysAgo = today.difference(eventDay).inDays;
-      if (daysAgo >= 0 && daysAgo < days) {
-        counts[days - 1 - daysAgo]++;
-      }
-    }
-    return counts;
+    return dailyPlayCounts(
+      _timedEvents.map((e) => e.timestamp),
+      DateTime.now(),
+      days,
+    );
   }
 
   /// Get the day name for a day index (0=Monday, 6=Sunday)
@@ -838,7 +972,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
   /// Get count of marathon sessions (2+ hour listening sessions)
   int getMarathonSessionCount({DateTime? since}) {
     final cutoff = since ?? DateTime(2000);
-    final relevantEvents = _events
+    final relevantEvents = _timedEvents
         .where((e) => e.timestamp.isAfter(cutoff))
         .toList()
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
@@ -876,7 +1010,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
 
   /// Get recent play events
   List<PlayEvent> getRecentEvents({int limit = 50}) {
-    return _events.take(limit).toList();
+    return _visibleEvents.take(limit).toList();
   }
 
   /// Get play events from the same day in previous months/years (On This Day)
@@ -886,12 +1020,12 @@ class ListeningAnalyticsService extends ChangeNotifier {
   List<PlayEvent> getOnThisDayEvents() {
     final now = DateTime.now();
     final today = now.day;
+    final todayDate = DateTime(now.year, now.month, now.day);
 
     // Find events from the same day of the month in any previous month
-    final matchingEvents = _events.where((event) {
+    final matchingEvents = _timedEvents.where((event) {
       // Must be from a previous date (not today)
       final eventDate = DateTime(event.timestamp.year, event.timestamp.month, event.timestamp.day);
-      final todayDate = DateTime(now.year, now.month, now.day);
       if (!eventDate.isBefore(todayDate)) return false;
 
       // Match the same day of month
@@ -915,7 +1049,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
   /// Groups plays into sessions (gap > 30 min = new session)
   Duration? getAverageSessionLength({DateTime? since}) {
     final cutoff = since ?? DateTime.now().subtract(const Duration(days: 30));
-    final relevantEvents = _events
+    final relevantEvents = _timedEvents
         .where((e) => e.timestamp.isAfter(cutoff))
         .toList()
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp)); // Sort chronologically
@@ -961,7 +1095,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
   /// Higher percentage = more exploration, lower = more replay
   double getDiscoveryRate({DateTime? since}) {
     final cutoff = since ?? DateTime.now().subtract(const Duration(days: 30));
-    final relevantEvents = _events.where((e) => e.timestamp.isAfter(cutoff)).toList();
+    final relevantEvents = _visibleEvents.where((e) => e.timestamp.isAfter(cutoff)).toList();
 
     if (relevantEvents.isEmpty) return 0.0;
 
@@ -985,7 +1119,9 @@ class ListeningAnalyticsService extends ChangeNotifier {
 
   /// Clear all analytics data
   Future<void> clearAll() async {
+    final keys = _events.map(_eventKey).toList();
     _events.clear();
+    await _box?.deleteAll(keys);
     await _box?.delete(_eventsKey);
     await _box?.delete(_streakKey);
     debugPrint('ListeningAnalyticsService: Cleared all data');
@@ -1028,6 +1164,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
       }
 
       int importedCount = 0;
+      final imported = <PlayEvent>[];
 
       // Import play events
       final eventsJson = jsonData['play_events'] as List<dynamic>?;
@@ -1036,12 +1173,16 @@ class ListeningAnalyticsService extends ChangeNotifier {
 
         for (final eventJson in eventsJson) {
           try {
-            final event = PlayEvent.fromJson(
+            final parsed = PlayEvent.fromJson(
               Map<String, dynamic>.from(eventJson as Map),
             );
+            // Imported plays are history, never pushed to a server: the
+            // backup may come from another account/server.
+            final event = parsed.synced ? parsed : parsed.copyWith(synced: true);
             // Only add if not a duplicate (by eventId)
             if (!existingEventIds.contains(event.eventId)) {
               _events.add(event);
+              imported.add(event);
               existingEventIds.add(event.eventId);
               importedCount++;
             }
@@ -1084,10 +1225,11 @@ class ListeningAnalyticsService extends ChangeNotifier {
         _pianoTotalSessionMs = importedPianoMs;
       }
 
+
       // Save all imported data
       if (importedCount > 0 || relaxJson != null || importedPianoNotes > 0 || importedPianoMs > 0) {
         await Future.wait([
-          _saveEvents(),
+          _persistEvents(imported),
           _saveRelaxModeStats(),
           _savePianoStats(),
         ]);
@@ -1105,21 +1247,47 @@ class ListeningAnalyticsService extends ChangeNotifier {
   }
 
   /// Get raw event count for stats display
-  int get totalEventCount => _events.length;
+  int get totalEventCount => _visibleEvents.length;
 
   // ============ Server Sync Methods ============
 
-  /// Get all unsynced play events
+  /// Unsynced events of the current account (see [setCurrentAccount]); with
+  /// no account set, all unsynced events.
   List<PlayEvent> getUnsyncedEvents() {
-    return _events.where((e) => !e.synced).toList();
+    return _visibleEvents.where((e) => !e.synced).toList();
   }
 
   /// Get count of unsynced events
-  int get unsyncedCount => _events.where((e) => !e.synced).length;
+  int get unsyncedCount => _visibleEvents.where((e) => !e.synced).length;
 
-  /// Sync unsynced plays to server
-  /// This marks plays on the server with their actual timestamps
+  /// Events [syncToServer] would push for this account: unsynced, tagged
+  /// with this account (see [PlayEvent.belongsTo]), and real Jellyfin tracks.
+  @visibleForTesting
+  List<PlayEvent> pushableEvents({
+    required String serverUrl,
+    required String userId,
+  }) =>
+      _events
+          .where((e) =>
+              !e.synced &&
+              !e.isCatchUp &&
+              !_isEasterEggTrack(e.trackId) &&
+              e.belongsTo(serverUrl: serverUrl, userId: userId))
+          .toList();
+
+  /// Push plays that no Jellyfin playback report covered to the server
+  /// (`POST /UserPlayedItems/{id}?datePlayed=…`, which increments
+  /// PlayCount). Only this account's events are pushed. Single-flight:
+  /// concurrent callers share one run, so no event is pushed twice.
   Future<SyncResult> syncToServer({
+    required JellyfinClient client,
+    required JellyfinCredentials credentials,
+  }) {
+    return _syncing ??= _syncToServer(client: client, credentials: credentials)
+        .whenComplete(() => _syncing = null);
+  }
+
+  Future<SyncResult> _syncToServer({
     required JellyfinClient client,
     required JellyfinCredentials credentials,
   }) async {
@@ -1127,38 +1295,30 @@ class ListeningAnalyticsService extends ChangeNotifier {
       return SyncResult(success: false, error: 'Service not initialized');
     }
 
-    final unsynced = getUnsyncedEvents();
-    if (unsynced.isEmpty) {
-      debugPrint('📊 Sync: No unsynced events to push');
-      return SyncResult(success: true, syncedCount: 0);
+    // Easter-egg plays (not Jellyfin items) never sync; mark them done.
+    final eggs = _events
+        .where((e) => !e.synced && _isEasterEggTrack(e.trackId))
+        .toList();
+    if (eggs.isNotEmpty) {
+      _markSynced(eggs.map((e) => e.eventId!).toSet());
+      debugPrint('📊 Sync: Skipped ${eggs.length} easter egg plays (not Jellyfin tracks)');
     }
 
-    // Filter out easter egg tracks (not real Jellyfin items)
-    final syncable = unsynced.where((e) => !_isEasterEggTrack(e.trackId)).toList();
-    final skipped = unsynced.length - syncable.length;
-
-    if (skipped > 0) {
-      // Mark easter egg tracks as "synced" so they don't keep trying
-      for (final event in unsynced.where((e) => _isEasterEggTrack(e.trackId))) {
-        final index = _events.indexWhere((e) => e.eventId == event.eventId);
-        if (index != -1) {
-          _events[index] = event.copyWith(synced: true);
-        }
-      }
-      await _saveEvents();
-      debugPrint('📊 Sync: Skipped $skipped easter egg plays (not Jellyfin tracks)');
-    }
-
+    final syncable = pushableEvents(
+      serverUrl: client.serverUrl,
+      userId: credentials.userId,
+    );
     if (syncable.isEmpty) {
       debugPrint('📊 Sync: No syncable events to push');
       return SyncResult(success: true, syncedCount: 0);
     }
 
-    debugPrint('📊 Sync: Pushing ${syncable.length} unsynced plays to server...');
+    debugPrint('📊 Sync: Pushing ${syncable.length} unreported plays to server...');
 
     int syncedCount = 0;
     int failedCount = 0;
     final errors = <String>[];
+    final done = <String>{};
 
     for (final event in syncable) {
       try {
@@ -1169,11 +1329,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
         );
 
         if (result != null) {
-          // Mark as synced locally
-          final index = _events.indexWhere((e) => e.eventId == event.eventId);
-          if (index != -1) {
-            _events[index] = event.copyWith(synced: true);
-          }
+          done.add(event.eventId!);
           syncedCount++;
         } else {
           failedCount++;
@@ -1186,7 +1342,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
     }
 
     // Save updated sync status
-    await _saveEvents();
+    _markSynced(done);
 
     debugPrint('📊 Sync complete: $syncedCount synced, $failedCount failed');
 
@@ -1196,6 +1352,20 @@ class ListeningAnalyticsService extends ChangeNotifier {
       failedCount: failedCount,
       errors: errors.isNotEmpty ? errors : null,
     );
+  }
+
+  /// Marks the events with [eventIds] as synced and persists them.
+  void _markSynced(Set<String> eventIds) {
+    if (eventIds.isEmpty) return;
+    final changed = <PlayEvent>[];
+    for (var i = 0; i < _events.length; i++) {
+      final e = _events[i];
+      if (!e.synced && eventIds.contains(e.eventId)) {
+        _events[i] = e.copyWith(synced: true);
+        changed.add(_events[i]);
+      }
+    }
+    unawaited(_persistEvents(changed));
   }
 
   /// Sync play data FROM server to reconcile counts
@@ -1223,7 +1393,13 @@ class ListeningAnalyticsService extends ChangeNotifier {
         itemIds: trackIds,
       );
 
-      int addedCount = 0;
+      final added = <PlayEvent>[];
+      final localCounts = <String, int>{};
+      for (final e in _events) {
+        if (e.belongsTo(serverUrl: client.serverUrl, userId: credentials.userId)) {
+          localCounts[e.trackId] = (localCounts[e.trackId] ?? 0) + 1;
+        }
+      }
 
       for (final trackId in trackIds) {
         final itemData = serverData[trackId];
@@ -1232,7 +1408,7 @@ class ListeningAnalyticsService extends ChangeNotifier {
         final userData = itemData['UserData'] as Map<String, dynamic>?;
         if (userData == null) continue;
 
-        final serverPlayCount = userData['PlayCount'] as int? ?? 0;
+        final serverPlayCount = (userData['PlayCount'] as num?)?.toInt() ?? 0;
         final lastPlayedStr = userData['LastPlayedDate'] as String?;
 
         // Extract track metadata from server response
@@ -1243,34 +1419,32 @@ class ListeningAnalyticsService extends ChangeNotifier {
         final genres = rawGenres?.whereType<String>().toList() ?? <String>[];
         final albumId = itemData['AlbumId'] as String?;
         final albumName = itemData['Album'] as String?;
-        final runTimeTicks = itemData['RunTimeTicks'] as int?;
+        final runTimeTicks = (itemData['RunTimeTicks'] as num?)?.toInt();
         final durationMs = runTimeTicks != null ? runTimeTicks ~/ 10000 : 0;
 
-        // Count local plays for this track
-        final localPlayCount = _events.where((e) => e.trackId == trackId).length;
+        // Count local plays for this track (this account only)
+        final localPlayCount = localCounts[trackId] ?? 0;
 
         // If server has more plays than we have locally, we're missing data
         if (serverPlayCount > localPlayCount) {
           final missingCount = serverPlayCount - localPlayCount;
-          debugPrint('📊 Track $trackId ($trackName): server=$serverPlayCount, local=$localPlayCount, missing=$missingCount');
 
-          // Get last played date from server
-          final lastPlayed = lastPlayedStr != null
-              ? DateTime.tryParse(lastPlayedStr)
-              : DateTime.now();
-          final baseTime = lastPlayed ?? DateTime.now();
+          // Server dates are UTC: convert so local-day stats line up.
+          final baseTime = (lastPlayedStr != null
+                  ? DateTime.tryParse(lastPlayedStr)?.toLocal()
+                  : null) ??
+              DateTime.now();
 
-          // Distribute catch-up events across time for more realistic stats
-          // Spread plays evenly over the past 30 days leading up to lastPlayed
+          // Spread the synthetic plays over the 30 days up to lastPlayed.
+          // They are flagged isCatchUp and excluded from time-based stats.
           for (int i = 0; i < missingCount; i++) {
-            // Calculate a spread timestamp - distribute events over 30 days
             final daysAgo = (i * 30) ~/ missingCount;
-            final hoursOffset = (i * 24) % 24; // Vary the hour for better distribution
+            final hoursOffset = (i * 7) % 24;
             final spreadTimestamp = baseTime
                 .subtract(Duration(days: daysAgo))
                 .subtract(Duration(hours: hoursOffset));
 
-            final catchUpEvent = PlayEvent(
+            added.add(PlayEvent(
               trackId: trackId,
               trackName: trackName,
               albumId: albumId,
@@ -1280,21 +1454,24 @@ class ListeningAnalyticsService extends ChangeNotifier {
               timestamp: spreadTimestamp,
               durationMs: durationMs,
               synced: true, // Already on server
-            );
-            _events.add(catchUpEvent);
-            addedCount++;
+              eventId: '${trackId}_catchup_${spreadTimestamp.millisecondsSinceEpoch}_$i',
+              userId: credentials.userId,
+              serverUrl: client.serverUrl,
+              isCatchUp: true,
+            ));
           }
         }
       }
 
-      if (addedCount > 0) {
-        // Sort events by timestamp
-        _events.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-        await _saveEvents();
-        debugPrint('📊 Sync: Added $addedCount catch-up events from server with full metadata');
+      if (added.isNotEmpty) {
+        _events
+          ..addAll(added)
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+        await _persistEvents(added);
+        debugPrint('📊 Sync: Added ${added.length} catch-up events from server with full metadata');
       }
 
-      return SyncResult(success: true, syncedCount: addedCount);
+      return SyncResult(success: true, syncedCount: added.length);
     } catch (e) {
       debugPrint('❌ Sync from server failed: $e');
       return SyncResult(success: false, error: e.toString());
@@ -1342,9 +1519,20 @@ class ListeningAnalyticsService extends ChangeNotifier {
 
   /// Mark all current events as synced (use after initial sync from server)
   Future<void> markAllSynced() async {
-    _events = _events.map((e) => e.copyWith(synced: true)).toList();
-    await _saveEvents();
+    final changedIds = {
+      for (final e in _events)
+        if (!e.synced) e.eventId,
+    };
+    _events = _events.map((e) => e.synced ? e : e.copyWith(synced: true)).toList();
+    await _persistEvents(_events.where((e) => changedIds.contains(e.eventId)));
     debugPrint('📊 Marked all ${_events.length} events as synced');
+  }
+
+  /// Test hook: load [events] as if read from storage.
+  @visibleForTesting
+  void debugSetEvents(List<PlayEvent> events) {
+    _events = [...events]..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    _initialized = true;
   }
 }
 

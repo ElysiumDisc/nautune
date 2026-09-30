@@ -11,6 +11,21 @@ import '../jellyfin/jellyfin_track.dart';
 import '../models/listenbrainz_config.dart';
 import 'power_mode_service.dart';
 
+/// Result of checking a ListenBrainz user token.
+enum ListenBrainzTokenStatus { valid, invalid, networkError }
+
+class ListenBrainzTokenCheck {
+  const ListenBrainzTokenCheck(this.status, {this.userName});
+
+  final ListenBrainzTokenStatus status;
+
+  /// The account the token belongs to (`user_name` from validate-token);
+  /// only set when [status] is valid.
+  final String? userName;
+
+  bool get isValid => status == ListenBrainzTokenStatus.valid;
+}
+
 /// Service for ListenBrainz integration (scrobbling + recommendations)
 class ListenBrainzService {
   static const _baseUrl = 'https://api.listenbrainz.org/1';
@@ -20,9 +35,17 @@ class ListenBrainzService {
   static const _pendingScrobblesKey = 'pending_scrobbles';
   static const _secureStorageKey = 'listenbrainz_hive_key';
 
+  /// Oldest pending scrobbles are dropped beyond this many.
+  static const int maxPendingScrobbles = 1000;
+
+  /// Listens per `import` request when retrying the queue.
+  static const int _retryBatchSize = 100;
+
   Box? _box;
   ListenBrainzConfig? _config;
   bool _initialized = false;
+  Future<void>? _initializing;
+  Future<int>? _retrying;
 
   // Pending scrobbles for offline support
   List<Map<String, dynamic>> _pendingScrobbles = [];
@@ -69,7 +92,7 @@ class ListenBrainzService {
     for (int attempt = 0; attempt < maxRetries; attempt++) {
       try {
         final response = await http.get(
-          Uri.parse('$_baseUrl/user/${_config!.username}/listen-count'),
+          Uri.parse('$_baseUrl/user/${_userPath()}/listen-count'),
           headers: {
             'Authorization': 'Token ${_config!.token}',
           },
@@ -127,7 +150,7 @@ class ListenBrainzService {
 
     try {
       final response = await http.get(
-        Uri.parse('$_baseUrl/user/${_config!.username}/listen-count'),
+        Uri.parse('$_baseUrl/user/${_userPath()}/listen-count'),
         headers: {
           'Authorization': 'Token ${_config!.token}',
         },
@@ -152,13 +175,54 @@ class ListenBrainzService {
     }
   }
 
-  final _secureStorage = const FlutterSecureStorage();
+  /// Username as a path segment (usernames may contain spaces, `#`, `?`).
+  String _userPath() => Uri.encodeComponent(_config!.username);
+
+  /// Readable after first unlock, so a CarPlay / background cold start on a
+  /// locked phone can open the box (and scrobble). Matches the session store.
+  static const _iosOptions = IOSOptions(
+    accessibility: KeychainAccessibility.first_unlock,
+  );
+
+  /// Accessibility the key was written with before; the plugin matches on
+  /// accessibility when reading, so legacy items need their own read.
+  static const _legacyIosOptions = IOSOptions.defaultOptions;
+
+  final _secureStorage = const FlutterSecureStorage(iOptions: _iosOptions);
+
+  /// Reads the box key, migrating a legacy (when-unlocked) item to
+  /// [_iosOptions]. Throws if the keychain can't be read (device locked):
+  /// the caller must not generate a new key then.
+  Future<String?> _readEncryptionKey() async {
+    final value = await _secureStorage.read(key: _secureStorageKey);
+    if (value != null) return value;
+    final legacy = await _secureStorage.read(
+      key: _secureStorageKey,
+      iOptions: _legacyIosOptions,
+    );
+    if (legacy != null) {
+      try {
+        await _secureStorage.delete(key: _secureStorageKey);
+        await _secureStorage.write(key: _secureStorageKey, value: legacy);
+      } catch (e) {
+        debugPrint('ListenBrainzService: key accessibility migration failed: $e');
+        try {
+          await _secureStorage.write(
+            key: _secureStorageKey,
+            value: legacy,
+            iOptions: _legacyIosOptions,
+          );
+        } catch (_) {}
+      }
+    }
+    return legacy;
+  }
 
   /// Open or migrate the encrypted Hive box for config/scrobbles.
   Future<Box> _openEncryptedBox() async {
     if (Hive.isBoxOpen(_boxName)) return Hive.box(_boxName);
 
-    String? keyString = await _secureStorage.read(key: _secureStorageKey);
+    String? keyString = await _readEncryptionKey();
     Uint8List encryptionKey;
 
     if (keyString == null) {
@@ -209,10 +273,15 @@ class ListenBrainzService {
     );
   }
 
-  /// Initialize the service
-  Future<void> initialize() async {
-    if (_initialized) return;
+  /// Initialize the service. Safe to call repeatedly and concurrently; a
+  /// failed attempt (e.g. keychain locked on a CarPlay cold start) is
+  /// retried by the next call. Queued scrobbles are retried once ready.
+  Future<void> initialize() {
+    if (_initialized) return Future.value();
+    return _initializing ??= _initialize().whenComplete(() => _initializing = null);
+  }
 
+  Future<void> _initialize() async {
     try {
       _box = await _openEncryptedBox();
       _popularityCacheBox = await Hive.openBox(_popularityCacheBoxName);
@@ -220,6 +289,9 @@ class ListenBrainzService {
       await _loadPendingScrobbles();
       _initialized = true;
       debugPrint('ListenBrainzService: Initialized${_config != null ? " (connected as ${_config!.username})" : ""}');
+      if (_pendingScrobbles.isNotEmpty) {
+        unawaited(retryPendingScrobbles());
+      }
     } catch (e) {
       debugPrint('ListenBrainzService: Failed to initialize: $e');
     }
@@ -252,12 +324,18 @@ class ListenBrainzService {
     if (raw == null) return;
 
     try {
+      final List<dynamic> list;
       if (raw is String) {
-        _pendingScrobbles = (jsonDecode(raw) as List)
-            .cast<Map<String, dynamic>>();
+        list = jsonDecode(raw) as List<dynamic>;
       } else if (raw is List) {
-        _pendingScrobbles = raw.cast<Map<String, dynamic>>();
+        list = raw;
+      } else {
+        list = const [];
       }
+      _pendingScrobbles = [
+        for (final e in list)
+          if (e is Map) Map<String, dynamic>.from(e),
+      ];
     } catch (e) {
       debugPrint('ListenBrainzService: Error loading pending scrobbles: $e');
       _pendingScrobbles = [];
@@ -269,48 +347,88 @@ class ListenBrainzService {
     await _box!.put(_pendingScrobblesKey, jsonEncode(_pendingScrobbles));
   }
 
-  /// Validate a ListenBrainz user token
-  Future<bool> validateToken(String token) async {
+  /// Checks a ListenBrainz user token: valid (with the account's
+  /// `user_name`), invalid, or unknown because of a network/server error.
+  Future<ListenBrainzTokenCheck> checkToken(String token) async {
     try {
       final response = await http.get(
         Uri.parse('$_baseUrl/validate-token'),
         headers: {
           'Authorization': 'Token $token',
         },
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data['valid'] == true;
-      }
-      return false;
+      ).timeout(const Duration(seconds: 15));
+      return parseTokenCheck(response.statusCode, response.body);
     } catch (e) {
-      debugPrint('ListenBrainzService: Token validation error: $e');
-      return false;
+      debugPrint('ListenBrainzService: Token validation error: ${e.runtimeType}');
+      return const ListenBrainzTokenCheck(ListenBrainzTokenStatus.networkError);
     }
   }
 
-  /// Save credentials and connect account
-  Future<bool> saveCredentials(String username, String token) async {
+  /// Pure interpretation of a `/validate-token` response.
+  @visibleForTesting
+  static ListenBrainzTokenCheck parseTokenCheck(int statusCode, String body) {
+    if (statusCode >= 500 || statusCode == 429) {
+      return const ListenBrainzTokenCheck(ListenBrainzTokenStatus.networkError);
+    }
+    if (statusCode != 200) {
+      return const ListenBrainzTokenCheck(ListenBrainzTokenStatus.invalid);
+    }
+    try {
+      final data = jsonDecode(body);
+      if (data is Map && data['valid'] == true) {
+        final name = data['user_name'];
+        return ListenBrainzTokenCheck(
+          ListenBrainzTokenStatus.valid,
+          userName: name is String && name.isNotEmpty ? name : null,
+        );
+      }
+      return const ListenBrainzTokenCheck(ListenBrainzTokenStatus.invalid);
+    } catch (_) {
+      return const ListenBrainzTokenCheck(ListenBrainzTokenStatus.networkError);
+    }
+  }
+
+  /// Validate a ListenBrainz user token (false for invalid *or* unknown;
+  /// use [checkToken] to tell them apart).
+  Future<bool> validateToken(String token) async =>
+      (await checkToken(token)).isValid;
+
+  /// Validates [token] and, when valid, connects the account under the
+  /// username the token belongs to (the server's `user_name`; [username]
+  /// is only a fallback). Returns the check so the UI can distinguish an
+  /// invalid token from a network error.
+  Future<ListenBrainzTokenCheck> connectWithToken(
+    String token, {
+    String? username,
+  }) async {
     if (!_initialized) await initialize();
 
-    // Validate token first
-    final isValid = await validateToken(token);
-    if (!isValid) {
-      debugPrint('ListenBrainzService: Invalid token');
-      return false;
+    final check = await checkToken(token);
+    if (!check.isValid) {
+      debugPrint('ListenBrainzService: Token not accepted (${check.status.name})');
+      return check;
+    }
+    final name = check.userName ?? username?.trim();
+    if (name == null || name.isEmpty) {
+      return const ListenBrainzTokenCheck(ListenBrainzTokenStatus.invalid);
     }
 
     _config = ListenBrainzConfig(
-      username: username,
+      username: name,
       token: token,
       scrobblingEnabled: true,
     );
     await _saveConfig();
 
-    debugPrint('ListenBrainzService: Connected as $username');
-    return true;
+    debugPrint('ListenBrainzService: Connected as $name');
+    return check;
   }
+
+  /// Save credentials and connect account. Kept for existing callers; the
+  /// stored username is the token's real account name when the server
+  /// reports it. Prefer [connectWithToken].
+  Future<bool> saveCredentials(String username, String token) async =>
+      (await connectWithToken(token, username: username)).isValid;
 
   /// Disconnect account
   Future<void> disconnect() async {
@@ -331,13 +449,15 @@ class ListenBrainzService {
 
   /// Submit a listen (scrobble) to ListenBrainz
   Future<bool> submitListen(JellyfinTrack track, DateTime listenedAt) async {
+    // Initialize lazily instead of dropping the listen.
+    if (!_initialized) await initialize();
     if (!_initialized || _config == null || !_config!.scrobblingEnabled) {
       debugPrint('ListenBrainzService: Scrobble skipped - not initialized or disabled');
       return false;
     }
 
     // Validate required fields
-    if (track.name.isEmpty || track.displayArtist.isEmpty) {
+    if (track.name.trim().isEmpty || track.scrobbleArtist == null) {
       debugPrint('ListenBrainzService: Scrobble skipped - missing track name or artist');
       return false;
     }
@@ -348,7 +468,7 @@ class ListenBrainzService {
       'payload': [payload],
     });
 
-    debugPrint('ListenBrainzService: Submitting scrobble for "${track.name}" by ${track.displayArtist}');
+    debugPrint('ListenBrainzService: Submitting scrobble for "${track.name}" by ${track.scrobbleArtist}');
     debugPrint('ListenBrainzService: Timestamp: ${listenedAt.toIso8601String()} (${listenedAt.millisecondsSinceEpoch ~/ 1000})');
 
     try {
@@ -388,6 +508,8 @@ class ListenBrainzService {
         await _saveConfig();
 
         debugPrint('ListenBrainzService: Scrobbled "${track.name}" successfully');
+        // The service is reachable: send anything queued earlier.
+        if (_pendingScrobbles.isNotEmpty) unawaited(retryPendingScrobbles());
         return true;
       } else {
         debugPrint('ListenBrainzService: Scrobble failed: ${response.statusCode}');
@@ -414,9 +536,11 @@ class ListenBrainzService {
 
   /// Submit "now playing" status
   Future<bool> submitNowPlaying(JellyfinTrack track) async {
+    if (!_initialized) await initialize();
     if (!_initialized || _config == null || !_config!.scrobblingEnabled) {
       return false;
     }
+    if (track.name.trim().isEmpty || track.scrobbleArtist == null) return false;
 
     // playing_now must NOT include listened_at per ListenBrainz API spec
     final payload = _buildListenPayload(track, null);
@@ -432,7 +556,7 @@ class ListenBrainzService {
           'listen_type': 'playing_now',
           'payload': [payload],
         }),
-      );
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         debugPrint('ListenBrainzService: Now playing "${track.name}"');
@@ -450,7 +574,8 @@ class ListenBrainzService {
   /// [listenedAt] should be null for playing_now submissions
   Map<String, dynamic> _buildListenPayload(JellyfinTrack track, DateTime? listenedAt) {
     final metadata = <String, dynamic>{
-      'artist_name': track.displayArtist,
+      // Full artist credit, never the UI abbreviation "A & 1 more".
+      'artist_name': track.scrobbleArtist ?? '',
       'track_name': track.name,
     };
 
@@ -496,12 +621,20 @@ class ListenBrainzService {
 
   void _queuePendingScrobble(Map<String, dynamic> payload) {
     _pendingScrobbles.add(payload);
+    final excess = _pendingScrobbles.length - maxPendingScrobbles;
+    if (excess > 0) _pendingScrobbles.removeRange(0, excess);
     unawaited(_savePendingScrobbles());
     debugPrint('ListenBrainzService: Queued pending scrobble (${_pendingScrobbles.length} pending)');
   }
 
-  /// Retry pending scrobbles (call when network is available)
-  Future<int> retryPendingScrobbles() async {
+  /// Retry pending scrobbles (call when network is available).
+  /// Single-flight; sends the queue in `import` batches and removes each
+  /// listen only once ListenBrainz accepted (or permanently rejected) it, so
+  /// listens queued while the retry runs are never lost or re-sent.
+  Future<int> retryPendingScrobbles() =>
+      _retrying ??= _retryPending().whenComplete(() => _retrying = null);
+
+  Future<int> _retryPending() async {
     if (!_initialized || _config == null || _pendingScrobbles.isEmpty) {
       return 0;
     }
@@ -514,58 +647,34 @@ class ListenBrainzService {
 
     debugPrint('ListenBrainzService: Retrying ${_pendingScrobbles.length} pending scrobbles');
 
-    int successCount = 0;
-    final failedScrobbles = <Map<String, dynamic>>[];
-    final permanentFailures = <Map<String, dynamic>>[];
-
-    for (final payload in _pendingScrobbles) {
-      try {
-        final response = await http.post(
-          Uri.parse('$_baseUrl/submit-listens'),
-          headers: {
-            'Authorization': 'Token ${_config!.token}',
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode({
-            'listen_type': 'single',
-            'payload': [payload],
-          }),
-        ).timeout(const Duration(seconds: 30));
-
-        if (response.statusCode == 200) {
-          // Verify response body
-          try {
-            final responseData = jsonDecode(response.body);
-            if (responseData['status'] == 'ok') {
-              successCount++;
-              continue;
-            }
-          } catch (_) {
-            // Accept if we got 200 but couldn't parse
-            successCount++;
-            continue;
-          }
-          failedScrobbles.add(payload);
-        } else if (response.statusCode >= 400 && response.statusCode < 500 && response.statusCode != 429) {
-          // Permanent failure (bad request, auth error) - don't retry
-          debugPrint('ListenBrainzService: Permanent failure for pending scrobble: ${response.statusCode}');
-          permanentFailures.add(payload);
-        } else {
-          // Temporary failure - retry later
-          failedScrobbles.add(payload);
+    var successCount = 0;
+    var batchSize = _retryBatchSize;
+    while (_pendingScrobbles.isNotEmpty && _config != null) {
+      final batch = _pendingScrobbles.take(batchSize).toList();
+      final status = await _submitImport(batch);
+      if (status == 200) {
+        successCount += batch.length;
+      } else if (status == 400) {
+        // A malformed listen rejects the whole batch: isolate it by
+        // sending one at a time, then drop just the bad one.
+        if (batch.length > 1) {
+          batchSize = 1;
+          continue;
         }
-      } on TimeoutException {
-        failedScrobbles.add(payload);
-      } catch (e) {
-        failedScrobbles.add(payload);
+        debugPrint('ListenBrainzService: Dropping rejected pending scrobble');
+      } else {
+        // Network/5xx/429 or auth (401/403): keep everything for later.
+        break;
       }
+      // Remove exactly the listens that were handled (by identity), even
+      // if new ones were queued meanwhile.
+      for (final p in batch) {
+        _pendingScrobbles.remove(p);
+      }
+      await _savePendingScrobbles();
     }
 
-    // Only keep scrobbles that can be retried (not permanent failures)
-    _pendingScrobbles = failedScrobbles;
-    await _savePendingScrobbles();
-
-    if (successCount > 0) {
+    if (successCount > 0 && _config != null) {
       _config = _config!.copyWith(
         totalScrobbles: _config!.totalScrobbles + successCount,
         lastScrobbleTime: DateTime.now(),
@@ -573,12 +682,49 @@ class ListenBrainzService {
       await _saveConfig();
     }
 
-    debugPrint('ListenBrainzService: Retried pending scrobbles: $successCount success, ${failedScrobbles.length} failed');
+    debugPrint('ListenBrainzService: Retried pending scrobbles: $successCount sent, ${_pendingScrobbles.length} still pending');
     return successCount;
   }
 
+  /// POSTs [listens] as one `import` submission; returns the HTTP status
+  /// (200 only when the body says ok), or -1 on a network error.
+  Future<int> _submitImport(List<Map<String, dynamic>> listens) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$_baseUrl/submit-listens'),
+        headers: {
+          'Authorization': 'Token ${_config!.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'listen_type': listens.length == 1 ? 'single' : 'import',
+          'payload': listens,
+        }),
+      ).timeout(const Duration(seconds: 30));
+      if (response.statusCode == 200) {
+        try {
+          final data = jsonDecode(response.body);
+          if (data is Map && data['status'] != null && data['status'] != 'ok') {
+            return -1;
+          }
+        } catch (_) {
+          // 200 with an unparseable body: accept.
+        }
+      }
+      return response.statusCode;
+    } catch (e) {
+      debugPrint('ListenBrainzService: pending scrobble submit failed: ${e.runtimeType}');
+      return -1;
+    }
+  }
+
   /// Get personalized recommendations from ListenBrainz
-  Future<List<ListenBrainzRecommendation>> getRecommendations({int count = 50}) async {
+  /// [enrich] resolves track/artist names via MusicBrainz (1 request/s);
+  /// pass false to get the raw MBIDs quickly and enrich in batches.
+  Future<List<ListenBrainzRecommendation>> getRecommendations({
+    int count = 50,
+    bool enrich = true,
+  }) async {
     if (!_initialized || _config == null) {
       debugPrint('ListenBrainzService: getRecommendations - not initialized or no config');
       return [];
@@ -591,7 +737,7 @@ class ListenBrainzService {
     for (int attempt = 0; attempt < maxRetries; attempt++) {
       try {
         final response = await http.get(
-          Uri.parse('$_baseUrl/cf/recommendation/user/${_config!.username}/recording?count=$count'),
+          Uri.parse('$_baseUrl/cf/recommendation/user/${_userPath()}/recording?count=$count'),
         ).timeout(const Duration(seconds: 15));
 
         if (response.statusCode == 200) {
@@ -613,6 +759,7 @@ class ListenBrainzService {
             return null;
           }).whereType<ListenBrainzRecommendation>().toList();
 
+          if (!enrich) return recommendations;
           debugPrint('ListenBrainzService: Got ${recommendations.length} recommendations, fetching metadata...');
 
           // Fetch track/artist metadata from MusicBrainz for each recommendation
@@ -657,6 +804,8 @@ class ListenBrainzService {
   ) async {
     final enriched = <ListenBrainzRecommendation>[];
     int apiCallsMade = 0;
+    int rateLimitRetries = 0;
+    const maxRateLimitRetries = 3;
 
     for (int i = 0; i < recommendations.length; i++) {
       final rec = recommendations[i];
@@ -741,10 +890,12 @@ class ListenBrainzService {
             releaseMbid: releaseMbid,
             score: rec.score,
           ));
-        } else if (response.statusCode == 429) {
-          // Rate limited - wait longer and retry this one
+        } else if (response.statusCode == 429 &&
+            rateLimitRetries < maxRateLimitRetries) {
+          // Rate limited - wait longer and retry this one (bounded).
+          rateLimitRetries++;
           debugPrint('ListenBrainzService: MusicBrainz rate limited, waiting...');
-          await Future.delayed(const Duration(seconds: 3));
+          await Future.delayed(Duration(seconds: 3 * rateLimitRetries));
           i--; // Retry this recommendation
           continue;
         } else {
@@ -862,7 +1013,7 @@ class ListenBrainzService {
     }
 
     // Fetch raw recommendations (just MBIDs, fast)
-    final rawRecs = await getRecommendations(count: maxFetch);
+    final rawRecs = await getRecommendations(count: maxFetch, enrich: false);
     if (rawRecs.isEmpty) return [];
 
     final allMatched = <ListenBrainzRecommendation>[];
@@ -1142,7 +1293,7 @@ class ListenBrainzService {
 
     try {
       final response = await http.get(
-        Uri.parse('$_baseUrl/user/$username/fresh_releases?days=$days&sort=release_date&past=true&future=true'),
+        Uri.parse('$_baseUrl/user/${Uri.encodeComponent(username)}/fresh_releases?days=$days&sort=release_date&past=true&future=true'),
         headers: {
           'Authorization': 'Token ${_config!.token}',
         },
@@ -1303,8 +1454,8 @@ class ListenBrainzService {
 
     try {
       final response = await http.get(
-        Uri.parse('$_baseUrl/user/${_config!.username}/listens?count=$count'),
-      );
+        Uri.parse('$_baseUrl/user/${_userPath()}/listens?count=$count'),
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../data/network_channels.dart';
@@ -179,16 +180,47 @@ class NetworkChannelStats {
   }
 }
 
+/// Thrown inside a download when the user cancels it.
+class _DownloadCancelled implements Exception {
+  const _DownloadCancelled();
+  @override
+  String toString() => 'Download cancelled';
+}
+
 /// Service for downloading and managing network channel content offline.
 ///
-/// Supports two modes:
-/// - Auto-cache ON: Channels are automatically saved when played
-/// - Auto-cache OFF: Streaming only, no local storage
+/// A single app-wide instance ([instance]; the unnamed constructor returns it
+/// too) so downloads survive leaving The Network screen and every screen sees
+/// the same queue and state.
+///
+/// Files live under `Documents/network/`. Paths are persisted *relative* to
+/// that directory (the app container path changes between installs/updates)
+/// and resolved on use; absolute paths from older builds are migrated on load.
 class NetworkDownloadService extends ChangeNotifier {
+  NetworkDownloadService._() {
+    _initFuture = _initializeAndLoad();
+  }
+
+  static final NetworkDownloadService instance = NetworkDownloadService._();
+
+  /// Returns the shared [instance].
+  factory NetworkDownloadService() => instance;
+
+  static const Duration _connectTimeout = Duration(seconds: 30);
+  static const Duration _idleTimeout = Duration(seconds: 60);
+  static const Duration _progressNotifyInterval = Duration(milliseconds: 250);
+
   final Map<int, NetworkDownloadItem> _downloads = {};
   final Set<int> _downloadQueue = {};
   bool _isProcessingQueue = false;
   final http.Client _httpClient = http.Client();
+
+  /// Channel whose files are being fetched right now, and a callback that
+  /// aborts that transfer immediately (used by cancel).
+  int? _activeChannel;
+  void Function()? _abortActive;
+
+  Timer? _progressNotifyTimer;
 
   // Auto-cache mode setting
   bool _autoCacheEnabled = false;
@@ -203,30 +235,32 @@ class NetworkDownloadService extends ChangeNotifier {
   static const _statsKey = 'channel_stats';
   Box<dynamic>? _box;
 
+  /// Absolute path of `Documents/network`, set during init.
+  String? _rootPath;
+
+  late final Future<void> _initFuture;
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
 
-  NetworkDownloadService() {
-    _initializeAndLoad();
-  }
-
-  /// Wait for initialization to complete (for external callers)
-  Future<void> initialize() async {
-    if (_isInitialized) return;
-    // Wait for _initializeAndLoad to complete
-    while (!_isInitialized) {
-      await Future.delayed(const Duration(milliseconds: 50));
-    }
-  }
+  /// Completes once state is loaded (or loading failed; the service then runs
+  /// with empty state instead of blocking callers forever).
+  Future<void> initialize() => _initFuture;
 
   Future<void> _initializeAndLoad() async {
-    await _initHive();
-    await _loadSettings();
-    await _loadDownloads();
-    await _loadStats();
-    await _verifyDownloads();
-    _isInitialized = true;
-    notifyListeners();
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
+      _rootPath = p.join(docsDir.path, 'network');
+      await _initHive();
+      await _loadSettings();
+      await _loadDownloads();
+      await _loadStats();
+      await _verifyDownloads();
+    } catch (e) {
+      debugPrint('NetworkDownloadService: init failed: $e');
+    } finally {
+      _isInitialized = true;
+      notifyListeners();
+    }
   }
 
   Future<void> _initHive() async {
@@ -239,32 +273,78 @@ class NetworkDownloadService extends ChangeNotifier {
     _autoCacheEnabled = _box!.get(_autoCacheKey, defaultValue: false) as bool;
   }
 
+  /// Convert a stored path to one relative to `Documents/network`.
+  /// Older builds stored absolute paths, which break when the app container
+  /// moves; those are migrated. Returns null if it can't be mapped.
+  static String? _toRelative(String? stored) {
+    if (stored == null || stored.isEmpty) return null;
+    if (!stored.startsWith('/')) return stored;
+    const marker = '/network/';
+    final i = stored.lastIndexOf(marker);
+    if (i < 0) return null;
+    return stored.substring(i + marker.length);
+  }
+
+  /// Absolute path for a stored relative path.
+  String? _resolve(String? relative) {
+    final root = _rootPath;
+    if (relative == null || root == null) return null;
+    return p.join(root, relative);
+  }
+
   Future<void> _loadDownloads() async {
     if (_box == null) return;
 
     final raw = _box!.get(_downloadsKey);
+    var migrated = false;
     if (raw is Map) {
       for (final entry in raw.entries) {
         try {
           final item = NetworkDownloadItem.fromJson(
             Map<String, dynamic>.from(entry.value as Map),
           );
-          _downloads[item.channelNumber] = item;
+          // Only finished downloads survive a restart; anything that was
+          // mid-flight or failed is simply not downloaded.
+          if (!item.isDownloaded) {
+            migrated = true;
+            continue;
+          }
+          final audio = _toRelative(item.audioPath);
+          final image = _toRelative(item.imagePath);
+          if (audio != item.audioPath || image != item.imagePath) {
+            migrated = true;
+          }
+          if (audio == null) continue;
+          _downloads[item.channelNumber] = NetworkDownloadItem(
+            channelNumber: item.channelNumber,
+            status: NetworkDownloadStatus.downloaded,
+            progress: 1.0,
+            audioPath: audio,
+            imagePath: image,
+            downloadedAt: item.downloadedAt,
+          );
         } catch (e) {
           debugPrint('Failed to load network download: $e');
         }
       }
     }
+    if (migrated) await _saveDownloads();
   }
 
+  /// Persist finished downloads (relative paths).
   Future<void> _saveDownloads() async {
     if (_box == null) return;
 
     final data = <String, dynamic>{};
     for (final entry in _downloads.entries) {
+      if (!entry.value.isDownloaded) continue;
       data[entry.key.toString()] = entry.value.toJson();
     }
-    await _box!.put(_downloadsKey, data);
+    try {
+      await _box!.put(_downloadsKey, data);
+    } catch (e) {
+      debugPrint('NetworkDownloadService: save failed: $e');
+    }
   }
 
   Future<void> _loadStats() async {
@@ -441,36 +521,39 @@ class NetworkDownloadService extends ChangeNotifier {
 
     for (final entry in _downloads.entries) {
       final item = entry.value;
-      if (item.status == NetworkDownloadStatus.downloaded) {
-        bool audioExists = true;
-
-        if (item.audioPath != null) {
-          audioExists = await File(item.audioPath!).exists();
-        }
-
-        // If audio is missing, mark for removal
-        if (!audioExists) {
-          toRemove.add(entry.key);
-          // Clean up orphaned image
-          if (item.imagePath != null) {
-            try {
-              final imageFile = File(item.imagePath!);
-              if (await imageFile.exists()) {
-                await imageFile.delete();
-              }
-            } catch (_) {}
-          }
-        }
-      }
+      if (item.status != NetworkDownloadStatus.downloaded) continue;
+      final audioPath = _resolve(item.audioPath);
+      final audioExists =
+          audioPath != null && await File(audioPath).exists();
+      if (!audioExists) toRemove.add(entry.key);
     }
 
     for (final key in toRemove) {
-      _downloads.remove(key);
+      final item = _downloads.remove(key);
+      // Clean up the orphaned image unless another channel still uses it.
+      final imagePath = _resolve(item?.imagePath);
+      if (imagePath != null && !_isPathInUse(item!.imagePath!, image: true)) {
+        try {
+          final imageFile = File(imagePath);
+          if (await imageFile.exists()) await imageFile.delete();
+        } catch (_) {}
+      }
     }
 
     if (toRemove.isNotEmpty) {
       await _saveDownloads();
     }
+  }
+
+  /// Whether any tracked (downloaded or in-progress) channel references the
+  /// relative [path]. Several channels share one audio or image file.
+  bool _isPathInUse(String path, {bool image = false, int? except}) {
+    for (final item in _downloads.values) {
+      if (item.channelNumber == except) continue;
+      final other = image ? item.imagePath : item.audioPath;
+      if (other == path) return true;
+    }
+    return false;
   }
 
   /// Get download item for a channel.
@@ -495,7 +578,7 @@ class NetworkDownloadService extends ChangeNotifier {
   String? getLocalAudioPath(int channelNumber) {
     final item = _downloads[channelNumber];
     if (item?.status == NetworkDownloadStatus.downloaded) {
-      return item?.audioPath;
+      return _resolve(item?.audioPath);
     }
     return null;
   }
@@ -504,24 +587,18 @@ class NetworkDownloadService extends ChangeNotifier {
   String? getLocalImagePath(int channelNumber) {
     final item = _downloads[channelNumber];
     if (item?.status == NetworkDownloadStatus.downloaded) {
-      return item?.imagePath;
+      return _resolve(item?.imagePath);
     }
     return null;
   }
 
-  /// Get list of all downloaded channels.
+  /// Get list of all downloaded channels, sorted by number.
   List<NetworkChannel> get downloadedChannels {
     final downloaded = <NetworkChannel>[];
     for (final item in _downloads.values) {
-      if (item.status == NetworkDownloadStatus.downloaded) {
-        final channel = networkChannels.cast<NetworkChannel?>().firstWhere(
-              (c) => c?.number == item.channelNumber,
-              orElse: () => null,
-            );
-        if (channel != null) {
-          downloaded.add(channel);
-        }
-      }
+      if (item.status != NetworkDownloadStatus.downloaded) continue;
+      final channel = networkChannelsByNumber[item.channelNumber];
+      if (channel != null) downloaded.add(channel);
     }
     return downloaded..sort((a, b) => a.number.compareTo(b.number));
   }
@@ -557,148 +634,156 @@ class NetworkDownloadService extends ChangeNotifier {
     if (_autoCacheEnabled) {
       // Return stream URL immediately for playback
       // Download in background for future offline access
-      _downloadChannelInBackground(channel);
+      _enqueue(channel.number);
+      notifyListeners();
+      unawaited(_processQueue());
     }
 
     // Return stream URL for immediate playback
     return channel.audioUrl;
   }
 
-  /// Download a channel in the background (for auto-cache).
-  void _downloadChannelInBackground(NetworkChannel channel) {
-    if (_downloads[channel.number]?.status == NetworkDownloadStatus.downloaded ||
-        _downloads[channel.number]?.status == NetworkDownloadStatus.downloading ||
-        _downloadQueue.contains(channel.number)) {
-      return; // Already downloaded or in progress
+  /// Mark [channelNumber] as queued. Returns false if it is already
+  /// downloaded or in progress.
+  bool _enqueue(int channelNumber) {
+    if (isChannelDownloaded(channelNumber) ||
+        isChannelDownloading(channelNumber)) {
+      return false;
     }
-
-    _downloadQueue.add(channel.number);
-    _downloads[channel.number] = NetworkDownloadItem(
-      channelNumber: channel.number,
+    _downloadQueue.add(channelNumber);
+    _downloads[channelNumber] = NetworkDownloadItem(
+      channelNumber: channelNumber,
       status: NetworkDownloadStatus.downloading,
       progress: 0.0,
     );
-    notifyListeners();
-
-    _processQueue();
+    return true;
   }
 
   /// Manually trigger download for a channel.
   Future<void> downloadChannel(NetworkChannel channel) async {
-    if (_downloads[channel.number]?.status == NetworkDownloadStatus.downloaded) {
-      return; // Already downloaded
-    }
-
-    _downloadQueue.add(channel.number);
-    _downloads[channel.number] = NetworkDownloadItem(
-      channelNumber: channel.number,
-      status: NetworkDownloadStatus.downloading,
-      progress: 0.0,
-    );
+    if (!_enqueue(channel.number)) return;
     notifyListeners();
-
-    _processQueue();
+    unawaited(_processQueue());
   }
 
-  /// Download all channels.
+  /// Download all channels (queued; returns once they are queued).
   Future<void> downloadAllChannels() async {
     for (final channel in networkChannels) {
-      if (!isChannelDownloaded(channel.number) &&
-          !isChannelDownloading(channel.number)) {
-        _downloadQueue.add(channel.number);
-        _downloads[channel.number] = NetworkDownloadItem(
-          channelNumber: channel.number,
-          status: NetworkDownloadStatus.downloading,
-          progress: 0.0,
-        );
-      }
+      _enqueue(channel.number);
     }
     notifyListeners();
-    _processQueue();
+    unawaited(_processQueue());
   }
 
-  /// Process the download queue.
+  /// Process the download queue, persisting after every channel.
   Future<void> _processQueue() async {
     if (_isProcessingQueue) return;
     _isProcessingQueue = true;
 
-    while (_downloadQueue.isNotEmpty) {
-      final channelNumber = _downloadQueue.first;
-      _downloadQueue.remove(channelNumber);
+    try {
+      await _initFuture;
+      while (_downloadQueue.isNotEmpty) {
+        final channelNumber = _downloadQueue.first;
+        _downloadQueue.remove(channelNumber);
 
-      final channel = networkChannels.cast<NetworkChannel?>().firstWhere(
-            (c) => c?.number == channelNumber,
-            orElse: () => null,
-          );
+        final channel = networkChannelsByNumber[channelNumber];
+        if (channel == null) {
+          _downloads.remove(channelNumber);
+          continue;
+        }
 
-      if (channel == null) continue;
+        _activeChannel = channelNumber;
+        try {
+          await _downloadChannelFiles(channel);
+        } on _DownloadCancelled {
+          debugPrint('Network download cancelled: channel $channelNumber');
+          // Drop the entry unless the user re-queued it meanwhile.
+          if (!_downloadQueue.contains(channelNumber) &&
+              _downloads[channelNumber]?.isDownloading == true) {
+            _downloads.remove(channelNumber);
+          }
+        } catch (e) {
+          debugPrint('Failed to download channel $channelNumber: $e');
+          if (!_downloadQueue.contains(channelNumber) &&
+              _downloads[channelNumber]?.isDownloading == true) {
+            _downloads[channelNumber] = NetworkDownloadItem(
+              channelNumber: channelNumber,
+              status: NetworkDownloadStatus.failed,
+              errorMessage: e.toString(),
+            );
+          }
+        } finally {
+          _activeChannel = null;
+          _abortActive = null;
+        }
 
-      try {
-        await _downloadChannelFiles(channel);
-      } catch (e) {
-        debugPrint('Failed to download channel ${channel.number}: $e');
-        _downloads[channel.number] = NetworkDownloadItem(
-          channelNumber: channel.number,
-          status: NetworkDownloadStatus.failed,
-          errorMessage: e.toString(),
-        );
+        _progressNotifyTimer?.cancel();
         notifyListeners();
+        await _saveDownloads();
       }
+    } finally {
+      _isProcessingQueue = false;
     }
+  }
 
-    _isProcessingQueue = false;
-    await _saveDownloads();
+  void _setProgress(int channelNumber, double progress) {
+    final item = _downloads[channelNumber];
+    if (item == null || !item.isDownloading) return;
+    if ((progress - item.progress).abs() < 0.005 && progress < 1.0) return;
+    _downloads[channelNumber] = item.copyWith(progress: progress);
+    // Throttle: at most one notification per interval while bytes stream in.
+    if (_progressNotifyTimer?.isActive ?? false) return;
+    _progressNotifyTimer = Timer(_progressNotifyInterval, notifyListeners);
   }
 
   /// Download audio and image files for a channel.
   Future<void> _downloadChannelFiles(NetworkChannel channel) async {
-    final audioDir = await _getAudioDirectory();
-    final imageDir = await _getImageDirectory();
+    final root = _rootPath;
+    if (root == null) throw StateError('Download directory unavailable');
+    await _ensureDirectory(p.join(root, 'audio'));
+    await _ensureDirectory(p.join(root, 'images'));
 
-    // Sanitize filename
-    final safeAudioName = _sanitizeFilename(channel.audioFile);
-    final audioPath = '${audioDir.path}/$safeAudioName';
+    final relAudio = 'audio/${_sanitizeFilename(channel.audioFile)}';
+    String? relImage = channel.imageFile != null
+        ? 'images/${_sanitizeFilename(channel.imageFile!)}'
+        : null;
 
-    String? imagePath;
-    if (channel.imageFile != null) {
-      final safeImageName = _sanitizeFilename(channel.imageFile!);
-      imagePath = '${imageDir.path}/$safeImageName';
-    }
-
-    // Download audio
-    final audioFile = File(audioPath);
-    if (!await audioFile.exists()) {
+    // Reuse a file only when another downloaded channel already owns it
+    // (shared recordings). Any other existing file may be a partial left by
+    // an older build, so it is downloaded again.
+    final audioPath = p.join(root, relAudio);
+    final audioShared = _downloads.values.any((d) =>
+        d.isDownloaded &&
+        d.channelNumber != channel.number &&
+        d.audioPath == relAudio);
+    if (!(audioShared && await File(audioPath).exists())) {
       await _downloadFile(
         channel.audioUrl,
         audioPath,
-        onProgress: (progress) {
-          _downloads[channel.number] = _downloads[channel.number]!.copyWith(
-            progress: progress * 0.9, // Audio is 90% of progress
-          );
-          notifyListeners();
-        },
+        onProgress: (progress) => _setProgress(channel.number, progress * 0.9),
       );
     }
 
-    // Download image if available
-    if (channel.imageUrl != null && imagePath != null) {
-      final imageFile = File(imagePath);
-      if (!await imageFile.exists()) {
+    if (channel.imageUrl != null && relImage != null) {
+      final imagePath = p.join(root, relImage);
+      final imageShared = _downloads.values.any((d) =>
+          d.isDownloaded &&
+          d.channelNumber != channel.number &&
+          d.imagePath == relImage);
+      if (!(imageShared && await File(imagePath).exists())) {
         try {
           await _downloadFile(
             channel.imageUrl!,
             imagePath,
-            onProgress: (progress) {
-              _downloads[channel.number] = _downloads[channel.number]!.copyWith(
-                progress: 0.9 + (progress * 0.1), // Image is last 10%
-              );
-              notifyListeners();
-            },
+            onProgress: (progress) =>
+                _setProgress(channel.number, 0.9 + progress * 0.1),
           );
+        } on _DownloadCancelled {
+          rethrow;
         } catch (e) {
           // Image download failure is not critical
           debugPrint('Failed to download image for channel ${channel.number}: $e');
-          imagePath = null;
+          relImage = null;
         }
       }
     }
@@ -708,80 +793,130 @@ class NetworkDownloadService extends ChangeNotifier {
       channelNumber: channel.number,
       status: NetworkDownloadStatus.downloaded,
       progress: 1.0,
-      audioPath: audioPath,
-      imagePath: imagePath,
+      audioPath: relAudio,
+      imagePath: relImage,
       downloadedAt: DateTime.now(),
     );
-    notifyListeners();
   }
 
-  /// Download a file with progress callback.
+  /// Download [url] to [savePath] via a `.part` file that is renamed into
+  /// place only after the whole body arrived. Partial files are always
+  /// removed. Throws [_DownloadCancelled] if aborted through [_abortActive].
   Future<void> _downloadFile(
     String url,
     String savePath, {
     void Function(double)? onProgress,
   }) async {
-    final request = http.Request('GET', Uri.parse(url));
-    final response = await _httpClient.send(request);
+    final part = File('$savePath.part');
+    IOSink? sink;
+    StreamSubscription<List<int>>? subscription;
+    final done = Completer<void>();
+    _abortActive = () {
+      if (!done.isCompleted) done.completeError(const _DownloadCancelled());
+    };
 
-    if (response.statusCode != 200) {
-      throw Exception('HTTP ${response.statusCode}');
-    }
+    try {
+      final request = http.Request('GET', Uri.parse(url));
+      final response = await Future.any([
+        _httpClient.send(request).timeout(_connectTimeout),
+        // Lets a cancel during connect abort right away.
+        done.future.then<http.StreamedResponse>(
+          (_) => throw const _DownloadCancelled(),
+        ),
+      ]);
 
-    final contentLength = response.contentLength ?? 0;
-    int receivedBytes = 0;
-
-    final file = File(savePath);
-    final sink = file.openWrite();
-
-    await for (final chunk in response.stream) {
-      sink.add(chunk);
-      receivedBytes += chunk.length;
-
-      if (contentLength > 0 && onProgress != null) {
-        onProgress(receivedBytes / contentLength);
+      if (response.statusCode != 200) {
+        unawaited(response.stream.drain<void>().catchError((_) {}));
+        throw HttpException('HTTP ${response.statusCode}', uri: request.url);
       }
-    }
 
-    await sink.close();
+      final contentLength = response.contentLength ?? 0;
+      var receivedBytes = 0;
+      final out = part.openWrite();
+      sink = out;
+
+      subscription = response.stream.timeout(_idleTimeout).listen(
+        (chunk) {
+          out.add(chunk);
+          receivedBytes += chunk.length;
+          if (contentLength > 0 && onProgress != null) {
+            onProgress(receivedBytes / contentLength);
+          }
+        },
+        onError: (Object e, StackTrace st) {
+          if (!done.isCompleted) done.completeError(e, st);
+        },
+        onDone: () {
+          if (!done.isCompleted) done.complete();
+        },
+        cancelOnError: true,
+      );
+
+      await done.future;
+      await out.flush();
+      await out.close();
+      sink = null;
+
+      if (contentLength > 0 && receivedBytes != contentLength) {
+        throw HttpException(
+          'Incomplete download ($receivedBytes of $contentLength bytes)',
+          uri: request.url,
+        );
+      }
+      await part.rename(savePath);
+    } finally {
+      _abortActive = null;
+      await subscription?.cancel();
+      if (sink != null) {
+        try {
+          await sink.close();
+        } catch (_) {}
+      }
+      try {
+        if (await part.exists()) await part.delete();
+      } catch (_) {}
+      // Swallow the pending error of an abandoned signal future.
+      if (!done.isCompleted) done.complete();
+    }
   }
 
-  /// Delete a downloaded channel.
+  /// Delete a downloaded channel. Files shared with another tracked channel
+  /// are kept.
   Future<void> deleteChannel(int channelNumber) async {
-    final item = _downloads[channelNumber];
-    if (item == null) return;
+    if (isChannelDownloading(channelNumber)) cancelDownload(channelNumber);
+    final item = _downloads.remove(channelNumber);
+    if (item == null) {
+      notifyListeners();
+      return;
+    }
 
-    // Delete audio file
-    if (item.audioPath != null) {
+    final audio = item.audioPath;
+    if (audio != null && !_isPathInUse(audio)) {
       try {
-        final file = File(item.audioPath!);
-        if (await file.exists()) {
-          await file.delete();
-        }
+        final file = File(_resolve(audio)!);
+        if (await file.exists()) await file.delete();
       } catch (e) {
         debugPrint('Failed to delete audio: $e');
       }
     }
 
-    // Delete image file
-    if (item.imagePath != null) {
+    final image = item.imagePath;
+    if (image != null && !_isPathInUse(image, image: true)) {
       try {
-        final file = File(item.imagePath!);
-        if (await file.exists()) {
-          await file.delete();
-        }
+        final file = File(_resolve(image)!);
+        if (await file.exists()) await file.delete();
       } catch (e) {
         debugPrint('Failed to delete image: $e');
       }
     }
 
-    _downloads.remove(channelNumber);
     await _saveDownloads();
     notifyListeners();
   }
 
   /// Delete all downloaded channels.
   Future<void> deleteAllChannels() async {
+    cancelAllDownloads();
     final channelsToDelete = _downloads.keys.toList();
     for (final channelNumber in channelsToDelete) {
       await deleteChannel(channelNumber);
@@ -791,53 +926,49 @@ class NetworkDownloadService extends ChangeNotifier {
   /// Cancel a downloading channel.
   void cancelDownload(int channelNumber) {
     _downloadQueue.remove(channelNumber);
+    if (_activeChannel == channelNumber) _abortActive?.call();
     if (_downloads[channelNumber]?.status == NetworkDownloadStatus.downloading) {
       _downloads.remove(channelNumber);
-      notifyListeners();
     }
+    notifyListeners();
   }
 
   /// Cancel all pending and in-progress downloads.
   void cancelAllDownloads() {
     _downloadQueue.clear();
-    final toRemove = <int>[];
-    for (final entry in _downloads.entries) {
-      if (entry.value.status == NetworkDownloadStatus.downloading) {
-        toRemove.add(entry.key);
-      }
-    }
-    for (final key in toRemove) {
-      _downloads.remove(key);
-    }
+    _abortActive?.call();
+    _downloads.removeWhere(
+      (_, item) => item.status == NetworkDownloadStatus.downloading,
+    );
     notifyListeners();
   }
 
-  /// Get storage statistics.
+  /// Get storage statistics. Shared files are counted once.
   Future<NetworkStorageStats> getStorageStats() async {
     int audioBytes = 0;
     int imageBytes = 0;
     int channelCount = 0;
+    final seenAudio = <String>{};
+    final seenImages = <String>{};
 
-    for (final item in _downloads.values) {
+    for (final item in _downloads.values.toList()) {
       if (item.status != NetworkDownloadStatus.downloaded) continue;
 
       channelCount++;
 
-      if (item.audioPath != null) {
+      final audio = item.audioPath;
+      if (audio != null && seenAudio.add(audio)) {
         try {
-          final file = File(item.audioPath!);
-          if (await file.exists()) {
-            audioBytes += await file.length();
-          }
+          final file = File(_resolve(audio)!);
+          if (await file.exists()) audioBytes += await file.length();
         } catch (_) {}
       }
 
-      if (item.imagePath != null) {
+      final image = item.imagePath;
+      if (image != null && seenImages.add(image)) {
         try {
-          final file = File(item.imagePath!);
-          if (await file.exists()) {
-            imageBytes += await file.length();
-          }
+          final file = File(_resolve(image)!);
+          if (await file.exists()) imageBytes += await file.length();
         } catch (_) {}
       }
     }
@@ -850,28 +981,12 @@ class NetworkDownloadService extends ChangeNotifier {
     );
   }
 
-  /// Get the audio download directory.
-  Future<Directory> _getAudioDirectory() async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final audioDir = Directory('${docsDir.path}/network/audio');
-
-    if (!await audioDir.exists()) {
-      await audioDir.create(recursive: true);
+  Future<void> _ensureDirectory(String path) async {
+    final dir = Directory(path);
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
     }
-    await excludeFromBackup(audioDir.path);
-    return audioDir;
-  }
-
-  /// Get the image download directory.
-  Future<Directory> _getImageDirectory() async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final imageDir = Directory('${docsDir.path}/network/images');
-
-    if (!await imageDir.exists()) {
-      await imageDir.create(recursive: true);
-    }
-    await excludeFromBackup(imageDir.path);
-    return imageDir;
+    await excludeFromBackup(path);
   }
 
   /// Sanitize a filename for safe storage.

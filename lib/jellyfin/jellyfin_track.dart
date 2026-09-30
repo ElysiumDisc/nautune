@@ -74,7 +74,7 @@ class JellyfinTrack {
     this.runTimeTicks,
     this.primaryImageTag,
     this.serverUrl,
-    this.token,
+    String? token,
     this.userId,
     this.indexNumber,
     this.parentIndexNumber,
@@ -97,7 +97,15 @@ class JellyfinTrack {
     this.providerIds,
     this.tags,
     this.productionYear,
-  });
+    this.playlistItemId,
+  }) : _token = token;
+
+  /// Resolves the current session's access token for a track that was
+  /// restored from storage without one (tokens are not persisted). Set by
+  /// `JellyfinService` whenever its session changes; returns null when
+  /// [serverUrl]/[userId] don't belong to the active session.
+  static String? Function(String? serverUrl, String? userId)?
+      sessionTokenResolver;
 
   final String id;
   final String name;
@@ -107,7 +115,13 @@ class JellyfinTrack {
   final int? runTimeTicks;
   final String? primaryImageTag;
   final String? serverUrl;
-  final String? token;
+  final String? _token;
+
+  /// Access token for stream/artwork URLs: the token this track was built
+  /// with, or — for tracks restored from storage, which never persist the
+  /// token — the active session's token (resolved lazily at use time, so a
+  /// queue restored before the session is ready still works once it is).
+  String? get token => _token ?? sessionTokenResolver?.call(serverUrl, userId);
   final String? userId;
   final int? indexNumber;
   final int? parentIndexNumber;
@@ -132,6 +146,9 @@ class JellyfinTrack {
   final Map<String, String>? providerIds; // External IDs (MusicBrainzTrack, MusicBrainzArtist, etc.)
   final List<String>? tags; // User tags from Jellyfin for smart playlist filtering
   final int? productionYear; // Album production year, persisted for offline display
+  /// This entry's `PlaylistItemId` when the track came from a playlist's
+  /// items (older servers need it, not the item id, to move/remove entries).
+  final String? playlistItemId;
 
   factory JellyfinTrack.fromJson(Map<String, dynamic> json, {String? serverUrl, String? token, String? userId}) {
     final rawArtists = json['Artists'];
@@ -280,6 +297,9 @@ class JellyfinTrack {
       providerIds: providerIds,
       tags: tagsList,
       productionYear: productionYear,
+      playlistItemId: json['PlaylistItemId'] is String
+          ? json['PlaylistItemId'] as String
+          : null,
     );
   }
 
@@ -315,6 +335,7 @@ class JellyfinTrack {
     Map<String, String>? providerIds,
     List<String>? tags,
     int? productionYear,
+    String? playlistItemId,
   }) {
     return JellyfinTrack(
       id: id ?? this.id,
@@ -325,7 +346,7 @@ class JellyfinTrack {
       runTimeTicks: runTimeTicks ?? this.runTimeTicks,
       primaryImageTag: primaryImageTag ?? this.primaryImageTag,
       serverUrl: serverUrl ?? this.serverUrl,
-      token: token ?? this.token,
+      token: token ?? _token,
       userId: userId ?? this.userId,
       indexNumber: indexNumber ?? this.indexNumber,
       parentIndexNumber: parentIndexNumber ?? this.parentIndexNumber,
@@ -349,7 +370,31 @@ class JellyfinTrack {
       providerIds: providerIds ?? this.providerIds,
       tags: tags ?? this.tags,
       productionYear: productionYear ?? this.productionYear,
+      playlistItemId: playlistItemId ?? this.playlistItemId,
     );
+  }
+
+  /// Artist credit for scrobbling (Last.fm / ListenBrainz): every artist,
+  /// comma-separated, or null when unknown. Unlike [displayArtist] this is
+  /// never a UI abbreviation ("A & 1 more") or a placeholder.
+  String? get scrobbleArtist => scrobbleArtistFor(artists);
+
+  /// Pure form of [scrobbleArtist]. Also repairs single-string credits that
+  /// were persisted from [displayArtist] ("A & 2 more" → "A").
+  static String? scrobbleArtistFor(List<String> artists) {
+    final names = [
+      for (final a in artists)
+        if (a.trim().isNotEmpty) a.trim(),
+    ];
+    if (names.isEmpty) return null;
+    if (names.length == 1) {
+      final single = names.first
+          .replaceFirst(RegExp(r' & \d+ more$'), '')
+          .trim();
+      if (single.isEmpty || single == 'Unknown Artist') return null;
+      return single;
+    }
+    return names.join(', ');
   }
 
   String get displayArtist {
@@ -698,7 +743,9 @@ class JellyfinTrack {
       'runTimeTicks': runTimeTicks,
       'primaryImageTag': primaryImageTag,
       'serverUrl': serverUrl,
-      'token': token,
+      // The access token is deliberately NOT persisted (these boxes are
+      // unencrypted and iCloud-backed-up); [token] re-resolves it from the
+      // active session via [sessionTokenResolver].
       'userId': userId,
       'indexNumber': indexNumber,
       'parentIndexNumber': parentIndexNumber,
@@ -720,6 +767,8 @@ class JellyfinTrack {
       'genres': genres,
       'tags': tags,
       'productionYear': productionYear,
+      if (providerIds != null) 'providerIds': providerIds,
+      if (playlistItemId != null) 'playlistItemId': playlistItemId,
     };
   }
 
@@ -747,6 +796,14 @@ class JellyfinTrack {
 
     final productionYearVal = json['productionYear'];
     final productionYear = productionYearVal is int ? productionYearVal : (productionYearVal is num ? productionYearVal.toInt() : null);
+
+    final rawProviderIds = json['providerIds'];
+    final providerIds = rawProviderIds is Map
+        ? <String, String>{
+            for (final e in rawProviderIds.entries)
+              if (e.key is String && e.value != null) e.key as String: '${e.value}',
+          }
+        : null;
 
     return JellyfinTrack(
       id: json['id'] is String ? json['id'] as String : '',
@@ -779,6 +836,8 @@ class JellyfinTrack {
       genres: genresList,
       tags: tagsList,
       productionYear: productionYear,
+      providerIds: (providerIds == null || providerIds.isEmpty) ? null : providerIds,
+      playlistItemId: json['playlistItemId'] is String ? json['playlistItemId'] as String : null,
     );
   }
 

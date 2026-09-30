@@ -17,6 +17,7 @@ import '../jellyfin/jellyfin_genre.dart';
 import '../jellyfin/jellyfin_library.dart';
 import '../jellyfin/jellyfin_playlist.dart';
 import '../jellyfin/jellyfin_track.dart';
+import '../jellyfin/order_by_ids.dart';
 import '../models/download_item.dart';
 import '../repositories/music_repository.dart';
 import '../services/haptic_service.dart';
@@ -78,8 +79,8 @@ class LibraryScreen extends StatefulWidget {
 class _LibraryScreenState extends State<LibraryScreen>
     with SingleTickerProviderStateMixin {
   static const int _homeTabIndex = 2;
+  static const int _favoritesTabIndex = 1;
   late TabController _tabController;
-  final ScrollController _albumsScrollController = ScrollController();
   final ScrollController _playlistsScrollController = ScrollController();
   int _currentTabIndex = _homeTabIndex;
 
@@ -96,46 +97,28 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   // Provider-based state
   NautuneAppState? _appState;
-  bool? _previousOfflineMode;
-  bool? _previousNetworkAvailable;
   bool _hasInitialized = false;
 
-  // Tracked snapshots used by _onAppStateChanged to detect when a rebuild is
-  // needed. listen:false on Provider.of (above) means the framework no longer
-  // auto-rebuilds on every notifyListeners(); we manually rebuild only when one
-  // of these UI-relevant fields actually changes.
-  SortOption? _previousAlbumSortBy;
-  SortOrder? _previousAlbumSortOrder;
-  SortOption? _previousArtistSortBy;
-  SortOrder? _previousArtistSortOrder;
-  int? _previousAlbumsIdentity;
-  int? _previousArtistsIdentity;
-  int? _previousPlaylistsIdentity;
-  int? _previousGenresIdentity;
-  int? _previousFavoritesIdentity;
-  int? _previousRecentTracksIdentity;
-  int? _previousLibrariesIdentity;
-  bool? _previousIsLoadingAlbums;
-  bool? _previousIsLoadingArtists;
-  bool? _previousIsLoadingPlaylists;
-  bool? _previousIsLoadingFavorites;
-  bool? _previousIsLoadingGenres;
-  bool? _previousIsLoadingRecent;
-  bool? _previousIsLoadingLibraries;
-  bool? _previousIsLoadingMoreAlbums;
-  bool? _previousIsLoadingMoreArtists;
-  bool? _previousIsDemoMode;
-  String? _previousSelectedLibraryId;
-  Object? _previousLibrariesError;
-  Object? _previousAlbumsError;
-  Object? _previousArtistsError;
-  Object? _previousPlaylistsError;
-  Object? _previousFavoritesError;
+  /// The app-state values this screen (and its tabs) render, captured by
+  /// [_uiSnapshot]. listen:false on Provider.of means the framework doesn't
+  /// rebuild on every notifyListeners(); we rebuild only when one of these
+  /// actually changes. Anything a tab reads from [NautuneAppState] must be
+  /// listed there, or the tab won't update when it changes.
+  List<Object?> _lastSnapshot = const [];
+
+  /// Identity of the completed-downloads list the offline views were built
+  /// from; they rebuild when it changes.
+  List<Object?>? _lastCompletedDownloads;
+
+  /// Favorites are refreshed on entering the tab at most this often.
+  static const Duration _favoritesRefreshInterval = Duration(minutes: 5);
+  DateTime? _lastFavoritesRefresh;
 
   // Cached filtered favorites to avoid recomputing on every build
   List<JellyfinTrack>? _cachedFilteredFavorites;
   List<JellyfinTrack>? _lastFavoriteTracks;
   bool? _lastOfflineModeForFavorites;
+  List<Object?>? _lastDownloadsForFavorites;
 
   @override
   void initState() {
@@ -146,49 +129,23 @@ class _LibraryScreenState extends State<LibraryScreen>
       initialIndex: _homeTabIndex,
     );  // Library, Favorites, Home (Most), Playlists, Search
     _tabController.addListener(_handleTabChange);
-    _albumsScrollController.addListener(_onAlbumsScroll);
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (!_hasInitialized) {
-      _appState = Provider.of<NautuneAppState>(context, listen: false);
-      _previousOfflineMode = _appState!.isOfflineMode;
-      _previousNetworkAvailable = _appState!.networkAvailable;
-      _previousAlbumSortBy = _appState!.albumSortBy;
-      _previousAlbumSortOrder = _appState!.albumSortOrder;
-      _previousArtistSortBy = _appState!.artistSortBy;
-      _previousArtistSortOrder = _appState!.artistSortOrder;
-      _previousAlbumsIdentity = identityHashCode(_appState!.albums);
-      _previousArtistsIdentity = identityHashCode(_appState!.artists);
-      _previousPlaylistsIdentity = identityHashCode(_appState!.playlists);
-      _previousGenresIdentity = identityHashCode(_appState!.genres);
-      _previousFavoritesIdentity = identityHashCode(_appState!.favoriteTracks);
-      _previousRecentTracksIdentity = identityHashCode(_appState!.recentTracks);
-      _previousLibrariesIdentity = identityHashCode(_appState!.libraries);
-      _previousIsLoadingAlbums = _appState!.isLoadingAlbums;
-      _previousIsLoadingArtists = _appState!.isLoadingArtists;
-      _previousIsLoadingPlaylists = _appState!.isLoadingPlaylists;
-      _previousIsLoadingFavorites = _appState!.isLoadingFavorites;
-      _previousIsLoadingGenres = _appState!.isLoadingGenres;
-      _previousIsLoadingRecent = _appState!.isLoadingRecent;
-      _previousIsLoadingLibraries = _appState!.isLoadingLibraries;
-      _previousIsLoadingMoreAlbums = _appState!.isLoadingMoreAlbums;
-      _previousIsLoadingMoreArtists = _appState!.isLoadingMoreArtists;
-      _previousIsDemoMode = _appState!.isDemoMode;
-      _previousSelectedLibraryId = _appState!.selectedLibraryId;
-      _previousLibrariesError = _appState!.librariesError;
-      _previousAlbumsError = _appState!.albumsError;
-      _previousArtistsError = _appState!.artistsError;
-      _previousPlaylistsError = _appState!.playlistsError;
-      _previousFavoritesError = _appState!.favoritesError;
+      final appState = Provider.of<NautuneAppState>(context, listen: false);
+      _appState = appState;
+      _lastSnapshot = _uiSnapshot(appState);
+      _lastCompletedDownloads = appState.downloadService.completedDownloads;
       _hasInitialized = true;
-      _tabOrder = List<int>.from(_appState!.navTabOrder);
-      _appState!.addListener(_onAppStateChanged);
+      _tabOrder = List<int>.from(appState.navTabOrder);
+      appState.addListener(_onAppStateChanged);
+      appState.downloadService.addListener(_onDownloadsChanged);
 
       // Restore saved tab index after build completes
-      final savedTabIndex = _appState!.initialLibraryTabIndex;
+      final savedTabIndex = appState.initialLibraryTabIndex;
       if (savedTabIndex != _homeTabIndex && savedTabIndex < 5) {
         _currentTabIndex = savedTabIndex;
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -200,128 +157,99 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
   }
 
+  /// Everything the library UI reads from [NautuneAppState].
+  static List<Object?> _uiSnapshot(NautuneAppState a) => [
+        // Connectivity / mode
+        a.isOfflineMode,
+        a.networkAvailable,
+        a.isDemoMode,
+        a.selectedLibraryId,
+        // Libraries
+        a.libraries,
+        a.isLoadingLibraries,
+        a.librariesError,
+        // Albums / artists / genres
+        a.albumSortBy,
+        a.albumSortOrder,
+        a.artistSortBy,
+        a.artistSortOrder,
+        a.albums,
+        a.isLoadingAlbums,
+        a.isLoadingMoreAlbums,
+        a.hasMoreAlbums,
+        a.albumsError,
+        a.artists,
+        a.isLoadingArtists,
+        a.isLoadingMoreArtists,
+        a.hasMoreArtists,
+        a.artistsError,
+        a.genres,
+        a.isLoadingGenres,
+        a.genresError,
+        // Playlists / favorites
+        a.playlists,
+        a.isLoadingPlaylists,
+        a.playlistsError,
+        a.favoriteTracks,
+        a.isLoadingFavorites,
+        a.favoritesError,
+        // Home shelves
+        a.recentTracks,
+        a.isLoadingRecent,
+        a.recentlyPlayedTracks,
+        a.isLoadingRecentlyPlayed,
+        a.recentlyAddedAlbums,
+        a.isLoadingRecentlyAdded,
+        a.discoverTracks,
+        a.isLoadingDiscover,
+        a.onThisDayTracks,
+        a.isLoadingOnThisDay,
+        a.recommendationTracks,
+        a.isLoadingRecommendations,
+        a.recommendationSeedTrackName,
+      ];
+
+  /// Lists compare by identity (providers replace them on change); other
+  /// values by equality.
+  static bool _snapshotChanged(List<Object?> a, List<Object?> b) {
+    if (a.length != b.length) return true;
+    for (var i = 0; i < a.length; i++) {
+      final x = a[i];
+      final y = b[i];
+      if (identical(x, y)) continue;
+      if (x is List || y is List || x != y) return true;
+    }
+    return false;
+  }
+
   void _onAppStateChanged() {
-    if (!mounted || _appState == null) return;
-    final appState = _appState!;
+    final appState = _appState;
+    if (!mounted || appState == null) return;
+    final snapshot = _uiSnapshot(appState);
+    if (!_snapshotChanged(_lastSnapshot, snapshot)) return;
+    _lastSnapshot = snapshot;
+    setState(() {});
+  }
 
-    final offline = appState.isOfflineMode;
-    final network = appState.networkAvailable;
-    final connectivityChanged = _previousOfflineMode != offline ||
-        _previousNetworkAvailable != network;
-
-    final albumSortBy = appState.albumSortBy;
-    final albumSortOrder = appState.albumSortOrder;
-    final artistSortBy = appState.artistSortBy;
-    final artistSortOrder = appState.artistSortOrder;
-    final albumsId = identityHashCode(appState.albums);
-    final artistsId = identityHashCode(appState.artists);
-    final playlistsId = identityHashCode(appState.playlists);
-    final genresId = identityHashCode(appState.genres);
-    final favoritesId = identityHashCode(appState.favoriteTracks);
-    final recentId = identityHashCode(appState.recentTracks);
-    final librariesId = identityHashCode(appState.libraries);
-    final isLoadingAlbums = appState.isLoadingAlbums;
-    final isLoadingArtists = appState.isLoadingArtists;
-    final isLoadingPlaylists = appState.isLoadingPlaylists;
-    final isLoadingFavorites = appState.isLoadingFavorites;
-    final isLoadingGenres = appState.isLoadingGenres;
-    final isLoadingRecent = appState.isLoadingRecent;
-    final isLoadingLibraries = appState.isLoadingLibraries;
-    final isLoadingMoreAlbums = appState.isLoadingMoreAlbums;
-    final isLoadingMoreArtists = appState.isLoadingMoreArtists;
-    final isDemoMode = appState.isDemoMode;
-    final selectedLibraryId = appState.selectedLibraryId;
-    final librariesError = appState.librariesError;
-    final albumsError = appState.albumsError;
-    final artistsError = appState.artistsError;
-    final playlistsError = appState.playlistsError;
-    final favoritesError = appState.favoritesError;
-
-    final dataChanged = _previousAlbumSortBy != albumSortBy ||
-        _previousAlbumSortOrder != albumSortOrder ||
-        _previousArtistSortBy != artistSortBy ||
-        _previousArtistSortOrder != artistSortOrder ||
-        _previousAlbumsIdentity != albumsId ||
-        _previousArtistsIdentity != artistsId ||
-        _previousPlaylistsIdentity != playlistsId ||
-        _previousGenresIdentity != genresId ||
-        _previousFavoritesIdentity != favoritesId ||
-        _previousRecentTracksIdentity != recentId ||
-        _previousLibrariesIdentity != librariesId ||
-        _previousIsLoadingAlbums != isLoadingAlbums ||
-        _previousIsLoadingArtists != isLoadingArtists ||
-        _previousIsLoadingPlaylists != isLoadingPlaylists ||
-        _previousIsLoadingFavorites != isLoadingFavorites ||
-        _previousIsLoadingGenres != isLoadingGenres ||
-        _previousIsLoadingRecent != isLoadingRecent ||
-        _previousIsLoadingLibraries != isLoadingLibraries ||
-        _previousIsLoadingMoreAlbums != isLoadingMoreAlbums ||
-        _previousIsLoadingMoreArtists != isLoadingMoreArtists ||
-        _previousIsDemoMode != isDemoMode ||
-        _previousSelectedLibraryId != selectedLibraryId ||
-        _previousLibrariesError != librariesError ||
-        _previousAlbumsError != albumsError ||
-        _previousArtistsError != artistsError ||
-        _previousPlaylistsError != playlistsError ||
-        _previousFavoritesError != favoritesError;
-
-    if (connectivityChanged) {
-      debugPrint('🔄 LibraryScreen: Connectivity changed (offline: $_previousOfflineMode -> $offline, network: $_previousNetworkAvailable -> $network)');
-      _previousOfflineMode = offline;
-      _previousNetworkAvailable = network;
-    }
-
-    if (dataChanged) {
-      _previousAlbumSortBy = albumSortBy;
-      _previousAlbumSortOrder = albumSortOrder;
-      _previousArtistSortBy = artistSortBy;
-      _previousArtistSortOrder = artistSortOrder;
-      _previousAlbumsIdentity = albumsId;
-      _previousArtistsIdentity = artistsId;
-      _previousPlaylistsIdentity = playlistsId;
-      _previousGenresIdentity = genresId;
-      _previousFavoritesIdentity = favoritesId;
-      _previousRecentTracksIdentity = recentId;
-      _previousLibrariesIdentity = librariesId;
-      _previousIsLoadingAlbums = isLoadingAlbums;
-      _previousIsLoadingArtists = isLoadingArtists;
-      _previousIsLoadingPlaylists = isLoadingPlaylists;
-      _previousIsLoadingFavorites = isLoadingFavorites;
-      _previousIsLoadingGenres = isLoadingGenres;
-      _previousIsLoadingRecent = isLoadingRecent;
-      _previousIsLoadingLibraries = isLoadingLibraries;
-      _previousIsLoadingMoreAlbums = isLoadingMoreAlbums;
-      _previousIsLoadingMoreArtists = isLoadingMoreArtists;
-      _previousIsDemoMode = isDemoMode;
-      _previousSelectedLibraryId = selectedLibraryId;
-      _previousLibrariesError = librariesError;
-      _previousAlbumsError = albumsError;
-      _previousArtistsError = artistsError;
-      _previousPlaylistsError = playlistsError;
-      _previousFavoritesError = favoritesError;
-    }
-
-    if (connectivityChanged || dataChanged) {
-      setState(() {});
-    }
+  /// Offline, the library, favorites and downloads views are built from the
+  /// completed downloads; rebuild when that list changes.
+  void _onDownloadsChanged() {
+    final appState = _appState;
+    if (!mounted || appState == null) return;
+    final completed = appState.downloadService.completedDownloads;
+    if (identical(completed, _lastCompletedDownloads)) return;
+    _lastCompletedDownloads = completed;
+    if (appState.isOfflineMode) setState(() {});
   }
 
   @override
   void dispose() {
     _appState?.removeListener(_onAppStateChanged);
+    _appState?.downloadService.removeListener(_onDownloadsChanged);
     _tabController.removeListener(_handleTabChange);
     _tabController.dispose();
-    _albumsScrollController.dispose();
     _playlistsScrollController.dispose();
     super.dispose();
-  }
-
-  void _onAlbumsScroll() {
-    if (_albumsScrollController.position.pixels >=
-        _albumsScrollController.position.maxScrollExtent - 200) {
-      // Load more albums when near bottom
-      _appState?.loadMoreAlbums();
-    }
   }
 
   void _handleTabChange() {
@@ -331,20 +259,33 @@ class _LibraryScreenState extends State<LibraryScreen>
     });
     // Persist tab selection
     _appState?.updateLibraryTabIndex(_currentTabIndex);
-    // Refresh favorites when switching to favorites tab (tab index 1)
-    if (_currentTabIndex == 1) {
-      _appState?.refreshFavorites();
+    if (_currentTabIndex == _favoritesTabIndex) _maybeRefreshFavorites();
+  }
+
+  /// Refresh favorites on entering the tab: online only, and not more often
+  /// than [_favoritesRefreshInterval] (pull to refresh is always available).
+  void _maybeRefreshFavorites() {
+    final appState = _appState;
+    if (appState == null || appState.isOfflineMode) return;
+    final now = DateTime.now();
+    final last = _lastFavoritesRefresh;
+    if (last != null && now.difference(last) < _favoritesRefreshInterval) {
+      return;
     }
+    _lastFavoritesRefresh = now;
+    appState.refreshFavorites();
   }
 
   /// Returns filtered favorites with caching to avoid recomputing on every build
   List<JellyfinTrack>? _getFilteredFavorites(NautuneAppState appState) {
     final favoriteTracks = appState.favoriteTracks;
     final isOffline = appState.isOfflineMode;
+    final downloads = isOffline ? appState.downloadService.completedDownloads : null;
 
     // Check if we can use cached result
     if (identical(_lastFavoriteTracks, favoriteTracks) &&
         _lastOfflineModeForFavorites == isOffline &&
+        identical(_lastDownloadsForFavorites, downloads) &&
         _cachedFilteredFavorites != null) {
       return _cachedFilteredFavorites;
     }
@@ -352,6 +293,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     // Update cache
     _lastFavoriteTracks = favoriteTracks;
     _lastOfflineModeForFavorites = isOffline;
+    _lastDownloadsForFavorites = downloads;
 
     if (isOffline && favoriteTracks != null) {
       _cachedFilteredFavorites = favoriteTracks
@@ -428,7 +370,10 @@ class _LibraryScreenState extends State<LibraryScreen>
 
         if (isLoadingLibraries && (libraries == null || libraries.isEmpty)) {
           body = const Center(child: CircularProgressIndicator());
-        } else if (libraryError != null) {
+        } else if (libraryError != null &&
+            (libraries == null || libraries.isEmpty)) {
+          // Only when there's nothing to show: a failed refresh with cached
+          // libraries (e.g. Retry while offline) keeps the tabs.
           body = _ErrorState(
             message: 'Could not reach Jellyfin.\n${libraryError.toString()}',
             onRetry: () => appState.refreshLibraries(),
@@ -485,7 +430,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 isLoading: isLoadingFavorites,
                 error: favoritesError,
                 onRefresh: () => appState.refreshFavorites(),
-                onTrackTap: (track) => _playTrack(track),
+                onTrackTap: _playTrack,
                 appState: appState,
               ),
               // Swap Most/Downloads based on offline mode
@@ -914,14 +859,16 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
   }
 
-  Future<void> _playTrack(JellyfinTrack track) async {
+  /// Plays [track] with [queue] (the favorites as shown: sorted, and only
+  /// downloaded ones while offline) as the queue.
+  Future<void> _playTrack(JellyfinTrack track, List<JellyfinTrack> queue) async {
     final appState = _appState;
     if (appState == null) return;
 
     try {
       await appState.audioPlayerService.playTrack(
         track,
-        queueContext: appState.favoriteTracks,
+        queueContext: queue,
       );
     } catch (error) {
       if (!mounted) return;
@@ -1053,7 +1000,8 @@ class _LibraryTab extends StatefulWidget {
   State<_LibraryTab> createState() => _LibraryTabState();
 }
 
-class _LibraryTabState extends State<_LibraryTab> {
+class _LibraryTabState extends State<_LibraryTab>
+    with AutomaticKeepAliveClientMixin {
   String _selectedView = 'albums'; // 'albums', 'artists', or 'genres'
   late ScrollController _albumsScrollController;
   late ScrollController _artistsScrollController;
@@ -1080,7 +1028,13 @@ class _LibraryTabState extends State<_LibraryTab> {
     super.dispose();
   }
 
+  // Keep the chosen view and scroll positions while other tabs are shown.
+  @override
+  bool get wantKeepAlive => true;
+
+  // Offline the lists are the downloads, all loaded: never page the server.
   void _onAlbumsScroll() {
+    if (widget.appState.isOfflineMode) return;
     if (_albumsScrollController.position.pixels >=
         _albumsScrollController.position.maxScrollExtent - 200) {
       widget.appState.loadMoreAlbums();
@@ -1088,15 +1042,23 @@ class _LibraryTabState extends State<_LibraryTab> {
   }
 
   void _onArtistsScroll() {
+    if (widget.appState.isOfflineMode) return;
     if (_artistsScrollController.position.pixels >=
         _artistsScrollController.position.maxScrollExtent - 200) {
       widget.appState.loadMoreArtists();
     }
   }
 
+  /// The view to show: Genres isn't offered offline, so it falls back to
+  /// Albums (the choice comes back when online again).
+  String _effectiveView(bool isOffline) =>
+      isOffline && _selectedView == 'genres' ? 'albums' : _selectedView;
+
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final isOffline = widget.appState.isOfflineMode;
+    final view = _effectiveView(isOffline);
 
     final theme = Theme.of(context);
     // Header stays put while the collection scrolls under it, so the A-Z
@@ -1110,7 +1072,7 @@ class _LibraryTabState extends State<_LibraryTab> {
             children: [
               Expanded(
                 child: CupertinoSlidingSegmentedControl<String>(
-                  groupValue: _selectedView,
+                  groupValue: view,
                   thumbColor: theme.colorScheme.primary,
                   backgroundColor: theme.colorScheme.onSurface.withValues(alpha: 0.08),
                   children: {
@@ -1125,7 +1087,7 @@ class _LibraryTabState extends State<_LibraryTab> {
                           label,
                           style: theme.textTheme.subhead.copyWith(
                             fontWeight: FontWeight.w600,
-                            color: _selectedView == value
+                            color: view == value
                                 ? theme.colorScheme.onPrimary
                                 : theme.colorScheme.onSurface,
                           ),
@@ -1140,24 +1102,26 @@ class _LibraryTabState extends State<_LibraryTab> {
                 ),
               ),
               // Sort controls for albums and artists (not genres)
-              if (!isOffline && _selectedView != 'genres') ...[
+              if (!isOffline && view != 'genres') ...[
                 const SizedBox(width: NautuneSpacing.sm),
                 _SortControls(
                   appState: widget.appState,
-                  isAlbums: _selectedView == 'albums',
+                  isAlbums: view == 'albums',
                 ),
               ],
             ],
           ),
         ),
         Expanded(
-          child: isOffline ? _buildOfflineContent() : _buildOnlineContent(),
+          child: isOffline
+              ? _buildOfflineContent(view)
+              : _buildOnlineContent(view),
         ),
       ],
     );
   }
 
-  Widget _buildOfflineContent() {
+  Widget _buildOfflineContent(String view) {
     final downloads = widget.appState.downloadService.completedDownloads;
     final downloadsId = identityHashCode(downloads);
     if (downloadsId != _lastOfflineDownloadsIdentity) {
@@ -1166,7 +1130,7 @@ class _LibraryTabState extends State<_LibraryTab> {
       _cachedOfflineArtists = null;
     }
 
-    if (_selectedView == 'albums') {
+    if (view == 'albums') {
       var offlineAlbums = _cachedOfflineAlbums;
       if (offlineAlbums == null) {
         // Group by album id (not name) so same-name albums stay apart.
@@ -1216,7 +1180,8 @@ class _LibraryTabState extends State<_LibraryTab> {
         }
 
         offlineArtists = artistsMap.values.toList()
-          ..sort((a, b) => a.name.compareTo(b.name));
+          ..sort((a, b) =>
+              a.name.toLowerCase().compareTo(b.name.toLowerCase()));
         _cachedOfflineArtists = offlineArtists;
       }
 
@@ -1232,8 +1197,8 @@ class _LibraryTabState extends State<_LibraryTab> {
     }
   }
 
-  Widget _buildOnlineContent() {
-    if (_selectedView == 'albums') {
+  Widget _buildOnlineContent(String view) {
+    if (view == 'albums') {
       return _AlbumsTab(
         albums: widget.appState.albums,
         isLoading: widget.appState.isLoadingAlbums,
@@ -1248,7 +1213,7 @@ class _LibraryTabState extends State<_LibraryTab> {
         hasMore: widget.appState.hasMoreAlbums,
         onLoadAll: widget.appState.loadAllAlbums,
       );
-    } else if (_selectedView == 'artists') {
+    } else if (view == 'artists') {
       return _ArtistsTab(
         appState: widget.appState,
         scrollController: _artistsScrollController,

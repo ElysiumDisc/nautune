@@ -13,24 +13,28 @@ import 'package:path_provider/path_provider.dart';
 import 'wav_builder.dart';
 
 /// Plays a single sustained sine-wave tone at an arbitrary frequency.
-/// Tones are synthesized in memory as integer-cycle WAV buffers so they loop
-/// seamlessly (head sample == tail sample → no click at the loop boundary).
+/// Tones are synthesized as integer-cycle WAV buffers (no waveform
+/// discontinuity at the loop point). audioplayers loops by seeking back to 0
+/// when the item ends, which leaves a short gap on every wrap, so the buffer
+/// is long (~30 s) to make that gap rare. Synthesis runs off the UI isolate.
 ///
 /// Designed for the Healing Frequencies Easter egg. Works 100% offline.
 class HealingFrequencyService {
   static const int _sampleRate = 44100;
-  static const double _targetDurationSeconds = 2.0;
+  static const double _targetDurationSeconds = 30.0;
   static const double _amplitude = 0.5; // leaves headroom before clipping
 
   AudioPlayer? _player;
   double? _currentHz;
   double _volume = 0.7;
 
-  final Map<double, Uint8List> _byteCache = {};
   final Map<double, String> _fileCache = {};
   String? _tempDir;
   bool _disposed = false;
   bool _initialized = false;
+  Future<void>? _initFuture;
+  // Incremented per play/stop; a superseded play() doesn't touch state.
+  int _request = 0;
 
   final StreamController<double?> _currentHzController =
       StreamController<double?>.broadcast();
@@ -40,19 +44,49 @@ class HealingFrequencyService {
   double get volume => _volume;
   bool get isInitialized => _initialized;
 
-  Future<void> init() async {
-    if (_initialized || _disposed) return;
+  /// Create the player and temp directory. A [dispose] that races this is
+  /// honoured (nothing created afterwards is leaked).
+  Future<void> init() => _initFuture ??= _init();
 
+  Future<void> _init() async {
+    if (_disposed) return;
     final dir = await getTemporaryDirectory();
-    _tempDir = p.join(dir.path, 'healing_freq');
-    await Directory(_tempDir!).create(recursive: true);
+    if (_disposed) return;
+    // Per-instance directory so a closing screen's cleanup can't delete the
+    // files of a screen that was reopened right away.
+    final parent = p.join(dir.path, 'healing_freq');
+    final tempDir = p.join(
+      parent,
+      DateTime.now().microsecondsSinceEpoch.toString(),
+    );
+    await _removeStaleEntries(parent, keep: tempDir);
+    await Directory(tempDir).create(recursive: true);
+    _tempDir = tempDir;
+    if (_disposed) return;
 
     final player = AudioPlayer();
+    _player = player;
     await player.setReleaseMode(ReleaseMode.loop);
     await player.setVolume(_volume);
-
-    _player = player;
     _initialized = true;
+  }
+
+  /// Delete what earlier instances left in [parent] (directories of sessions
+  /// that ended without dispose, e.g. the app was killed, and loose files
+  /// from older builds), except [keep]. Best effort: errors are ignored.
+  static Future<void> _removeStaleEntries(String parent, {required String keep}) async {
+    try {
+      final dir = Directory(parent);
+      if (!await dir.exists()) return;
+      await for (final entity in dir.list(followLinks: false)) {
+        if (p.equals(entity.path, keep)) continue;
+        try {
+          await entity.delete(recursive: true);
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('HealingFrequencyService: stale temp cleanup failed: $e');
+    }
   }
 
   /// iOS: allow mixing so background music keeps playing. Applied on every
@@ -83,7 +117,7 @@ class HealingFrequencyService {
 
   /// Synthesize an integer number of full cycles so the buffer loops without a
   /// zero-crossing discontinuity.
-  Uint8List _generateLoopWav(double hz) {
+  static Uint8List _generateLoopWav(double hz) {
     final safeHz = hz.clamp(20.0, 20000.0);
     final cyclesTarget = (safeHz * _targetDurationSeconds).round().clamp(1, 1 << 20);
     final numSamples = (cyclesTarget * _sampleRate / safeHz).round();
@@ -102,10 +136,12 @@ class HealingFrequencyService {
   }
 
   Future<Source> _sourceFor(double hz) async {
-    final bytes = _byteCache.putIfAbsent(hz, () => _generateLoopWav(hz));
-
     final cached = _fileCache[hz];
     if (cached != null) return DeviceFileSource(cached, mimeType: 'audio/wav');
+
+    // ~2.6 MB of PCM: synthesize off the UI isolate (static tear-off, so
+    // nothing from `this` is sent).
+    final bytes = await compute(_generateLoopWav, hz);
 
     final dir = _tempDir;
     if (dir == null) {
@@ -125,17 +161,24 @@ class HealingFrequencyService {
     if (player == null) return;
 
     if (_currentHz == hz) return;
+    final request = ++_request;
+    bool superseded() => _disposed || request != _request;
 
     try {
+      // Build the source first (may take a moment for a new tone) so the
+      // previous tone keeps playing until the new one is ready.
+      final source = await _sourceFor(hz);
+      if (superseded()) return;
       await player.stop();
       await _applyMixingContext(player);
       await player.setVolume(_volume);
-      final source = await _sourceFor(hz);
+      if (superseded()) return;
       await player.play(source);
+      if (superseded()) return;
       _currentHz = hz;
       _currentHzController.add(hz);
     } catch (e) {
-      debugPrint('HealingFrequencyService: play($hz) failed: $e');
+      if (!superseded()) debugPrint('HealingFrequencyService: play($hz) failed: $e');
     }
   }
 
@@ -143,6 +186,7 @@ class HealingFrequencyService {
     if (_disposed) return;
     final player = _player;
     if (player == null) return;
+    _request++;
     try {
       await player.stop();
     } catch (e) {
@@ -166,6 +210,10 @@ class HealingFrequencyService {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _request++;
+    try {
+      await _initFuture;
+    } catch (_) {}
     try {
       await _player?.stop();
       await _player?.dispose();
@@ -174,7 +222,6 @@ class HealingFrequencyService {
     }
     _player = null;
     if (_initialized) await _restoreMusicSession();
-    _byteCache.clear();
     _fileCache.clear();
     await _currentHzController.close();
     if (_tempDir != null) {

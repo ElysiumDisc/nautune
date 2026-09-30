@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'dart:io' show Platform;
-import 'dart:math' show Random, max;
+import 'dart:math' show Random, max, pow;
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -28,7 +29,7 @@ class FretsOnFireScreen extends StatefulWidget {
 }
 
 class _FretsOnFireScreenState extends State<FretsOnFireScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   // Services
   final _chartGenerator = ChartGeneratorService.instance;
   final _chartCache = ChartCacheService.instance;
@@ -43,19 +44,31 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   final AudioPlayer _gamePlayer = AudioPlayer();
   Duration _position = Duration.zero;
 
+  /// True from starting playback until the player reports its first position.
+  /// Until then [_position] can't be trusted, so notes aren't judged.
+  bool _awaitingFirstPosition = false;
+  bool _starting = false;
+
   // Gameplay
   int _score = 0;
   int _combo = 0;
   int _maxCombo = 0;
   int _multiplier = 1;
+  int _maxMultiplier = 1;
   int _perfectHits = 0;
   int _goodHits = 0;
   int _missedNotes = 0;
-  int _nextNoteIndex = 0;
 
-  // Active bonuses
+  /// Per-note judged state for the current run (every note judged once).
+  ChartJudge? _judge;
+
+  // Results of the last finished run
+  bool _lastRunPerfect = false;
+  bool _isNewHighScore = false;
+
+  // Active bonuses (expiry in song milliseconds, so pausing doesn't eat it)
   BonusType? _activeBonus;
-  DateTime? _bonusExpiry;
+  int? _bonusExpiryMs;
   int _shieldCharges = 0;
   int? _lightningLane; // Which lane is being auto-hit
   bool _doublePointsActive = false;
@@ -70,8 +83,13 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
   final Random _random = Random();
 
-  // Animation
-  late AnimationController _noteController;
+  // Game loop
+  late final Ticker _ticker;
+  Duration _lastTickElapsed = Duration.zero;
+  double _fireSpawnCarry = 0;
+
+  /// Bumped whenever the highway needs repainting.
+  int _repaintToken = 0;
 
   // Streak feedback animations
   late AnimationController _multiplierPulseController;
@@ -103,8 +121,8 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
   // FFT spectrum visualizer - each lane acts as a spectrum band
   StreamSubscription? _fftSubscription;
+  bool _fftCaptureStarted = false; // Only stop the shared capture if we started it
   StreamSubscription? _positionSubscription;
-  StreamSubscription? _durationSubscription;
   StreamSubscription? _completeSubscription;
   final List<double> _laneBands = [0.0, 0.0, 0.0, 0.0, 0.0]; // Raw FFT values per lane
   final List<double> _smoothBands = [0.0, 0.0, 0.0, 0.0, 0.0]; // Smoothed for display
@@ -113,22 +131,48 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
   // Legendary track unlock state
   bool _showLegendaryUnlock = false;
-  bool _showLegendaryDownloadPrompt = false;
+
+  // HUD text styles (built once, not every frame)
+  late final TextStyle _hudLabelStyle = GoogleFonts.raleway(
+    color: Colors.white38,
+    fontSize: 10,
+    fontWeight: FontWeight.w600,
+  );
+  late final TextStyle _hudScoreStyle = GoogleFonts.raleway(
+    color: Colors.white,
+    fontSize: 24,
+    fontWeight: FontWeight.bold,
+  );
+  late final TextStyle _hudValueStyle = GoogleFonts.raleway(
+    fontSize: 20,
+    fontWeight: FontWeight.bold,
+  );
+  late final TextStyle _milestoneStyle = GoogleFonts.pacifico(
+    fontSize: 52,
+    color: NautuneFeatureColors.treasureGold,
+    shadows: const [
+      Shadow(color: Color(0xFFFF6B35), blurRadius: 24),
+      Shadow(color: Color(0xFFFF4D6D), blurRadius: 48),
+    ],
+  );
+  late final TextStyle _bonusChipStyle = GoogleFonts.raleway(
+    fontSize: 11,
+    fontWeight: FontWeight.bold,
+  );
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _chartCache.initialize().then((_) {
-      // Check if legendary track is unlocked but not downloaded
+      if (!mounted) return;
+      // Check if legendary track is unlocked but not yet copied
       _checkLegendaryDownloadPrompt();
     }).catchError((e) {
       debugPrint('ChartCache initialization failed: $e');
     });
 
-    _noteController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 16), // ~60fps
-    )..addListener(_onFrame);
+    _ticker = createTicker(_onTick);
 
     // Multiplier pulse animation (continuous when on streak)
     _multiplierPulseController = AnimationController(
@@ -156,18 +200,12 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
     _positionSubscription = _gamePlayer.onPositionChanged.listen(
       (pos) {
-        // Update position without setState — the animation frame loop
-        // in _onFrame() already calls setState at ~60fps during gameplay
+        // Update position without setState — the game loop in _onTick()
+        // already calls setState every frame during gameplay
         _position = pos;
+        _awaitingFirstPosition = false;
       },
       onError: (e) => debugPrint('Game position stream error: $e'),
-    );
-
-    _durationSubscription = _gamePlayer.onDurationChanged.listen(
-      (dur) {
-        // Duration tracked for reference, not used in UI currently
-      },
-      onError: (e) => debugPrint('Game duration stream error: $e'),
     );
 
     _completeSubscription = _gamePlayer.onPlayerComplete.listen(
@@ -187,12 +225,21 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Leaving the app (Control Center, call, home) pauses the game; audio
+    // would otherwise keep playing in the background while the loop stops.
+    if (state != AppLifecycleState.resumed && _gameState == GameState.playing) {
+      _pauseGame();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _stopFFTCapture();
     _positionSubscription?.cancel();
-    _durationSubscription?.cancel();
     _completeSubscription?.cancel();
-    _noteController.dispose();
+    _ticker.dispose();
     _multiplierPulseController.dispose();
     _milestoneFlashController.dispose();
     _gamePlayer.dispose();
@@ -200,8 +247,18 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     super.dispose();
   }
 
-  void _onFrame() {
-    if (_gameState != GameState.playing || _chart == null) return;
+  /// Hit window with the Note Magnet bonus applied (used for taps AND misses,
+  /// so the magnet's extra late window is actually reachable).
+  int get _effectiveHitWindow =>
+      _noteMagnetActive ? (_hitWindow * 1.5).round() : _hitWindow;
+
+  void _onTick(Duration elapsed) {
+    if (_gameState != GameState.playing || _chart == null || _judge == null) return;
+
+    // Real frame time (ProMotion runs at 120Hz), clamped after hitches
+    final dt = ((elapsed - _lastTickElapsed).inMicroseconds / 1e6).clamp(0.0, 0.05);
+    _lastTickElapsed = elapsed;
+    final frameScale = dt / 0.016; // 1.0 at 60fps
 
     final currentMs = _position.inMilliseconds;
 
@@ -215,19 +272,28 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       }
     }
 
-    // Check bonus expiry
-    _checkBonusExpiry();
+    // Position isn't trustworthy until the player reports it after play()
+    if (!_awaitingFirstPosition) {
+      // Check bonus expiry
+      _checkBonusExpiry(currentMs);
 
-    // Handle lightning lane auto-hits
-    if (_lightningLane != null) {
-      _handleLightningLaneAutoHits(currentMs);
+      // Handle lightning lane auto-hits
+      if (_lightningLane != null) {
+        _handleLightningLaneAutoHits(currentMs);
+      }
+
+      // Judge notes whose window has passed. Bonus notes just disappear.
+      final notes = _chart!.notes;
+      for (final i in _judge!.expire(currentMs, _effectiveHitWindow)) {
+        if (!notes[i].isBonus) _missNote();
+      }
     }
 
     // Update particles
-    const dt = 0.016; // ~60fps
     _hitParticles.removeWhere((p) => p.life <= 0);
+    final drag = pow(0.96, frameScale).toDouble();
     for (final p in _hitParticles) {
-      p.dx *= 0.96;
+      p.dx *= drag;
       p.dy += 3.0 * dt; // gravity
       p.fractionalY += p.dy * dt * 30;
       p.lane += p.dx * dt * 0.3;
@@ -237,7 +303,9 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     // Spawn and update fire particles when streaking
     if (_showStreakFire) {
       final fireCount = (2 + (_combo / 15).clamp(0, 4)).round();
-      for (int i = 0; i < fireCount; i++) {
+      _fireSpawnCarry += fireCount * frameScale;
+      while (_fireSpawnCarry >= 1) {
+        _fireSpawnCarry -= 1;
         _fireParticles.add(_Particle(
           lane: _random.nextDouble() * 5,
           fractionalY: 0,
@@ -265,9 +333,9 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
     // Update screen shake
     if (_shakeStartTime != null) {
-      final elapsed = DateTime.now().difference(_shakeStartTime!).inMilliseconds;
-      if (elapsed < 300) {
-        final decay = 1.0 - elapsed / 300.0;
+      final elapsedShake = DateTime.now().difference(_shakeStartTime!).inMilliseconds;
+      if (elapsedShake < 300) {
+        final decay = 1.0 - elapsedShake / 300.0;
         _shakeOffset = Offset(
           (_random.nextDouble() * 2 - 1) * _shakeIntensity * decay,
           (_random.nextDouble() * 2 - 1) * _shakeIntensity * decay,
@@ -278,34 +346,14 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       }
     }
 
-    // Check for missed notes (past the hit window)
-    while (_nextNoteIndex < _chart!.notes.length) {
-      final note = _chart!.notes[_nextNoteIndex];
-      // Skip bonus notes for miss detection (they just disappear if not hit)
-      if (note.isBonus) {
-        if (note.timestampMs < currentMs - _hitWindow) {
-          _nextNoteIndex++;
-        } else {
-          break;
-        }
-        continue;
-      }
-      if (note.timestampMs < currentMs - _hitWindow) {
-        // Missed this note - check shield
-        _missNote();
-        _nextNoteIndex++;
-      } else {
-        break;
-      }
-    }
-
+    _repaintToken++;
     if (mounted) setState(() {});
   }
 
-  void _checkBonusExpiry() {
-    if (_bonusExpiry != null && DateTime.now().isAfter(_bonusExpiry!)) {
+  void _checkBonusExpiry(int currentMs) {
+    if (_bonusExpiryMs != null && currentMs >= _bonusExpiryMs!) {
       _activeBonus = null;
-      _bonusExpiry = null;
+      _bonusExpiryMs = null;
       _lightningLane = null;
       _doublePointsActive = false;
       _noteMagnetActive = false;
@@ -313,20 +361,14 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   }
 
   void _handleLightningLaneAutoHits(int currentMs) {
-    // Auto-hit any notes in the lightning lane that are within the hit window
-    for (int i = _nextNoteIndex; i < _chart!.notes.length; i++) {
-      final note = _chart!.notes[i];
-      if (note.lane != _lightningLane) continue;
-      if (note.isBonus) continue;
-
-      final diff = note.timestampMs - currentMs;
-      if (diff <= 50 && diff >= -50) {
-        // Auto-hit with perfect timing
-        _hitNote(_lightningLane!, true);
-        if (i == _nextNoteIndex) _nextNoteIndex++;
-      } else if (diff > 50) {
-        break;
-      }
+    // Auto-hit notes in the lightning lane within ±50ms. Each note is judged
+    // once, so it can never be counted twice or later counted as a miss.
+    final lane = _lightningLane!;
+    while (true) {
+      final index = _judge!.findHittable(lane, currentMs, 50, includeBonus: false);
+      if (index < 0) break;
+      _judge!.markJudged(index);
+      _hitNote(lane, true);
     }
   }
 
@@ -380,6 +422,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     } else if (_combo == 100) {
       _triggerMilestone('GODLIKE!');
     }
+    _maxMultiplier = max(_maxMultiplier, _multiplier);
 
     // Start/maintain streak fire effect and multiplier pulse
     if (_combo >= 10) {
@@ -430,7 +473,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
         // Pick a random lane to auto-hit
         _lightningLane = _random.nextInt(5);
         _activeBonus = bonusType;
-        _bonusExpiry = DateTime.now().add(const Duration(seconds: 5));
+        _bonusExpiryMs = _position.inMilliseconds + 5000;
         _triggerMilestone('LIGHTNING!');
         break;
 
@@ -442,12 +485,13 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       case BonusType.doublePoints:
         _doublePointsActive = true;
         _activeBonus = bonusType;
-        _bonusExpiry = DateTime.now().add(const Duration(seconds: 5));
+        _bonusExpiryMs = _position.inMilliseconds + 5000;
         _triggerMilestone('2X POINTS!');
         break;
 
       case BonusType.multiplierBoost:
         _multiplier = 4;
+        _maxMultiplier = 4;
         _combo = max(_combo, 30); // Ensure combo supports 4x
         _showStreakFire = true;
         if (!_multiplierPulseController.isAnimating) {
@@ -459,7 +503,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       case BonusType.noteMagnet:
         _noteMagnetActive = true;
         _activeBonus = bonusType;
-        _bonusExpiry = DateTime.now().add(const Duration(seconds: 3));
+        _bonusExpiryMs = _position.inMilliseconds + 3000;
         _triggerMilestone('MAGNET!');
         break;
     }
@@ -478,53 +522,44 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   }
 
   void _onLaneTap(int lane) {
-    if (_gameState != GameState.playing || _chart == null) return;
+    if (_gameState != GameState.playing || _chart == null || _judge == null) return;
     if (lane < 0 || lane >= 5) return; // Validate lane index
 
     _lanePressed[lane] = true;
+    _repaintToken++;
     Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) setState(() => _lanePressed[lane] = false);
+      if (mounted) {
+        setState(() {
+          _lanePressed[lane] = false;
+          _repaintToken++;
+        });
+      }
     });
 
+    if (_awaitingFirstPosition) return;
     final currentMs = _position.inMilliseconds;
 
     // Effective hit window (Note Magnet makes it more forgiving)
-    final effectiveHitWindow = _noteMagnetActive ? (_hitWindow * 1.5).round() : _hitWindow;
+    final effectiveHitWindow = _effectiveHitWindow;
     final effectivePerfectWindow = _noteMagnetActive ? (_hitWindow * 0.8).round() : _perfectWindow;
 
-    // Find a note in this lane that's within the hit window
-    for (int i = _nextNoteIndex; i < _chart!.notes.length; i++) {
-      final note = _chart!.notes[i];
-      if (note.lane != lane) continue;
+    // Earliest unjudged note in this lane within the hit window. Notes in
+    // other lanes (e.g. chord partners) are left for their own taps.
+    final index = _judge!.findHittable(lane, currentMs, effectiveHitWindow);
+    if (index < 0) return;
 
+    final note = _chart!.notes[index];
+    _judge!.markJudged(index);
+
+    if (note.isBonus) {
+      if (note.bonusType != null) {
+        _collectBonus(note.bonusType!);
+      }
+    } else {
       final diff = (note.timestampMs - currentMs).abs();
-
-      // Handle bonus notes
-      if (note.isBonus && diff <= effectiveHitWindow) {
-        if (note.bonusType != null) {
-          _collectBonus(note.bonusType!);
-        }
-        _nextNoteIndex = i + 1;
-        setState(() {});
-        return;
-      }
-
-      // Regular notes
-      if (diff <= effectivePerfectWindow) {
-        _hitNote(lane, true);
-        _nextNoteIndex = i + 1;
-        setState(() {});
-        return;
-      } else if (diff <= effectiveHitWindow) {
-        _hitNote(lane, false);
-        _nextNoteIndex = i + 1;
-        setState(() {});
-        return;
-      }
-
-      // Notes are sorted, so if this note is too far in the future, stop looking
-      if (note.timestampMs > currentMs + effectiveHitWindow) break;
+      _hitNote(lane, diff <= effectivePerfectWindow);
     }
+    setState(() {});
   }
 
   Future<void> _selectTrack() async {
@@ -594,8 +629,9 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     String artistName,
     int durationMs,
   ) async {
-    // Check cache first
-    final cached = _chartCache.getChart(trackId);
+    // Check cache first (memory, then disk)
+    final cached = await _chartCache.loadChart(trackId);
+    if (!mounted) return;
     if (cached != null) {
       setState(() {
         _chart = cached;
@@ -606,7 +642,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
     // Check duration limit before analyzing
     final durationError = _chartGenerator.checkDurationLimit(durationMs);
-    if (durationError != null && mounted) {
+    if (durationError != null) {
       setState(() => _gameState = GameState.selectTrack);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -627,58 +663,107 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       durationMs: durationMs,
     );
 
-    if (chart != null && mounted) {
-      await _chartCache.saveChart(chart);
+    // Save even if the user left the screen, so the work isn't wasted
+    if (chart != null) {
+      await _chartCache.saveGeneratedChart(chart);
+    }
+    if (!mounted) return;
+
+    if (chart != null) {
       setState(() {
-        _chart = chart;
+        _chart = _chartCache.getChart(trackId) ?? chart;
         _gameState = GameState.ready;
       });
-    } else if (mounted) {
+    } else {
       setState(() => _gameState = GameState.selectTrack);
+      final reason = _chartGenerator.lastFailureMessage;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to analyze track')),
+        SnackBar(
+          content: Text(reason != null
+              ? 'Failed to analyze track: $reason'
+              : 'Failed to analyze track'),
+        ),
       );
     }
   }
 
   Future<void> _startGame() async {
     if (_chart == null || _selectedTrackPath == null) return;
+    if (_starting || _gameState == GameState.playing) return;
+    _starting = true;
 
-    // Reset game state
-    _score = 0;
-    _combo = 0;
-    _maxCombo = 0;
-    _multiplier = 1;
-    _perfectHits = 0;
-    _goodHits = 0;
-    _missedNotes = 0;
-    _nextNoteIndex = 0;
+    try {
+      // Reset game state
+      _score = 0;
+      _combo = 0;
+      _maxCombo = 0;
+      _multiplier = 1;
+      _maxMultiplier = 1;
+      _perfectHits = 0;
+      _goodHits = 0;
+      _missedNotes = 0;
+      _judge = ChartJudge(_chart!.notes);
+      _lastRunPerfect = false;
+      _isNewHighScore = false;
 
-    // Reset bonus state
-    _activeBonus = null;
-    _bonusExpiry = null;
-    _shieldCharges = 0;
-    _lightningLane = null;
-    _doublePointsActive = false;
-    _noteMagnetActive = false;
-    _bonusesCollected = 0;
-    _hitFeedbackText = null;
+      // Reset bonus state
+      _activeBonus = null;
+      _bonusExpiryMs = null;
+      _shieldCharges = 0;
+      _lightningLane = null;
+      _doublePointsActive = false;
+      _noteMagnetActive = false;
+      _bonusesCollected = 0;
+      _hitFeedbackText = null;
 
-    // Reset FFT bands
-    for (int i = 0; i < 5; i++) {
-      _laneBands[i] = 0.0;
-      _smoothBands[i] = 0.0;
+      // Reset effects left over from a previous run
+      _showStreakFire = false;
+      _showLegendaryUnlock = false;
+      _milestoneText = null;
+      _milestoneFlashController.reset();
+      _multiplierPulseController.stop();
+      _multiplierPulseController.reset();
+      _hitParticles.clear();
+      _fireParticles.clear();
+      _fireSpawnCarry = 0;
+      _shakeStartTime = null;
+      _shakeOffset = Offset.zero;
+      for (int i = 0; i < 5; i++) {
+        _lanePressed[i] = false;
+        _laneHitTime[i] = null;
+      }
+
+      // Reset FFT bands
+      for (int i = 0; i < 5; i++) {
+        _laneBands[i] = 0.0;
+        _smoothBands[i] = 0.0;
+      }
+
+      // Don't play over the main player
+      final mainPlayer = _appState?.audioPlayerService;
+      if (mainPlayer != null && mainPlayer.isPlaying) {
+        await mainPlayer.pause();
+      }
+
+      // Start FFT capture for spectrum visualization
+      await _startFFTCapture();
+
+      // The previous run's position is stale (a released player reports
+      // nothing on stop), so wait for a fresh one before judging notes.
+      _position = Duration.zero;
+      _awaitingFirstPosition = true;
+
+      // Start audio
+      await _gamePlayer.play(DeviceFileSource(_selectedTrackPath!));
+      if (!mounted) return;
+
+      setState(() => _gameState = GameState.playing);
+      _lastTickElapsed = Duration.zero;
+      if (!_ticker.isActive) _ticker.start();
+      _focusNode.requestFocus();
+    } finally {
+      _starting = false;
     }
-
-    // Start FFT capture for spectrum visualization
-    await _startFFTCapture();
-
-    // Start audio
-    await _gamePlayer.play(DeviceFileSource(_selectedTrackPath!));
-
-    setState(() => _gameState = GameState.playing);
-    _noteController.repeat();
-    _focusNode.requestFocus();
   }
 
   Future<void> _startFFTCapture() async {
@@ -687,6 +772,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
     if (Platform.isIOS) {
       // iOS: Set audio URL and start capture
+      _fftCaptureStarted = true;
       await IOSFFTService.instance.setAudioUrl('file://$_selectedTrackPath');
       await IOSFFTService.instance.startCapture();
       _fftSubscription = IOSFFTService.instance.fftStream.listen((data) {
@@ -704,50 +790,67 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   void _stopFFTCapture() {
     _fftSubscription?.cancel();
     _fftSubscription = null;
-    if (Platform.isIOS) {
+    // The FFT service is shared with the main player's visualizer: only stop
+    // it if a game here pointed it at the game track.
+    if (_fftCaptureStarted && Platform.isIOS) {
       IOSFFTService.instance.stopCapture();
+      // Forget the game URL so the main player re-points the shadow player
+      // at its own track on the next track start.
+      IOSFFTService.instance.resetUrl();
     }
+    _fftCaptureStarted = false;
   }
 
   void _pauseGame() {
+    if (_gameState != GameState.playing) return;
     _gamePlayer.pause();
-    _noteController.stop();
+    _ticker.stop();
     setState(() => _gameState = GameState.paused);
   }
 
   void _resumeGame() {
+    if (_gameState != GameState.paused) return;
     _gamePlayer.resume();
-    _noteController.repeat();
+    _lastTickElapsed = Duration.zero;
+    if (!_ticker.isActive) _ticker.start();
     setState(() => _gameState = GameState.playing);
     _focusNode.requestFocus();
   }
 
-  void _endGame() {
-    _noteController.stop();
+  Future<void> _endGame() async {
+    if (_gameState == GameState.ended || _chart == null) return;
+    final chart = _chart!;
+
+    _ticker.stop();
     _gamePlayer.stop();
     _stopFFTCapture();
 
-    // Check for remaining notes as missed
-    while (_nextNoteIndex < (_chart?.notes.length ?? 0)) {
-      _missedNotes++;
-      _nextNoteIndex++;
-    }
+    // Unjudged notes count as missed (golden bonus notes are optional)
+    _missedNotes += _judge?.remainingScorable ?? 0;
 
-    // Update high score
-    if (_chart != null && _score > _chart!.highScore) {
-      _chartCache.updateScore(_chart!.trackId, _score, _multiplier);
-    }
+    final scorableNotes = chart.scorableNoteCount;
+    _lastRunPerfect = _chartCache.isPerfectScore(
+        _perfectHits, _goodHits, _missedNotes, scorableNotes);
+    _isNewHighScore = _score > chart.highScore;
 
     // Check for PERFECT score - unlock legendary track!
-    final totalNotes = _chart?.notes.length ?? 0;
-    if (_chartCache.isPerfectScore(_perfectHits, _goodHits, _missedNotes, totalNotes)) {
-      if (!_chartCache.isLegendaryUnlocked) {
-        _chartCache.unlockLegendaryTrack();
-        _showLegendaryUnlock = true;
-      }
+    if (_lastRunPerfect && !_chartCache.isLegendaryUnlocked) {
+      _chartCache.unlockLegendaryTrack();
+      _showLegendaryUnlock = true;
     }
 
     setState(() => _gameState = GameState.ended);
+
+    // Record the play (play count, best score/multiplier, notes hit)
+    final updated = await _chartCache.updateScore(
+      chart.trackId,
+      _score,
+      _maxMultiplier,
+      notesHit: _perfectHits + _goodHits,
+    );
+    if (mounted && updated != null && _chart?.trackId == updated.trackId) {
+      setState(() => _chart = updated);
+    }
   }
 
   void _checkLegendaryDownloadPrompt() {
@@ -758,7 +861,6 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   }
 
   Future<void> _prepareLegendaryTrack() async {
-    setState(() => _showLegendaryDownloadPrompt = false);
     final success = await _chartCache.prepareLegendaryTrack();
     if (success && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -777,9 +879,11 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
 
   void _backToSelect() {
     _gamePlayer.stop();
+    _position = Duration.zero;
     setState(() {
       _gameState = GameState.selectTrack;
       _chart = null;
+      _judge = null;
       _selectedTrackPath = null;
     });
   }
@@ -808,120 +912,11 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
                 onPressed: () => Navigator.pop(context),
               ),
             ),
-      body: Stack(
-        children: [
-          KeyboardListener(
-            focusNode: _focusNode,
-            autofocus: true,
-            onKeyEvent: _handleKeyEvent,
-            child: _buildBody(theme),
-          ),
-          // Legendary track download prompt overlay
-          if (_showLegendaryDownloadPrompt)
-            _buildLegendaryDownloadPrompt(theme),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLegendaryDownloadPrompt(ThemeData theme) {
-    const fireOrange = Color(0xFFFF6B35);
-    const fireRed = Color(0xFFFF4D6D);
-    const fireYellow = NautuneFeatureColors.treasureGold;
-
-    return Container(
-      color: Colors.black87,
-      child: Center(
-        child: Container(
-          margin: const EdgeInsets.all(32),
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                const Color(0xFF1A0A0A),
-                fireRed.withValues(alpha: 0.2),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: fireOrange.withValues(alpha: 0.5), width: 2),
-            boxShadow: [
-              BoxShadow(
-                color: fireOrange.withValues(alpha: 0.3),
-                blurRadius: 20,
-                spreadRadius: 2,
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.local_fire_department, color: fireYellow, size: 56),
-              const SizedBox(height: 16),
-              Text(
-                'LEGENDARY UNLOCKED!',
-                style: GoogleFonts.pacifico(
-                  color: fireYellow,
-                  fontSize: 24,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Through the Fire and Flames',
-                style: GoogleFonts.raleway(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              Text(
-                'by DragonForce',
-                style: GoogleFonts.raleway(
-                  color: Colors.white70,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'The ultimate Guitar Hero track awaits!',
-                style: GoogleFonts.raleway(
-                  color: fireOrange,
-                  fontSize: 12,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              if (_chartCache.isLegendaryCopying) ...[
-                const CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation(fireOrange),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Preparing...',
-                  style: TextStyle(color: Colors.white54),
-                ),
-              ] else ...[
-                ElevatedButton.icon(
-                  onPressed: _prepareLegendaryTrack,
-                  icon: const Icon(Icons.local_fire_department),
-                  label: const Text('UNLOCK'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: fireOrange,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextButton(
-                  onPressed: () => setState(() => _showLegendaryDownloadPrompt = false),
-                  child: const Text('Later', style: TextStyle(color: Colors.white54)),
-                ),
-              ],
-            ],
-          ),
-        ),
+      body: KeyboardListener(
+        focusNode: _focusNode,
+        autofocus: true,
+        onKeyEvent: _handleKeyEvent,
+        child: _buildBody(theme),
       ),
     );
   }
@@ -968,11 +963,12 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     // Activate lightning lane - auto-hits all notes in one random lane
     _lightningLane = _random.nextInt(5);
     _activeBonus = BonusType.lightningLane;
-    _bonusExpiry = DateTime.now().add(const Duration(seconds: 5));
+    _bonusExpiryMs = _position.inMilliseconds + 5000;
 
     // Also boost to fire mode
     if (_combo < 10) _combo = 10;
     if (_multiplier < 2) _multiplier = 2;
+    _maxMultiplier = max(_maxMultiplier, _multiplier);
     _showStreakFire = true;
 
     // Start the pulse animation
@@ -983,6 +979,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
     // Show the message
     _triggerMilestone('LIGHTNING!');
 
+    _repaintToken++;
     setState(() {});
   }
 
@@ -1174,6 +1171,8 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
           offset: _shakeOffset,
           child: _NoteHighway(
           chart: _chart!,
+          judge: _judge!,
+          repaintToken: _repaintToken,
           currentTimeMs: _position.inMilliseconds,
           leadTimeMs: _noteLeadTime,
           lanePressed: _lanePressed,
@@ -1203,18 +1202,8 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'SCORE',
-                    style: GoogleFonts.raleway(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.w600),
-                  ),
-                  Text(
-                    _score.toString(),
-                    style: GoogleFonts.raleway(
-                      color: Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+                  Text('SCORE', style: _hudLabelStyle),
+                  Text(_score.toString(), style: _hudScoreStyle),
                 ],
               ),
               // Combo with fire indicator
@@ -1229,20 +1218,16 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
                       ],
                       Text(
                         'COMBO',
-                        style: GoogleFonts.raleway(
-                          color: _showStreakFire ? fireOrange : Colors.white38,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        style: _showStreakFire
+                            ? _hudLabelStyle.copyWith(color: fireOrange)
+                            : _hudLabelStyle,
                       ),
                     ],
                   ),
                   Text(
                     _combo.toString(),
-                    style: GoogleFonts.raleway(
+                    style: _hudValueStyle.copyWith(
                       color: _showStreakFire ? fireYellow : theme.colorScheme.primary,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ],
@@ -1290,10 +1275,8 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
                             ),
                           Text(
                             '${_multiplier}x',
-                            style: GoogleFonts.raleway(
+                            style: _hudValueStyle.copyWith(
                               color: _showStreakFire ? Colors.white : theme.colorScheme.primary,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
                             ),
                           ),
                         ],
@@ -1356,20 +1339,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
                         opacity: opacity,
                         child: Text(
                           _milestoneText!,
-                          style: GoogleFonts.pacifico(
-                            fontSize: 52,
-                            color: fireYellow,
-                            shadows: [
-                              Shadow(
-                                color: fireOrange,
-                                blurRadius: 24,
-                              ),
-                              Shadow(
-                                color: fireRed,
-                                blurRadius: 48,
-                              ),
-                            ],
-                          ),
+                          style: _milestoneStyle,
                         ),
                       ),
                     ),
@@ -1399,8 +1369,8 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   }
 
   Widget _buildActiveBonusIndicator(Color fireOrange, Color fireYellow, Color lightningBlue) {
-    final remaining = _bonusExpiry != null
-        ? _bonusExpiry!.difference(DateTime.now()).inMilliseconds / 1000.0
+    final remaining = _bonusExpiryMs != null
+        ? ((_bonusExpiryMs! - _position.inMilliseconds) / 1000.0).clamp(0.0, 99.0)
         : 0.0;
 
     Widget buildBonusChip(String label, IconData icon, Color color, {String? countdown}) {
@@ -1419,11 +1389,7 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
             const SizedBox(width: 4),
             Text(
               countdown != null ? '$label $countdown' : label,
-              style: GoogleFonts.raleway(
-                color: color,
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
-              ),
+              style: _bonusChipStyle.copyWith(color: color),
             ),
           ],
         ),
@@ -1480,9 +1446,10 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
   }
 
   Widget _buildEnded(ThemeData theme) {
-    final totalNotes = _chart?.notes.length ?? 0;
+    // Golden bonus notes are optional, so they don't count toward accuracy
+    final totalNotes = _chart?.scorableNoteCount ?? 0;
     final accuracy = totalNotes > 0
-        ? ((_perfectHits + _goodHits) / totalNotes * 100)
+        ? ((_perfectHits + _goodHits) / totalNotes * 100).clamp(0.0, 100.0)
         : 0.0;
 
     String grade;
@@ -1500,8 +1467,10 @@ class _FretsOnFireScreenState extends State<FretsOnFireScreen>
       grade = 'F';
     }
 
-    final isNewHighScore = _chart != null && _score > _chart!.highScore;
-    final isPerfect = _missedNotes == 0 && totalNotes > 0;
+    // Both computed in _endGame; the perfect check is the same one that
+    // unlocks the legendary track.
+    final isNewHighScore = _isNewHighScore;
+    final isPerfect = _lastRunPerfect;
 
     // Fire colors
     const fireOrange = Color(0xFFFF6B35);
@@ -1784,6 +1753,8 @@ class _StatColumn extends StatelessWidget {
 /// Note highway widget - renders falling notes and hit zones
 class _NoteHighway extends StatelessWidget {
   final ChartData chart;
+  final ChartJudge judge;
+  final int repaintToken;
   final int currentTimeMs;
   final int leadTimeMs;
   final List<bool> lanePressed;
@@ -1803,6 +1774,8 @@ class _NoteHighway extends StatelessWidget {
 
   const _NoteHighway({
     required this.chart,
+    required this.judge,
+    required this.repaintToken,
     required this.currentTimeMs,
     required this.leadTimeMs,
     required this.lanePressed,
@@ -1831,14 +1804,16 @@ class _NoteHighway extends StatelessWidget {
         final hitLineOffset = isPortrait ? 100.0 : 120.0;
         final hitLineY = constraints.maxHeight - hitLineOffset;
 
-        // Get visible notes
+        // Visible notes: scan from the first unjudged note (everything
+        // before it is judged) and hide notes already hit or missed.
         final visibleNotes = <ChartNote>[];
-        for (final note in chart.notes) {
-          if (note.timestampMs >= currentTimeMs - 100 &&
-              note.timestampMs <= currentTimeMs + leadTimeMs) {
+        final notes = chart.notes;
+        for (int i = judge.cursor; i < notes.length; i++) {
+          final note = notes[i];
+          if (note.timestampMs > currentTimeMs + leadTimeMs) break;
+          if (note.timestampMs >= currentTimeMs - 100 && !judge.isJudged(i)) {
             visibleNotes.add(note);
           }
-          if (note.timestampMs > currentTimeMs + leadTimeMs) break;
         }
 
         return GestureDetector(
@@ -1848,6 +1823,7 @@ class _NoteHighway extends StatelessWidget {
           },
           child: CustomPaint(
             painter: _NoteHighwayPainter(
+              repaintToken: repaintToken,
               notes: visibleNotes,
               currentTimeMs: currentTimeMs,
               leadTimeMs: leadTimeMs,
@@ -1876,6 +1852,8 @@ class _NoteHighway extends StatelessWidget {
 }
 
 class _NoteHighwayPainter extends CustomPainter {
+  /// Changes whenever game state that affects the picture changes.
+  final int repaintToken;
   final List<ChartNote> notes;
   final int currentTimeMs;
   final int leadTimeMs;
@@ -1896,6 +1874,7 @@ class _NoteHighwayPainter extends CustomPainter {
   final List<_Particle> fireParticles;
 
   _NoteHighwayPainter({
+    required this.repaintToken,
     required this.notes,
     required this.currentTimeMs,
     required this.leadTimeMs,
@@ -1933,16 +1912,7 @@ class _NoteHighwayPainter extends CustomPainter {
       canvas.drawRect(vignetteRect, vignettePaint);
     }
 
-    // Generate lane colors from theme primary using hue shifts
-    // Creates a rainbow spread around the primary color
-    final baseHsl = HSLColor.fromColor(primaryColor);
-    final laneColors = [
-      baseHsl.withHue((baseHsl.hue - 60) % 360).withSaturation(0.9).withLightness(0.5).toColor(),  // Lane 0
-      baseHsl.withHue((baseHsl.hue - 30) % 360).withSaturation(0.9).withLightness(0.5).toColor(),  // Lane 1
-      baseHsl.withSaturation(0.9).withLightness(0.55).toColor(),                                    // Lane 2 - Primary
-      baseHsl.withHue((baseHsl.hue + 30) % 360).withSaturation(0.9).withLightness(0.5).toColor(),  // Lane 3
-      baseHsl.withHue((baseHsl.hue + 60) % 360).withSaturation(0.9).withLightness(0.5).toColor(),  // Lane 4
-    ];
+    final laneColors = _laneColorsFor(primaryColor);
 
     // Scale sizes based on lane width for iOS portrait mode
     // On narrow screens (portrait), elements scale down proportionally
@@ -2342,19 +2312,35 @@ class _NoteHighwayPainter extends CustomPainter {
     }
   }
 
+  // Lane colors derived from the theme primary, cached across frames.
+  static Color? _cachedPrimary;
+  static List<Color> _cachedLaneColors = const [];
+
+  /// Rainbow spread of hue shifts around the primary color.
+  static List<Color> _laneColorsFor(Color primary) {
+    if (primary == _cachedPrimary) return _cachedLaneColors;
+    final baseHsl = HSLColor.fromColor(primary);
+    _cachedPrimary = primary;
+    _cachedLaneColors = [
+      baseHsl.withHue((baseHsl.hue - 60) % 360).withSaturation(0.9).withLightness(0.5).toColor(),  // Lane 0
+      baseHsl.withHue((baseHsl.hue - 30) % 360).withSaturation(0.9).withLightness(0.5).toColor(),  // Lane 1
+      baseHsl.withSaturation(0.9).withLightness(0.55).toColor(),                                    // Lane 2 - Primary
+      baseHsl.withHue((baseHsl.hue + 30) % 360).withSaturation(0.9).withLightness(0.5).toColor(),  // Lane 3
+      baseHsl.withHue((baseHsl.hue + 60) % 360).withSaturation(0.9).withLightness(0.5).toColor(),  // Lane 4
+    ];
+    return _cachedLaneColors;
+  }
+
   @override
   bool shouldRepaint(covariant _NoteHighwayPainter old) {
-    // The highway scrolls with time, so in the common case we return true.
-    // Skipping repaint on identical frames saves work when the parent
-    // rebuilds for an unrelated reason (e.g. paused mid-game).
-    return old.currentTimeMs != currentTimeMs ||
-        old.combo != combo ||
-        old.lightningLane != lightningLane ||
-        old.hitFeedbackTime != hitFeedbackTime ||
-        !identical(old.notes, notes) ||
-        !identical(old.lanePressed, lanePressed) ||
-        !identical(old.hitParticles, hitParticles) ||
-        !identical(old.fireParticles, fireParticles);
+    // Particles and lane state are mutated in place, so identity checks
+    // can't detect changes; the game bumps repaintToken instead. Rebuilds for
+    // unrelated reasons (e.g. a milestone animation tick) skip the repaint.
+    return old.repaintToken != repaintToken ||
+        old.currentTimeMs != currentTimeMs ||
+        old.laneWidth != laneWidth ||
+        old.hitLineY != hitLineY ||
+        old.primaryColor != primaryColor;
   }
 }
 

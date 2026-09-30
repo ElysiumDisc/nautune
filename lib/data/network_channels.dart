@@ -885,6 +885,13 @@ NetworkChannel findNearestChannel(int number) {
       (a.number - number).abs() <= (b.number - number).abs() ? a : b);
 }
 
-/// Returns all channels sorted by channel number.
-List<NetworkChannel> get sortedChannels =>
-    List.from(networkChannels)..sort((a, b) => a.number.compareTo(b.number));
+/// All channels sorted by channel number (computed once).
+final List<NetworkChannel> sortedChannels = List.unmodifiable(
+  List<NetworkChannel>.of(networkChannels)
+    ..sort((a, b) => a.number.compareTo(b.number)),
+);
+
+/// Channels keyed by number, for O(1) lookup.
+final Map<int, NetworkChannel> networkChannelsByNumber = {
+  for (final channel in networkChannels) channel.number: channel,
+};

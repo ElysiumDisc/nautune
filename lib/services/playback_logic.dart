@@ -4,6 +4,7 @@
 /// without an audio backend.
 library;
 
+import 'dart:async';
 import 'dart:math' show Random, pow;
 
 import '../models/replay_gain_mode.dart';
@@ -419,6 +420,40 @@ bool shouldCacheStreamingCopy({
   return wanted && onWifi && !lowPowerMode && !batterySaver;
 }
 
+/// Whether a stream should be saved to disk while it plays (just_audio
+/// LockCachingAudioSource). A saved stream keeps downloading to the end even
+/// after the track is skipped, so for the pre-cache (and for tracks loaded
+/// ahead, which may well be skipped) it follows the background-copy policy
+/// ([shouldCacheStreamingCopy]: Wi-Fi only, no power saving). The iOS
+/// visualizer needs a local copy of the track playing *now*: that one is
+/// saved on any network while a visualizer is on screen (not in Low Power
+/// Mode / battery saver) — it costs nothing extra unless the track is
+/// skipped.
+bool shouldSaveStreamWhilePlaying({
+  required bool wantedForCache,
+  required bool visualizerWanted,
+  required bool isCurrentTrack,
+  required bool onWifi,
+  required bool lowPowerMode,
+  required bool batterySaver,
+}) {
+  if (lowPowerMode || batterySaver) return false;
+  if (visualizerWanted && isCurrentTrack) return true;
+  return shouldCacheStreamingCopy(
+    wanted: wantedForCache || visualizerWanted,
+    onWifi: onWifi,
+    lowPowerMode: lowPowerMode,
+    batterySaver: batterySaver,
+  );
+}
+
+/// Delay before the [attempt]-th (0-based) automatic retry of a track whose
+/// reload failed during a network outage: 5 s, 10 s, 20 s, then every 30 s.
+Duration outageRetryDelay(int attempt) {
+  const steps = [5, 10, 20];
+  return Duration(seconds: attempt < steps.length ? steps[attempt] : 30);
+}
+
 /// A cached file as seen by the size-budget eviction.
 // ---------------------------------------------------------------------------
 // Audio cache variants
@@ -471,6 +506,19 @@ String trackIdFromCacheKey(String key) {
   return at < 0 ? key : key.substring(0, at);
 }
 
+/// File name for a stream saved while it plays: the cache [key] plus a
+/// [unique] suffix, so two loads of the same track never share a partial
+/// file. [unique] must not contain `~`.
+String streamCacheFileName(String key, String unique) =>
+    '${Uri.encodeComponent(key)}~$unique';
+
+/// Cache key of a stream-cache file name (see [streamCacheFileName]); older
+/// versions named the file after the encoded key alone.
+String streamCacheKeyFromFileName(String fileName) {
+  final tilde = fileName.lastIndexOf('~');
+  return Uri.decodeComponent(tilde < 0 ? fileName : fileName.substring(0, tilde));
+}
+
 /// Cache keys that satisfy a request for [trackId] at [variant], best first.
 /// An original-quality copy satisfies any request; a lower-bitrate or legacy
 /// (unknown quality) copy only satisfies a request for a lossy variant.
@@ -521,35 +569,137 @@ List<String> cacheKeysToEvict(
 // Stall detection
 // ---------------------------------------------------------------------------
 
-/// Detects a "playing" player whose position has stopped advancing (e.g. a
+/// Detects a "playing" player that has stopped making progress (e.g. a
 /// stream that died mid-track: AVPlayer stops, but no error or completion
 /// event reaches Dart).
+///
+/// Feed it from a periodic timer (not from the player's position stream:
+/// that stream drops repeated positions, so a frozen position never arrives
+/// as a tick). It is deliberately conservative — a false alarm reloads the
+/// track and throws away what AVPlayer had buffered:
+/// * not buffering: a stall once the position has not moved for
+///   [threshold] — except at/after the reported duration, where the player
+///   is just finishing (a short duration estimate) and its completion event
+///   ends the track;
+/// * buffering (waiting for data, so a frozen position is expected): a stall
+///   only after buffering without a break for [bufferingThreshold], and
+///   never while there is no network — AVPlayer resumes by itself when the
+///   connection is back, a reload now would only fail.
 class PlaybackStallDetector {
   PlaybackStallDetector({
     this.threshold = const Duration(seconds: 12),
+    this.bufferingThreshold = const Duration(seconds: 30),
     this.minProgress = const Duration(milliseconds: 50),
   });
 
   final Duration threshold;
+  final Duration bufferingThreshold;
   final Duration minProgress;
 
   Duration? _lastPosition;
   DateTime? _lastProgressAt;
+  DateTime? _bufferingSince;
 
   void reset() {
     _lastPosition = null;
     _lastProgressAt = null;
+    _bufferingSince = null;
   }
 
-  /// Feed a position tick taken while the player reports "playing". Returns
-  /// true while the position has not moved for at least [threshold].
-  bool onTick(Duration position, DateTime now) {
+  /// Feed a sample taken while the player reports "playing". [buffering]:
+  /// it is waiting for data; [networkAvailable]: false while the device has
+  /// no connection (or the app is offline); [duration]: the player's
+  /// duration, if known. Returns true once playback counts as stalled.
+  bool onTick(
+    Duration position,
+    DateTime now, {
+    bool buffering = false,
+    bool networkAvailable = true,
+    Duration? duration,
+  }) {
+    if (buffering) {
+      // Waiting for data: only the buffering clock counts.
+      _lastPosition = position;
+      _lastProgressAt = now;
+      if (!networkAvailable) {
+        // An outage: wait for the network, however long it takes.
+        _bufferingSince = null;
+        return false;
+      }
+      final since = _bufferingSince ??= now;
+      return now.difference(since) >= bufferingThreshold;
+    }
+    _bufferingSince = null;
+
     final last = _lastPosition;
     if (last == null || (position - last).abs() >= minProgress) {
       _lastPosition = position;
       _lastProgressAt = now;
       return false;
     }
+    if (duration != null && duration > Duration.zero && position >= duration) {
+      // Parked at the reported end while still playing: the audio runs past
+      // an estimated duration, completion follows.
+      _lastProgressAt = now;
+      return false;
+    }
     return now.difference(_lastProgressAt!) >= threshold;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared latest-value streams
+// ---------------------------------------------------------------------------
+
+/// A multi-listener stream that stays subscribed to [source] and replays the
+/// latest value to every new listener.
+///
+/// Unlike `shareValue()` (rxdart's refCount closes its subject when the last
+/// listener cancels, so a widget that remounts later can't listen again),
+/// listeners can come and go any number of times. Call [close] when done.
+class LatestValueRelay<T> {
+  LatestValueRelay(Stream<T> source, {bool Function(T a, T b)? equals})
+      : _equals = equals {
+    _sourceSub = source.listen(_add, onError: _controller.addError);
+  }
+
+  final bool Function(T a, T b)? _equals;
+  final StreamController<T> _controller = StreamController<T>.broadcast(sync: true);
+  late final StreamSubscription<T> _sourceSub;
+  T? _latest;
+  bool _hasValue = false;
+
+  bool get hasValue => _hasValue;
+
+  /// Latest value (throws if nothing was emitted yet; check [hasValue]).
+  T get value {
+    if (!_hasValue) throw StateError('No value yet');
+    return _latest as T;
+  }
+
+  void _add(T value) {
+    final equals = _equals;
+    if (_hasValue && equals != null && equals(_latest as T, value)) return;
+    _latest = value;
+    _hasValue = true;
+    if (!_controller.isClosed) _controller.add(value);
+  }
+
+  /// Every listener first receives the latest value (if any), then updates.
+  late final Stream<T> stream = Stream<T>.multi((listener) {
+    if (_hasValue) listener.add(_latest as T);
+    final sub = _controller.stream.listen(
+      listener.add,
+      onError: listener.addError,
+      onDone: listener.close,
+    );
+    listener.onCancel = sub.cancel;
+    listener.onPause = sub.pause;
+    listener.onResume = sub.resume;
+  }, isBroadcast: true);
+
+  Future<void> close() async {
+    await _sourceSub.cancel();
+    await _controller.close();
   }
 }

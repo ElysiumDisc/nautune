@@ -2,7 +2,11 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:nautune/jellyfin/jellyfin_credentials.dart';
 import 'package:nautune/jellyfin/jellyfin_service.dart';
+import 'package:nautune/jellyfin/jellyfin_session.dart';
 import 'package:nautune/jellyfin/jellyfin_track.dart';
 import 'package:nautune/models/download_item.dart';
 import 'package:nautune/services/download_service.dart';
@@ -29,6 +33,8 @@ Map<String, dynamic> _record({
   required String localPath,
   required String status,
   List<String> owners = const [],
+  String? serverUrl,
+  String? userId,
 }) =>
     DownloadItem(
       track: JellyfinTrack(
@@ -38,6 +44,9 @@ Map<String, dynamic> _record({
         albumId: 'album1',
         artists: const ['Artist'],
         runTimeTicks: 1800000000,
+        container: 'flac',
+        serverUrl: serverUrl,
+        userId: userId,
       ),
       localPath: localPath,
       status: DownloadStatus.values.byName(status),
@@ -136,6 +145,116 @@ void main() {
     await service.flushPendingSave();
     expect(box.containsKey('t:a'), isFalse);
     expect(await File('${downloadsDir.path}/a_Track a.flac').exists(), isFalse);
+
+    service.dispose();
+  });
+
+  test('downloads of another account stay queued; non-audio 200 fails',
+      () async {
+    final box = Hive.box<dynamic>('nautune_downloads');
+    await box.clear();
+    await box.put(
+      't:foreign',
+      _record(
+        id: 'foreign',
+        localPath: 'foreign_Track foreign.flac',
+        status: 'queued',
+        serverUrl: 'http://a.example',
+        userId: 'user-a',
+      ),
+    );
+    // Written by an older version: no account stored.
+    await box.put(
+      't:mine',
+      _record(id: 'mine', localPath: 'mine_Track mine.flac', status: 'queued'),
+    );
+
+    final jellyfin = JellyfinService()
+      ..restoreSession(JellyfinSession(
+        serverUrl: 'http://b.example',
+        username: 'b',
+        credentials:
+            const JellyfinCredentials(accessToken: 'token-b', userId: 'user-b'),
+        deviceId: 'device',
+      ));
+    final requested = <Uri>[];
+    final client = MockClient((request) async {
+      requested.add(request.url);
+      // A reverse-proxy login page instead of audio.
+      return http.Response('<html>login</html>', 200,
+          headers: {'content-type': 'text/html'});
+    });
+    final service = DownloadService(jellyfinService: jellyfin, httpClient: client);
+    await service.ready;
+
+    for (var i = 0; i < 100 && !service.getDownload('mine')!.isFailed; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+
+    final mine = service.getDownload('mine')!;
+    expect(mine.status, DownloadStatus.failed);
+    expect(mine.errorKind, DownloadErrorKind.server);
+    expect(await File('${downloadsDir.path}/mine_Track mine.flac').exists(),
+        isFalse);
+    expect(service.getDownload('foreign')!.status, DownloadStatus.queued);
+    expect(requested.any((u) => u.path.contains('foreign')), isFalse);
+    expect(requested.every((u) => u.host == 'b.example'), isTrue);
+
+    await service.flushPendingSave();
+    final foreignRecord = box.get('t:foreign') as Map;
+    expect(foreignRecord['serverUrl'], 'http://a.example');
+    expect(foreignRecord['userId'], 'user-a');
+    // The legacy record now belongs to the signed-in account; the access
+    // token itself is never persisted.
+    final mineRecord = box.get('t:mine') as Map;
+    expect(mineRecord['serverUrl'], 'http://b.example');
+    expect(mineRecord['userId'], 'user-b');
+    expect(mineRecord.containsKey('token'), isFalse);
+
+    service.dispose();
+  });
+
+  test('releasing a collection keeps tracks another collection owns',
+      () async {
+    final box = Hive.box<dynamic>('nautune_downloads');
+    await box.clear();
+    final solo = File('${downloadsDir.path}/solo_Track solo.flac');
+    final shared = File('${downloadsDir.path}/shared_Track shared.flac');
+    await solo.writeAsBytes([1, 2, 3]);
+    await shared.writeAsBytes([1, 2, 3]);
+    await box.put(
+      't:solo',
+      _record(
+        id: 'solo',
+        localPath: 'solo_Track solo.flac',
+        status: 'completed',
+        owners: ['playlist1'],
+      ),
+    );
+    await box.put(
+      't:shared',
+      _record(
+        id: 'shared',
+        localPath: 'shared_Track shared.flac',
+        status: 'completed',
+        owners: ['playlist1', 'album1'],
+      ),
+    );
+
+    final service = DownloadService(jellyfinService: JellyfinService());
+    await service.ready;
+
+    final result = await service.releaseDownloads(['solo', 'shared'], 'playlist1');
+    expect(result.removed, 1);
+    expect(result.kept, 1);
+    expect(service.getDownload('solo'), isNull);
+    expect(await solo.exists(), isFalse);
+    expect(service.getDownload('shared')!.owners, {'album1'});
+    expect(await shared.exists(), isTrue);
+
+    await service.flushPendingSave();
+    expect(box.containsKey('t:solo'), isFalse);
+    expect((box.get('t:shared') as Map)['owners'], ['album1']);
 
     service.dispose();
   });

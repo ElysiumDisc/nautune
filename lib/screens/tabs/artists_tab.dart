@@ -70,7 +70,8 @@ class _ArtistsTab extends StatelessWidget {
   }
 }
 
-Widget _artistArtwork(JellyfinArtist artist, {int maxWidth = 400}) {
+Widget _artistArtwork(JellyfinArtist artist,
+    {int maxWidth = JellyfinImage.gridArtwork}) {
   final tag = artist.primaryImageTag;
   if (tag == null || tag.isEmpty) {
     return Image.asset('assets/no_artist_art.png', fit: BoxFit.cover);
@@ -100,7 +101,7 @@ class _ArtistListTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return LibraryListRow(
-      artwork: _artistArtwork(artist, maxWidth: 100),
+      artwork: _artistArtwork(artist, maxWidth: JellyfinImage.listArtwork),
       circular: true,
       title: artist.name,
       onTap: () => _openArtist(context, artist),
@@ -116,7 +117,13 @@ class _ArtistCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ArtworkGridTile(
-      artwork: _artistArtwork(artist),
+      // The artwork fills the tile's width.
+      artwork: LayoutBuilder(
+        builder: (context, constraints) => _artistArtwork(
+          artist,
+          maxWidth: _gridArtworkWidth(constraints.maxWidth),
+        ),
+      ),
       circular: true,
       title: artist.name,
       onTap: () => _openArtist(context, artist),

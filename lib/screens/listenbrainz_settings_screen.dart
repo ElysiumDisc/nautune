@@ -38,29 +38,30 @@ class _ListenBrainzSettingsScreenState extends State<ListenBrainzSettingsScreen>
     if (result != null && mounted) {
       setState(() => _isLoading = true);
 
-      final success = await _service.saveCredentials(
-        result['username']!,
+      final check = await _service.connectWithToken(
         result['token']!,
+        username: result['username'],
       );
 
       if (mounted) {
         setState(() => _isLoading = false);
 
-        if (success) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Connected as ${result['username']}'),
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Invalid token. Please check and try again.'),
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
+        // The server's user_name wins over what was typed, since that is
+        // the account the token scrobbles to.
+        final message = switch (check.status) {
+          ListenBrainzTokenStatus.valid =>
+            'Connected as ${check.userName ?? result['username']}',
+          ListenBrainzTokenStatus.invalid =>
+            'Invalid token. Please check and try again.',
+          ListenBrainzTokenStatus.networkError =>
+            "Couldn't reach ListenBrainz. Check your connection and try again.",
+        };
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
     }
   }
@@ -89,16 +90,14 @@ class _ListenBrainzSettingsScreenState extends State<ListenBrainzSettingsScreen>
 
     if (confirm == true && mounted) {
       await _service.disconnect();
+      if (!mounted) return;
       setState(() {});
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Disconnected from ListenBrainz'),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Disconnected from ListenBrainz'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -302,6 +301,10 @@ class _ListenBrainzSettingsScreenState extends State<ListenBrainzSettingsScreen>
 
   Widget _buildAccountCard(BuildContext context, dynamic config) {
     final theme = Theme.of(context);
+    // Plain green is ~2.8:1 on a light card; use a darker shade there.
+    final connectedColor = theme.brightness == Brightness.light
+        ? Colors.green.shade800
+        : Colors.green;
 
     return Card(
       child: Padding(
@@ -314,17 +317,17 @@ class _ListenBrainzSettingsScreenState extends State<ListenBrainzSettingsScreen>
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: Colors.green.withValues(alpha: 0.2),
+                    color: connectedColor.withValues(alpha: 0.2),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.check, color: Colors.green, size: 20),
+                  child: Icon(Icons.check, color: connectedColor, size: 20),
                 ),
                 const SizedBox(width: 12),
                 Text(
                   'Connected',
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
-                    color: Colors.green,
+                    color: connectedColor,
                   ),
                 ),
               ],
@@ -375,7 +378,7 @@ class _ListenBrainzSettingsScreenState extends State<ListenBrainzSettingsScreen>
             value: config.scrobblingEnabled,
             onChanged: (value) async {
               await _service.setScrobblingEnabled(value);
-              setState(() {});
+              if (mounted) setState(() {});
             },
           ),
           Padding(

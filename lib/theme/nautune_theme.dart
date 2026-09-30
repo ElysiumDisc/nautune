@@ -35,35 +35,42 @@ class NautuneColorPalette {
     Color? accent,
     required bool isLight,
   }) {
-    // Generate complementary colors based on primary/secondary
+    // Generate complementary colors based on primary/secondary. The user can
+    // pick any colours, so every role is pushed to a readable contrast
+    // against the generated surface (text 4.5:1, accents 3:1).
     final hsl = HSLColor.fromColor(primary);
 
     if (isLight) {
       // Light theme: light surface with dark text
       // Use user-selected accent or fall back to dark version of primary
-      final textPrimaryColor = accent ?? HSLColor.fromColor(primary).withLightness(0.25).toColor();
+      final surface = Color.lerp(Colors.white, primary, 0.03)!; // Very light tint of primary
+      final textPrimaryColor = accent ?? hsl.withLightness(0.25).toColor();
       return NautuneColorPalette(
         id: 'custom',
         name: 'Custom',
-        primary: primary,
-        secondary: secondary,
-        surface: Color.lerp(Colors.white, primary, 0.03)!,  // Very light tint of primary
-        textPrimary: textPrimaryColor,
-        textSecondary: Colors.grey.shade600,
+        primary: _withContrast(primary, surface, 3),
+        secondary: _withContrast(secondary, surface, 3),
+        surface: surface,
+        textPrimary: _withContrast(textPrimaryColor, surface, 4.5),
+        textSecondary: _withContrast(Colors.grey.shade600, surface, 4.5),
         isLight: true,
       );
     } else {
       // Dark theme: dark surface with light text
       // Use user-selected accent or fall back to secondary
+      final surface = hsl
+          .withLightness(0.08)
+          .withSaturation(hsl.saturation * 0.3)
+          .toColor();
       final textPrimaryColor = accent ?? secondary;
       return NautuneColorPalette(
         id: 'custom',
         name: 'Custom',
-        primary: primary,
-        secondary: secondary,
-        surface: HSLColor.fromColor(primary).withLightness(0.08).withSaturation(hsl.saturation * 0.3).toColor(),
-        textPrimary: textPrimaryColor,
-        textSecondary: Color.lerp(Colors.grey, secondary, 0.2)!,
+        primary: _withContrast(primary, surface, 3),
+        secondary: _withContrast(secondary, surface, 3),
+        surface: surface,
+        textPrimary: _withContrast(textPrimaryColor, surface, 4.5),
+        textSecondary: _withContrast(Color.lerp(Colors.grey, secondary, 0.2)!, surface, 4.5),
         isLight: false,
       );
     }
@@ -168,13 +175,13 @@ class NautuneColorPalette {
   /// Secondary roles (titleSmall / labelMedium / labelSmall) use the muted
   /// palette colour. Decorative fonts (Pacifico) are reserved for the app
   /// wordmark and easter-egg screens; don't add them here.
-  TextTheme _buildTextTheme(TextTheme base, Color onSurface) {
+  TextTheme _buildTextTheme(TextTheme base, Color onSurface, Color secondaryText) {
     final themed = base.apply(bodyColor: onSurface, displayColor: onSurface);
     return themed.copyWith(
       titleLarge: themed.titleLarge?.copyWith(fontSize: 22, fontWeight: FontWeight.bold),
-      titleSmall: themed.titleSmall?.copyWith(color: textSecondary),
-      labelMedium: themed.labelMedium?.copyWith(color: textSecondary),
-      labelSmall: themed.labelSmall?.copyWith(color: textSecondary),
+      titleSmall: themed.titleSmall?.copyWith(color: secondaryText),
+      labelMedium: themed.labelMedium?.copyWith(color: secondaryText),
+      labelSmall: themed.labelSmall?.copyWith(color: secondaryText),
     );
   }
 
@@ -185,6 +192,9 @@ class NautuneColorPalette {
   ThemeData _build(NautuneStyle style) {
     final brightness = this.brightness;
     final onSurface = isLight ? const Color(0xFF1A1A1A) : textPrimary;
+    // Secondary text (subtitles, footnotes, captions) must stay readable
+    // whatever the palette says.
+    final secondaryText = _withContrast(textSecondary, surface, 4.5);
     Color tier(double amount) => isLight
         ? Color.alphaBlend(primary.withValues(alpha: amount * 0.6), Colors.white)
         : Color.alphaBlend(
@@ -207,13 +217,13 @@ class NautuneColorPalette {
       onTertiary: _onColor(textPrimary),
       surface: surface,
       onSurface: onSurface,
-      onSurfaceVariant: textSecondary,
+      onSurfaceVariant: secondaryText,
       surfaceContainerLowest: isLight ? Colors.white : tier(0.02),
       surfaceContainerLow: tier(0.04),
       surfaceContainer: tier(0.06),
       surfaceContainerHigh: tier(0.09),
       surfaceContainerHighest: tier(0.12),
-      outline: textSecondary.withValues(alpha: 0.6),
+      outline: secondaryText.withValues(alpha: 0.6),
       outlineVariant: separator,
       surfaceTint: Colors.transparent,
     );
@@ -239,7 +249,7 @@ class NautuneColorPalette {
       // iOS has no ink ripples; keep a soft highlight for touch feedback.
       splashFactory: NoSplash.splashFactory,
       highlightColor: onSurface.withValues(alpha: 0.06),
-      textTheme: _buildTextTheme(base.textTheme, onSurface),
+      textTheme: _buildTextTheme(base.textTheme, onSurface, secondaryText),
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
           TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
@@ -333,7 +343,7 @@ class NautuneColorPalette {
       ),
       tabBarTheme: TabBarThemeData(
         labelColor: isLight ? primary : onSurface,
-        unselectedLabelColor: textSecondary,
+        unselectedLabelColor: secondaryText,
         indicatorColor: primary,
         dividerColor: Colors.transparent,
       ),
@@ -356,7 +366,7 @@ class NautuneColorPalette {
         backgroundColor: groupedCell,
         shape: style0.shape(NautuneRadius.lg),
         titleTextStyle: TextStyle(color: onSurface, fontSize: 20, fontWeight: FontWeight.bold),
-        contentTextStyle: TextStyle(color: textSecondary),
+        contentTextStyle: TextStyle(color: secondaryText),
       ),
       popupMenuTheme: PopupMenuThemeData(
         color: groupedCell,
@@ -560,7 +570,7 @@ class NautunePalettes {
     secondary: Color(0xFF9333EA),    // Vivid purple
     surface: Color(0xFFFAF5FF),      // Very light lavender white
     textPrimary: Color(0xFF581C87),  // Deep purple
-    textSecondary: Color(0xFF9CA3AF), // Gray
+    textSecondary: Color(0xFF6B6478), // Lavender gray (5.3:1 on the surface)
     isLight: true,
   );
 

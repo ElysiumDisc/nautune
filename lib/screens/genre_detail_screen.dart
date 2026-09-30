@@ -7,6 +7,7 @@ import '../app_state.dart';
 import '../jellyfin/jellyfin_album.dart';
 import '../jellyfin/jellyfin_genre.dart';
 import '../widgets/jellyfin_image.dart';
+import '../widgets/library_tiles.dart';
 import 'album_detail_screen.dart';
 
 class GenreDetailScreen extends StatefulWidget {
@@ -29,6 +30,7 @@ class _GenreDetailScreenState extends State<GenreDetailScreen> {
   bool? _previousOfflineMode;
   bool? _previousNetworkAvailable;
   bool _hasInitialized = false;
+  int _loadGeneration = 0;
 
   @override
   void initState() {
@@ -68,12 +70,16 @@ class _GenreDetailScreenState extends State<GenreDetailScreen> {
 
   Future<void> _loadAlbums() async {
     if (_appState == null) return;
+    // Connectivity flips can overlap loads; only the latest one lands.
+    final generation = ++_loadGeneration;
 
     setState(() {
       _isLoading = true;
       _error = null;
     });
 
+    List<JellyfinAlbum>? albums;
+    Object? error;
     try {
       final libraryId = _appState!.selectedLibraryId;
       if (libraryId == null) {
@@ -86,14 +92,16 @@ class _GenreDetailScreenState extends State<GenreDetailScreen> {
       }
 
       // Use repository instead of direct client call to support offline mode
-      _albums = await _appState!.repository.getGenreAlbums(widget.genre.id);
+      albums = await _appState!.repository.getGenreAlbums(widget.genre.id);
     } catch (e) {
-      _error = e;
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      error = e;
     }
+    if (!mounted || generation != _loadGeneration) return;
+    setState(() {
+      _albums = albums ?? _albums;
+      _error = error;
+      _isLoading = false;
+    });
   }
 
   @override
@@ -146,14 +154,21 @@ class _GenreDetailScreenState extends State<GenreDetailScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final crossAxisCount = constraints.maxWidth > 800 ? 4 : 2;
-        
+        const padding = 16.0;
+        const spacing = 16.0;
+        final tileWidth = (constraints.maxWidth -
+                2 * padding -
+                (crossAxisCount - 1) * spacing) /
+            crossAxisCount;
+
         return GridView.builder(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(padding),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: crossAxisCount,
-            childAspectRatio: 0.75,
-            crossAxisSpacing: 16,
-            mainAxisSpacing: 16,
+            // Artwork plus title and artist lines, scaled with the text size.
+            mainAxisExtent: LibraryTileMetrics.of(context).gridExtent(tileWidth),
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: spacing,
           ),
           itemCount: _albums!.length,
           itemBuilder: (context, index) {
@@ -161,6 +176,7 @@ class _GenreDetailScreenState extends State<GenreDetailScreen> {
             return _AlbumCard(
               album: album,
               appState: _appState!,
+              artworkWidth: tileWidth,
             );
           },
         );
@@ -173,76 +189,47 @@ class _AlbumCard extends StatelessWidget {
   const _AlbumCard({
     required this.album,
     required this.appState,
+    required this.artworkWidth,
   });
 
   final JellyfinAlbum album;
   final NautuneAppState appState;
 
+  /// Logical width the artwork is drawn at (the tile width).
+  final double artworkWidth;
+
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final tag = album.primaryImageTag;
+    final artwork = tag != null && tag.isNotEmpty
+        ? JellyfinImage(
+            itemId: album.id,
+            imageTag: tag,
+            albumId: album.id,
+            // Not below the prewarmed grid size, so small tiles share
+            // the library grid's cache entries.
+            maxWidth: artworkWidth > JellyfinImage.gridArtwork
+                ? artworkWidth.ceil()
+                : JellyfinImage.gridArtwork,
+            boxFit: BoxFit.cover,
+            errorBuilder: (context, url, error) => Image.asset(
+              'assets/no_album_art.png',
+              fit: BoxFit.cover,
+            ),
+          )
+        : Image.asset('assets/no_album_art.png', fit: BoxFit.cover);
 
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => AlbumDetailScreen(
-                album: album,
-              ),
-            ),
-          );
-        },
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            AspectRatio(
-              aspectRatio: 1,
-              child: album.primaryImageTag != null
-                  ? JellyfinImage(
-                      itemId: album.id,
-                      imageTag: album.primaryImageTag,
-                      maxWidth: 400,
-                      boxFit: BoxFit.cover,
-                      errorBuilder: (context, url, error) => Image.asset(
-                        'assets/no_album_art.png',
-                        fit: BoxFit.cover,
-                      ),
-                    )
-                  : Image.asset(
-                      'assets/no_album_art.png',
-                      fit: BoxFit.cover,
-                    ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    album.name,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      color: theme.colorScheme.tertiary,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    album.displayArtist,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.tertiary.withValues(alpha: 0.7),
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+    return ArtworkGridTile(
+      artwork: artwork,
+      title: album.name,
+      subtitle: album.displayArtist,
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => AlbumDetailScreen(album: album),
+          ),
+        );
+      },
     );
   }
 }

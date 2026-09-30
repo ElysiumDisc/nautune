@@ -16,10 +16,14 @@ import 'jellyfin/jellyfin_service.dart';
 import 'jellyfin/jellyfin_session.dart';
 import 'jellyfin/jellyfin_session_store.dart';
 import 'jellyfin/jellyfin_track.dart';
+import 'jellyfin/robust_http_client.dart';
 import 'providers/demo_mode_provider.dart';
 import 'services/audio_player_service.dart';
 import 'services/bootstrap_service.dart';
 import 'services/listening_analytics_service.dart';
+import 'services/lastfm_service.dart';
+import 'services/listenbrainz_service.dart';
+import 'services/profile_stats_cache.dart';
 import 'services/carplay_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/download_service.dart';
@@ -44,6 +48,7 @@ import 'repositories/music_repository.dart';
 import 'repositories/repository_factory.dart';
 
 import 'providers/library_data_provider.dart';
+import 'providers/sync_status_provider.dart';
 
 class NautuneAppState extends ChangeNotifier {
   NautuneAppState({
@@ -59,6 +64,7 @@ class NautuneAppState extends ChangeNotifier {
     DemoModeProvider? demoModeProvider,
     SessionProvider? sessionProvider,
     LibraryDataProvider? libraryDataProvider, // New parameter
+    SyncStatusProvider? syncStatusProvider,
   })  : _jellyfinService = jellyfinService,
         _sessionStore = sessionStore,
         _playbackStateStore = playbackStateStore,
@@ -70,12 +76,14 @@ class NautuneAppState extends ChangeNotifier {
         _demoModeProvider = demoModeProvider,
         _sessionProvider = sessionProvider,
         _libraryDataProvider = libraryDataProvider, // Initialize
+        _syncStatusProvider = syncStatusProvider,
         _downloadService = downloadService {
     _audioPlayerService = AudioPlayerService();
 
     // Listen to LibraryDataProvider changes if available
     if (_libraryDataProvider != null) {
       _libraryDataProvider.addListener(notifyListeners);
+      _libraryDataProvider.offlineCheck = () => isOfflineMode;
     }
     
     // Link download service to audio player for offline playback
@@ -120,6 +128,7 @@ class NautuneAppState extends ChangeNotifier {
   final DemoModeProvider? _demoModeProvider;
   final SessionProvider? _sessionProvider;
   final LibraryDataProvider? _libraryDataProvider; // New field
+  final SyncStatusProvider? _syncStatusProvider;
   late final AudioPlayerService _audioPlayerService;
   late final DownloadService _downloadService;
   CarPlayService? _carPlayService;
@@ -141,15 +150,19 @@ class NautuneAppState extends ChangeNotifier {
   bool _gaplessPlaybackEnabled = true;
   int _cacheTtlMinutes = 2; // User-configurable cache TTL
   StreamingQuality _streamingQuality = StreamingQuality.original; // Default to lossless
-  bool _visualizerEnabled = true; // Bioluminescent visualizer toggle
-  bool _visualizerEnabledByUser = true; // User's explicit preference (for Low Power Mode restore)
-  bool _visualizerSuppressedByLowPower = false; // Temporarily disabled by iOS Low Power Mode
+  bool _visualizerEnabled = true; // Effective: shown right now
+  bool _visualizerEnabledByUser = true; // User's preference (the Settings switch)
   VisualizerType _visualizerType = VisualizerType.bioluminescent; // Current visualizer style
   VisualizerPosition _visualizerPosition = VisualizerPosition.controlsBar; // Where visualizer is displayed
   NowPlayingLayout _nowPlayingLayout = NowPlayingLayout.classic; // Now Playing screen layout
   StreamSubscription? _powerModeSub;
+  /// Battery saver ("submarine mode"; offline or iOS Low Power Mode). While
+  /// active, crossfade, gapless, pre-caching and the visualizer are paused.
+  /// Only the applied values change: the user's preferences
+  /// ([_crossfadeEnabled], [_gaplessPlaybackEnabled], [_preCacheTrackCount],
+  /// [_visualizerEnabledByUser]) stay as chosen, and are what is persisted.
   bool _submarineModeEnabled = false;
-  Map<String, dynamic>? _batterySaverSnapshot;
+  int _preCacheTrackCount = 3; // User's preference (0 = off)
   SortOption _albumSortBy = SortOption.name;
   SortOrder _albumSortOrder = SortOrder.ascending;
   SortOption _artistSortBy = SortOption.name;
@@ -255,6 +268,9 @@ class NautuneAppState extends ChangeNotifier {
         _playlists = provider.playlists;
         _recentTracks = provider.recentTracks;
         _favoriteTracks = provider.favoriteTracks;
+        // The demo library is complete: nothing to page in.
+        _hasMoreAlbums = false;
+        _hasMoreArtists = false;
       } else {
         if (_session != null && _session!.isDemo) {
           _session = null;
@@ -268,8 +284,19 @@ class NautuneAppState extends ChangeNotifier {
   // Sync session from SessionProvider
   void _onSessionChanged() {
     if (_sessionProvider == null) return;
+    // Until initialize() has loaded the persisted preferences (offline mode,
+    // remote control, battery saver) a session must not start any network
+    // work: initialize() restores the stored session itself and calls this
+    // again at the end to pick up anything that changed meanwhile.
+    if (!_initialized) return;
 
     final newSession = _sessionProvider.session;
+    // Scope listening analytics to this account (no-op when unchanged), so
+    // another account's plays are neither shown nor synced to this server.
+    ListeningAnalyticsService().setCurrentAccount(
+      serverUrl: newSession?.serverUrl,
+      userId: newSession?.credentials.userId,
+    );
     debugPrint('[NautuneAppState] _onSessionChanged called. Provider session: ${newSession?.selectedLibraryId}');
 
     if (_session != newSession) {
@@ -307,6 +334,8 @@ class NautuneAppState extends ChangeNotifier {
           _playlists = provider.playlists;
           _recentTracks = provider.recentTracks;
           _favoriteTracks = provider.favoriteTracks;
+          _hasMoreAlbums = false;
+          _hasMoreArtists = false;
 
           notifyListeners();
           return;
@@ -330,9 +359,15 @@ class NautuneAppState extends ChangeNotifier {
         // Start periodic analytics sync for the new session
         _startPeriodicSyncTimer();
 
-        _loadLibraries();
+        // LibraryDataProvider (when present) loads the libraries and the
+        // library collections itself on this same session change; loading
+        // them here too only duplicated every request. Offline, the legacy
+        // loader still provides the downloads-based fallback.
+        if (_libraryDataProvider == null || isOfflineMode) {
+          unawaited(_loadLibraries());
+        }
         if (session.selectedLibraryId != null) {
-          _loadLibraryDependentContent(forceRefresh: true);
+          unawaited(_loadLibraryDependentContent(forceRefresh: true));
         }
       } else if (_session == null) {
         // Session cleared - stop periodic sync
@@ -516,6 +551,9 @@ class NautuneAppState extends ChangeNotifier {
       }
     }
     service.setEnabled(!isOfflineMode);
+    if (_submarineModeEnabled) {
+      service.setProgressInterval(const Duration(seconds: 60));
+    }
     if (!isOfflineMode) {
       unawaited(service.flushPendingReports());
     }
@@ -536,34 +574,40 @@ class NautuneAppState extends ChangeNotifier {
 
   JellyfinSession? get session => _session;
   Object? get lastError => _lastError;
-  bool get isLoadingLibraries => _libraryDataProvider?.isLoadingLibraries ?? _isLoadingLibraries;
-  Object? get librariesError => _libraryDataProvider?.librariesError ?? _librariesError;
-  List<JellyfinLibrary>? get libraries => _libraryDataProvider?.libraries ?? _libraries;
-  bool get isLoadingAlbums => _libraryDataProvider?.isLoadingAlbums ?? _isLoadingAlbums;
-  Object? get albumsError => _libraryDataProvider?.albumsError ?? _albumsError;
-  List<JellyfinAlbum>? get albums => _libraryDataProvider?.albums ?? _albums;
-  bool get isLoadingMoreAlbums => _libraryDataProvider?.isLoadingMoreAlbums ?? _isLoadingMoreAlbums;
-  bool get hasMoreAlbums => _libraryDataProvider?.hasMoreAlbums ?? _hasMoreAlbums;
-  bool get isLoadingArtists => _libraryDataProvider?.isLoadingArtists ?? _isLoadingArtists;
-  Object? get artistsError => _libraryDataProvider?.artistsError ?? _artistsError;
-  List<JellyfinArtist>? get artists => _libraryDataProvider?.artists ?? _artists;
-  bool get isLoadingMoreArtists => _libraryDataProvider?.isLoadingMoreArtists ?? _isLoadingMoreArtists;
-  bool get hasMoreArtists => _libraryDataProvider?.hasMoreArtists ?? _hasMoreArtists;
-  bool get isLoadingPlaylists => _libraryDataProvider?.isLoadingPlaylists ?? _isLoadingPlaylists;
-  Object? get playlistsError => _libraryDataProvider?.playlistsError ?? _playlistsError;
-  List<JellyfinPlaylist>? get playlists => _libraryDataProvider?.playlists ?? _playlists;
-  bool get isLoadingRecent => _libraryDataProvider?.isLoadingRecent ?? _isLoadingRecent;
-  Object? get recentError => _libraryDataProvider?.recentError ?? _recentError;
-  List<JellyfinTrack>? get recentTracks => _libraryDataProvider?.recentTracks ?? _recentTracks;
-  bool get isLoadingRecentlyAdded => _libraryDataProvider?.isLoadingRecentlyAdded ?? _isLoadingRecentlyAdded;
-  Object? get recentlyAddedError => _libraryDataProvider?.recentlyAddedError ?? _recentlyAddedError;
-  List<JellyfinAlbum>? get recentlyAddedAlbums => _libraryDataProvider?.recentlyAddedAlbums ?? _recentlyAddedAlbums;
-  bool get isLoadingFavorites => _libraryDataProvider?.isLoadingFavorites ?? _isLoadingFavorites;
-  Object? get favoritesError => _libraryDataProvider?.favoritesError ?? _favoritesError;
-  List<JellyfinTrack>? get favoriteTracks => _libraryDataProvider?.favoriteTracks ?? _favoriteTracks;
-  bool get isLoadingGenres => _libraryDataProvider?.isLoadingGenres ?? _isLoadingGenres;
-  Object? get genresError => _libraryDataProvider?.genresError ?? _genresError;
-  List<JellyfinGenre>? get genres => _libraryDataProvider?.genres ?? _genres;
+
+  /// The library data source for the getters below. In demo mode the demo
+  /// collections (legacy fields, filled from DemoModeProvider) are served
+  /// instead, so a provider error or stale real-account data can't hide them.
+  LibraryDataProvider? get _libData => isDemoMode ? null : _libraryDataProvider;
+
+  bool get isLoadingLibraries => _libData?.isLoadingLibraries ?? _isLoadingLibraries;
+  Object? get librariesError => _libData?.librariesError ?? _librariesError;
+  List<JellyfinLibrary>? get libraries => _libData?.libraries ?? _libraries;
+  bool get isLoadingAlbums => _libData?.isLoadingAlbums ?? _isLoadingAlbums;
+  Object? get albumsError => _libData?.albumsError ?? _albumsError;
+  List<JellyfinAlbum>? get albums => _libData?.albums ?? _albums;
+  bool get isLoadingMoreAlbums => _libData?.isLoadingMoreAlbums ?? _isLoadingMoreAlbums;
+  bool get hasMoreAlbums => _libData?.hasMoreAlbums ?? _hasMoreAlbums;
+  bool get isLoadingArtists => _libData?.isLoadingArtists ?? _isLoadingArtists;
+  Object? get artistsError => _libData?.artistsError ?? _artistsError;
+  List<JellyfinArtist>? get artists => _libData?.artists ?? _artists;
+  bool get isLoadingMoreArtists => _libData?.isLoadingMoreArtists ?? _isLoadingMoreArtists;
+  bool get hasMoreArtists => _libData?.hasMoreArtists ?? _hasMoreArtists;
+  bool get isLoadingPlaylists => _libData?.isLoadingPlaylists ?? _isLoadingPlaylists;
+  Object? get playlistsError => _libData?.playlistsError ?? _playlistsError;
+  List<JellyfinPlaylist>? get playlists => _libData?.playlists ?? _playlists;
+  bool get isLoadingRecent => _libData?.isLoadingRecent ?? _isLoadingRecent;
+  Object? get recentError => _libData?.recentError ?? _recentError;
+  List<JellyfinTrack>? get recentTracks => _libData?.recentTracks ?? _recentTracks;
+  bool get isLoadingRecentlyAdded => _libData?.isLoadingRecentlyAdded ?? _isLoadingRecentlyAdded;
+  Object? get recentlyAddedError => _libData?.recentlyAddedError ?? _recentlyAddedError;
+  List<JellyfinAlbum>? get recentlyAddedAlbums => _libData?.recentlyAddedAlbums ?? _recentlyAddedAlbums;
+  bool get isLoadingFavorites => _libData?.isLoadingFavorites ?? _isLoadingFavorites;
+  Object? get favoritesError => _libData?.favoritesError ?? _favoritesError;
+  List<JellyfinTrack>? get favoriteTracks => _libData?.favoriteTracks ?? _favoriteTracks;
+  bool get isLoadingGenres => _libData?.isLoadingGenres ?? _isLoadingGenres;
+  Object? get genresError => _libData?.genresError ?? _genresError;
+  List<JellyfinGenre>? get genres => _libData?.genres ?? _genres;
   bool get isLoadingRecentlyPlayed => _isLoadingRecentlyPlayed;
   List<JellyfinTrack>? get recentlyPlayedTracks => _recentlyPlayedTracks;
   bool get isLoadingMostPlayedTracks => _isLoadingMostPlayedTracks;
@@ -615,7 +659,27 @@ class NautuneAppState extends ChangeNotifier {
   ReplayGainMode get replayGainMode => _audioPlayerService.replayGainMode;
   TranscodeCodec get transcodeCodec => _audioPlayerService.transcodeCodec;
   double get replayGainPreampDb => _audioPlayerService.replayGainPreampDb;
+  /// Whether the visualizer is shown right now (the user's preference, unless
+  /// Low Power Mode or the battery saver paused it). Rendering code reads this.
   bool get visualizerEnabled => _visualizerEnabled;
+
+  /// The user's visualizer preference (the Settings switch value).
+  bool get visualizerEnabledByUser => _visualizerEnabledByUser;
+
+  /// True while the user wants the visualizer but Low Power Mode or the
+  /// battery saver has paused it.
+  bool get isVisualizerPausedByPowerSaving =>
+      _visualizerEnabledByUser && !_visualizerEnabled;
+
+  /// Whether the battery saver is active (offline or Low Power Mode):
+  /// crossfade, gapless, pre-caching and the visualizer are paused, while
+  /// [crossfadeEnabled], [gaplessPlaybackEnabled], [preCacheTrackCount] and
+  /// [visualizerEnabledByUser] keep reporting the user's choices.
+  bool get batterySaverActive => _submarineModeEnabled;
+
+  /// The user's pre-cache preference (0 = off); paused while
+  /// [batterySaverActive].
+  int get preCacheTrackCount => _preCacheTrackCount;
   VisualizerType get visualizerType => _visualizerType;
   VisualizerPosition get visualizerPosition => _visualizerPosition;
   NowPlayingLayout get nowPlayingLayout => _nowPlayingLayout;
@@ -630,7 +694,7 @@ class NautuneAppState extends ChangeNotifier {
   double? scrollOffsetFor(String key) => _libraryScrollOffsets[key];
   String? get selectedLibraryId => _session?.selectedLibraryId;
   JellyfinLibrary? get selectedLibrary {
-    final libs = _libraries;
+    final libs = libraries;
     final id = _session?.selectedLibraryId;
     if (libs == null || id == null) {
       return null;
@@ -845,7 +909,8 @@ class NautuneAppState extends ChangeNotifier {
 
   void toggleCrossfade(bool enabled) {
     _crossfadeEnabled = enabled;
-    _audioPlayerService.setCrossfadeEnabled(enabled);
+    // The battery saver keeps it paused; the preference applies once it ends.
+    _audioPlayerService.setCrossfadeEnabled(enabled && !_submarineModeEnabled);
     unawaited(_playbackStateStore.saveUiState(
       crossfadeEnabled: enabled,
       crossfadeDurationSeconds: _crossfadeDurationSeconds,
@@ -874,7 +939,8 @@ class NautuneAppState extends ChangeNotifier {
 
   void toggleGaplessPlayback(bool enabled) {
     _gaplessPlaybackEnabled = enabled;
-    _audioPlayerService.setGaplessPlaybackEnabled(enabled);
+    _audioPlayerService
+        .setGaplessPlaybackEnabled(enabled && !_submarineModeEnabled);
     unawaited(_playbackStateStore.saveUiState(
       gaplessPlaybackEnabled: enabled,
     ));
@@ -939,19 +1005,24 @@ class NautuneAppState extends ChangeNotifier {
 
   /// Set visualizer enabled/disabled (for battery savings)
   void setVisualizerEnabled(bool enabled) {
-    // Track user's explicit preference for Low Power Mode restore
+    if (_visualizerEnabledByUser == enabled) return;
+    // The user's preference; Low Power Mode / the battery saver may keep the
+    // visualizer paused until they end.
     _visualizerEnabledByUser = enabled;
-
-    // Only update actual state if not in Low Power Mode
-    if (!PowerModeService.instance.isLowPowerMode) {
-      if (_visualizerEnabled == enabled) return;
-      _visualizerEnabled = enabled;
-      notifyListeners();
-    }
+    _updateEffectiveVisualizer();
+    notifyListeners();
 
     unawaited(_playbackStateStore.saveUiState(
       visualizerEnabled: enabled,
     ));
+  }
+
+  /// Visualizer shown = user's preference, unless Low Power Mode or the
+  /// battery saver pauses it.
+  void _updateEffectiveVisualizer() {
+    _visualizerEnabled = _visualizerEnabledByUser &&
+        !_submarineModeEnabled &&
+        !PowerModeService.instance.isLowPowerMode;
   }
 
   /// Set visualizer type/style
@@ -992,7 +1063,10 @@ class NautuneAppState extends ChangeNotifier {
 
   /// Set pre-cache track count for smart caching
   void setPreCacheTrackCount(int count) {
-    _audioPlayerService.setPreCacheTrackCount(count);
+    _preCacheTrackCount = count;
+    // Paused (0) while the battery saver is active; applied once it ends.
+    _audioPlayerService
+        .setPreCacheTrackCount(_submarineModeEnabled ? 0 : count);
     unawaited(_playbackStateStore.saveUiState(
       preCacheTrackCount: count,
     ));
@@ -1012,90 +1086,49 @@ class NautuneAppState extends ChangeNotifier {
   void _activateSubmarineFeatures() {
     if (_submarineModeEnabled) return; // Already active
     _submarineModeEnabled = true;
-
-    // Snapshot current values before overriding
-    _batterySaverSnapshot = {
-      'visualizerEnabledByUser': _visualizerEnabledByUser,
-      'crossfadeEnabled': _crossfadeEnabled,
-      'gaplessPlaybackEnabled': _gaplessPlaybackEnabled,
-      'preCacheTrackCount': _audioPlayerService.preCacheTrackCount,
-    };
-
-    // Override to battery-saving values
-    _visualizerEnabledByUser = _visualizerEnabled;
-    _visualizerEnabled = false;
-    _crossfadeEnabled = false;
-    _audioPlayerService.setCrossfadeEnabled(false);
-    _gaplessPlaybackEnabled = false;
-    _audioPlayerService.setGaplessPlaybackEnabled(false);
-    _audioPlayerService.setPreCacheTrackCount(0);
-
-    // Reduce background work
-    _audioPlayerService.setBatterySaverMode(true);
-    _audioPlayerService.reportingService?.setProgressInterval(
-      const Duration(seconds: 60),
-    );
-
+    _applyBatterySaverState();
     debugPrint('🚢 Battery saver: ENGAGED — running silent, running deep');
-
-    unawaited(_playbackStateStore.saveUiState(
-      visualizerEnabled: _visualizerEnabled,
-      crossfadeEnabled: _crossfadeEnabled,
-      gaplessPlaybackEnabled: _gaplessPlaybackEnabled,
-      preCacheTrackCount: _audioPlayerService.preCacheTrackCount,
-      submarineModeEnabled: true,
-      batterySaverSnapshot: _batterySaverSnapshot,
-    ));
+    // Only the flag is persisted: the preferences stay as the user chose,
+    // and the overrides are re-applied at launch while the flag is set.
+    unawaited(_playbackStateStore.saveUiState(submarineModeEnabled: true));
   }
 
   /// Deactivate battery-saving features (called when coming back online).
   void _deactivateSubmarineFeatures() {
     if (!_submarineModeEnabled) return; // Already inactive
     _submarineModeEnabled = false;
-
-    // Restore original values from snapshot
-    final snapshot = _batterySaverSnapshot;
-    if (snapshot != null) {
-      _visualizerEnabledByUser = snapshot['visualizerEnabledByUser'] as bool? ?? true;
-      _visualizerEnabled = _visualizerEnabledByUser;
-      _crossfadeEnabled = snapshot['crossfadeEnabled'] as bool? ?? false;
-      _audioPlayerService.setCrossfadeEnabled(_crossfadeEnabled);
-      _gaplessPlaybackEnabled = snapshot['gaplessPlaybackEnabled'] as bool? ?? true;
-      _audioPlayerService.setGaplessPlaybackEnabled(_gaplessPlaybackEnabled);
-      final preCacheCount = snapshot['preCacheTrackCount'] as int? ?? 3;
-      _audioPlayerService.setPreCacheTrackCount(preCacheCount);
-    }
-
-    // Restore normal intervals
-    _audioPlayerService.setBatterySaverMode(false);
-    _audioPlayerService.reportingService?.setProgressInterval(
-      const Duration(seconds: 10),
-    );
-
-    // Clear snapshot (persist empty map to signal "cleared")
-    _batterySaverSnapshot = null;
-
+    _applyBatterySaverState();
     debugPrint('🚢 Battery saver: SURFACED — all systems restored');
+    unawaited(_playbackStateStore.saveUiState(submarineModeEnabled: false));
+  }
 
-    unawaited(_playbackStateStore.saveUiState(
-      visualizerEnabled: _visualizerEnabled,
-      crossfadeEnabled: _crossfadeEnabled,
-      gaplessPlaybackEnabled: _gaplessPlaybackEnabled,
-      preCacheTrackCount: _audioPlayerService.preCacheTrackCount,
-      submarineModeEnabled: false,
-      batterySaverSnapshot: <String, dynamic>{}, // empty map = cleared
-    ));
+  /// Leave the battery saver only when nothing needs it any more: the app
+  /// is online (and the user didn't choose offline) and iOS Low Power Mode
+  /// is off.
+  void _maybeDeactivateSubmarineFeatures() {
+    if (isOfflineMode || PowerModeService.instance.isLowPowerMode) return;
+    _deactivateSubmarineFeatures();
+  }
+
+  /// Push the battery-saver state to the services: while active, crossfade,
+  /// gapless, pre-caching and the visualizer are paused and background work
+  /// slows down; otherwise the user's preferences apply.
+  void _applyBatterySaverState() {
+    final saver = _submarineModeEnabled;
+    _audioPlayerService.setCrossfadeEnabled(_crossfadeEnabled && !saver);
+    _audioPlayerService.setGaplessPlaybackEnabled(_gaplessPlaybackEnabled && !saver);
+    _audioPlayerService.setPreCacheTrackCount(saver ? 0 : _preCacheTrackCount);
+    _audioPlayerService.setBatterySaverMode(saver);
+    _audioPlayerService.reportingService?.setProgressInterval(
+      Duration(seconds: saver ? 60 : 10),
+    );
+    _updateEffectiveVisualizer();
   }
 
   /// Initialize Low Power Mode listener (iOS only)
   void _initPowerModeListener() {
-    // Check INITIAL state - if already in low power mode, disable visualizer
-    if (PowerModeService.instance.isLowPowerMode && _visualizerEnabled) {
-      _visualizerSuppressedByLowPower = true;
-      _visualizerEnabled = false;
-      notifyListeners();
-      debugPrint('🔋 Visualizer disabled (Low Power Mode - initial state)');
-    }
+    // Initial state: Low Power Mode pauses the visualizer.
+    _updateEffectiveVisualizer();
 
     // Listen for CHANGES
     _powerModeSub = PowerModeService.instance.lowPowerModeStream.listen((isLowPower) {
@@ -1104,28 +1137,12 @@ class NautuneAppState extends ChangeNotifier {
         // keep network alive so user can still stream
         _activateSubmarineFeatures();
         debugPrint('🔋 Battery saver auto-enabled by iOS Low Power Mode');
-        // Also suppress visualizer (redundant if submarine mode is on, but safe)
-        if (_visualizerEnabled) {
-          _visualizerSuppressedByLowPower = true;
-          _visualizerEnabled = false;
-          notifyListeners();
-          debugPrint('🔋 Visualizer disabled (Low Power Mode)');
-        }
       } else {
         // Exiting Low Power Mode - only deactivate submarine features if not offline
-        if (!_userWantsOffline && _networkAvailable) {
-          _deactivateSubmarineFeatures();
-        }
-        // Restore visualizer if it was suppressed and user had it ON
-        if (_visualizerSuppressedByLowPower && _visualizerEnabledByUser) {
-          _visualizerEnabled = true;
-          _visualizerSuppressedByLowPower = false;
-          notifyListeners();
-          debugPrint('🔋 Visualizer restored (Low Power Mode off)');
-        } else {
-          _visualizerSuppressedByLowPower = false;
-        }
+        _maybeDeactivateSubmarineFeatures();
       }
+      _updateEffectiveVisualizer();
+      notifyListeners();
     });
   }
 
@@ -1219,8 +1236,9 @@ class NautuneAppState extends ChangeNotifier {
 
       if (!_userWantsOffline) {
         debugPrint('📶 User is online — restoring network services');
-        _deactivateSubmarineFeatures();
         _publishOfflineState();
+        // Stays engaged while iOS Low Power Mode is on.
+        _maybeDeactivateSubmarineFeatures();
         // Refresh data in background - don't await, don't block UI
         unawaited(_refreshAfterReconnect());
       } else {
@@ -1246,9 +1264,8 @@ class NautuneAppState extends ChangeNotifier {
       // If user explicitly chose offline mode, they stay offline until they toggle it
       // If they were offline due to no network, isOfflineMode getter now returns false
       notifyListeners();
-
-      // Sync analytics in background (don't await - fire and forget)
-      unawaited(_syncAnalyticsToServer());
+      // Analytics are synced by _restoreOnlineNetworkPolicy, which always
+      // runs before this; a second concurrent sync would send plays twice.
     } catch (error) {
       debugPrint('⚠️ Refresh after reconnect failed: $error');
     }
@@ -1280,9 +1297,26 @@ class NautuneAppState extends ChangeNotifier {
     debugPrint('📊 Stopped periodic analytics sync timer');
   }
 
+  Future<void>? _analyticsSyncInFlight;
+
   /// Sync local listening analytics to the Jellyfin server
-  /// This pushes unsynced plays that were recorded offline
-  Future<void> _syncAnalyticsToServer() async {
+  /// This pushes unsynced plays that were recorded offline.
+  ///
+  /// Single-flight: overlapping triggers (reconnect, periodic timer, startup)
+  /// share one run. Two concurrent runs would both send the plays the first
+  /// one hasn't marked as synced yet, and Jellyfin counts every mark.
+  Future<void> _syncAnalyticsToServer() {
+    final running = _analyticsSyncInFlight;
+    if (running != null) return running;
+    late final Future<void> run;
+    run = _runAnalyticsSync().whenComplete(() {
+      if (identical(_analyticsSyncInFlight, run)) _analyticsSyncInFlight = null;
+    });
+    _analyticsSyncInFlight = run;
+    return run;
+  }
+
+  Future<void> _runAnalyticsSync() async {
     final session = _session;
     final client = _jellyfinService.jellyfinClient;
 
@@ -1319,25 +1353,74 @@ class NautuneAppState extends ChangeNotifier {
     }
   }
 
-  Future<void> initialize() async {
+  /// Apply the preferences that gate network traffic (the user's offline
+  /// choice, remote control) before the session is restored, so work that
+  /// starts on the session change (LibraryDataProvider's loads) already
+  /// honours them. main calls this before SessionProvider.initialize().
+  void primeStoredPreferences(PlaybackState? state) {
+    if (state == null) return;
+    _userWantsOffline = state.isOfflineMode;
+    _remoteControlEnabled = state.remoteControlEnabled;
+  }
+
+  /// Restores the persisted preferences and session. Pass
+  /// [storedPlaybackState] when the caller already loaded it (main does).
+  ///
+  /// Always ends with [isInitialized] true, even when a step fails, so the
+  /// app can't hang on the startup spinner.
+  Future<void> initialize({PlaybackState? storedPlaybackState}) async {
     final initStopwatch = Stopwatch()..start();
     debugPrint('NautuneAppState initialization started');
+    try {
+      await _initialize(storedPlaybackState);
+    } catch (error, stackTrace) {
+      _lastError = error;
+      debugPrint('NautuneAppState initialization failed: $error');
+      FlutterError.reportError(FlutterErrorDetails(
+        exception: error,
+        stack: stackTrace,
+        library: 'app_state',
+        context: ErrorDescription('initializing Nautune'),
+      ));
+    } finally {
+      _initialized = true;
+      _syncStatusProvider?.setOffline(isOfflineMode);
+      notifyListeners();
+      // Pick up a session that arrived or changed while initializing (e.g.
+      // the keychain unlocked); a no-op when it's the one restored above.
+      _onSessionChanged();
+      unawaited(_refreshPendingActionsCount());
+      debugPrint('NautuneAppState init took: ${initStopwatch.elapsedMilliseconds}ms');
+    }
+  }
 
+  Future<void> _initialize(PlaybackState? preloadedPlaybackState) async {
     // Parallelize core connectivity and power monitoring
     await Future.wait([
       _ensureConnectivityMonitoring(),
       PowerModeService.instance.initialize(),
-      AppIconService().initialize().then((_) => AppIconService().syncIOSIcon()),
+      AppIconService()
+          .initialize()
+          .then((_) => AppIconService().syncIOSIcon())
+          .catchError((Object e) => debugPrint('App icon init failed: $e')),
     ]);
 
-    // Parallelize playback state restoration and session loading
-    final initResults = await Future.wait([
-      _playbackStateStore.load(),
-      _loadStoredSessionSafely(),
-    ]);
-
-    final storedPlaybackState = initResults[0] as PlaybackState?;
-    final storedSession = initResults[1] as JellyfinSession?;
+    PlaybackState? storedPlaybackState = preloadedPlaybackState;
+    if (storedPlaybackState == null) {
+      try {
+        storedPlaybackState = await _playbackStateStore.load();
+      } catch (error) {
+        debugPrint('Failed to load playback state: $error');
+      }
+    }
+    // SessionProvider (initialized before this runs) already read the
+    // keychain and restored the JellyfinService; reuse its session instead
+    // of reading and restoring a second copy. A session that becomes
+    // readable later (locked keychain) arrives through _onSessionChanged.
+    final sessionProvider = _sessionProvider;
+    final storedSession = sessionProvider != null
+        ? sessionProvider.session
+        : await _loadStoredSessionSafely();
 
     // Network type for auto quality / Wi-Fi-only caching. Needed even on a
     // first launch (no stored state), which used to leave it unset.
@@ -1354,13 +1437,14 @@ class NautuneAppState extends ChangeNotifier {
       _navTabOrder = List<int>.from(storedPlaybackState.navTabOrder);
       _gaplessPlaybackEnabled = storedPlaybackState.gaplessPlaybackEnabled;
       _streamingQuality = storedPlaybackState.streamingQuality;
-      _visualizerEnabled = storedPlaybackState.visualizerEnabled;
       _visualizerEnabledByUser = storedPlaybackState.visualizerEnabled;
+      _preCacheTrackCount = storedPlaybackState.preCacheTrackCount;
       _visualizerType = storedPlaybackState.visualizerType;
       _visualizerPosition = storedPlaybackState.visualizerPosition;
       _nowPlayingLayout = storedPlaybackState.nowPlayingLayout;
-      _submarineModeEnabled = storedPlaybackState.isOfflineMode;
-      _batterySaverSnapshot = storedPlaybackState.batterySaverSnapshot;
+      _submarineModeEnabled = storedPlaybackState.submarineModeEnabled ||
+          storedPlaybackState.isOfflineMode;
+      _restoreLegacyBatterySaverSnapshot(storedPlaybackState);
       _libraryScrollOffsets =
           Map<String, double>.from(storedPlaybackState.scrollOffsets);
 
@@ -1368,10 +1452,8 @@ class NautuneAppState extends ChangeNotifier {
       // prepares the source for the restored track, which must already see
       // the streaming quality, connectivity (network type for auto quality,
       // Wi-Fi-only caching) and battery-saver settings.
-      _audioPlayerService.setCrossfadeEnabled(_crossfadeEnabled);
       _audioPlayerService.setCrossfadeDuration(_crossfadeDurationSeconds);
       _audioPlayerService.setInfiniteRadioEnabled(_infiniteRadioEnabled);
-      _audioPlayerService.setGaplessPlaybackEnabled(_gaplessPlaybackEnabled);
       _audioPlayerService.setStreamingQuality(_streamingQuality);
       _audioPlayerService.setTranscodeCodec(storedPlaybackState.transcodeCodec);
       _audioPlayerService.setSmartShuffleEnabled(storedPlaybackState.smartShuffleEnabled);
@@ -1381,10 +1463,17 @@ class NautuneAppState extends ChangeNotifier {
         mode: storedPlaybackState.replayGainMode,
         preampDb: storedPlaybackState.replayGainPreampDb,
       ));
-      _audioPlayerService.setPreCacheTrackCount(storedPlaybackState.preCacheTrackCount);
       _audioPlayerService.setWifiOnlyCaching(storedPlaybackState.wifiOnlyCaching);
       _jellyfinService.setCacheTtl(Duration(minutes: _cacheTtlMinutes));
 
+      // Crossfade, gapless and pre-caching: the preferences, or the battery
+      // saver's overrides when it was active at the last run.
+      _audioPlayerService.setCrossfadeEnabled(
+          _crossfadeEnabled && !_submarineModeEnabled);
+      _audioPlayerService.setGaplessPlaybackEnabled(
+          _gaplessPlaybackEnabled && !_submarineModeEnabled);
+      _audioPlayerService.setPreCacheTrackCount(
+          _submarineModeEnabled ? 0 : _preCacheTrackCount);
       if (_submarineModeEnabled) {
         _audioPlayerService.setBatterySaverMode(true);
         _audioPlayerService.reportingService?.setProgressInterval(
@@ -1403,6 +1492,12 @@ class NautuneAppState extends ChangeNotifier {
       );
 
       _userWantsOffline = storedPlaybackState.isOfflineMode;
+      if (!_remoteControlEnabled) _stopRemoteControl();
+
+      // The battery saver was active at the last run (offline or Low Power
+      // Mode) but neither applies any more: lift it now, before the queue
+      // is restored, so the preferences apply again.
+      _maybeDeactivateSubmarineFeatures();
 
       if (_userWantsOffline) {
         _audioPlayerService.reportingService?.setEnabled(false);
@@ -1413,8 +1508,13 @@ class NautuneAppState extends ChangeNotifier {
       _audioPlayerService.setOfflineMode(isOfflineMode);
 
       // Restore the saved queue/track (paused). Doesn't wait on the network:
-      // the source is prepared in the background.
-      await _audioPlayerService.hydrateFromPersistence(storedPlaybackState);
+      // the source is prepared in the background. A failure here must not
+      // stop the session from being restored.
+      try {
+        await _audioPlayerService.hydrateFromPersistence(storedPlaybackState);
+      } catch (error) {
+        debugPrint('Failed to restore the saved queue: $error');
+      }
     } else {
       _initPowerModeListener();
     }
@@ -1428,13 +1528,17 @@ class NautuneAppState extends ChangeNotifier {
             final data = await rootBundle.load('assets/demo/demo_offline_track.mp3');
             await _setupDemoMode(DemoContent(), data.buffer.asUint8List());
           }
-          _initialized = true;
-          notifyListeners();
-          return;
+          return; // initialize() marks the state initialized
         }
 
+        // Same object as SessionProvider's, so _onSessionChanged sees no
+        // change and doesn't restart everything.
         _session = storedSession;
-        _jellyfinService.restoreSession(storedSession);
+        if (sessionProvider == null) {
+          // SessionProvider restores the JellyfinService itself; restoring
+          // again would drop its caches and in-flight request sharing.
+          _jellyfinService.restoreSession(storedSession);
+        }
         _audioPlayerService.setJellyfinService(_jellyfinService);
         _downloadService.onSessionChanged();
 
@@ -1455,10 +1559,22 @@ class NautuneAppState extends ChangeNotifier {
           _startBootstrapSync(storedSession);
           unawaited(_syncAnalyticsToServer());
           _publishOfflineState(); // records "online" (policy already live)
+          // Home sections the app owns (recently played, discover, ...).
+          if (storedSession.selectedLibraryId != null) {
+            unawaited(_loadLibraryDependentContent(forceRefresh: true));
+          }
         } else if (isOfflineMode) {
           _publishOfflineState();
           _activateSubmarineFeatures();
+          if (_libraryDataProvider?.libraries == null) {
+            unawaited(_loadLibraries()); // downloads-based fallback
+          }
           unawaited(_loadLibraryDependentContent(forceRefresh: true));
+          if (!_userWantsOffline) {
+            // No network transport right now: keep checking the server so
+            // the app comes back online as soon as it answers.
+            _startReachabilityProbe();
+          }
         }
       } catch (error, stackTrace) {
         _lastError = error;
@@ -1473,10 +1589,29 @@ class NautuneAppState extends ChangeNotifier {
         );
       }
     }
+  }
 
-    _initialized = true;
-    notifyListeners();
-    debugPrint('NautuneAppState init took: ${initStopwatch.elapsedMilliseconds}ms');
+  /// Builds before 2026-09 wrote the battery saver's overrides (crossfade,
+  /// gapless, pre-cache and visualizer off) into the preference fields and
+  /// kept the user's values in `batterySaverSnapshot`. Take the preferences
+  /// from such a snapshot, and persist them where they belong.
+  void _restoreLegacyBatterySaverSnapshot(PlaybackState stored) {
+    final snapshot = stored.batterySaverSnapshot;
+    if (snapshot == null || snapshot.isEmpty) return;
+    _visualizerEnabledByUser =
+        snapshot['visualizerEnabledByUser'] as bool? ?? _visualizerEnabledByUser;
+    _crossfadeEnabled = snapshot['crossfadeEnabled'] as bool? ?? _crossfadeEnabled;
+    _gaplessPlaybackEnabled =
+        snapshot['gaplessPlaybackEnabled'] as bool? ?? _gaplessPlaybackEnabled;
+    _preCacheTrackCount =
+        (snapshot['preCacheTrackCount'] as num?)?.toInt() ?? _preCacheTrackCount;
+    unawaited(_playbackStateStore.saveUiState(
+      visualizerEnabled: _visualizerEnabledByUser,
+      crossfadeEnabled: _crossfadeEnabled,
+      gaplessPlaybackEnabled: _gaplessPlaybackEnabled,
+      preCacheTrackCount: _preCacheTrackCount,
+      batterySaverSnapshot: <String, dynamic>{}, // empty map = cleared
+    ));
   }
 
   /// Loads the persisted session. When the keychain is locked (cold start
@@ -1508,18 +1643,33 @@ class NautuneAppState extends ChangeNotifier {
       onNetworkReachable: _handleNetworkRecovered,
       onNetworkLost: _handleNetworkDrop,
       onUnauthorized: _handleBootstrapUnauthorized,
+      // LibraryDataProvider loads (and caches) the collections itself; the
+      // bootstrap then only fetches the libraries, to detect network loss
+      // and an expired session. Its other results went to legacy fields the
+      // provider-backed getters never read.
+      librariesOnly: _libraryDataProvider != null,
     );
     unawaited(_syncPendingPlaylistActions());
   }
 
   Future<void> _applyBootstrapSnapshot(BootstrapSnapshot snapshot) async {
-    if (_libraryDataProvider != null) {
-      _libraryDataProvider.applySnapshot(snapshot);
-      // We still need to check if selected library is valid in legacy state
-      if (snapshot.libraries != null) {
-        _libraries = snapshot.libraries;
-        await _ensureSelectedLibraryStillValid();
-      }
+    final provider = _libraryDataProvider;
+    if (provider != null) {
+      // Only fill what the provider doesn't have yet: its own loads started
+      // on the session change and may already have fresher data, which a
+      // cached snapshot must not overwrite. (The provider validates the
+      // selected library against the fresh list itself.)
+      provider.applySnapshot(BootstrapSnapshot(
+        libraries: provider.libraries == null ? snapshot.libraries : null,
+        playlists: provider.playlists == null ? snapshot.playlists : null,
+        albums: provider.albums == null ? snapshot.albums : null,
+        artists: provider.artists == null ? snapshot.artists : null,
+        recentTracks:
+            provider.recentTracks == null ? snapshot.recentTracks : null,
+        recentlyAddedAlbums: provider.recentlyAddedAlbums == null
+            ? snapshot.recentlyAddedAlbums
+            : null,
+      ));
       return;
     }
     
@@ -1735,6 +1885,7 @@ class NautuneAppState extends ChangeNotifier {
 
   Future<void> logout() async {
     final cacheKey = _sessionCacheKey;
+    final oldSession = _session;
 
     // 1. Stop playback while the old token is still valid (so the stop is
     //    reported) and clear the persisted queue snapshot — every track in it
@@ -1750,6 +1901,21 @@ class NautuneAppState extends ChangeNotifier {
       debugPrint('Logout: failed to clear saved playback state: $error');
     }
 
+    // Give playlist edits / favorites queued while offline one last chance
+    // to reach this account; whatever is left is dropped below so it can't
+    // be replayed into the next account.
+    if (!isOfflineMode && !isDemoMode && _session != null) {
+      try {
+        await _syncPendingPlaylistActions(refreshAfter: false)
+            .timeout(const Duration(seconds: 5));
+      } catch (error) {
+        debugPrint('Logout: pending playlist sync did not finish: $error');
+      }
+    }
+    // A run still in flight stops by itself once the session is cleared
+    // below; forget it so the next account's sync starts a fresh run.
+    _playlistSyncInFlight = null;
+
     // 2. Silence all background work tied to the old account.
     _retireReportingService();
     _stopRemoteControl();
@@ -1758,6 +1924,17 @@ class NautuneAppState extends ChangeNotifier {
     _stopPeriodicSyncTimer();
     _bootstrapService.cancelSync();
     _jellyfinService.clearSession();
+    // Park in-flight downloads as queued. After clearSession, so they wait
+    // for the next session instead of restarting with the old token.
+    _downloadService.pauseActiveForSessionChange();
+    // Revoke the token on the server (best effort). The delay lets the
+    // final Stopped report above go out with the token first.
+    if (oldSession != null && !oldSession.isDemo) {
+      unawaited(_jellyfinService.revokeSessionToken(
+        oldSession,
+        delay: const Duration(seconds: 5),
+      ));
+    }
 
     // 3. Clear the SessionProvider BEFORE nulling our own session, so
     //    _onSessionChanged sees the transition (old → null) and runs its
@@ -1796,6 +1973,24 @@ class NautuneAppState extends ChangeNotifier {
       debugPrint('Logout: failed to clear stored session: $error');
     }
 
+    // Per-account data kept in global boxes: queued offline edits, the
+    // offline playlist list and playlist membership. Left in place, the
+    // next account would replay the edits and show these playlists.
+    try {
+      await _syncQueue.clear();
+      await _playlistStore.clear();
+      await PlaylistMembershipStore.instance.clear();
+    } catch (error) {
+      debugPrint('Logout: failed to clear per-account playlist data: $error');
+    }
+    _syncStatusProvider?.reset();
+    ListeningAnalyticsService().setCurrentAccount();
+    try {
+      await ProfileStatsCache.clear();
+    } catch (error) {
+      debugPrint('Logout: failed to clear profile stats cache: $error');
+    }
+
     // A bootstrap-detected network drop belongs to the old session; re-derive
     // network state from OS connectivity so the next login isn't stuck
     // offline.
@@ -1817,9 +2012,22 @@ class NautuneAppState extends ChangeNotifier {
     }
   }
 
+  /// Reload the libraries and everything shown for the selected library
+  /// (pull-to-refresh, retry, back online).
   Future<void> refreshLibraries() async {
-    if (_libraryDataProvider != null) {
-      await _libraryDataProvider.loadLibraries();
+    final provider = _libraryDataProvider;
+    if (provider != null) {
+      // Demo collections are local; nothing to fetch.
+      if (_demoModeProvider?.isDemoMode ?? false) return;
+      await provider.loadLibraries();
+      // Libraries alone left albums, playlists, favorites, ... (and their
+      // errors from an offline start) stale after reconnecting.
+      if (_sessionProvider?.session?.selectedLibraryId != null) {
+        await Future.wait([
+          provider.loadAllLibraryData(forceRefresh: true),
+          _loadLibraryDependentContent(forceRefresh: true),
+        ]);
+      }
       return;
     }
     await _loadLibraries();
@@ -1850,7 +2058,7 @@ class NautuneAppState extends ChangeNotifier {
     }
 
     if (isOfflineMode) {
-      await _syncQueue.add(PendingPlaylistAction(
+      await _queueAction(PendingPlaylistAction(
         type: 'create',
         payload: {
           'name': name,
@@ -1891,7 +2099,7 @@ class NautuneAppState extends ChangeNotifier {
     }
 
     if (isOfflineMode) {
-      await _syncQueue.add(PendingPlaylistAction(
+      await _queueAction(PendingPlaylistAction(
         type: 'update',
         payload: {
           'playlistId': playlistId,
@@ -1922,7 +2130,7 @@ class NautuneAppState extends ChangeNotifier {
     }
 
     if (isOfflineMode) {
-      await _syncQueue.add(PendingPlaylistAction(
+      await _queueAction(PendingPlaylistAction(
         type: 'delete',
         payload: {
           'playlistId': playlistId,
@@ -1962,7 +2170,7 @@ class NautuneAppState extends ChangeNotifier {
     }
 
     if (isOfflineMode) {
-      await _syncQueue.add(PendingPlaylistAction(
+      await _queueAction(PendingPlaylistAction(
         type: 'add',
         payload: {
           'playlistId': playlistId,
@@ -2038,7 +2246,7 @@ class NautuneAppState extends ChangeNotifier {
     }
 
     if (isOfflineMode) {
-      await _syncQueue.add(PendingPlaylistAction(
+      await _queueAction(PendingPlaylistAction(
         type: 'favorite',
         payload: {
           'itemId': itemId,
@@ -2245,27 +2453,38 @@ class NautuneAppState extends ChangeNotifier {
       return;
     }
 
+    // Online, LibraryDataProvider (when wired) loads the library collections
+    // itself (albums, artists, playlists, recent, recently added, favorites,
+    // genres) and the getters prefer its lists, so loading them here too
+    // only duplicated every request. Offline, these legacy loaders still
+    // provide the downloads-based fallback through OfflineRepository.
+    final providerOwnsCollections =
+        _libraryDataProvider != null && !isOfflineMode;
+
     // Load all data in parallel with individual timeouts
     // eagerError: false ensures one slow/failed request doesn't cancel others
     await Future.wait([
-      _loadAlbumsForLibrary(libraryId, forceRefresh: forceRefresh)
-          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Albums load timed out')),
-      _loadArtistsForLibrary(libraryId, forceRefresh: forceRefresh)
-          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Artists load timed out')),
-      _loadPlaylistsForLibrary(libraryId, forceRefresh: forceRefresh)
-          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Playlists load timed out')),
-      _loadRecentForLibrary(libraryId, forceRefresh: forceRefresh)
-          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Recent load timed out')),
-      _loadRecentlyAddedForLibrary(libraryId, forceRefresh: forceRefresh)
-          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ RecentlyAdded load timed out')),
+      if (!providerOwnsCollections) ...[
+        _loadAlbumsForLibrary(libraryId, forceRefresh: forceRefresh)
+            .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Albums load timed out')),
+        _loadArtistsForLibrary(libraryId, forceRefresh: forceRefresh)
+            .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Artists load timed out')),
+        _loadPlaylistsForLibrary(libraryId, forceRefresh: forceRefresh)
+            .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Playlists load timed out')),
+        _loadRecentForLibrary(libraryId, forceRefresh: forceRefresh)
+            .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Recent load timed out')),
+        _loadRecentlyAddedForLibrary(libraryId, forceRefresh: forceRefresh)
+            .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ RecentlyAdded load timed out')),
+        _loadGenres(libraryId, forceRefresh: forceRefresh)
+            .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Genres load timed out')),
+      ],
       // Skip the legacy favorites load when LibraryDataProvider is wired —
       // it loads favorites itself via loadAllLibraryData on session change,
       // and the favoriteTracks getter prefers the provider's list.
       if (_libraryDataProvider == null)
         _loadFavorites(forceRefresh: forceRefresh)
             .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Favorites load timed out')),
-      _loadGenres(libraryId, forceRefresh: forceRefresh)
-          .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ Genres load timed out')),
+      // Home sections only the app state owns.
       _loadRecentlyPlayed(libraryId, forceRefresh: forceRefresh)
           .timeout(const Duration(seconds: 30), onTimeout: () => debugPrint('⚠️ RecentlyPlayed load timed out')),
       _loadDiscoverTracks(libraryId, forceRefresh: forceRefresh)
@@ -3003,8 +3222,8 @@ class NautuneAppState extends ChangeNotifier {
       // Try recently played first
       if (_recentlyPlayedTracks != null && _recentlyPlayedTracks!.isNotEmpty) {
         seedTrack = _recentlyPlayedTracks!.first;
-      } else if (_recentTracks != null && _recentTracks!.isNotEmpty) {
-        seedTrack = _recentTracks!.first;
+      } else if (recentTracks?.isNotEmpty ?? false) {
+        seedTrack = recentTracks!.first;
       }
 
       if (seedTrack == null) {
@@ -3051,7 +3270,8 @@ class NautuneAppState extends ChangeNotifier {
   }
 
   void clearLibrarySelection() {
-    _session = _session?.copyWith(selectedLibraryId: null, selectedLibraryName: null);
+    final previous = _session;
+    _session = previous?.copyWith(selectedLibraryId: null, selectedLibraryName: null);
     _albums = null;
     _playlists = null;
     _recentTracks = null;
@@ -3065,8 +3285,19 @@ class NautuneAppState extends ChangeNotifier {
     _recommendationTracks = null;
     _recommendationSeedTrackName = null;
     notifyListeners();
-    if (_session != null) {
-      _sessionStore.save(_session!);
+    if (previous == null) return;
+
+    final sessionProvider = _sessionProvider;
+    if (sessionProvider != null) {
+      // Through SessionProvider, so it, LibraryDataProvider and the stored
+      // session agree (and a demo session isn't persisted).
+      unawaited(sessionProvider.clearSelectedLibrary().catchError((Object e) {
+        debugPrint('Failed to save the cleared library selection: $e');
+      }));
+    } else if (!previous.isDemo) {
+      unawaited(_sessionStore.save(_session!).catchError((Object e) {
+        debugPrint('Failed to save the cleared library selection: $e');
+      }));
     }
   }
 
@@ -3080,7 +3311,8 @@ class NautuneAppState extends ChangeNotifier {
     if (_userWantsOffline) {
       _activateSubmarineFeatures();
     } else {
-      _deactivateSubmarineFeatures();
+      // Stays engaged while there's no network or Low Power Mode is on.
+      _maybeDeactivateSubmarineFeatures();
     }
     // Applies the offline policy, or restores the online one (only when the
     // network is actually available).
@@ -3133,6 +3365,7 @@ class NautuneAppState extends ChangeNotifier {
   void _publishOfflineState({bool restartBootstrap = true}) {
     final offline = isOfflineMode;
     _audioPlayerService.setOfflineMode(offline);
+    _syncStatusProvider?.setOffline(offline);
     final previous = _publishedOffline;
     if (previous == offline) return;
     _publishedOffline = offline;
@@ -3175,6 +3408,10 @@ class NautuneAppState extends ChangeNotifier {
     _startPeriodicSyncTimer();
     unawaited(_syncAnalyticsToServer());
 
+    // Send scrobbles queued while offline
+    unawaited(ListenBrainzService().retryPendingScrobbles());
+    unawaited(LastFmService.instance.flush());
+
     // Re-enable playback reporting + flush queued reports
     final reportingService = _audioPlayerService.reportingService;
     if (reportingService != null) {
@@ -3194,15 +3431,34 @@ class NautuneAppState extends ChangeNotifier {
 
   Future<void>? _playlistSyncInFlight;
 
+  /// Queue a playlist edit / favorite made while offline.
+  Future<void> _queueAction(PendingPlaylistAction action) async {
+    await _syncQueue.add(action);
+    unawaited(_refreshPendingActionsCount());
+  }
+
+  /// Publish the number of queued offline edits to the sync indicator.
+  Future<void> _refreshPendingActionsCount() async {
+    final status = _syncStatusProvider;
+    if (status == null) return;
+    try {
+      status.setPendingActionsCount((await _syncQueue.load()).length);
+    } catch (e) {
+      debugPrint('Failed to read the pending playlist queue: $e');
+    }
+  }
+
   /// Replay playlist edits / favorites queued while offline. Runs whenever
   /// the app is (back) online — startup, reconnect, "Go online" — and is
   /// single-flight: overlapping triggers share one run, so no action is sent
-  /// twice.
-  Future<void> _syncPendingPlaylistActions() {
+  /// twice. [refreshAfter] reloads the playlists once done (only honoured
+  /// when this call starts the run).
+  Future<void> _syncPendingPlaylistActions({bool refreshAfter = true}) {
     final running = _playlistSyncInFlight;
     if (running != null) return running;
     late final Future<void> run;
-    run = _runPendingPlaylistSync().catchError((Object e) {
+    run = _runPendingPlaylistSync(refreshAfter: refreshAfter)
+        .catchError((Object e) {
       debugPrint('❌ Pending playlist sync failed: $e');
     }).whenComplete(() {
       if (identical(_playlistSyncInFlight, run)) _playlistSyncInFlight = null;
@@ -3211,19 +3467,66 @@ class NautuneAppState extends ChangeNotifier {
     return run;
   }
 
-  Future<void> _runPendingPlaylistSync() async {
+  /// HTTP status of a failed Jellyfin request, when the error carries one.
+  static int? _requestStatus(Object error) {
+    if (error is! JellyfinRequestException) return null;
+    final match = RegExp(r'status (\d{3})').firstMatch(error.message);
+    return match == null ? null : int.tryParse(match.group(1)!);
+  }
+
+  /// Whether a failed request may still have been applied by the server:
+  /// it timed out or broke after being sent, or the server answered 5xx.
+  static bool _mayHaveBeenApplied(Object error) {
+    if (error is ServerSlowException) return true;
+    if (error is RobustHttpException) {
+      final cause = error.lastError;
+      return cause != null &&
+          !RobustHttpClient.isConnectionEstablishmentFailure(cause);
+    }
+    final status = _requestStatus(error);
+    return status != null && status >= 500;
+  }
+
+  Future<void> _runPendingPlaylistSync({bool refreshAfter = true}) async {
     if (isOfflineMode || isDemoMode || _session == null) return;
+    // Every action is sent with this session; if the account changes
+    // (logout / another login) the run stops, so one account's edits can
+    // never reach another.
+    final startSession = _jellyfinService.session;
+    if (startSession == null) return;
+    bool sessionChanged() => !identical(_jellyfinService.session, startSession);
+
     final pending = await _syncQueue.load();
-    if (pending.isEmpty) return;
+    if (pending.isEmpty || sessionChanged()) return;
 
     debugPrint('Syncing ${pending.length} pending playlist actions...');
-    
+    _syncStatusProvider?.startSync('Syncing offline changes');
+    String? failure;
+    var aborted = false;
+
+    // In order, stopping at the first transient failure: later actions may
+    // depend on earlier ones (rename after create, favorite toggles), so
+    // running them out of order could leave the wrong final state.
     for (final action in pending) {
+      if (sessionChanged()) {
+        aborted = true;
+        break;
+      }
       try {
         switch (action.type) {
           case 'create':
             final name = action.payload['name'] as String;
             final itemIds = (action.payload['itemIds'] as List?)?.cast<String>();
+            // An earlier attempt may have created it on the server even
+            // though the response never arrived; don't create a duplicate.
+            if (action.maybeApplied &&
+                await _retriedCreateAlreadyApplied(action, name)) {
+              break;
+            }
+            if (sessionChanged()) {
+              aborted = true;
+              break;
+            }
             await _jellyfinService.createPlaylist(name: name, itemIds: itemIds);
             break;
           case 'update':
@@ -3252,16 +3555,75 @@ class NautuneAppState extends ChangeNotifier {
             await _jellyfinService.markFavorite(itemId, shouldBeFavorite);
             break;
         }
+        if (aborted) break;
         await _syncQueue.remove(action);
         debugPrint('✅ Synced ${action.type} action');
       } catch (error) {
+        if (sessionChanged()) {
+          // Failed because the account changed mid-request: not the
+          // action's fault, and it no longer belongs to this session.
+          aborted = true;
+          break;
+        }
+        final decision = decidePendingActionFailure(
+          attempts: action.attempts,
+          queuedAt: action.timestamp,
+          now: DateTime.now(),
+          httpStatus: _requestStatus(error),
+          // A malformed stored payload (bad cast) can never succeed.
+          invalidPayload: error is TypeError,
+        );
+        if (decision.drop) {
+          debugPrint('❌ Dropping ${action.type} action after '
+              '${decision.attempts} attempt(s): $error');
+          await _syncQueue.remove(action);
+          continue;
+        }
         debugPrint('❌ Failed to sync ${action.type} action: $error');
-        // Keep the action for next sync attempt
+        await _syncQueue.update(action.copyWith(
+          attempts: decision.attempts,
+          maybeApplied: action.maybeApplied || _mayHaveBeenApplied(error),
+        ));
+        failure = error.toString();
+        break; // keep the order; retry from here next time
       }
     }
-    
+
+    if (aborted) {
+      debugPrint('Pending playlist sync stopped: the session changed');
+      return;
+    }
+
+    await _refreshPendingActionsCount();
+    if (failure != null) {
+      _syncStatusProvider?.failSync(failure);
+    } else {
+      _syncStatusProvider?.completeSync();
+    }
+
     // Refresh playlists after sync
-    await refreshPlaylists();
+    if (refreshAfter) await refreshPlaylists();
+  }
+
+  /// See [retriedCreateAlreadyApplied]. When the server's playlists can't
+  /// be read, assumes not applied (a duplicate beats a lost playlist).
+  Future<bool> _retriedCreateAlreadyApplied(
+    PendingPlaylistAction action,
+    String name,
+  ) async {
+    try {
+      final playlists = await _jellyfinService.loadPlaylists(forceRefresh: true);
+      return retriedCreateAlreadyApplied(
+        maybeApplied: action.maybeApplied,
+        name: name,
+        queuedAt: action.timestamp,
+        serverPlaylists: [
+          for (final p in playlists) (name: p.name, created: p.dateCreated),
+        ],
+      );
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> disconnect() async {

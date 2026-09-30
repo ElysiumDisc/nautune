@@ -17,6 +17,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
+  bool _submitting = false;
   String? _errorMessage;
 
   late SessionProvider _sessionProvider;
@@ -64,6 +65,9 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _submit() async {
+    // Guards double taps, including the demo path, which awaits asset
+    // loading before the session reports it is authenticating.
+    if (_submitting) return;
     final form = _formKey.currentState;
     if (form == null || !form.validate()) {
       return;
@@ -71,6 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     FocusScope.of(context).unfocus();
     setState(() {
+      _submitting = true;
       _errorMessage = null;
     });
 
@@ -85,9 +90,12 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       }
     } catch (error) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = error.toString();
       });
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
   }
 
@@ -97,7 +105,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     return Consumer2<SessionProvider, DemoModeProvider>(
       builder: (context, session, demoMode, child) {
-        final isLoading = session.isAuthenticating;
+        final isLoading = session.isAuthenticating || _submitting;
 
         return Scaffold(
           body: Container(
@@ -108,122 +116,145 @@ class _LoginScreenState extends State<LoginScreen> {
                 end: Alignment.bottomRight,
               ),
             ),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 380),
-                child: Card(
-                  elevation: 12,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Form(
-                      key: _formKey,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Welcome aboard',
-                            style: theme.textTheme.titleLarge,
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Sign in to your Jellyfin server to start the voyage.',
-                            style: theme.textTheme.bodyMedium,
-                          ),
-                          const SizedBox(height: 24),
-                          TextFormField(
-                            controller: _serverController,
-                            decoration: const InputDecoration(
-                              labelText: 'Server URL',
-                              hintText: 'https://your-jellyfin-server.com',
-                            ),
-                            keyboardType: TextInputType.url,
-                            validator: (value) {
-                              final trimmed = value?.trim() ?? '';
-                              if (trimmed.isEmpty) {
-                                if (_looksLikeDemoRequest(
-                                    serverValue: value ?? '')) {
+            // Scrollable so the form stays reachable above the keyboard on
+            // small phones instead of overflowing.
+            child: SafeArea(
+              child: Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 380),
+                    child: Card(
+                      elevation: 12,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Form(
+                          key: _formKey,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Welcome aboard',
+                                style: theme.textTheme.titleLarge,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Sign in to your Jellyfin server to start the voyage.',
+                                style: theme.textTheme.bodyMedium,
+                              ),
+                              const SizedBox(height: 24),
+                              TextFormField(
+                                controller: _serverController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Server URL',
+                                  hintText: 'https://your-jellyfin-server.com',
+                                ),
+                                keyboardType: TextInputType.url,
+                                textInputAction: TextInputAction.next,
+                                autocorrect: false,
+                                enableSuggestions: false,
+                                validator: (value) {
+                                  final trimmed = value?.trim() ?? '';
+                                  if (trimmed.isEmpty) {
+                                    if (_looksLikeDemoRequest(
+                                      serverValue: value ?? '',
+                                    )) {
+                                      return null;
+                                    }
+                                    return 'Enter your server URL';
+                                  }
+                                  final lower = trimmed.toLowerCase();
+                                  if (!lower.startsWith('http://') &&
+                                      !lower.startsWith('https://')) {
+                                    return 'URL must start with http:// or https://';
+                                  }
                                   return null;
-                                }
-                                return 'Enter your server URL';
-                              }
-                              if (!trimmed.startsWith('http://') &&
-                                  !trimmed.startsWith('https://')) {
-                                return 'URL must start with http:// or https://';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          TextFormField(
-                            controller: _usernameController,
-                            decoration: const InputDecoration(
-                              labelText: 'Username',
-                            ),
-                            validator: (value) {
-                              if (value == null || value.trim().isEmpty) {
-                                return 'Enter your username';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          TextFormField(
-                            controller: _passwordController,
-                            decoration: InputDecoration(
-                              labelText: 'Password',
-                              suffixIcon: IconButton(
-                                onPressed: () {
-                                  setState(() {
-                                    _obscurePassword = !_obscurePassword;
-                                  });
                                 },
-                                icon: Icon(
-                                  _obscurePassword
-                                      ? Icons.visibility_outlined
-                                      : Icons.visibility_off_outlined,
+                              ),
+                              const SizedBox(height: 16),
+                              TextFormField(
+                                controller: _usernameController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Username',
+                                ),
+                                textInputAction: TextInputAction.next,
+                                autocorrect: false,
+                                enableSuggestions: false,
+                                autofillHints: const [AutofillHints.username],
+                                validator: (value) {
+                                  if (value == null || value.trim().isEmpty) {
+                                    return 'Enter your username';
+                                  }
+                                  return null;
+                                },
+                              ),
+                              const SizedBox(height: 16),
+                              TextFormField(
+                                controller: _passwordController,
+                                decoration: InputDecoration(
+                                  labelText: 'Password',
+                                  suffixIcon: IconButton(
+                                    onPressed: () {
+                                      setState(() {
+                                        _obscurePassword = !_obscurePassword;
+                                      });
+                                    },
+                                    icon: Icon(
+                                      _obscurePassword
+                                          ? Icons.visibility_outlined
+                                          : Icons.visibility_off_outlined,
+                                    ),
+                                  ),
+                                ),
+                                obscureText: _obscurePassword,
+                                textInputAction: TextInputAction.go,
+                                autofillHints: const [AutofillHints.password],
+                                onFieldSubmitted: (_) {
+                                  if (!isLoading) _submit();
+                                },
+                                validator: (value) {
+                                  if (value == null || value.isEmpty) {
+                                    return 'Enter your password';
+                                  }
+                                  return null;
+                                },
+                              ),
+                              const SizedBox(height: 24),
+                              if (_errorMessage != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 16),
+                                  child: Text(
+                                    _errorMessage!,
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: theme.colorScheme.error,
+                                    ),
+                                  ),
+                                ),
+                              SizedBox(
+                                width: double.infinity,
+                                child: FilledButton(
+                                  onPressed: isLoading ? null : _submit,
+                                  child: isLoading
+                                      ? const SizedBox(
+                                          width: 22,
+                                          height: 22,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : const Text('Sign In'),
                                 ),
                               ),
-                            ),
-                            obscureText: _obscurePassword,
-                            validator: (value) {
-                              if (value == null || value.isEmpty) {
-                                return 'Enter your password';
-                              }
-                              return null;
-                            },
+                              _buildDemoHint(theme),
+                            ],
                           ),
-                          const SizedBox(height: 24),
-                          if (_errorMessage != null)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 16),
-                              child: Text(
-                                _errorMessage!,
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: theme.colorScheme.error,
-                                ),
-                              ),
-                            ),
-                          SizedBox(
-                            width: double.infinity,
-                            child: FilledButton(
-                              onPressed: isLoading ? null : _submit,
-                              child: isLoading
-                                  ? const SizedBox(
-                                      width: 22,
-                                      height: 22,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : const Text('Sign In'),
-                            ),
-                          ),
-                          _buildDemoHint(theme),
-                        ],
+                        ),
                       ),
                     ),
                   ),
@@ -241,26 +272,19 @@ class _LoginScreenState extends State<LoginScreen> {
       margin: const EdgeInsets.only(top: 16),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest
-            .withValues(alpha: 0.4),
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            Icons.explore,
-            color: theme.colorScheme.primary,
-          ),
+          Icon(Icons.explore, color: theme.colorScheme.primary),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Need a guided demo?',
-                  style: theme.textTheme.titleSmall,
-                ),
+                Text('Need a guided demo?', style: theme.textTheme.titleSmall),
                 const SizedBox(height: 4),
                 const Text(
                   'Leave the server blank and sign in with username tester '

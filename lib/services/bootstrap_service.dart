@@ -114,6 +114,7 @@ class BootstrapService {
     VoidCallback? onNetworkReachable,
     ValueChanged<Object>? onNetworkLost,
     VoidCallback? onUnauthorized,
+    bool librariesOnly = false,
   }) {
     final sessionKey = _cacheService.cacheKeyForSession(session);
     final selectedLibraryId = libraryIdOverride ?? session.selectedLibraryId;
@@ -127,6 +128,10 @@ class BootstrapService {
       onNetworkLost: onNetworkLost,
       onUnauthorized: onUnauthorized,
     );
+
+    // The caller keeps the rest fresh itself (LibraryDataProvider); the
+    // libraries request still detects network loss / an expired session.
+    if (librariesOnly) return;
 
     _runSync<JellyfinPlaylist>(
       label: 'playlists',
@@ -270,6 +275,8 @@ class BootstrapService {
         return await fetch().timeout(_syncTimeout);
       } catch (error) {
         lastError = error;
+        // Retrying can't fix an expired session.
+        if (_isUnauthorized(error)) break;
         if (attempt < _maxRetries) {
           await Future<void>.delayed(Duration(milliseconds: 250 * (attempt + 1)));
         }

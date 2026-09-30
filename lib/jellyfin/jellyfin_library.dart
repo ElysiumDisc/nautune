@@ -16,8 +16,11 @@ class JellyfinLibrary {
       id: json['Id'] as String? ?? '',
       name: json['Name'] as String? ?? '',
       collectionType: json['CollectionType'] as String?,
-      imageTag: json['ImageTags'] is Map<String, dynamic>
-          ? (json['ImageTags'] as Map<String, dynamic>)['Primary'] as String?
+      // `is Map` (not Map<String, dynamic>): Hive-restored nested maps are
+      // Map<dynamic, dynamic>.
+      imageTag: json['ImageTags'] is Map &&
+              (json['ImageTags'] as Map)['Primary'] is String
+          ? (json['ImageTags'] as Map)['Primary'] as String
           : null,
     );
   }

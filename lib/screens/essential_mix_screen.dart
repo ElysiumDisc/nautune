@@ -143,7 +143,7 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
       });
 
       _positionSub = _audioService.positionStream.listen((position) {
-        if (!mounted || !_isEssentialMixActive) return;
+        if (!mounted || !_isEssentialMixActive || _isScrubbing) return;
 
         // On iOS, throttle position updates to reduce UI rebuilds
         if (Platform.isIOS) {
@@ -253,6 +253,7 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
   void dispose() {
     _recordListenTime();
     _stopFFTListener();
+    _removeDownloadWaiter();
     _powerModeSubscription?.cancel();
     _trackSub?.cancel();
     _positionSub?.cancel();
@@ -334,7 +335,8 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     await waveformService.initialize();
 
     final data = await waveformService.getWaveform(_trackId);
-    if (data != null && mounted) {
+    if (!mounted) return;
+    if (data != null) {
       setState(() {
         _waveformData = data;
       });
@@ -344,7 +346,7 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
   }
 
   Future<void> _extractWaveform() async {
-    if (_isExtractingWaveform || !_service.isDownloaded) return;
+    if (!mounted || _isExtractingWaveform || !_service.isDownloaded) return;
 
     setState(() {
       _isExtractingWaveform = true;
@@ -452,14 +454,18 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
         if (_isEssentialMixActive) {
           await _audioService.resume();
         } else {
-          // Play the Essential Mix using AudioPlayerService
+          // Play the Essential Mix using AudioPlayerService. Note: this
+          // replaces the current play queue (AudioPlayerService has no
+          // public snapshot/restore for it).
           await _audioService.playTrack(virtualTrack, queueContext: [virtualTrack]);
         }
 
+        if (!mounted) return;
         setState(() {
           _isLoading = false;
         });
       } catch (e) {
+        if (!mounted) return;
         setState(() {
           _isLoading = false;
           _errorMessage = 'Failed to play: $e';
@@ -469,27 +475,47 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     }
   }
 
+  // Listener that auto-plays once a Play-triggered download finishes.
+  VoidCallback? _downloadWaiter;
+
+  void _removeDownloadWaiter() {
+    final waiter = _downloadWaiter;
+    if (waiter != null) {
+      _service.removeListener(waiter);
+      _downloadWaiter = null;
+    }
+  }
+
   void _waitForDownloadAndPlay() {
+    _removeDownloadWaiter();
+
     void listener() {
       if (!mounted) {
-        _service.removeListener(listener);
+        _removeDownloadWaiter();
         return;
       }
 
       if (_service.isDownloaded) {
-        _service.removeListener(listener);
+        _removeDownloadWaiter();
         setState(() {
           _errorMessage = null;
         });
         _togglePlayPause();
       } else if (_service.state.status == EssentialMixDownloadStatus.failed) {
-        _service.removeListener(listener);
+        _removeDownloadWaiter();
         setState(() {
           _errorMessage = 'Download failed: ${_service.state.errorMessage}';
+        });
+      } else if (!_service.isDownloading) {
+        // Cancelled: don't auto-play a later, unrelated download.
+        _removeDownloadWaiter();
+        setState(() {
+          _errorMessage = null;
         });
       }
     }
 
+    _downloadWaiter = listener;
     _service.addListener(listener);
   }
 
@@ -497,13 +523,37 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     await _audioService.seek(position);
   }
 
-  void _seekFromTap(double localX, BuildContext context) {
-    if (_duration.inMilliseconds <= 0) return;
+  Duration? _positionForX(double localX, BuildContext context) {
+    if (_duration.inMilliseconds <= 0) return null;
 
     final progressBarWidth = MediaQuery.of(context).size.width - 48;
     final progress = (localX / progressBarWidth).clamp(0.0, 1.0);
-    final newPosition = Duration(milliseconds: (progress * _duration.inMilliseconds).toInt());
-    _seekTo(newPosition);
+    return Duration(milliseconds: (progress * _duration.inMilliseconds).toInt());
+  }
+
+  void _seekFromTap(double localX, BuildContext context) {
+    final newPosition = _positionForX(localX, context);
+    if (newPosition != null) _seekTo(newPosition);
+  }
+
+  // Scrubbing previews the position locally and seeks once on release,
+  // instead of issuing a seek per pointer move.
+  bool _isScrubbing = false;
+  Duration? _scrubTarget;
+
+  void _onScrubUpdate(double localX, BuildContext context) {
+    final target = _positionForX(localX, context);
+    if (target == null) return;
+    _isScrubbing = true;
+    _scrubTarget = target;
+    _positionNotifier.value = target;
+  }
+
+  void _onScrubEnd() {
+    final target = _scrubTarget;
+    _isScrubbing = false;
+    _scrubTarget = null;
+    if (target != null) _seekTo(target);
   }
 
   void _showDownloadOptions() {
@@ -612,7 +662,9 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
                     children: [
                       GestureDetector(
                         onTapDown: (details) => _seekFromTap(details.localPosition.dx, context),
-                        onHorizontalDragUpdate: (details) => _seekFromTap(details.localPosition.dx, context),
+                        onHorizontalDragUpdate: (details) => _onScrubUpdate(details.localPosition.dx, context),
+                        onHorizontalDragEnd: (_) => _onScrubEnd(),
+                        onHorizontalDragCancel: _onScrubEnd,
                         child: SizedBox(
                           height: 56,
                           child: _waveformData != null
@@ -845,7 +897,13 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
         final artworkSize = maxSize * 0.60;
         final maxBarLength = (maxSize - artworkSize) / 2 - 4;
 
-        final showVisualizer = _isPlaying && _service.isDownloaded && _visualizerEnabled;
+        // Play/pause changes only update _playingNotifier (no full rebuild),
+        // so the visualizer and artwork glow listen to it directly.
+        return ValueListenableBuilder<bool>(
+          valueListenable: _playingNotifier,
+          builder: (context, isPlaying, _) {
+        final playing = _isEssentialMixActive && isPlaying;
+        final showVisualizer = playing && _service.isDownloaded && _visualizerEnabled;
 
         return SizedBox(
           width: visualizerSize,
@@ -877,10 +935,12 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
               SizedBox(
                 width: artworkSize,
                 height: artworkSize,
-                child: _buildArtwork(theme),
+                child: _buildArtwork(theme, playing),
               ),
             ],
           ),
+        );
+          },
         );
       },
     );
@@ -979,7 +1039,7 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     );
   }
 
-  Widget _buildArtwork(ThemeData theme) {
+  Widget _buildArtwork(ThemeData theme, bool playing) {
     final artworkUrl = _service.getArtworkUrl();
     final isLocal = artworkUrl.startsWith('file://');
 
@@ -1001,18 +1061,18 @@ class _EssentialMixScreenState extends State<EssentialMixScreen>
     }
 
     final shadowBlur = Platform.isIOS
-        ? (_isPlaying ? 20.0 : 10.0)
-        : (_isPlaying ? 40.0 : 20.0);
+        ? (playing ? 20.0 : 10.0)
+        : (playing ? 40.0 : 20.0);
     final shadowSpread = Platform.isIOS
-        ? (_isPlaying ? 4.0 : 2.0)
-        : (_isPlaying ? 10.0 : 5.0);
+        ? (playing ? 4.0 : 2.0)
+        : (playing ? 10.0 : 5.0);
 
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: theme.colorScheme.primary.withValues(alpha: _isPlaying ? 0.6 : 0.3),
+            color: theme.colorScheme.primary.withValues(alpha: playing ? 0.6 : 0.3),
             blurRadius: shadowBlur,
             spreadRadius: shadowSpread,
           ),

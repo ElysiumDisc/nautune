@@ -27,22 +27,25 @@ class _ButterchurnVisualizerState extends BaseVisualizerState<ButterchurnVisuali
   static const int _maxTrailPoints = 150;
 
   @override
-  Widget buildVisualizer(BuildContext context) {
-    // Update preset timer
-    _presetTimer += 0.033; // ~30fps
+  void onFrame(double dt) {
+    // Real elapsed time: the build rate no longer decides how fast presets
+    // cycle or trails age (at 120 Hz presets used to change every 7.5 s).
+    _presetTimer += dt;
     if (_presetTimer >= _presetDuration) {
       _presetTimer = 0.0;
       _currentPreset = (_currentPreset + 1) % _presetCount;
     }
-
-    // Update trail points
     _updateTrailPoints();
+  }
 
+  @override
+  Widget buildVisualizer(BuildContext context) {
     final theme = Theme.of(context);
     final primaryColor = theme.colorScheme.primary;
 
     return CustomPaint(
       painter: _ButterchurnPainter(
+        frame: frame,
         bass: smoothBass,
         mid: smoothMid,
         treble: smoothTreble,
@@ -51,7 +54,8 @@ class _ButterchurnVisualizerState extends BaseVisualizerState<ButterchurnVisuali
         primaryColor: primaryColor,
         opacity: widget.opacity,
         preset: _currentPreset,
-        trailPoints: List.from(_trailPoints),
+        // Only mutated in onFrame, which is always followed by a rebuild.
+        trailPoints: _trailPoints,
       ),
       size: Size.infinite,
     );
@@ -109,6 +113,7 @@ class _TrailPoint {
 }
 
 class _ButterchurnPainter extends CustomPainter {
+  final int frame;
   final double bass;
   final double mid;
   final double treble;
@@ -130,6 +135,7 @@ class _ButterchurnPainter extends CustomPainter {
   static const MaskFilter _blurFilter15 = MaskFilter.blur(BlurStyle.normal, 15);
 
   _ButterchurnPainter({
+    required this.frame,
     required this.bass,
     required this.mid,
     required this.treble,
@@ -457,23 +463,10 @@ class _ButterchurnPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ButterchurnPainter old) {
-    // Threshold-based repaint for battery optimization
-    const tolerance = 0.01;
-    const timeTolerance = 0.05; // Skip frames during slow animations
-
-    // Always repaint if preset changed or trail points changed significantly
-    if (preset != old.preset || trailPoints.length != old.trailPoints.length) {
-      return true;
-    }
-
-    // Skip if nothing meaningful changed
-    if ((time - old.time).abs() < timeTolerance &&
-        (bass - old.bass).abs() < tolerance &&
-        (mid - old.mid).abs() < tolerance &&
-        (treble - old.treble).abs() < tolerance &&
-        (amplitude - old.amplitude).abs() < tolerance) {
-      return false;
-    }
-    return true;
+    // One repaint per visual frame (~30 fps).
+    return old.frame != frame ||
+        old.preset != preset ||
+        old.primaryColor != primaryColor ||
+        old.opacity != opacity;
   }
 }

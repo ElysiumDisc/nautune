@@ -30,6 +30,9 @@ class ChartCacheService extends ChangeNotifier {
   bool _legendaryCopying = false;
   File? _legendaryTrackFile;
 
+  /// Size of the legendary track when it was fully copied (null = unknown).
+  int? _legendaryTrackBytes;
+
   /// Whether the service is initialized
   bool get isInitialized => _initialized;
 
@@ -102,6 +105,46 @@ class ChartCacheService extends ChangeNotifier {
   /// Get a cached chart (null if not cached)
   ChartData? getChart(String trackId) => _cache[trackId];
 
+  File? _chartFile(String trackId) =>
+      _cacheDir == null ? null : File('${_cacheDir!.path}/$trackId.json');
+
+  /// Read a chart from disk regardless of its generator version.
+  Future<ChartData?> _readChartFile(String trackId) async {
+    final file = _chartFile(trackId);
+    if (file == null || !await file.exists()) return null;
+    try {
+      final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      return ChartData.fromJson(json);
+    } catch (e) {
+      debugPrint('🎮 ChartCache: Error reading ${file.path}: $e');
+      return null;
+    }
+  }
+
+  /// Any stored chart for [trackId] (memory first, then disk), even one from
+  /// an older generator version.
+  Future<ChartData?> _findAnyChart(String trackId) async =>
+      _cache[trackId] ?? await _readChartFile(trackId);
+
+  /// A playable chart for [trackId]: checks memory, then disk (charts trimmed
+  /// from memory are still on disk). Returns null when there is none or it
+  /// was built by an older generator and should be regenerated.
+  Future<ChartData?> loadChart(String trackId) async {
+    if (_cacheDir == null) await initialize();
+    final chart = await _findAnyChart(trackId);
+    if (chart == null || !chart.isCurrentVersion) return null;
+    _cache[trackId] = chart;
+    return chart;
+  }
+
+  /// Write [contents] to [file] atomically (temp file + rename), so a crash
+  /// mid-write never leaves a truncated file behind.
+  static Future<void> _writeAtomic(File file, List<int> contents) async {
+    final tmp = File('${file.path}.tmp');
+    await tmp.writeAsBytes(contents, flush: true);
+    await tmp.rename(file.path);
+  }
+
   /// Get all cached charts
   List<ChartData> getAllCharts() {
     final charts = _cache.values.toList();
@@ -118,7 +161,7 @@ class ChartCacheService extends ChangeNotifier {
     try {
       final file = File('${_cacheDir!.path}/${chart.trackId}.json');
       final json = jsonEncode(chart.toJson());
-      await file.writeAsString(json);
+      await _writeAtomic(file, utf8.encode(json));
       _cache[chart.trackId] = chart;
       notifyListeners();
       debugPrint('🎮 ChartCache: Saved chart for ${chart.trackName}');
@@ -127,10 +170,32 @@ class ChartCacheService extends ChangeNotifier {
     }
   }
 
-  /// Update a chart's scores
-  Future<void> updateScore(String trackId, int score, int maxMultiplier) async {
-    final existing = _cache[trackId];
-    if (existing == null) return;
+  /// Save a freshly generated chart, carrying over the scores of any chart
+  /// it replaces (e.g. one from an older generator version).
+  Future<void> saveGeneratedChart(ChartData chart) async {
+    if (_cacheDir == null) await initialize();
+    final previous = await _findAnyChart(chart.trackId);
+    await saveChart(previous == null
+        ? chart
+        : chart.copyWithScore(
+            highScore: previous.highScore,
+            maxMultiplier: previous.maxMultiplier,
+            playCount: previous.playCount,
+            totalNotesHit: previous.totalNotesHit,
+          ));
+  }
+
+  /// Record a finished play: counts the play and keeps the best score and
+  /// multiplier. Returns the updated chart (null if the chart is unknown).
+  Future<ChartData?> updateScore(
+    String trackId,
+    int score,
+    int maxMultiplier, {
+    int notesHit = 0,
+  }) async {
+    if (_cacheDir == null) await initialize();
+    final existing = await _findAnyChart(trackId);
+    if (existing == null) return null;
 
     final updated = existing.copyWithScore(
       highScore: score > existing.highScore ? score : existing.highScore,
@@ -138,9 +203,11 @@ class ChartCacheService extends ChangeNotifier {
           ? maxMultiplier
           : existing.maxMultiplier,
       playCount: existing.playCount + 1,
+      totalNotesHit: existing.totalNotesHit + notesHit,
     );
 
     await saveChart(updated);
+    return updated;
   }
 
   /// Delete a chart from cache
@@ -232,7 +299,7 @@ class ChartCacheService extends ChangeNotifier {
 
     for (final chart in _cache.values) {
       totalPlays += chart.playCount;
-      totalNotes += chart.notes.length * chart.playCount;
+      totalNotes += chart.totalNotesHit;
 
       if (chart.highScore > bestScore) {
         bestScore = chart.highScore;
@@ -269,8 +336,13 @@ class ChartCacheService extends ChangeNotifier {
   /// Whether the legendary track is currently being copied from assets
   bool get isLegendaryCopying => _legendaryCopying;
 
-  /// Whether the legendary track is ready to play (copied from assets)
-  bool get isLegendaryReady => _legendaryTrackFile?.existsSync() ?? false;
+  /// Whether the legendary track is ready to play (fully copied from assets)
+  bool get isLegendaryReady {
+    final file = _legendaryTrackFile;
+    if (file == null || !file.existsSync()) return false;
+    final expected = _legendaryTrackBytes;
+    return expected == null || file.lengthSync() == expected;
+  }
 
   /// Get the legendary track file path (null if not downloaded)
   String? get legendaryTrackPath => _legendaryTrackFile?.path;
@@ -290,11 +362,12 @@ class ChartCacheService extends ChangeNotifier {
     debugPrint('🔥🎸 LEGENDARY UNLOCKED: Through the Fire and Flames!');
   }
 
-  /// Check if a score qualifies as perfect (100% accuracy, no misses)
-  bool isPerfectScore(int perfectHits, int goodHits, int missedNotes, int totalNotes) {
-    if (totalNotes == 0) return false;
+  /// Check if a score qualifies as perfect (100% accuracy, no misses).
+  /// [scorableNotes] excludes golden bonus notes, which are optional.
+  bool isPerfectScore(int perfectHits, int goodHits, int missedNotes, int scorableNotes) {
+    if (scorableNotes == 0) return false;
     // Perfect = hit every note (perfect or good counts), no misses
-    return missedNotes == 0 && (perfectHits + goodHits) == totalNotes;
+    return missedNotes == 0 && (perfectHits + goodHits) == scorableNotes;
   }
 
   /// Copy the legendary track from bundled assets to documents directory
@@ -324,9 +397,11 @@ class ChartCacheService extends ChangeNotifier {
       // Copy from bundled assets to documents directory
       final byteData = await rootBundle.load(_legendaryAssetPath);
       final bytes = byteData.buffer.asUint8List();
-      await file.writeAsBytes(bytes);
+      await _writeAtomic(file, bytes);
 
       _legendaryTrackFile = file;
+      _legendaryTrackBytes = bytes.length;
+      await _saveLegendaryUnlockState();
       _legendaryCopying = false;
       notifyListeners();
 
@@ -351,12 +426,19 @@ class ChartCacheService extends ChangeNotifier {
       if (await stateFile.exists()) {
         final json = jsonDecode(await stateFile.readAsString());
         _legendaryUnlocked = json['unlocked'] == true;
+        _legendaryTrackBytes = json['trackBytes'] as int?;
       }
 
-      // Check if track file exists
+      // Check if track file exists and is complete (a partial copy from an
+      // interrupted write is discarded and re-copied on demand)
       final trackFile = File('$legendaryPath/through_the_fire_and_flames.mp3');
       if (await trackFile.exists()) {
-        _legendaryTrackFile = trackFile;
+        final expected = _legendaryTrackBytes;
+        if (expected != null && await trackFile.length() != expected) {
+          await trackFile.delete();
+        } else {
+          _legendaryTrackFile = trackFile;
+        }
       }
 
       debugPrint('🔥 Legendary state: unlocked=$_legendaryUnlocked, ready=$isLegendaryReady');
@@ -377,7 +459,13 @@ class ChartCacheService extends ChangeNotifier {
       }
 
       final stateFile = File('${legendaryDir.path}/unlock_state.json');
-      await stateFile.writeAsString(jsonEncode({'unlocked': _legendaryUnlocked}));
+      await _writeAtomic(
+        stateFile,
+        utf8.encode(jsonEncode({
+          'unlocked': _legendaryUnlocked,
+          if (_legendaryTrackBytes != null) 'trackBytes': _legendaryTrackBytes,
+        })),
+      );
     } catch (e) {
       debugPrint('🔥 Error saving legendary state: $e');
     }

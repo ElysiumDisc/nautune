@@ -43,10 +43,19 @@ class _SpectrumBarsVisualizerState extends BaseVisualizerState<SpectrumBarsVisua
     }
   }
 
+  // Bars for the current frame (the shared buffer from getSpectrumBars).
+  List<double> _bars = const [];
+
+  @override
+  void onFrame(double dt) {
+    _bars = getSpectrumBars(_barCount);
+    _updatePeaks(_bars);
+  }
+
   @override
   Widget buildVisualizer(BuildContext context) {
-    final bars = getSpectrumBars(_barCount);
-    _updatePeaks(bars);
+    // Before the first frame (e.g. opened while paused) draw the resting state.
+    final bars = _bars.isEmpty ? (_bars = getSpectrumBars(_barCount)) : _bars;
 
     final theme = Theme.of(context);
     final primaryColor = theme.colorScheme.primary;
@@ -58,6 +67,7 @@ class _SpectrumBarsVisualizerState extends BaseVisualizerState<SpectrumBarsVisua
         primaryColor: primaryColor,
         opacity: widget.opacity,
         bass: smoothBass,
+        frame: frame,
       ),
       size: Size.infinite,
     );
@@ -70,6 +80,7 @@ class _SpectrumBarsPainter extends CustomPainter {
   final Color primaryColor;
   final double opacity;
   final double bass;
+  final int frame;
 
   late final Paint _barPaint;
   late final Paint _peakPaint;
@@ -85,8 +96,6 @@ class _SpectrumBarsPainter extends CustomPainter {
   // Pre-computed color array for bar indices (avoids HSL conversion per bar)
   static final List<double> _hueOffsets = List.generate(48, (i) => -30 + (i / 48) * 70);
 
-  // Gradient cache to avoid creating new shaders every frame
-  final Map<int, Shader> _gradientCache = {};
 
   _SpectrumBarsPainter({
     required this.bars,
@@ -94,6 +103,7 @@ class _SpectrumBarsPainter extends CustomPainter {
     required this.primaryColor,
     required this.opacity,
     required this.bass,
+    required this.frame,
   }) {
     _barPaint = Paint()..style = PaintingStyle.fill;
     _peakPaint = Paint()
@@ -132,22 +142,17 @@ class _SpectrumBarsPainter extends CustomPainter {
     return HSLColor.fromAHSL(1.0, newHue, saturation, lightness).toColor();
   }
 
-  /// Get cached gradient shader for a bar
-  Shader _getBarGradient(int index, Rect rect, Color color) {
-    // Key based on bar index and height bucket (rounded to reduce cache misses)
-    final heightBucket = (rect.height / 10).round();
-    final key = index * 1000 + heightBucket;
-
-    return _gradientCache.putIfAbsent(key, () {
-      return LinearGradient(
-        begin: Alignment.bottomCenter,
-        end: Alignment.topCenter,
-        colors: [
-          color.withValues(alpha: opacity * 0.9),
-          color.withValues(alpha: opacity * 0.6),
-        ],
-      ).createShader(rect);
-    });
+  /// Gradient shader for a bar. Painters are rebuilt every frame and each
+  /// bar's colour follows its value, so a per-painter cache never hit.
+  Shader _getBarGradient(Rect rect, Color color) {
+    return LinearGradient(
+      begin: Alignment.bottomCenter,
+      end: Alignment.topCenter,
+      colors: [
+        color.withValues(alpha: opacity * 0.9),
+        color.withValues(alpha: opacity * 0.6),
+      ],
+    ).createShader(rect);
   }
 
   @override
@@ -192,7 +197,7 @@ class _SpectrumBarsPainter extends CustomPainter {
       canvas.drawRRect(glowRect, _glowPaint);
     }
 
-    // Draw bars - use cached gradients to avoid per-frame allocations
+    // Draw bars
     for (int i = 0; i < barCount; i++) {
       final value = bars[i];
       final x = i * (barWidth + spacing);
@@ -207,8 +212,7 @@ class _SpectrumBarsPainter extends CustomPainter {
         barHeight,
       );
 
-      // Use cached shader when possible (falls back to fresh shader for color changes)
-      _barPaint.shader = _getBarGradient(i, barRect, color);
+      _barPaint.shader = _getBarGradient(barRect, color);
 
       final rrect = RRect.fromRectAndRadius(
         barRect,
@@ -264,14 +268,11 @@ class _SpectrumBarsPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _SpectrumBarsPainter old) {
-    const tolerance = 0.005;
-    if (bars.length != old.bars.length) return true;
-    if ((bass - old.bass).abs() > tolerance) return true;
-    if ((opacity - old.opacity).abs() > tolerance) return true;
-    if (primaryColor != old.primaryColor) return true;
-    for (int i = 0; i < bars.length; i++) {
-      if ((bars[i] - old.bars[i]).abs() > tolerance) return true;
-    }
-    return false;
+    // One repaint per visual frame (~30 fps). `bars` and `peaks` are buffers
+    // reused (mutated in place) across frames, so comparing their contents
+    // against the old painter's always found them equal and froze the bars.
+    return old.frame != frame ||
+        old.primaryColor != primaryColor ||
+        old.opacity != opacity;
   }
 }

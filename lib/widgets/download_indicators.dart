@@ -236,9 +236,10 @@ class CollectionDownloadButton extends StatelessWidget {
                 when d.isQueued || d.isDownloading || d.isPaused)
               id,
         ];
-        final n = await service.deleteDownloads(active);
+        // Tracks another album or playlist also wants keep downloading.
+        final result = await service.releaseDownloads(active, ownerId);
         messenger.showSnackBar(
-          SnackBar(content: Text('Cancelled $n downloads')),
+          SnackBar(content: Text('Cancelled ${result.removed} downloads')),
         );
 
       case CollectionDownloadState.complete:
@@ -249,16 +250,24 @@ class CollectionDownloadButton extends StatelessWidget {
         final remove = await _confirm(
           context,
           title: 'Remove downloads?',
-          message: 'Removes ${summary.total} downloaded tracks '
+          message: 'Removes the ${summary.total} downloaded tracks '
               '(${formatDownloadBytes(bytes)}) of “$collectionName” from this '
-              'device. You can download them again any time.',
+              'device. Tracks that are also part of another downloaded album '
+              'or playlist are kept. You can download them again any time.',
           confirmLabel: 'Remove',
           destructive: true,
         );
         if (remove != true) return;
-        await service.deleteDownloads(ids);
+        final result = await service.releaseDownloads(ids, ownerId);
         messenger.showSnackBar(
-          SnackBar(content: Text('Removed downloads of “$collectionName”')),
+          SnackBar(
+            content: Text(
+              result.kept == 0
+                  ? 'Removed downloads of “$collectionName”'
+                  : 'Removed ${result.removed} downloads of “$collectionName”. '
+                      '${result.kept} kept for other albums or playlists',
+            ),
+          ),
         );
         onRemoved?.call();
 

@@ -528,6 +528,7 @@ class PlaybackState {
       transcodeCodec: transcodeCodec,
       replayGainPreampDb: replayGainPreampDb,
       replayGainMode: replayGainMode,
+      isOfflineMode: isOfflineMode, // The user's "Go offline" choice
       submarineModeEnabled: submarineModeEnabled, // Preserve submarine mode
       batterySaverSnapshot: batterySaverSnapshot, // Preserve snapshot
       gridSize: gridSize, // Preserve grid size preference

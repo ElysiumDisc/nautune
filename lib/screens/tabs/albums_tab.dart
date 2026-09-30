@@ -269,6 +269,15 @@ class _LibraryGridSkeleton extends StatelessWidget {
   }
 }
 
+/// Logical decode width for grid artwork drawn [tileWidth] points wide.
+/// Never below [JellyfinImage.gridArtwork], the size the image prewarmer
+/// fetches, so small tiles still hit its cache; larger tiles (iPad, few
+/// columns) get their real size instead of an upscaled thumbnail.
+int _gridArtworkWidth(double tileWidth) =>
+    tileWidth.isFinite && tileWidth > JellyfinImage.gridArtwork
+        ? tileWidth.ceil()
+        : JellyfinImage.gridArtwork;
+
 Widget _albumArtwork(JellyfinAlbum album, {int? maxWidth}) {
   if (album.primaryImageTag == null) {
     return Image.asset('assets/no_album_art.png', fit: BoxFit.cover);
@@ -320,7 +329,7 @@ class _AlbumListTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return LibraryListRow(
-      artwork: _albumArtwork(album),
+      artwork: _albumArtwork(album, maxWidth: JellyfinImage.listArtwork),
       title: album.name,
       subtitle: album.artists.isNotEmpty ? album.displayArtist : null,
       onTap: onTap,
@@ -362,7 +371,7 @@ class _MiniAlbumCard extends StatelessWidget {
                           itemId: album.id,
                           imageTag: album.primaryImageTag,
                           albumId: album.id,
-                          maxWidth: 400,
+                          maxWidth: 150, // the card's width
                           boxFit: BoxFit.cover,
                           errorBuilder: (context, url, error) => Image.asset(
                             'assets/no_album_art.png',
@@ -415,7 +424,13 @@ class _AlbumCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ArtworkGridTile(
-      artwork: _albumArtwork(album),
+      // The artwork fills the tile's width.
+      artwork: LayoutBuilder(
+        builder: (context, constraints) => _albumArtwork(
+          album,
+          maxWidth: _gridArtworkWidth(constraints.maxWidth),
+        ),
+      ),
       title: album.name,
       subtitle: album.artists.isNotEmpty ? album.displayArtist : null,
       onTap: onTap,

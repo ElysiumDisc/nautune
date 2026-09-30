@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../jellyfin/jellyfin_track.dart';
 import '../services/listening_analytics_service.dart';
 import '../widgets/jellyfin_image.dart';
 import '../widgets/now_playing_bar.dart';
@@ -70,21 +71,26 @@ class _RecentlyPlayedScreenState extends State<RecentlyPlayedScreen> {
                 ],
               ),
             )
-          : ListView.builder(
-              itemCount: grouped.length,
-              itemBuilder: (context, index) {
-                final group = grouped[index];
-                return _DayGroup(
-                  label: group.label,
-                  events: group.events,
-                  appState: widget.appState,
-                );
-              },
-            ),
+          : _buildList(grouped),
       bottomNavigationBar: NowPlayingBar(
         audioService: widget.appState.audioPlayerService,
         appState: widget.appState,
       ),
+    );
+  }
+
+  /// One lazily built row per header and event (up to 200 events).
+  Widget _buildList(List<_DayGroupData> groups) {
+    final rows = <Object>[
+      for (final group in groups) ...[group.label, ...group.events],
+    ];
+    return ListView.builder(
+      itemCount: rows.length,
+      itemBuilder: (context, index) {
+        final row = rows[index];
+        if (row is String) return _DayHeader(label: row);
+        return _EventTile(event: row as PlayEvent, appState: widget.appState);
+      },
     );
   }
 
@@ -132,35 +138,23 @@ class _DayGroupData {
   const _DayGroupData({required this.label, required this.events});
 }
 
-class _DayGroup extends StatelessWidget {
-  const _DayGroup({
-    required this.label,
-    required this.events,
-    required this.appState,
-  });
+class _DayHeader extends StatelessWidget {
+  const _DayHeader({required this.label});
 
   final String label;
-  final List<PlayEvent> events;
-  final NautuneAppState appState;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Text(
-            label,
-            style: theme.textTheme.titleSmall?.copyWith(
-              color: theme.colorScheme.primary,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Text(
+        label,
+        style: theme.textTheme.titleSmall?.copyWith(
+          color: theme.colorScheme.primary,
+          fontWeight: FontWeight.bold,
         ),
-        ...events.map((event) => _EventTile(event: event, appState: appState)),
-      ],
+      ),
     );
   }
 }
@@ -186,16 +180,30 @@ class _EventTile extends StatelessWidget {
     return '${timestamp.month}/${timestamp.day}';
   }
 
+  /// The event's track: the downloaded copy when there is one (works
+  /// offline), else fetched from the server (online only).
+  Future<JellyfinTrack?> _resolveTrack(BuildContext context) async {
+    final download = appState.downloadService.getDownload(event.trackId);
+    if (download != null && download.isCompleted) return download.track;
+    if (appState.isOfflineMode) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Not downloaded — not available offline')),
+      );
+      return null;
+    }
+    final track = await appState.jellyfinService.getTrack(event.trackId);
+    if (track == null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Track no longer available')),
+      );
+    }
+    return track;
+  }
+
   Future<void> _playTrack(BuildContext context) async {
     try {
-      final track = await appState.jellyfinService.getTrack(event.trackId);
-      if (track == null) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Track no longer available')),
-        );
-        return;
-      }
+      final track = await _resolveTrack(context);
+      if (track == null) return;
       await appState.audioPlayerService.playTrack(track);
     } catch (e) {
       if (!context.mounted) return;
@@ -207,15 +215,8 @@ class _EventTile extends StatelessWidget {
 
   Future<void> _showContextMenu(BuildContext context) async {
     try {
-      final track = await appState.jellyfinService.getTrack(event.trackId);
-      if (track == null) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Track no longer available')),
-        );
-        return;
-      }
-      if (!context.mounted) return;
+      final track = await _resolveTrack(context);
+      if (track == null || !context.mounted) return;
       showTrackContextMenu(
         context: context,
         track: track,
@@ -250,9 +251,8 @@ class _EventTile extends StatelessWidget {
                     ? JellyfinImage(
                         itemId: event.albumId!,
                         imageTag: 'Primary',
-                        trackId: event.trackId,
                         albumId: event.albumId,
-                        maxWidth: 96,
+                        maxWidth: 48,
                         boxFit: BoxFit.cover,
                         errorBuilder: (context, url, error) => Container(
                           color: theme.colorScheme.surfaceContainerHighest,

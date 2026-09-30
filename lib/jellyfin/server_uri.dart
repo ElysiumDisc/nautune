@@ -53,3 +53,21 @@ String normalizeServerBaseUrl(String rawUrl) {
   }
   return trimmed;
 }
+
+/// Canonical form of a server base URL for identity comparisons: scheme and
+/// host lower-cased, default port made implicit, trailing slashes dropped.
+/// The base path keeps its case (reverse proxies may be case-sensitive).
+/// Unparseable input falls back to [normalizeServerBaseUrl].
+String serverIdentity(String rawUrl) {
+  final trimmed = normalizeServerBaseUrl(rawUrl);
+  final uri = Uri.tryParse(trimmed);
+  if (uri == null || !uri.hasScheme || uri.host.isEmpty) return trimmed;
+  final scheme = uri.scheme.toLowerCase();
+  final defaultPort = scheme == 'https' ? 443 : (scheme == 'http' ? 80 : null);
+  final port = uri.hasPort && uri.port != defaultPort ? ':${uri.port}' : '';
+  final path = uri.pathSegments.where((s) => s.isNotEmpty).join('/');
+  return '$scheme://${uri.host.toLowerCase()}$port${path.isEmpty ? '' : '/$path'}';
+}
+
+/// Whether [a] and [b] address the same server (see [serverIdentity]).
+bool isSameServerUrl(String a, String b) => serverIdentity(a) == serverIdentity(b);

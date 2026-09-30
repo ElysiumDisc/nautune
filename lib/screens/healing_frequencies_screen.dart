@@ -29,6 +29,7 @@ class _HealingFrequenciesScreenState extends State<HealingFrequenciesScreen> {
 
   Future<void> _init() async {
     await _service.init();
+    if (!mounted) return;
     _sub = _service.currentHzStream.listen((_) {
       if (mounted) setState(() {});
     });

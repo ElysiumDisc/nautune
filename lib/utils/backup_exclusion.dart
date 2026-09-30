@@ -14,9 +14,12 @@ final Set<String> _excludedPaths = {};
 /// iCloud/iTunes backup. Re-downloadable media must not be backed up
 /// (App Review guideline 2.23).
 ///
-/// Fail-soft and memoized per path for the app session.
-Future<void> excludeFromBackup(String path) async {
-  if (!Platform.isIOS || !_excludedPaths.add(path)) return;
+/// Fail-soft and memoized per path for the app session. The flag lives on
+/// the directory itself, so pass [force] after re-creating a directory that
+/// was deleted: the memo would otherwise skip the new one.
+Future<void> excludeFromBackup(String path, {bool force = false}) async {
+  if (!Platform.isIOS) return;
+  if (!_excludedPaths.add(path) && !force) return;
   try {
     await _fileAttributesChannel
         .invokeMethod<bool>('excludeFromBackup', {'path': path});

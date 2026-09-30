@@ -129,13 +129,23 @@ class RemoteControlService {
   bool _running = false;
   int _failures = 0;
 
+  /// Bumped by [start]/[stop]: a connect that completes after the service
+  /// was stopped (or stopped and restarted) belongs to a stale generation
+  /// and closes its socket instead of installing it.
+  int _generation = 0;
+
   bool get isConnected => _socket != null;
 
   /// Websocket URL for [serverUrl] (keeps reverse-proxy base paths).
+  ///
+  /// The token is NOT put in the URL: it travels in the `Authorization`
+  /// header (which `WebSocket.connect` sends and the server's
+  /// AuthorizationContext reads for the upgrade request). dart:io includes
+  /// the full URL in `WebSocketException` messages, so a token in the query
+  /// would end up in the logs on every failed reconnect.
   @visibleForTesting
-  static Uri socketUri(String serverUrl, String token, String deviceId) {
+  static Uri socketUri(String serverUrl, String deviceId) {
     final http = buildServerUri(serverUrl, '/socket', {
-      kJellyfinApiKeyQueryParam: token,
       'deviceId': deviceId,
     });
     return http.replace(scheme: http.scheme == 'https' ? 'wss' : 'ws');
@@ -144,12 +154,15 @@ class RemoteControlService {
   Future<void> start() async {
     if (_running) return;
     _running = true;
+    final generation = ++_generation;
     await _registerCapabilities();
+    if (generation != _generation) return;
     await _connect();
   }
 
   void stop() {
     _running = false;
+    _generation++;
     _reconnect?.cancel();
     _reconnect = null;
     _closeSocket();
@@ -176,21 +189,26 @@ class RemoteControlService {
           )
           .timeout(const Duration(seconds: 15));
     } catch (e) {
-      debugPrint('🎛️ Remote control: capabilities not registered: $e');
+      debugPrint(
+          '🎛️ Remote control: capabilities not registered: ${e.runtimeType}');
     }
   }
 
   Future<void> _connect() async {
     if (!_running) return;
+    final generation = _generation;
     try {
       final socket = await WebSocket.connect(
-        socketUri(serverUrl, accessToken, deviceId).toString(),
+        socketUri(serverUrl, deviceId).toString(),
         headers: _headers,
       ).timeout(const Duration(seconds: 15));
-      if (!_running) {
-        await socket.close();
+      if (!_running || generation != _generation) {
+        // Stopped (or stopped and restarted) while connecting: a newer
+        // connect owns the session; don't install a second socket.
+        unawaited(socket.close());
         return;
       }
+      _closeSocket(); // never leak a previous socket/listener
       _socket = socket;
       _failures = 0;
       debugPrint('🎛️ Remote control connected');
@@ -204,15 +222,20 @@ class RemoteControlService {
             onCommand(command);
           }
         },
-        onDone: _scheduleReconnect,
-        onError: (Object e) => _scheduleReconnect(),
+        onDone: () {
+          if (identical(_socket, socket)) _scheduleReconnect();
+        },
+        onError: (Object e) {
+          if (identical(_socket, socket)) _scheduleReconnect();
+        },
         cancelOnError: true,
       );
       // Ask the server for its keep-alive interval.
       _send('KeepAlive');
     } catch (e) {
-      debugPrint('🎛️ Remote control connect failed: $e');
-      _scheduleReconnect();
+      // Log only the type: exception messages can carry the full URL.
+      debugPrint('🎛️ Remote control connect failed: ${e.runtimeType}');
+      if (generation == _generation) _scheduleReconnect();
     }
   }
 

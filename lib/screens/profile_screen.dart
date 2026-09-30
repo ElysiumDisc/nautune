@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -7,7 +6,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:hive_flutter/hive_flutter.dart' as hive;
 import 'package:material_color_utilities/material_color_utilities.dart';
 import 'package:provider/provider.dart';
 
@@ -18,67 +16,74 @@ import '../jellyfin/server_uri.dart';
 import '../providers/session_provider.dart';
 import '../services/listenbrainz_service.dart';
 import '../services/listening_analytics_service.dart';
+import '../services/profile_stats_cache.dart';
 import '../theme/nautune_theme.dart';
+import '../utils/artwork_colors.dart';
 
-/// Cache for profile stats to avoid recomputing on every visit
-class _ProfileStatsCache {
-  static const _boxName = 'profile_stats_cache';
-  static const _cacheKey = 'stats';
-  static const _cacheValidityMinutes = 5; // Refresh after 5 minutes
+/// Display fields of a track shown on the Profile. Unlike
+/// `JellyfinTrack.toStorageJson()` this carries no server URL or token, so it
+/// is safe to cache on disk.
+class _TrackSummary {
+  final String id;
+  final String name;
+  final List<String> artists;
+  final int? playCount;
+  final int? runTimeTicks;
+  final String? qualityInfo;
+  final String? imageItemId;
+  final String? imageTag;
 
-  static hive.Box? _box;
-  static Map<String, dynamic>? _cachedStats;
-  static DateTime? _cacheTime;
+  const _TrackSummary({
+    required this.id,
+    required this.name,
+    required this.artists,
+    this.playCount,
+    this.runTimeTicks,
+    this.qualityInfo,
+    this.imageItemId,
+    this.imageTag,
+  });
 
-  static Future<void> _ensureBox() async {
-    _box ??= await hive.Hive.openBox(_boxName);
+  factory _TrackSummary.fromTrack(JellyfinTrack track) {
+    final imageTag = track.primaryImageTag ??
+        track.albumPrimaryImageTag ??
+        track.parentThumbImageTag;
+    return _TrackSummary(
+      id: track.id,
+      name: track.name,
+      artists: List<String>.from(track.artists),
+      playCount: track.playCount,
+      runTimeTicks: track.runTimeTicks,
+      qualityInfo: track.audioQualityInfo,
+      imageItemId: imageTag != null ? (track.albumId ?? track.id) : null,
+      imageTag: imageTag,
+    );
   }
 
-  static Future<Map<String, dynamic>?> load() async {
-    await _ensureBox();
+  factory _TrackSummary.fromJson(Map<String, dynamic> json) => _TrackSummary(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        artists: (json['artists'] as List<dynamic>?)?.cast<String>() ?? const [],
+        playCount: json['playCount'] as int?,
+        runTimeTicks: json['runTimeTicks'] as int?,
+        qualityInfo: json['qualityInfo'] as String?,
+        imageItemId: json['imageItemId'] as String?,
+        imageTag: json['imageTag'] as String?,
+      );
 
-    // Return memory cache if fresh
-    if (_cachedStats != null && _cacheTime != null) {
-      if (DateTime.now().difference(_cacheTime!).inMinutes < _cacheValidityMinutes) {
-        return _cachedStats;
-      }
-    }
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'artists': artists,
+        'playCount': playCount,
+        'runTimeTicks': runTimeTicks,
+        'qualityInfo': qualityInfo,
+        'imageItemId': imageItemId,
+        'imageTag': imageTag,
+      };
 
-    // Load from disk
-    final raw = _box?.get(_cacheKey);
-    if (raw == null) return null;
-
-    try {
-      final data = raw is String ? jsonDecode(raw) as Map<String, dynamic> : Map<String, dynamic>.from(raw as Map);
-      final savedTime = data['_cacheTime'] as int?;
-
-      if (savedTime != null) {
-        _cacheTime = DateTime.fromMillisecondsSinceEpoch(savedTime);
-        // Check if disk cache is still valid
-        if (DateTime.now().difference(_cacheTime!).inMinutes < _cacheValidityMinutes) {
-          _cachedStats = data;
-          return data;
-        }
-      }
-      return null; // Cache expired
-    } catch (e) {
-      debugPrint('ProfileStatsCache: Error loading cache: $e');
-      return null;
-    }
-  }
-
-  static Future<void> save(Map<String, dynamic> stats) async {
-    await _ensureBox();
-    stats['_cacheTime'] = DateTime.now().millisecondsSinceEpoch;
-    _cachedStats = stats;
-    _cacheTime = DateTime.now();
-    await _box?.put(_cacheKey, jsonEncode(stats));
-  }
-
-  static bool get isFresh {
-    if (_cacheTime == null) return false;
-    return DateTime.now().difference(_cacheTime!).inMinutes < _cacheValidityMinutes;
-  }
+  Duration? get duration =>
+      runTimeTicks == null ? null : Duration(microseconds: runTimeTicks! ~/ 10);
 }
 
 /// Computed artist stats from track play history
@@ -143,6 +148,9 @@ class _StatsResult {
   final double diversityScore;
   final List<Map<String, dynamic>> topArtists; // name, playCount
   final List<Map<String, dynamic>> topAlbums; // albumId, name, artistName, playCount, imageTag
+  final Map<String, int> codecCounts;
+  final String? mostCommonFormat;
+  final int? highestQualityTrackIndex;
 
   _StatsResult({
     required this.totalPlays,
@@ -157,7 +165,28 @@ class _StatsResult {
     required this.diversityScore,
     required this.topArtists,
     required this.topAlbums,
+    required this.codecCounts,
+    this.mostCommonFormat,
+    this.highestQualityTrackIndex,
   });
+}
+
+/// Audio quality score for a track (higher = better).
+int _qualityScore(Map<String, dynamic> track) {
+  int score = 0;
+  final bitDepth = track['bitDepth'] as int?;
+  final sampleRate = track['sampleRate'] as int?;
+  final bitrate = track['bitrate'] as int?;
+  // Bit depth scoring: 16-bit = 160, 24-bit = 240, 32-bit = 320
+  if (bitDepth != null) score += bitDepth * 10;
+  // Sample rate scoring (kHz * 2)
+  if (sampleRate != null) score += (sampleRate / 1000).round() * 2;
+  // Bitrate scoring (kbps / 10)
+  if (bitrate != null) score += bitrate ~/ 10000;
+  // Lossless bonus
+  final codec = (track['codec'] as String?)?.toLowerCase() ?? '';
+  if (codec == 'flac' || codec == 'alac' || codec == 'wav') score += 100;
+  return score;
 }
 
 /// Top-level function for isolate computation
@@ -186,6 +215,8 @@ _StatsResult _computeStatsIsolate(_StatsInput input) {
       genreMap[genre] = (genreMap[genre] ?? 0) + playCount;
     }
   }
+  // Genres with no plays would make every percentage NaN.
+  genreMap.removeWhere((_, count) => count <= 0);
   final sortedGenres = genreMap.entries.toList()
     ..sort((a, b) => b.value.compareTo(a.value));
   final topGenres = Map.fromEntries(sortedGenres.take(8));
@@ -282,6 +313,31 @@ _StatsResult _computeStatsIsolate(_StatsInput input) {
     ..sort((a, b) => (b['playCount'] as int).compareTo(a['playCount'] as int));
   final topAlbums = sortedAlbums.take(10).toList();
 
+  // Audiophile stats: codec breakdown and highest quality track
+  final codecCounts = <String, int>{};
+  int? highestQualityIndex;
+  int highestQualityScore = 0;
+  for (int i = 0; i < tracks.length; i++) {
+    final track = tracks[i];
+    final codec = (track['codec'] as String?) ??
+        (track['container'] as String?) ??
+        'Unknown';
+    codecCounts[codec] = (codecCounts[codec] ?? 0) + 1;
+    final score = _qualityScore(track);
+    if (score > highestQualityScore) {
+      highestQualityScore = score;
+      highestQualityIndex = i;
+    }
+  }
+  String? mostCommonFormat;
+  int mostCommonCount = 0;
+  codecCounts.forEach((codec, count) {
+    if (count > mostCommonCount) {
+      mostCommonCount = count;
+      mostCommonFormat = codec;
+    }
+  });
+
   return _StatsResult(
     totalPlays: totalPlays,
     totalHours: totalHours,
@@ -295,6 +351,9 @@ _StatsResult _computeStatsIsolate(_StatsInput input) {
     diversityScore: diversity,
     topArtists: topArtists,
     topAlbums: topAlbums,
+    codecCounts: codecCounts,
+    mostCommonFormat: mostCommonFormat,
+    highestQualityTrackIndex: highestQualityIndex,
   );
 }
 
@@ -316,7 +375,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _bentoMode = true;
 
   // Stats
-  List<JellyfinTrack>? _topTracks;
+  List<_TrackSummary>? _topTracks;
   List<_ComputedAlbumStats>? _topAlbums;
   List<_ComputedArtistStats>? _topArtists;
   bool _statsLoading = true;
@@ -329,8 +388,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // Enhanced Stats
   Map<String, int>? _genrePlayCounts;
   Duration? _avgTrackLength;
-  JellyfinTrack? _longestTrack;
-  JellyfinTrack? _shortestTrack;
+  _TrackSummary? _longestTrack;
+  _TrackSummary? _shortestTrack;
   int _uniqueArtistsPlayed = 0;
   int _uniqueAlbumsPlayed = 0;
   int _uniqueTracksPlayed = 0;
@@ -340,6 +399,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   ListeningHeatmap? _heatmap;
   ListeningStreak? _streak;
   PeriodComparison? _weekComparison;
+  PeriodComparison? _monthComparison;
+  PeriodComparison? _yearComparison;
+  List<int>? _dailyPlayCounts;
   int? _peakHour;
   int? _peakDay;
   int _marathonSessions = 0;
@@ -347,7 +409,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   double _discoveryRate = 0.0;
   int _unsyncedPlays = 0; // Plays pending server sync
 
-  // Library overview counts
+  // Played-content overview counts ("Your Musical Ocean")
   int _libraryTracks = 0;
   int _libraryAlbums = 0;
   int _libraryArtists = 0;
@@ -355,7 +417,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // Audiophile stats
   Map<String, int>? _codecBreakdown;
-  JellyfinTrack? _highestQualityTrack;
+  _TrackSummary? _highestQualityTrack;
   String? _mostCommonFormat;
 
   // On This Day events
@@ -392,21 +454,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _onLocalAnalyticsChanged();
   }
 
+  /// Recomputes every local-analytics aggregate once, so `build()` only
+  /// reads state and never rescans the play history.
   void _onLocalAnalyticsChanged() {
     if (!mounted || _analyticsService == null) return;
-    if (!_analyticsService!.isInitialized) return;
+    final analytics = _analyticsService!;
+    if (!analytics.isInitialized) return;
 
     setState(() {
-      _heatmap = _analyticsService!.getListeningHeatmap();
-      _streak = _analyticsService!.getStreakInfo();
-      _weekComparison = _analyticsService!.getWeekOverWeekComparison();
-      _peakHour = _analyticsService!.getPeakListeningHour();
-      _peakDay = _analyticsService!.getPeakDayOfWeek();
-      _marathonSessions = _analyticsService!.getMarathonSessionCount();
-      _avgSessionLength = _analyticsService!.getAverageSessionLength();
-      _discoveryRate = _analyticsService!.getDiscoveryRate();
-      _unsyncedPlays = _analyticsService!.unsyncedCount;
-      _onThisDayEvents = _analyticsService!.getOnThisDayEvents();
+      _heatmap = analytics.getListeningHeatmap();
+      _streak = analytics.getStreakInfo();
+      _weekComparison = analytics.getWeekOverWeekComparison();
+      _monthComparison = analytics.getMonthOverMonthComparison();
+      _yearComparison = analytics.getYearOverYearComparison();
+      _dailyPlayCounts = analytics.getDailyPlayCounts(days: 28);
+      _peakHour = analytics.getPeakListeningHour();
+      _peakDay = analytics.getPeakDayOfWeek();
+      _marathonSessions = analytics.getMarathonSessionCount();
+      _avgSessionLength = analytics.getAverageSessionLength();
+      _discoveryRate = analytics.getDiscoveryRate();
+      _unsyncedPlays = analytics.unsyncedCount;
+      _onThisDayEvents = analytics.getOnThisDayEvents();
     });
   }
 
@@ -449,26 +517,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _loadStats() async {
     final appState = Provider.of<NautuneAppState>(context, listen: false);
     final sessionProvider = Provider.of<SessionProvider>(context, listen: false);
-    final libraryId = sessionProvider.session?.selectedLibraryId;
+    final session = sessionProvider.session;
+    final libraryId = session?.selectedLibraryId;
 
-    if (libraryId == null) {
+    if (session == null || libraryId == null) {
       setState(() => _statsLoading = false);
       return;
     }
 
+    // Stats are cached per user, server and library so another account or
+    // library never sees them.
+    final scope = ProfileStatsCache.scopeFor(
+      userId: session.credentials.userId,
+      serverUrl: session.serverUrl,
+      libraryId: libraryId,
+    );
+
     try {
-      // Try to load cached stats first for instant display
+      // Show fresh cached stats instantly and skip the network.
       // Timeout prevents Hive box corruption/lock from hanging forever
-      final cachedStats = await _ProfileStatsCache.load()
-          .timeout(const Duration(seconds: 5));
-      if (cachedStats != null && mounted) {
-        _applyCachedStats(cachedStats);
-        // If cache is still fresh, don't refresh from network
-        if (_ProfileStatsCache.isFresh) return;
+      final cachedStats =
+          await ProfileStatsCache.load(scope).timeout(const Duration(seconds: 5));
+      if (cachedStats != null && mounted && _applyCachedStats(cachedStats)) {
+        return;
       }
 
       // Refresh stats from network
-      await _refreshStatsFromNetwork(appState, libraryId);
+      await _refreshStatsFromNetwork(appState, libraryId, scope);
     } catch (e) {
       debugPrint('Error loading stats: $e');
     } finally {
@@ -478,58 +553,81 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  void _applyCachedStats(Map<String, dynamic> cached) {
-    setState(() {
-      _totalPlays = cached['totalPlays'] as int? ?? 0;
-      _totalHours = (cached['totalHours'] as num?)?.toDouble() ?? 0.0;
-      _uniqueArtistsPlayed = cached['uniqueArtists'] as int? ?? 0;
-      _uniqueAlbumsPlayed = cached['uniqueAlbums'] as int? ?? 0;
-      _uniqueTracksPlayed = cached['uniqueTracks'] as int? ?? 0;
-      _diversityScore = (cached['diversityScore'] as num?)?.toDouble() ?? 0.0;
+  /// Applies cached stats. Returns false (and changes nothing) if the entry
+  /// can't be read, so the caller refreshes from the server instead.
+  bool _applyCachedStats(Map<String, dynamic> cached) {
+    try {
+      List<Map<String, dynamic>> maps(Object? value) => (value as List<dynamic>?)
+              ?.map((e) => Map<String, dynamic>.from(e as Map))
+              .toList() ??
+          const [];
+      _TrackSummary? summary(Object? value) => value == null
+          ? null
+          : _TrackSummary.fromJson(Map<String, dynamic>.from(value as Map));
+      Map<String, int>? counts(Object? value) => (value as Map<dynamic, dynamic>?)
+          ?.map((k, v) => MapEntry(k as String, v as int));
 
-      final cachedGenres = cached['genrePlayCounts'] as Map<String, dynamic>?;
-      if (cachedGenres != null) {
-        _genrePlayCounts = cachedGenres.map((k, v) => MapEntry(k, v as int));
-      }
+      final topArtists = maps(cached['topArtists'])
+          .map((a) => _ComputedArtistStats(
+                name: a['name'] as String,
+                playCount: a['playCount'] as int,
+                id: a['id'] as String?,
+                imageTag: a['imageTag'] as String?,
+              ))
+          .toList();
+      final topAlbums = maps(cached['topAlbums'])
+          .map((a) => _ComputedAlbumStats(
+                albumId: a['albumId'] as String?,
+                name: a['name'] as String,
+                artistName: a['artistName'] as String,
+                playCount: a['playCount'] as int,
+                imageTag: a['imageTag'] as String?,
+              ))
+          .toList();
+      final topTracks = maps(cached['topTracks']).map(_TrackSummary.fromJson).toList();
+      final paletteColors = (cached['paletteColors'] as List<dynamic>?)
+          ?.map((c) => Color(c as int))
+          .toList();
+      final avgMs = cached['avgTrackLengthMs'] as int?;
+      final uniqueArtists = cached['uniqueArtists'] as int? ?? 0;
+      final uniqueAlbums = cached['uniqueAlbums'] as int? ?? 0;
+      final uniqueTracks = cached['uniqueTracks'] as int? ?? 0;
 
-      final cachedArtists = cached['topArtists'] as List<dynamic>?;
-      if (cachedArtists != null) {
-        _topArtists = cachedArtists.map((a) => _ComputedArtistStats(
-          name: a['name'] as String,
-          playCount: a['playCount'] as int,
-          id: a['id'] as String?,
-          imageTag: a['imageTag'] as String?,
-        )).toList();
-      }
-
-      final cachedAlbums = cached['topAlbums'] as List<dynamic>?;
-      if (cachedAlbums != null) {
-        _topAlbums = cachedAlbums.map((a) => _ComputedAlbumStats(
-          albumId: a['albumId'] as String?,
-          name: a['name'] as String,
-          artistName: a['artistName'] as String,
-          playCount: a['playCount'] as int,
-          imageTag: a['imageTag'] as String?,
-        )).toList();
-      }
-
-      final cachedTracks = cached['topTracks'] as List<dynamic>?;
-      if (cachedTracks != null) {
-        _topTracks = cachedTracks.map((t) => JellyfinTrack.fromStorageJson(
-          Map<String, dynamic>.from(t as Map),
-        )).toList();
-      }
-
-      final cachedColors = cached['paletteColors'] as List<dynamic>?;
-      if (cachedColors != null) {
-        _paletteColors = cachedColors.map((c) => Color(c as int)).toList();
-      }
-
-      _statsLoading = false;
-    });
+      setState(() {
+        _totalPlays = cached['totalPlays'] as int? ?? 0;
+        _totalHours = (cached['totalHours'] as num?)?.toDouble() ?? 0.0;
+        _uniqueArtistsPlayed = uniqueArtists;
+        _uniqueAlbumsPlayed = uniqueAlbums;
+        _uniqueTracksPlayed = uniqueTracks;
+        _libraryTracks = uniqueTracks;
+        _libraryAlbums = uniqueAlbums;
+        _libraryArtists = uniqueArtists;
+        _diversityScore = (cached['diversityScore'] as num?)?.toDouble() ?? 0.0;
+        _genrePlayCounts = counts(cached['genrePlayCounts']);
+        _topArtists = topArtists;
+        _topAlbums = topAlbums;
+        _topTracks = topTracks;
+        _paletteColors = paletteColors;
+        _avgTrackLength = avgMs == null ? null : Duration(milliseconds: avgMs);
+        _longestTrack = summary(cached['longestTrack']);
+        _shortestTrack = summary(cached['shortestTrack']);
+        _highestQualityTrack = summary(cached['highestQualityTrack']);
+        _codecBreakdown = counts(cached['codecBreakdown']);
+        _mostCommonFormat = cached['mostCommonFormat'] as String?;
+        _statsLoading = false;
+      });
+      return true;
+    } catch (e) {
+      debugPrint('ProfileScreen: Ignoring unreadable stats cache: $e');
+      return false;
+    }
   }
 
-  Future<void> _refreshStatsFromNetwork(NautuneAppState appState, String libraryId) async {
+  Future<void> _refreshStatsFromNetwork(
+    NautuneAppState appState,
+    String libraryId,
+    String cacheScope,
+  ) async {
     try {
       // Fetch ALL played tracks via pagination for accurate stats
       final tracks = await appState.jellyfinService.getAllPlayedTracks(libraryId: libraryId);
@@ -543,9 +641,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'album': t.album,
         'albumId': t.albumId,
         'albumPrimaryImageTag': t.albumPrimaryImageTag,
+        'codec': t.codec,
+        'container': t.container,
+        'bitDepth': t.bitDepth,
+        'sampleRate': t.sampleRate,
+        'bitrate': t.bitrate,
       }).toList();
 
-      // Run heavy computation in isolate
+      // Run heavy computation (aggregates, codec breakdown, quality scoring)
+      // in an isolate
       final statsResult = await compute(_computeStatsIsolate, _StatsInput(tracksJson));
 
       // Convert results back to proper types
@@ -592,76 +696,50 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ))
           .toList();
 
-      // Compute audiophile stats
-      final codecCounts = <String, int>{};
-      JellyfinTrack? highestQuality;
-      int highestQualityScore = 0;
-
-      for (final track in tracks) {
-        // Count codecs
-        final codec = track.codec ?? track.container ?? 'Unknown';
-        codecCounts[codec] = (codecCounts[codec] ?? 0) + 1;
-
-        // Find highest quality track
-        final score = _calculateQualityScore(track);
-        if (score > highestQualityScore) {
-          highestQualityScore = score;
-          highestQuality = track;
-        }
-      }
-
-      // Find most common format
-      String? mostCommon;
-      int mostCommonCount = 0;
-      codecCounts.forEach((codec, count) {
-        if (count > mostCommonCount) {
-          mostCommonCount = count;
-          mostCommon = codec;
-        }
-      });
+      _TrackSummary? summaryAt(int? index) =>
+          index == null ? null : _TrackSummary.fromTrack(tracks[index]);
 
       // Use actual listening time from local analytics instead of
-      // server-calculated trackDuration × playCount (which is inflated)
+      // server-calculated trackDuration × playCount (which is inflated).
+      // With no local history (new device, reinstall) fall back to the server
+      // estimate rather than showing 0 hours.
       final actualListeningTime = _analyticsService?.getTotalListeningTime();
-      final actualHours = actualListeningTime != null
+      final actualHours = actualListeningTime != null && actualListeningTime > Duration.zero
           ? actualListeningTime.inSeconds / 3600.0
-          : statsResult.totalHours; // Fallback to server estimate
+          : statsResult.totalHours;
 
-      if (mounted) {
-        setState(() {
-          _topTracks = tracks.take(5).toList();
-          _topAlbums = computedTopAlbums;
-          _topArtists = computedTopArtists;
-          _totalPlays = statsResult.totalPlays;
-          _totalHours = actualHours;
-          _genrePlayCounts = statsResult.genrePlayCounts;
-          _codecBreakdown = codecCounts;
-          _highestQualityTrack = highestQuality;
-          _mostCommonFormat = mostCommon;
-          _libraryTracks = tracks.length;
-          _libraryAlbums = statsResult.uniqueAlbumsCount;
-          _libraryArtists = statsResult.uniqueArtistsCount;
-          _avgTrackLength = statsResult.avgTrackLength;
-          _longestTrack = statsResult.longestTrackIndex != null ? tracks[statsResult.longestTrackIndex!] : null;
-          _shortestTrack = statsResult.shortestTrackIndex != null ? tracks[statsResult.shortestTrackIndex!] : null;
-          _uniqueArtistsPlayed = statsResult.uniqueArtistsCount;
-          _uniqueAlbumsPlayed = statsResult.uniqueAlbumsCount;
-          _uniqueTracksPlayed = statsResult.uniqueTracksCount;
-          _diversityScore = statsResult.diversityScore;
-          _statsLoading = false;
-        });
+      final topTracks = tracks.take(5).map(_TrackSummary.fromTrack).toList();
 
-        // Extract colors from top track and then save to cache
-        if (tracks.isNotEmpty) {
-          _extractColors(tracks.first).then((_) => _saveStatsToCache(
-            statsResult,
-            computedTopArtists,
-            computedTopAlbums,
-          ));
-        } else {
-          _saveStatsToCache(statsResult, computedTopArtists, computedTopAlbums);
-        }
+      if (!mounted) return;
+      setState(() {
+        _topTracks = topTracks;
+        _topAlbums = computedTopAlbums;
+        _topArtists = computedTopArtists;
+        _totalPlays = statsResult.totalPlays;
+        _totalHours = actualHours;
+        _genrePlayCounts = statsResult.genrePlayCounts;
+        _codecBreakdown = statsResult.codecCounts;
+        _highestQualityTrack = summaryAt(statsResult.highestQualityTrackIndex);
+        _mostCommonFormat = statsResult.mostCommonFormat;
+        _libraryTracks = statsResult.uniqueTracksCount;
+        _libraryAlbums = statsResult.uniqueAlbumsCount;
+        _libraryArtists = statsResult.uniqueArtistsCount;
+        _avgTrackLength = statsResult.avgTrackLength;
+        _longestTrack = summaryAt(statsResult.longestTrackIndex);
+        _shortestTrack = summaryAt(statsResult.shortestTrackIndex);
+        _uniqueArtistsPlayed = statsResult.uniqueArtistsCount;
+        _uniqueAlbumsPlayed = statsResult.uniqueAlbumsCount;
+        _uniqueTracksPlayed = statsResult.uniqueTracksCount;
+        _diversityScore = statsResult.diversityScore;
+        _statsLoading = false;
+      });
+
+      // Extract colours from the top track (bounded by a timeout, never
+      // throws), then cache whatever we have.
+      if (topTracks.isNotEmpty) {
+        await _extractColors(topTracks.first);
       }
+      await _saveStatsToCache(cacheScope);
     } catch (e) {
       debugPrint('Error loading stats: $e');
       if (mounted) {
@@ -672,47 +750,55 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Future<void> _saveStatsToCache(
-    _StatsResult statsResult,
-    List<_ComputedArtistStats> topArtists,
-    List<_ComputedAlbumStats> topAlbums,
-  ) async {
+  Future<void> _saveStatsToCache(String scope) async {
     final cacheData = <String, dynamic>{
-      'totalPlays': statsResult.totalPlays,
+      'totalPlays': _totalPlays,
       'totalHours': _totalHours,
-      'uniqueArtists': statsResult.uniqueArtistsCount,
-      'uniqueAlbums': statsResult.uniqueAlbumsCount,
-      'uniqueTracks': statsResult.uniqueTracksCount,
-      'diversityScore': statsResult.diversityScore,
-      'genrePlayCounts': statsResult.genrePlayCounts,
-      'topArtists': topArtists.map((a) => {
+      'uniqueArtists': _uniqueArtistsPlayed,
+      'uniqueAlbums': _uniqueAlbumsPlayed,
+      'uniqueTracks': _uniqueTracksPlayed,
+      'diversityScore': _diversityScore,
+      'genrePlayCounts': _genrePlayCounts,
+      'topArtists': _topArtists?.map((a) => {
         'name': a.name,
         'playCount': a.playCount,
         'id': a.id,
         'imageTag': a.imageTag,
       }).toList(),
-      'topAlbums': topAlbums.map((a) => {
+      'topAlbums': _topAlbums?.map((a) => {
         'albumId': a.albumId,
         'name': a.name,
         'artistName': a.artistName,
         'playCount': a.playCount,
         'imageTag': a.imageTag,
       }).toList(),
-      'topTracks': _topTracks?.map((t) => t.toStorageJson()).toList(),
-      // ignore: deprecated_member_use
-      'paletteColors': _paletteColors?.map((c) => c.value).toList(),
+      'topTracks': _topTracks?.map((t) => t.toJson()).toList(),
+      'avgTrackLengthMs': _avgTrackLength?.inMilliseconds,
+      'longestTrack': _longestTrack?.toJson(),
+      'shortestTrack': _shortestTrack?.toJson(),
+      'highestQualityTrack': _highestQualityTrack?.toJson(),
+      'codecBreakdown': _codecBreakdown,
+      'mostCommonFormat': _mostCommonFormat,
+      'paletteColors': _paletteColors?.map((c) => c.toARGB32()).toList(),
     };
-    await _ProfileStatsCache.save(cacheData);
-    debugPrint('ProfileScreen: Stats cached');
+    try {
+      await ProfileStatsCache.save(scope, cacheData);
+      debugPrint('ProfileScreen: Stats cached');
+    } catch (e) {
+      debugPrint('ProfileScreen: Failed to cache stats: $e');
+    }
   }
 
-  Future<void> _extractColors(JellyfinTrack track) async {
-    final appState = Provider.of<NautuneAppState>(context, listen: false);
-    
-    String? imageTag = track.primaryImageTag ?? track.albumPrimaryImageTag ?? track.parentThumbImageTag;
-    String? itemId = imageTag != null ? (track.albumId ?? track.id) : null;
-
+  /// Tints the header from the top track's artwork. Completes (without
+  /// throwing) even when the image fails to load or never arrives.
+  Future<void> _extractColors(_TrackSummary track) async {
+    final itemId = track.imageItemId;
+    final imageTag = track.imageTag;
     if (itemId == null || imageTag == null) return;
+
+    final appState = Provider.of<NautuneAppState>(context, listen: false);
+    ImageStream? imageStream;
+    ImageStreamListener? listener;
 
     try {
       final imageUrl = appState.jellyfinService.buildImageUrl(
@@ -726,36 +812,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
         headers: appState.jellyfinService.imageHeaders(),
       );
 
-      final imageStream = imageProvider.resolve(const ImageConfiguration());
       final completer = Completer<ui.Image>();
-
-      late ImageStreamListener listener;
-      listener = ImageStreamListener((info, _) {
-        if (!completer.isCompleted) completer.complete(info.image);
-      });
-
+      listener = ImageStreamListener(
+        (info, _) {
+          if (!completer.isCompleted) completer.complete(info.image);
+        },
+        onError: (error, stackTrace) {
+          if (!completer.isCompleted) completer.completeError(error, stackTrace);
+        },
+      );
+      imageStream = imageProvider.resolve(const ImageConfiguration());
       imageStream.addListener(listener);
-      final image = await completer.future;
-      imageStream.removeListener(listener);
 
+      final image = await completer.future.timeout(const Duration(seconds: 10));
       final byteData = await image.toByteData();
       if (byteData == null) return;
 
-      final pixels = byteData.buffer.asUint32List();
-      final result = await QuantizerCelebi().quantize(pixels, 128);
-      final colorToCount = result.colorToCount;
-
-      final sortedEntries = colorToCount.entries.toList()
-        ..sort((a, b) {
-          final hctA = Hct.fromInt(a.key);
-          final hctB = Hct.fromInt(b.key);
-          return (b.value * (hctB.chroma * hctB.chroma)).compareTo(a.value * (hctA.chroma * hctA.chroma));
-        });
-
-      final selectedColors = sortedEntries
-          .where((e) => Hct.fromInt(e.key).chroma > 5)
+      // Quantize in an isolate; the helper converts the raw RGBA bytes to
+      // the ARGB order the quantizer expects.
+      final colorInts = await compute(
+        extractArtworkColorsInIsolate,
+        byteData.buffer.asUint8List(byteData.offsetInBytes, byteData.lengthInBytes),
+      );
+      final selectedColors = colorInts
+          .where((c) => Hct.fromInt(c).chroma > 5)
           .take(3)
-          .map((e) => Color(e.key | 0xFF000000))
+          .map((c) => Color(c | 0xFF000000))
           .toList();
 
       if (mounted && selectedColors.isNotEmpty) {
@@ -765,6 +847,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
     } catch (e) {
       debugPrint('Failed to extract colors for profile: $e');
+    } finally {
+      if (listener != null) imageStream?.removeListener(listener);
     }
   }
 
@@ -1083,7 +1167,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(flex: 5, child: _buildHeroRing(theme)),
+              Expanded(flex: 5, child: _buildHeroRing(theme, compact: true)),
               const SizedBox(width: 12),
               Expanded(
                 flex: 4,
@@ -1170,7 +1254,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildHeroRing(ThemeData theme) {
+  Widget _buildHeroRing(ThemeData theme, {bool compact = false}) {
     final oceanBlue = theme.colorScheme.tertiary;
     final deepPurple = theme.colorScheme.secondary;
 
@@ -1179,7 +1263,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final progress = (_totalHours / goalHours).clamp(0.0, 1.0);
 
     return Container(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(compact ? 16 : 24),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
@@ -1203,9 +1287,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
       child: Column(
         children: [
-          SizedBox(
-            width: 180,
-            height: 180,
+          _HeroRingBox(
             child: Stack(
               alignment: Alignment.center,
               children: [
@@ -1944,8 +2026,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return _buildLoadingCard(theme);
     }
 
-    final analytics = ListeningAnalyticsService();
-    final comparison = analytics.getMonthOverMonthComparison();
+    final comparison = _monthComparison;
+    if (comparison == null) return const SizedBox.shrink();
 
     // Format hours from duration
     String formatHours(Duration d) {
@@ -2032,8 +2114,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return _buildLoadingCard(theme);
     }
 
-    final analytics = ListeningAnalyticsService();
-    final comparison = analytics.getYearOverYearComparison();
+    final comparison = _yearComparison;
+    if (comparison == null) return const SizedBox.shrink();
 
     // Format hours from duration
     String formatHours(Duration d) {
@@ -2358,7 +2440,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     ThemeData theme, {
     required IconData icon,
     required String label,
-    required JellyfinTrack track,
+    required _TrackSummary track,
     required Color color,
   }) {
     final duration = track.duration;
@@ -2414,6 +2496,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     final total = _genrePlayCounts!.values.fold(0, (a, b) => a + b);
+    if (total <= 0) return const SizedBox.shrink();
     final entries = _genrePlayCounts!.entries.take(5).toList();
     final colors = [
       theme.colorScheme.primary,
@@ -2513,6 +2596,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     final total = _genrePlayCounts!.values.fold(0, (a, b) => a + b);
+    if (total <= 0) {
+      return _buildEmptyCard(theme, 'No genre data available');
+    }
     final colors = [
       theme.colorScheme.primary,
       theme.colorScheme.secondary,
@@ -2640,11 +2726,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildActivitySparkline(ThemeData theme) {
-    final analytics = _analyticsService;
-    if (analytics == null) return const SizedBox.shrink();
-
-    final dailyCounts = analytics.getDailyPlayCounts(days: 28);
-    if (dailyCounts.every((c) => c == 0)) return const SizedBox.shrink();
+    final dailyCounts = _dailyPlayCounts;
+    if (dailyCounts == null || dailyCounts.length < 2 || dailyCounts.every((c) => c == 0)) {
+      return const SizedBox.shrink();
+    }
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -3067,29 +3152,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return '${hour - 12}pm';
   }
 
-  /// Calculate audio quality score for a track
-  int _calculateQualityScore(JellyfinTrack track) {
-    int score = 0;
-    // Bit depth scoring
-    if (track.bitDepth != null) {
-      score += track.bitDepth! * 10; // 16-bit = 160, 24-bit = 240, 32-bit = 320
-    }
-    // Sample rate scoring (kHz * 2)
-    if (track.sampleRate != null) {
-      score += (track.sampleRate! / 1000).round() * 2;
-    }
-    // Bitrate scoring (kbps / 10)
-    if (track.bitrate != null) {
-      score += track.bitrate! ~/ 10000;
-    }
-    // Lossless bonus
-    final codec = track.codec?.toLowerCase() ?? '';
-    if (codec == 'flac' || codec == 'alac' || codec == 'wav') {
-      score += 100;
-    }
-    return score;
-  }
-
   /// Build Quick Stats Badges below Hero Ring
   Widget _buildQuickStatsBadges(ThemeData theme) {
     final streak = _streak;
@@ -3195,7 +3257,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 4),
+          Text(
+            'What you\'ve played in this library',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(
@@ -3376,9 +3445,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           fontWeight: FontWeight.w500,
                         ),
                       ),
-                      if (_highestQualityTrack!.audioQualityInfo != null && _highestQualityTrack!.audioQualityInfo!.isNotEmpty)
+                      if (_highestQualityTrack!.qualityInfo != null && _highestQualityTrack!.qualityInfo!.isNotEmpty)
                         Text(
-                          _highestQualityTrack!.audioQualityInfo!,
+                          _highestQualityTrack!.qualityInfo!,
                           style: theme.textTheme.labelSmall?.copyWith(
                             color: deepPurple,
                           ),
@@ -3649,8 +3718,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: Column(
                 children: _onThisDayEvents!.take(5).map((event) {
-                  final yearsAgo = now.year - event.timestamp.year;
-                  final monthsAgo = now.month - event.timestamp.month + (yearsAgo * 12);
+                  final monthsAgo = (now.year - event.timestamp.year) * 12 +
+                      now.month - event.timestamp.month;
+                  final yearsAgo = monthsAgo ~/ 12;
                   String timeAgo;
                   if (yearsAgo >= 1) {
                     timeAgo = yearsAgo == 1 ? '1 year ago' : '$yearsAgo years ago';
@@ -3757,7 +3827,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 }
 
-/// Custom painter for wave divider
+/// A 180pt square for the hero ring that scales down uniformly when its
+/// column is narrower (the bento layout on phones), so the ring stays a
+/// circle instead of being squeezed into an oval.
+class _HeroRingBox extends StatelessWidget {
+  const _HeroRingBox({required this.child});
+
+  static const double _size = 180;
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: _size),
+      child: AspectRatio(
+        aspectRatio: 1,
+        child: FittedBox(
+          child: SizedBox(width: _size, height: _size, child: child),
+        ),
+      ),
+    );
+  }
+}
+
+/// Sparkline of daily play counts
 class _SparklinePainter extends CustomPainter {
   final List<int> data;
   final Color lineColor;

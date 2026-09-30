@@ -23,6 +23,7 @@ class _BioluminescentVisualizerState extends BaseVisualizerState<BioluminescentV
 
     return CustomPaint(
       painter: _BioluminescentWavePainter(
+        frame: frame,
         time: lastPaintedTime,
         bass: smoothBass,
         mid: smoothMid,
@@ -37,6 +38,7 @@ class _BioluminescentVisualizerState extends BaseVisualizerState<BioluminescentV
 }
 
 class _BioluminescentWavePainter extends CustomPainter {
+  final int frame;
   final double time;
   final double bass;
   final double mid;
@@ -67,6 +69,7 @@ class _BioluminescentWavePainter extends CustomPainter {
   late final Color _waveColor2;
 
   _BioluminescentWavePainter({
+    required this.frame,
     required this.time,
     required this.bass,
     required this.mid,
@@ -216,14 +219,10 @@ class _BioluminescentWavePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _BioluminescentWavePainter old) {
-    // Only repaint if values have changed significantly
-    const threshold = 0.01;
-    return (old.bass - bass).abs() > threshold ||
-           (old.mid - mid).abs() > threshold ||
-           (old.treble - treble).abs() > threshold ||
-           (old.amplitude - amplitude).abs() > threshold ||
-           (old.time - time).abs() > 0.016 ||
-           old.glowColor != glowColor ||
-           old.opacity != opacity;
+    // One repaint per visual frame (~30 fps); parent rebuilds in between
+    // reuse the last picture.
+    return old.frame != frame ||
+        old.glowColor != glowColor ||
+        old.opacity != opacity;
   }
 }

@@ -53,6 +53,21 @@ class EngineSource {
 /// Simplified player state used by the playback engine.
 enum EngineState { stopped, playing, paused, completed }
 
+/// A playback error reported by the native player after loading (e.g. a
+/// stream that failed mid-track). [index] is the playlist item it belongs
+/// to (the gapless window may hold the current and the next track).
+@immutable
+class EnginePlaybackError {
+  const EnginePlaybackError(this.code, this.message, this.index);
+
+  final int code;
+  final String? message;
+  final int? index;
+
+  @override
+  String toString() => 'EnginePlaybackError($code, $message, index: $index)';
+}
+
 /// The one place Nautune talks to just_audio. It keeps the small surface
 /// the engine was built on (load a source, resume, pause, seek, volume,
 /// position/duration/state/complete streams) and adds a two-item playlist
@@ -104,7 +119,32 @@ class EnginePlayer {
       .where((s) => s == ja.ProcessingState.completed)
       .map((_) {});
 
+  /// Native playback errors after the source loaded (load failures are
+  /// thrown by [setSource] instead).
+  Stream<EnginePlaybackError> get onError => _player.errorStream
+      .map((e) => EnginePlaybackError(e.code, e.message, e.index));
+
   EngineState get state => _map(_player.playerState);
+
+  /// Current position (just_audio extrapolates it while playing).
+  Duration get position => _player.position;
+
+  /// Duration of the item playing now, if known (the extrapolated
+  /// [position] never goes past it).
+  Duration? get duration => _player.duration;
+
+  /// Waiting for data while supposed to be playing.
+  bool get isBuffering {
+    final s = _player.processingState;
+    return s == ja.ProcessingState.buffering || s == ja.ProcessingState.loading;
+  }
+
+  /// Whether playback was requested (just_audio keeps this set through
+  /// buffering, errors and completion; only pause/stop clear it).
+  bool get wantsToPlay => _player.playing;
+
+  /// Playlist index of the item playing now.
+  int? get currentIndex => _player.currentIndex;
 
   static EngineState _map(ja.PlayerState s) {
     switch (s.processingState) {

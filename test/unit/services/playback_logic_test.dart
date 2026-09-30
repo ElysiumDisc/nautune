@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -648,5 +649,276 @@ void main() {
     expect(audioExtensionForMime('audio/mpeg; charset=binary'), 'mp3');
     expect(audioExtensionForMime('audio/mp4'), 'm4a');
     expect(audioExtensionForMime(''), 'mp3');
+  });
+
+  group('PlaybackStallDetector (timer-fed, with buffering)', () {
+    final t0 = DateTime(2026, 1, 1);
+
+    test('short buffering with a frozen position is not a stall', () {
+      final d = PlaybackStallDetector();
+      const pos = Duration(seconds: 30);
+      for (var s = 0; s <= 10; s++) {
+        expect(
+          d.onTick(pos, t0.add(Duration(seconds: s)), buffering: true),
+          isFalse,
+        );
+      }
+    });
+
+    test('a position frozen past the threshold is a stall when not buffering', () {
+      final d = PlaybackStallDetector(threshold: const Duration(seconds: 12));
+      const pos = Duration(seconds: 30);
+      var stalled = false;
+      for (var s = 0; s <= 12; s++) {
+        stalled = d.onTick(pos, t0.add(Duration(seconds: s)));
+        if (s < 12) expect(stalled, isFalse, reason: 'at ${s}s');
+      }
+      expect(stalled, isTrue);
+    });
+
+    test('a frozen position while buffering is only judged by the buffering '
+        'threshold', () {
+      final d = PlaybackStallDetector(
+        threshold: const Duration(seconds: 12),
+        bufferingThreshold: const Duration(seconds: 30),
+      );
+      const pos = Duration(seconds: 30);
+      for (var s = 0; s < 30; s++) {
+        expect(
+          d.onTick(pos, t0.add(Duration(seconds: s)), buffering: true),
+          isFalse,
+          reason: 'at ${s}s',
+        );
+      }
+      expect(d.onTick(pos, t0.add(const Duration(seconds: 30)), buffering: true), isTrue);
+    });
+
+    test('the default buffering threshold is generous (30 s)', () {
+      final d = PlaybackStallDetector();
+      const pos = Duration(seconds: 30);
+      for (var s = 0; s < 30; s++) {
+        expect(d.onTick(pos, t0.add(Duration(seconds: s)), buffering: true), isFalse);
+      }
+      expect(d.onTick(pos, t0.add(const Duration(seconds: 30)), buffering: true), isTrue);
+    });
+
+    test('buffering without a network is never a stall (AVPlayer resumes '
+        'when the connection is back)', () {
+      final d = PlaybackStallDetector(bufferingThreshold: const Duration(seconds: 20));
+      const pos = Duration(seconds: 30);
+      for (var s = 0; s <= 600; s += 5) {
+        expect(
+          d.onTick(pos, t0.add(Duration(seconds: s)),
+              buffering: true, networkAvailable: false),
+          isFalse,
+          reason: 'at ${s}s',
+        );
+      }
+    });
+
+    test('the buffering clock starts when the network is back', () {
+      final d = PlaybackStallDetector(bufferingThreshold: const Duration(seconds: 20));
+      const pos = Duration(seconds: 30);
+      for (var s = 0; s < 60; s++) {
+        d.onTick(pos, t0.add(Duration(seconds: s)), buffering: true, networkAvailable: false);
+      }
+      // Online again but still buffering: 20 s from now, not from t0.
+      expect(d.onTick(pos, t0.add(const Duration(seconds: 60)), buffering: true), isFalse);
+      expect(d.onTick(pos, t0.add(const Duration(seconds: 79)), buffering: true), isFalse);
+      expect(d.onTick(pos, t0.add(const Duration(seconds: 80)), buffering: true), isTrue);
+    });
+
+    test('a position parked at the reported duration while playing is not a '
+        'stall (completion ends the track)', () {
+      final d = PlaybackStallDetector(threshold: const Duration(seconds: 12));
+      const duration = Duration(minutes: 3);
+      for (var s = 0; s <= 120; s++) {
+        expect(
+          d.onTick(duration, t0.add(Duration(seconds: s)), duration: duration),
+          isFalse,
+          reason: 'at ${s}s',
+        );
+      }
+    });
+
+    test('a position frozen before the reported duration is still a stall', () {
+      final d = PlaybackStallDetector(threshold: const Duration(seconds: 12));
+      const duration = Duration(minutes: 3);
+      const pos = Duration(minutes: 2);
+      d.onTick(pos, t0, duration: duration);
+      expect(
+        d.onTick(pos, t0.add(const Duration(seconds: 12)), duration: duration),
+        isTrue,
+      );
+    });
+
+    test('buffering without a break past its threshold is a stall even if '
+        'the position creeps', () {
+      final d = PlaybackStallDetector(
+        threshold: const Duration(seconds: 12),
+        bufferingThreshold: const Duration(seconds: 20),
+      );
+      var stalled = false;
+      for (var s = 0; s <= 20; s++) {
+        stalled = d.onTick(
+          Duration(milliseconds: 30000 + s * 100),
+          t0.add(Duration(seconds: s)),
+          buffering: true,
+        );
+        if (s < 20) expect(stalled, isFalse, reason: 'at ${s}s');
+      }
+      expect(stalled, isTrue);
+    });
+
+    test('a break in buffering restarts the buffering clock', () {
+      final d = PlaybackStallDetector(bufferingThreshold: const Duration(seconds: 20));
+      for (var s = 0; s < 15; s++) {
+        d.onTick(Duration(seconds: s), t0.add(Duration(seconds: s)), buffering: true);
+      }
+      d.onTick(const Duration(seconds: 15), t0.add(const Duration(seconds: 15)));
+      expect(
+        d.onTick(const Duration(seconds: 16), t0.add(const Duration(seconds: 25)),
+            buffering: true),
+        isFalse,
+      );
+    });
+
+    test('reset (pause) clears both clocks', () {
+      final d = PlaybackStallDetector(threshold: const Duration(seconds: 12));
+      const pos = Duration(seconds: 5);
+      d.onTick(pos, t0, buffering: true);
+      d.reset();
+      expect(d.onTick(pos, t0.add(const Duration(seconds: 30)), buffering: true), isFalse);
+    });
+  });
+
+  group('LatestValueRelay', () {
+    test('listen, cancel, listen again: replays the latest value, then updates',
+        () async {
+      final source = StreamController<int>.broadcast(sync: true);
+      final relay = LatestValueRelay<int>(source.stream);
+      final stream = relay.stream; // cached like a widget would
+
+      final first = <int>[];
+      final sub1 = stream.listen(first.add);
+      source.add(1);
+      source.add(2);
+      await pumpEventQueue();
+      expect(first, [1, 2]);
+      await sub1.cancel();
+
+      source.add(3); // nobody listening
+      await pumpEventQueue();
+
+      final second = <int>[];
+      final sub2 = stream.listen(second.add);
+      await pumpEventQueue();
+      expect(second, [3], reason: 'a new listener gets the latest value at once');
+      source.add(4);
+      await pumpEventQueue();
+      expect(second, [3, 4]);
+      await sub2.cancel();
+
+      await relay.close();
+      await source.close();
+    });
+
+    test('several listeners at once', () async {
+      final source = StreamController<int>.broadcast(sync: true);
+      final relay = LatestValueRelay<int>(source.stream);
+      final a = <int>[];
+      final b = <int>[];
+      final subA = relay.stream.listen(a.add);
+      final subB = relay.stream.listen(b.add);
+      source.add(7);
+      await pumpEventQueue();
+      expect(a, [7]);
+      expect(b, [7]);
+      await subA.cancel();
+      await subB.cancel();
+      await relay.close();
+      await source.close();
+    });
+
+    test('equals drops repeats', () async {
+      final source = StreamController<int>.broadcast(sync: true);
+      final relay = LatestValueRelay<int>(source.stream, equals: (a, b) => a == b);
+      final seen = <int>[];
+      final sub = relay.stream.listen(seen.add);
+      source
+        ..add(1)
+        ..add(1)
+        ..add(2);
+      await pumpEventQueue();
+      expect(seen, [1, 2]);
+      expect(relay.value, 2);
+      await sub.cancel();
+      await relay.close();
+      await source.close();
+    });
+  });
+
+  group('stream cache file names', () {
+    test('round-trip the cache key, unique per load', () {
+      final a = streamCacheFileName('abc@orig', '1');
+      final b = streamCacheFileName('abc@orig', '2');
+      expect(a, isNot(b));
+      expect(streamCacheKeyFromFileName(a), 'abc@orig');
+      expect(streamCacheKeyFromFileName(streamCacheFileName('x~y@320000-mp3', '9')),
+          'x~y@320000-mp3');
+    });
+
+    test('files from older versions are named after the key alone', () {
+      expect(streamCacheKeyFromFileName(Uri.encodeComponent('abc@orig')), 'abc@orig');
+    });
+  });
+
+  group('shouldSaveStreamWhilePlaying', () {
+    bool save({
+      bool cache = false,
+      bool visualizer = false,
+      bool current = true,
+      bool wifi = false,
+      bool lowPower = false,
+      bool saver = false,
+    }) =>
+        shouldSaveStreamWhilePlaying(
+          wantedForCache: cache,
+          visualizerWanted: visualizer,
+          isCurrentTrack: current,
+          onWifi: wifi,
+          lowPowerMode: lowPower,
+          batterySaver: saver,
+        );
+
+    test('visualizer on screen: the current track is saved on any network', () {
+      expect(save(visualizer: true), isTrue);
+      expect(save(visualizer: true, wifi: true), isTrue);
+    });
+
+    test('tracks loaded ahead follow the Wi-Fi-only policy', () {
+      expect(save(visualizer: true, current: false), isFalse);
+      expect(save(visualizer: true, current: false, wifi: true), isTrue);
+      expect(save(cache: true, current: false, wifi: true), isTrue);
+    });
+
+    test('pre-cache alone is Wi-Fi only', () {
+      expect(save(cache: true), isFalse);
+      expect(save(cache: true, wifi: true), isTrue);
+    });
+
+    test('power saving or nothing wanting it: never', () {
+      expect(save(visualizer: true, lowPower: true), isFalse);
+      expect(save(visualizer: true, saver: true), isFalse);
+      expect(save(cache: true, wifi: true, lowPower: true), isFalse);
+      expect(save(wifi: true), isFalse);
+    });
+  });
+
+  test('outageRetryDelay backs off to every 30 s', () {
+    expect(
+      [for (var i = 0; i < 6; i++) outageRetryDelay(i).inSeconds],
+      [5, 10, 20, 30, 30, 30],
+    );
   });
 }

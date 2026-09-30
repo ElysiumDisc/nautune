@@ -340,4 +340,132 @@ void main() {
       service.dispose();
     });
   });
+
+  group('delivery failures keep reports queued', () {
+    test('status classification', () {
+      expect(PlaybackReportingService.outcomeForStatus(204), ReportOutcome.delivered);
+      expect(PlaybackReportingService.outcomeForStatus(503), ReportOutcome.retryLater);
+      expect(PlaybackReportingService.outcomeForStatus(401), ReportOutcome.retryLater);
+      expect(PlaybackReportingService.outcomeForStatus(429), ReportOutcome.retryLater);
+      expect(PlaybackReportingService.outcomeForStatus(400), ReportOutcome.drop);
+    });
+
+    test('flush stops on a transient failure and retains the rest', () async {
+      final store = _MemoryStore();
+      var failFrom = 1; // second request fails
+      var calls = 0;
+      final sent = <String>[];
+      final service = PlaybackReportingService(
+        serverUrl: 'https://host/jf',
+        accessToken: 'tok',
+        deviceId: 'dev',
+        userId: 'u',
+        pendingStore: store,
+        httpClient: MockClient((request) async {
+          final n = calls++;
+          if (n >= failFrom) throw http.ClientException('network down');
+          sent.add('${request.url.path} ${jsonDecode(request.body)['ItemId']}');
+          return http.Response('', 204);
+        }),
+      )..setEnabled(false);
+      await service.reportPlaybackStart(_track('a'), sessionId: 'sa');
+      await service.reportPlaybackStopped(_track('a'), Duration.zero);
+      await service.reportPlaybackStart(_track('b'), sessionId: 'sb');
+      service.setEnabled(true);
+
+      await service.flushPendingReports();
+      expect(sent, ['/jf/Sessions/Playing a']);
+      final kept = store.data.values.single;
+      expect(kept.map((e) => '${e['type']} ${e['sessionId']}'),
+          ['stop sa', 'start sb']);
+
+      failFrom = 1 << 30; // server reachable again
+      await service.flushPendingReports();
+      expect(sent, [
+        '/jf/Sessions/Playing a',
+        '/jf/Sessions/Playing/Stopped a',
+        '/jf/Sessions/Playing b',
+      ]);
+      expect(store.data.values.expand((e) => e), isEmpty);
+      service.dispose();
+    });
+
+    test('permanent rejections are dropped instead of blocking the queue',
+        () async {
+      final store = _MemoryStore();
+      final service = PlaybackReportingService(
+        serverUrl: 'https://host/jf',
+        accessToken: 'tok',
+        deviceId: 'dev',
+        userId: 'u',
+        pendingStore: store,
+        httpClient: MockClient((_) async => http.Response('', 400)),
+      )..setEnabled(false);
+      await service.reportPlaybackStart(_track('a'), sessionId: 'sa');
+      service.setEnabled(true);
+      await service.flushPendingReports();
+      expect(store.data.values.expand((e) => e), isEmpty);
+      service.dispose();
+    });
+
+    test('an online start/stop that fails is queued and replayed in order',
+        () async {
+      var down = true;
+      final sent = <String>[];
+      final service = PlaybackReportingService(
+        serverUrl: 'https://host/jf',
+        accessToken: 'tok',
+        deviceId: 'dev',
+        userId: 'u',
+        httpClient: MockClient((request) async {
+          if (down) return http.Response('', 503);
+          sent.add(request.url.path);
+          return http.Response('', 204);
+        }),
+      );
+      await service.reportPlaybackStart(_track('a'), sessionId: 'sa');
+      down = false;
+      // The start is still queued, so the stop queues behind it and both
+      // go out in order.
+      await service.reportPlaybackStopped(_track('a'), Duration.zero);
+      await service.flushPendingReports();
+      expect(sent, ['/jf/Sessions/Playing', '/jf/Sessions/Playing/Stopped']);
+      service.dispose();
+    });
+
+    test('a stop waits for its in-flight start, so the start never lands last',
+        () async {
+      final startGate = Completer<void>();
+      var startFails = true;
+      final sent = <String>[];
+      final service = PlaybackReportingService(
+        serverUrl: 'https://host/jf',
+        accessToken: 'tok',
+        deviceId: 'dev',
+        userId: 'u',
+        httpClient: MockClient((request) async {
+          final path = request.url.path;
+          if (path == '/jf/Sessions/Playing' && startFails) {
+            await startGate.future; // slow, then fails
+            startFails = false;
+            return http.Response('', 503);
+          }
+          sent.add(path);
+          return http.Response('', 204);
+        }),
+      );
+      final start = service.reportPlaybackStart(_track('a'), sessionId: 'sa');
+      await Future<void>.delayed(Duration.zero);
+      // Skip while the start is still in flight.
+      final stop = service.reportPlaybackStopped(_track('a'), Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(sent, isEmpty); // the stop did not overtake the start
+      startGate.complete();
+      await start;
+      await stop;
+      await service.flushPendingReports();
+      expect(sent, ['/jf/Sessions/Playing', '/jf/Sessions/Playing/Stopped']);
+      service.dispose();
+    });
+  });
 }

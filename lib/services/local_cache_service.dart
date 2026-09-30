@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import 'hive_init.dart';
@@ -47,7 +48,7 @@ class LocalCacheService {
 
   Future<List<JellyfinLibrary>?> readLibraries(String sessionKey) async {
     final raw = _readList(_k('libraries', sessionKey));
-    return raw?.map((json) => JellyfinLibrary.fromJson(json)).toList();
+    return _decodeEach(raw, (json) => JellyfinLibrary.fromJson(json));
   }
 
   Future<void> saveAlbums(
@@ -66,7 +67,7 @@ class LocalCacheService {
     required String libraryId,
   }) async {
     final raw = _readList(_k('albums', sessionKey, libraryId));
-    return raw?.map((json) => JellyfinAlbum.fromJson(json)).toList();
+    return _decodeEach(raw, (json) => JellyfinAlbum.fromJson(json));
   }
 
   Future<void> saveArtists(
@@ -85,7 +86,7 @@ class LocalCacheService {
     required String libraryId,
   }) async {
     final raw = _readList(_k('artists', sessionKey, libraryId));
-    return raw?.map((json) => JellyfinArtist.fromJson(json)).toList();
+    return _decodeEach(raw, (json) => JellyfinArtist.fromJson(json));
   }
 
   Future<void> savePlaylists(String sessionKey, List<JellyfinPlaylist> data) {
@@ -97,7 +98,7 @@ class LocalCacheService {
 
   Future<List<JellyfinPlaylist>?> readPlaylists(String sessionKey) async {
     final raw = _readList(_k('playlists', sessionKey));
-    return raw?.map((json) => JellyfinPlaylist.fromJson(json)).toList();
+    return _decodeEach(raw, (json) => JellyfinPlaylist.fromJson(json));
   }
 
   Future<void> saveRecentTracks(
@@ -116,7 +117,7 @@ class LocalCacheService {
     required String libraryId,
   }) async {
     final raw = _readList(_k('recent_tracks', sessionKey, libraryId));
-    return raw?.map(JellyfinTrack.fromStorageJson).toList();
+    return _decodeEach(raw, JellyfinTrack.fromStorageJson);
   }
 
   Future<void> saveRecentlyAddedAlbums(
@@ -135,7 +136,7 @@ class LocalCacheService {
     required String libraryId,
   }) async {
     final raw = _readList(_k('recently_added', sessionKey, libraryId));
-    return raw?.map((json) => JellyfinAlbum.fromJson(json)).toList();
+    return _decodeEach(raw, (json) => JellyfinAlbum.fromJson(json));
   }
 
   Future<void> saveGenres(
@@ -171,7 +172,7 @@ class LocalCacheService {
     required String albumId,
   }) async {
     final raw = _readList(_k('album_tracks', sessionKey, albumId));
-    return raw?.map(JellyfinTrack.fromStorageJson).toList();
+    return _decodeEach(raw, JellyfinTrack.fromStorageJson);
   }
 
   /// Check if album tracks are cached
@@ -227,6 +228,24 @@ class LocalCacheService {
       _updatedAtKey: DateTime.now().millisecondsSinceEpoch,
       _payloadKey: payload,
     });
+  }
+
+  /// Decodes each cached entry, skipping (not failing on) malformed ones,
+  /// so one bad record can't discard the whole cached list.
+  static List<T>? _decodeEach<T>(
+    List<Map<String, dynamic>>? raw,
+    T Function(Map<String, dynamic>) decode,
+  ) {
+    if (raw == null) return null;
+    final out = <T>[];
+    for (final json in raw) {
+      try {
+        out.add(decode(json));
+      } catch (e) {
+        debugPrint('LocalCacheService: skipping bad cached entry: $e');
+      }
+    }
+    return out;
   }
 
   List<Map<String, dynamic>>? _readList(String key) {

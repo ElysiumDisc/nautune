@@ -156,27 +156,6 @@ class SavedLoopsService extends ChangeNotifier {
     return _loopsCache[trackId]?.isNotEmpty ?? false;
   }
 
-  /// Generate a filename for the loop
-  /// Format: {TrackName}_{Start}-{End}_{Date}.{ext}
-  String generateLoopFilename(String trackName, Duration start, Duration end, String extension) {
-    // Sanitize track name for filename
-    final safeName = trackName
-        .replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
-        .replaceAll(RegExp(r'\s+'), '_')
-        .substring(0, trackName.length.clamp(0, 50));
-
-    String formatTime(Duration d) {
-      final m = d.inMinutes;
-      final s = d.inSeconds % 60;
-      return '${m}m${s}s';
-    }
-
-    final timeRange = '${formatTime(start)}-${formatTime(end)}';
-    final date = DateTime.now().toIso8601String().split('T').first; // YYYY-MM-DD
-
-    return '${safeName}_${timeRange}_$date.$extension';
-  }
-
   /// Save a new loop for a track (metadata only, no audio extraction yet)
   Future<SavedLoop> saveLoop({
     required String trackId,

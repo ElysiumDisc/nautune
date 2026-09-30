@@ -47,6 +47,10 @@ class CarPlayService {
   String? _currentPlayingTrackId;
   StreamSubscription<JellyfinTrack?>? _currentTrackSub;
 
+  /// Track id of each track row, so the Now Playing indicator can move to
+  /// the right row when the current track changes.
+  final Expando<String> _trackRowIds = Expando<String>('carplayTrackRow');
+
   /// Root rows whose detail text reflects app state. Updated in place so the
   /// selected tab and any pushed templates are preserved.
   CPListItem? _albumsRow;
@@ -143,7 +147,9 @@ class CarPlayService {
 
     _currentTrackSub =
         appState.audioPlayerService.currentTrackStream.listen((track) {
+      final previous = _currentPlayingTrackId;
       _currentPlayingTrackId = track?.id;
+      if (previous != _currentPlayingTrackId) _syncPlayingIndicators();
     });
     _currentPlayingTrackId = appState.audioPlayerService.currentTrack?.id;
   }
@@ -772,10 +778,13 @@ class CarPlayService {
     String? imageOverride,
   }) {
     final isCurrent = track.id == _currentPlayingTrackId;
-    return CPListItem(
+    final item = CPListItem(
       text: track.name,
       detailText: detailText,
-      image: imageOverride ?? track.artworkUrl(maxWidth: 200),
+      // Offline, only local artwork: a network URL would just fail (and
+      // carries the access token).
+      image: imageOverride ??
+          (appState.isOfflineMode ? null : track.artworkUrl(maxWidth: 200)),
       isPlaying: isCurrent ? true : null,
       playingIndicatorLocation:
           isCurrent ? CPListItemPlayingIndicatorLocation.trailing : null,
@@ -794,6 +803,35 @@ class CarPlayService {
         if (_stillAt(origin)) await _showNowPlaying();
       }),
     );
+    _trackRowIds[item] = track.id;
+    return item;
+  }
+
+  /// Move the Now Playing indicator to the current track's rows on the
+  /// pages still in the navigation history.
+  void _syncPlayingIndicators() {
+    final current = _currentPlayingTrackId;
+    for (final template in List.of(FlutterCarPlayController.templateHistory)) {
+      if (template is! CPListTemplate) continue;
+      for (final section in template.sections) {
+        for (final item in List.of(section.items)) {
+          if (item is! CPListItem) continue;
+          final id = _trackRowIds[item];
+          if (id == null) continue;
+          final playing = id == current;
+          if ((item.isPlaying ?? false) == playing) continue;
+          try {
+            item.update(
+              isPlaying: playing,
+              playingIndicatorLocation:
+                  playing ? CPListItemPlayingIndicatorLocation.trailing : null,
+            );
+          } catch (e) {
+            debugPrint('⚠️ CarPlay playing indicator update failed: $e');
+          }
+        }
+      }
+    }
   }
 
   CPListItem _shuffleRow(List<JellyfinTrack> tracks) {

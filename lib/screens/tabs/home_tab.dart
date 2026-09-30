@@ -89,7 +89,7 @@ class _TrackChip extends StatelessWidget {
                         imageTag: track.albumPrimaryImageTag,
                         trackId: track.id,
                         albumId: track.albumId,
-                        maxWidth: 300,
+                        maxWidth: 132, // the chip's square artwork
                         boxFit: BoxFit.cover,
                         errorBuilder: (context, url, error) => Image.asset(
                           'assets/no_album_art.png',
@@ -410,6 +410,44 @@ class _ListenBrainzDiscoveryShelf extends StatefulWidget {
   State<_ListenBrainzDiscoveryShelf> createState() => _ListenBrainzDiscoveryShelfState();
 }
 
+/// Last ListenBrainz shelf result, kept across rebuilds of the Home tab.
+///
+/// Scoped to the Jellyfin server, user and library and the ListenBrainz
+/// account it was fetched for (see [scopeFor]): after a logout, a user or
+/// library switch, or a ListenBrainz account change it simply misses.
+class _ListenBrainzShelfCache {
+  _ListenBrainzShelfCache(this.scope, this.recommendations, this.tracks)
+      : fetchedAt = DateTime.now();
+
+  final String scope;
+  final List<ListenBrainzRecommendation> recommendations;
+  final List<JellyfinTrack> tracks;
+  final DateTime fetchedAt;
+
+  static const Duration ttl = Duration(minutes: 30);
+  static _ListenBrainzShelfCache? current;
+
+  /// Cache scope for the current session, or null when there is nothing to
+  /// scope by (no session, library or ListenBrainz account).
+  static String? scopeFor(NautuneAppState appState) {
+    final session = appState.session;
+    final libraryId = appState.selectedLibraryId;
+    final lbUser = ListenBrainzService().username;
+    if (session == null || libraryId == null || lbUser == null) return null;
+    return [
+      session.serverUrl,
+      session.credentials.userId,
+      libraryId,
+      lbUser,
+    ].join('|');
+  }
+
+  bool isFreshFor(String? scope) =>
+      scope != null &&
+      scope == this.scope &&
+      DateTime.now().difference(fetchedAt) < ttl;
+}
+
 class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf> {
   List<ListenBrainzRecommendation>? _recommendations;
   List<JellyfinTrack>? _matchedTracks;
@@ -419,10 +457,19 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
   @override
   void initState() {
     super.initState();
-    _loadRecommendations();
+    final cached = _ListenBrainzShelfCache.current;
+    if (cached != null &&
+        cached.isFreshFor(_ListenBrainzShelfCache.scopeFor(widget.appState))) {
+      _recommendations = cached.recommendations;
+      _matchedTracks = cached.tracks;
+      _hasChecked = true;
+    } else {
+      _loadRecommendations();
+    }
   }
 
   Future<void> _loadRecommendations() async {
+    if (_isLoading) return;
     debugPrint('🎵 ListenBrainz Discovery: Starting to load recommendations...');
     final listenBrainz = ListenBrainzService();
 
@@ -462,6 +509,8 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
         }
         return;
       }
+      // Captured before the requests: the session may change meanwhile.
+      final cacheScope = _ListenBrainzShelfCache.scopeFor(widget.appState);
 
       final matched = await listenBrainz.getDiscoveryRecommendations(
         jellyfin: widget.appState.jellyfinService,
@@ -485,21 +534,28 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
         return;
       }
 
-      // Get tracks that are in library
-      final inLibraryRecs = matched.where((r) => r.isInLibrary).toList();
-      final tracks = <JellyfinTrack>[];
+      // Tracks that are in the library, fetched in one request and kept
+      // in recommendation order.
+      final ids = [
+        for (final rec in matched.where((r) => r.isInLibrary).take(20))
+          ?rec.jellyfinTrackId,
+      ];
+      var tracks = <JellyfinTrack>[];
+      var tracksFetched = true;
+      try {
+        final fetched =
+            await widget.appState.jellyfinService.loadTracksByIds(ids);
+        tracks = orderByIds(ids, fetched, (t) => t.id);
+      } catch (e) {
+        tracksFetched = false;
+        debugPrint('ListenBrainz discovery: track fetch failed: $e');
+      }
 
-      for (final rec in inLibraryRecs.take(20)) {
-        if (rec.jellyfinTrackId != null) {
-          try {
-            final track = await widget.appState.jellyfinService.getTrack(rec.jellyfinTrackId!);
-            if (track != null) {
-              tracks.add(track);
-            }
-          } catch (e) {
-            // Skip failed track fetches
-          }
-        }
+      // A failed track fetch is shown but not cached, so the next visit
+      // retries instead of showing no picks for the whole TTL.
+      if (tracksFetched && cacheScope != null) {
+        _ListenBrainzShelfCache.current =
+            _ListenBrainzShelfCache(cacheScope, matched, tracks);
       }
 
       if (!mounted) return;
@@ -563,7 +619,10 @@ class _ListenBrainzDiscoveryShelfState extends State<_ListenBrainzDiscoveryShelf
         _ShelfHeader(
           title: 'ListenBrainz Picks',
           subtitle: subtitleParts.isEmpty ? null : subtitleParts.join(' · '),
-          onRefresh: _loadRecommendations,
+          onRefresh: () {
+            _ListenBrainzShelfCache.current = null;
+            _loadRecommendations();
+          },
           isLoading: _isLoading,
         ),
         SizedBox(
@@ -812,9 +871,15 @@ class _MostPlayedTab extends StatefulWidget {
   State<_MostPlayedTab> createState() => _MostPlayedTabState();
 }
 
-class _MostPlayedTabState extends State<_MostPlayedTab> {
+class _MostPlayedTabState extends State<_MostPlayedTab>
+    with AutomaticKeepAliveClientMixin {
+  // Keep the shelves (and their scroll positions) while other tabs are shown.
+  @override
+  bool get wantKeepAlive => true;
+
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final theme = Theme.of(context);
     final heroShelves = _buildHomeHeroShelves();
 

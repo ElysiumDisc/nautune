@@ -54,8 +54,12 @@ class WaveformService {
 
     if (!await waveformDir.exists()) {
       await waveformDir.create(recursive: true);
+      // A new directory (e.g. after "Clear waveforms") has no backup
+      // exclusion yet, whatever was excluded earlier in this session.
+      await excludeFromBackup(waveformDir.path, force: true);
+    } else {
+      await excludeFromBackup(waveformDir.path);
     }
-    await excludeFromBackup(waveformDir.path);
 
     return '${waveformDir.path}${Platform.pathSeparator}$trackId.waveform';
   }
@@ -144,6 +148,8 @@ class WaveformService {
       final data = await getWaveform(trackId);
       completer.complete(data);
 
+      _statsCache = null;
+
       // Notify listeners that waveform is now available
       if (data != null && data.amplitudes.isNotEmpty) {
         _waveformExtractedController.add(trackId);
@@ -174,6 +180,7 @@ class WaveformService {
   /// Delete waveform for a track
   Future<void> deleteWaveform(String trackId) async {
     _cache.remove(trackId);
+    _statsCache = null;
 
     final path = await _getWaveformPath(trackId);
     final file = File(path);
@@ -186,6 +193,7 @@ class WaveformService {
   /// Clear all cached waveforms (memory and disk)
   Future<void> clearAllWaveforms() async {
     _cache.clear();
+    _statsCache = null;
 
     final docsDir = await getApplicationDocumentsDirectory();
     final waveformDir = Directory('${docsDir.path}/waveforms');
@@ -196,29 +204,68 @@ class WaveformService {
     }
   }
 
-  /// Get storage statistics for waveforms
+  // Last directory scan for [getStorageStats]: ({fileCount, totalBytes}).
+  // Cleared whenever this service adds or deletes a waveform file.
+  ({int fileCount, int totalBytes})? _statsCache;
+  DateTime _statsCacheAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Future<({int fileCount, int totalBytes})>? _statsScan;
+  static const _statsCacheMaxAge = Duration(seconds: 30);
+
+  /// Get storage statistics for waveforms. The directory scan is shared by
+  /// concurrent callers and reused for a short while (screens rebuild often;
+  /// every waveform file change here invalidates it).
   Future<Map<String, dynamic>> getStorageStats() async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final waveformDir = Directory('${docsDir.path}/waveforms');
-
-    int fileCount = 0;
-    int totalBytes = 0;
-
-    if (await waveformDir.exists()) {
-      await for (final entity in waveformDir.list()) {
-        if (entity is File && entity.path.endsWith('.waveform')) {
-          fileCount++;
-          totalBytes += await entity.length();
-        }
-      }
+    var scan = _statsCache;
+    if (scan == null ||
+        DateTime.now().difference(_statsCacheAt) >= _statsCacheMaxAge) {
+      final pending = _statsScan ??= _scanWaveformDir().whenComplete(() {
+        _statsScan = null;
+      });
+      scan = await pending;
     }
-
+    final totalBytes = scan.totalBytes;
     return {
-      'fileCount': fileCount,
+      'fileCount': scan.fileCount,
       'totalBytes': totalBytes,
       'totalSizeMB': (totalBytes / (1024 * 1024)).toStringAsFixed(2),
       'cacheSize': _cache.length,
     };
+  }
+
+  Future<({int fileCount, int totalBytes})> _scanWaveformDir() async {
+    final docsDir = await getApplicationDocumentsDirectory();
+    final waveformDir = Directory('${docsDir.path}/waveforms');
+
+    final files = <File>[];
+    if (await waveformDir.exists()) {
+      await for (final entity in waveformDir.list()) {
+        if (entity is File && entity.path.endsWith('.waveform')) {
+          files.add(entity);
+        }
+      }
+    }
+
+    // Stat in parallel batches instead of one await per file.
+    var totalBytes = 0;
+    const batchSize = 64;
+    for (var i = 0; i < files.length; i += batchSize) {
+      final end = i + batchSize < files.length ? i + batchSize : files.length;
+      final sizes = await Future.wait(files.sublist(i, end).map((f) async {
+        try {
+          return await f.length();
+        } catch (_) {
+          return 0; // deleted meanwhile
+        }
+      }));
+      for (final size in sizes) {
+        totalBytes += size;
+      }
+    }
+
+    final result = (fileCount: files.length, totalBytes: totalBytes);
+    _statsCache = result;
+    _statsCacheAt = DateTime.now();
+    return result;
   }
 }
 

@@ -25,21 +25,40 @@ public class AudioDecoderPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "INVALID_ARGS", message: "Missing path or sampleRate", details: nil))
                 return
             }
-            decodeAudio(path: path, targetSampleRate: targetSampleRate, result: result)
+            // Optional cap on the real decoded length (metadata can be missing).
+            let maxDurationSeconds = args["maxDurationSeconds"] as? Int
+            decodeAudio(path: path, targetSampleRate: targetSampleRate,
+                        maxDurationSeconds: maxDurationSeconds, result: result)
 
         default:
             result(FlutterMethodNotImplemented)
         }
     }
 
-    /// Decode an audio file to mono Float64 PCM samples
-    private func decodeAudio(path: String, targetSampleRate: Int, result: @escaping FlutterResult) {
+    /// Decode an audio file to mono Float32 PCM samples
+    private func decodeAudio(path: String, targetSampleRate: Int, maxDurationSeconds: Int?,
+                             result: @escaping FlutterResult) {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let url = URL(fileURLWithPath: path)
                 let audioFile = try AVAudioFile(forReading: url)
 
                 let format = audioFile.processingFormat
+
+                // Refuse over-long files before allocating the PCM buffer
+                if let maxSeconds = maxDurationSeconds, format.sampleRate > 0,
+                   Double(audioFile.length) / format.sampleRate > Double(maxSeconds) {
+                    DispatchQueue.main.async {
+                        result(FlutterError(code: "TOO_LONG", message: "Track exceeds \(maxSeconds) seconds", details: nil))
+                    }
+                    return
+                }
+                guard audioFile.length > 0, audioFile.length <= AVAudioFramePosition(UInt32.max) else {
+                    DispatchQueue.main.async {
+                        result(FlutterError(code: "BUFFER_ERROR", message: "Unsupported audio length", details: nil))
+                    }
+                    return
+                }
                 let frameCount = AVAudioFrameCount(audioFile.length)
 
                 guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
@@ -84,7 +103,7 @@ public class AudioDecoderPlugin: NSObject, FlutterPlugin {
 
                 // Resample if needed
                 let sourceSampleRate = Int(format.sampleRate)
-                var outputSamples: [Float]
+                let outputSamples: [Float]
 
                 if sourceSampleRate != targetSampleRate {
                     outputSamples = self.resample(monoSamples, from: sourceSampleRate, to: targetSampleRate)
@@ -93,11 +112,12 @@ public class AudioDecoderPlugin: NSObject, FlutterPlugin {
                     outputSamples = monoSamples
                 }
 
-                // Convert to Float64List for Flutter
-                let float64Samples = outputSamples.map { Double($0) }
+                // Send as a typed float32 buffer (arrives in Dart as Float32List,
+                // 4 bytes per sample, no per-element boxing)
+                let data = outputSamples.withUnsafeBufferPointer { Data(buffer: $0) }
 
                 DispatchQueue.main.async {
-                    result(["samples": float64Samples])
+                    result(["samples": FlutterStandardTypedData(float32: data)])
                 }
 
             } catch {

@@ -22,6 +22,13 @@ void main() {
     expect(sortFavorites(tracks, FavoritesSort.recent), same(tracks));
   });
 
+  test('the server-order option is labelled Default, and saved names parse', () {
+    expect(FavoritesSort.recent.label, 'Default');
+    expect(FavoritesSort.fromName('recent'), FavoritesSort.recent);
+    expect(FavoritesSort.fromName('bogus'), FavoritesSort.recent);
+    expect(PlaylistSort.fromName('size'), PlaylistSort.size);
+  });
+
   test('title, artist and album orders (case-insensitive)', () {
     expect(sortFavorites(tracks, FavoritesSort.title).map((t) => t.name),
         ['A song', 'b song', 'c song']);

@@ -70,30 +70,35 @@ final class EqualizerSettings {
         lock.unlock()
     }
 
-    /// Current settings; `version` changes whenever they do.
-    func snapshot() -> (enabled: Bool, preampDb: Float, gains: [Float], version: Int) {
-        lock.lock()
+    /// Current settings; `version` changes whenever they do. Called from the
+    /// audio thread, so it never blocks: returns nil while `update` holds the
+    /// lock (the tap keeps its current filters and retries next callback).
+    func trySnapshot() -> (enabled: Bool, preampDb: Float, gains: [Float], version: Int)? {
+        guard lock.try() else { return nil }
         defer { lock.unlock() }
         return (_enabled, _preampDb, _gains, _version)
     }
 
-    /// Peaking-EQ biquad (RBJ cookbook), normalised: [b0, b1, b2, a1, a2].
-    static func peakingCoefficients(frequency: Double, gainDb: Double, sampleRate: Double) -> [Double] {
+    /// Peaking-EQ biquad (RBJ cookbook), normalised [b0, b1, b2, a1, a2],
+    /// written to `c[0..<5]` (no allocation; safe on the audio thread).
+    static func writePeakingCoefficients(
+        frequency: Double, gainDb: Double, sampleRate: Double,
+        into c: UnsafeMutablePointer<Double>
+    ) {
         if gainDb == 0 || frequency >= sampleRate * 0.45 {
-            return [1, 0, 0, 0, 0]
+            c[0] = 1; c[1] = 0; c[2] = 0; c[3] = 0; c[4] = 0
+            return
         }
         let a = pow(10, gainDb / 40)
         let w0 = 2 * Double.pi * frequency / sampleRate
         let alpha = sin(w0) / (2 * q)
         let cosw = cos(w0)
         let a0 = 1 + alpha / a
-        return [
-            (1 + alpha * a) / a0,
-            (-2 * cosw) / a0,
-            (1 - alpha * a) / a0,
-            (-2 * cosw) / a0,
-            (1 - alpha / a) / a0,
-        ]
+        c[0] = (1 + alpha * a) / a0
+        c[1] = (-2 * cosw) / a0
+        c[2] = (1 - alpha * a) / a0
+        c[3] = (-2 * cosw) / a0
+        c[4] = (1 - alpha / a) / a0
     }
 }
 
@@ -108,10 +113,14 @@ final class EqualizerTapContext {
     var active = false
     var preampLinear: Float = 1
 
-    // Channel pointer arrays for vDSP_biquadm, allocated in prepare so the
-    // audio callback never allocates.
+    // Channel pointer arrays and the coefficient buffer for vDSP_biquadm,
+    // allocated in prepare (with the biquad setup) so the audio callback
+    // never allocates.
     private var inputs: UnsafeMutablePointer<UnsafePointer<Float>>?
     private var outputs: UnsafeMutablePointer<UnsafeMutablePointer<Float>>?
+    /// sections x channels x 5, section-major (same layout for CreateSetup
+    /// and SetCoefficientsDouble).
+    private var coefficients: UnsafeMutablePointer<Double>?
 
     func prepare(format: AudioStreamBasicDescription) {
         sampleRate = format.mSampleRate > 0 ? format.mSampleRate : 44100
@@ -121,41 +130,56 @@ final class EqualizerTapContext {
         freePointers()
         inputs = .allocate(capacity: channels)
         outputs = .allocate(capacity: channels)
+
+        // Start with pass-through filters; refresh() sets the real ones.
+        let sections = EqualizerSettings.frequencies.count
+        let filters = sections * channels
+        let coeffs = UnsafeMutablePointer<Double>.allocate(capacity: filters * 5)
+        for i in 0..<filters {
+            let c = coeffs + i * 5
+            c[0] = 1; c[1] = 0; c[2] = 0; c[3] = 0; c[4] = 0
+        }
+        coefficients = coeffs
+        setup = vDSP_biquadm_CreateSetup(coeffs, vDSP_Length(sections), vDSP_Length(channels))
         version = -1
     }
 
     private func freePointers() {
         inputs?.deallocate()
         outputs?.deallocate()
+        coefficients?.deallocate()
         inputs = nil
         outputs = nil
+        coefficients = nil
     }
 
-    /// Rebuild filter coefficients when the settings changed.
+    /// Rebuild filter coefficients when the settings changed. Runs on the
+    /// audio thread: no locks waited on, no allocation (the buffer and the
+    /// setup come from prepare).
     func refresh() {
-        let s = EqualizerSettings.shared.snapshot()
-        guard s.version != version else { return }
+        guard let s = EqualizerSettings.shared.trySnapshot(),
+              s.version != version else { return }
         version = s.version
         active = s.enabled && (s.preampDb != 0 || s.gains.contains { $0 != 0 })
         preampLinear = powf(10, s.preampDb / 20)
-        guard active else { return }
+        guard active, let setup = setup, let coeffs = coefficients else { return }
 
-        let sections = EqualizerSettings.frequencies.count
-        var coefficients = [Double]()
-        coefficients.reserveCapacity(sections * channels * 5)
-        for (i, f) in EqualizerSettings.frequencies.enumerated() {
-            let c = EqualizerSettings.peakingCoefficients(
-                frequency: f, gainDb: Double(s.gains[i]), sampleRate: sampleRate)
-            for _ in 0..<channels { coefficients.append(contentsOf: c) }
+        let frequencies = EqualizerSettings.frequencies
+        let sections = frequencies.count
+        for i in 0..<sections {
+            let first = coeffs + i * channels * 5
+            let gain = i < s.gains.count ? Double(s.gains[i]) : 0
+            EqualizerSettings.writePeakingCoefficients(
+                frequency: frequencies[i], gainDb: gain, sampleRate: sampleRate, into: first)
+            // Same filter for every channel of this section.
+            if channels > 1 {
+                for c in 1..<channels {
+                    for k in 0..<5 { first[c * 5 + k] = first[k] }
+                }
+            }
         }
-        if let existing = setup {
-            vDSP_biquadm_SetCoefficientsDouble(
-                existing, coefficients, 0, 0,
-                vDSP_Length(sections), vDSP_Length(channels))
-        } else {
-            setup = vDSP_biquadm_CreateSetup(
-                coefficients, vDSP_Length(sections), vDSP_Length(channels))
-        }
+        vDSP_biquadm_SetCoefficientsDouble(
+            setup, coeffs, 0, 0, vDSP_Length(sections), vDSP_Length(channels))
     }
 
     func process(_ bufferList: UnsafeMutablePointer<AudioBufferList>, frames: Int) {

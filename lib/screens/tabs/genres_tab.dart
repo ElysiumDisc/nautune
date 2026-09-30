@@ -66,13 +66,19 @@ class _GenresTabState extends State<_GenresTab> {
       );
     }
 
+    // Genre cards hold text, not artwork: keep them at least ~150pt wide
+    // and tall enough for two title lines plus the counts at any text size.
+    final gridSize = context.watch<UIStateProvider>().gridSize;
+    final width = MediaQuery.sizeOf(context).width;
+    final columns = gridSize.clamp(1, (width / 150).floor().clamp(1, 12));
+    final extent = _GenreCard.extentFor(MediaQuery.textScalerOf(context));
     return IndexedCollectionView<JellyfinGenre>(
       items: genres,
       nameOf: (genre) => genre.name,
       controller: _genresScrollController,
-      columns: context.watch<UIStateProvider>().gridSize,
+      columns: columns,
       gridSpacing: NautuneSpacing.md,
-      gridItemExtent: (w) => w / 1.5,
+      gridItemExtent: (w) => extent > w / 1.5 ? extent : w / 1.5,
       onRefresh: () => widget.appState.refreshGenres(),
       listItemBuilder: (context, genre) =>
           _GenreCard(genre: genre, appState: widget.appState),
@@ -87,6 +93,18 @@ class _GenreCard extends StatelessWidget {
 
   final JellyfinGenre genre;
   final NautuneAppState appState;
+
+  static const double _padding = 16;
+  static const double _cardMargin = 4; // Card's default margin
+
+  /// Height that fits two title lines and the counts line at [scaler].
+  static double extentFor(TextScaler scaler) =>
+      2 * _cardMargin +
+      2 * _padding +
+      2 * scaler.scale(16) * 1.5 + // titleMedium, two lines
+      8 +
+      scaler.scale(12) * 1.34 + // bodySmall counts line
+      2;
 
   @override
   Widget build(BuildContext context) {
@@ -116,8 +134,9 @@ class _GenreCard extends StatelessWidget {
             ),
           ),
           child: Padding(
-            padding: const EdgeInsets.all(16.0),
+            padding: const EdgeInsets.all(_padding),
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -137,6 +156,8 @@ class _GenreCard extends StatelessWidget {
                       if (genre.albumCount != null) '${genre.albumCount} albums',
                       if (genre.trackCount != null) '${genre.trackCount} tracks',
                     ].join(' • '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.tertiary.withValues(alpha: 0.7),
                     ),

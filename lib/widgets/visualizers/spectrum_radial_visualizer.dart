@@ -42,10 +42,19 @@ class _SpectrumRadialVisualizerState extends BaseVisualizerState<SpectrumRadialV
     }
   }
 
+  // Bars for the current frame (the shared buffer from getSpectrumBars).
+  List<double> _bars = const [];
+
+  @override
+  void onFrame(double dt) {
+    _bars = getSpectrumBars(_barCount);
+    _updatePeaks(_bars);
+  }
+
   @override
   Widget buildVisualizer(BuildContext context) {
-    final bars = getSpectrumBars(_barCount);
-    _updatePeaks(bars);
+    // Before the first frame (e.g. opened while paused) draw the resting state.
+    final bars = _bars.isEmpty ? (_bars = getSpectrumBars(_barCount)) : _bars;
 
     final theme = Theme.of(context);
     final primaryColor = theme.colorScheme.primary;
@@ -61,6 +70,7 @@ class _SpectrumRadialVisualizerState extends BaseVisualizerState<SpectrumRadialV
         treble: smoothTreble,
         amplitude: smoothAmplitude,
         time: lastPaintedTime,
+        frame: frame,
       ),
       size: Size.infinite,
     );
@@ -77,6 +87,7 @@ class _SpectrumRadialPainter extends CustomPainter {
   final double treble;
   final double amplitude;
   final double time;
+  final int frame;
 
   late final Paint _barPaint;
   late final Paint _peakPaint;
@@ -97,6 +108,7 @@ class _SpectrumRadialPainter extends CustomPainter {
     required this.treble,
     required this.amplitude,
     required this.time,
+    required this.frame,
   }) {
     _barPaint = Paint()
       ..style = PaintingStyle.stroke
@@ -221,30 +233,21 @@ class _SpectrumRadialPainter extends CustomPainter {
     }
 
     // Draw inner pulsing ring
-    final ringPaint = Paint()
-      ..style = PaintingStyle.stroke
+    _barPaint
       ..strokeWidth = 2.0
       ..color = primaryColor.withValues(alpha: opacity * (0.4 + mid * 0.4))
       ..maskFilter = _blurFilter4;
 
-    canvas.drawCircle(center, innerRadius * (1.0 + treble * 0.1), ringPaint);
+    canvas.drawCircle(center, innerRadius * (1.0 + treble * 0.1), _barPaint);
+    _barPaint.maskFilter = null;
   }
 
   @override
   bool shouldRepaint(covariant _SpectrumRadialPainter old) {
-    // Threshold-based repaint for battery optimization
-    // Always repaint if time changed significantly (animation) or audio values changed
-    const tolerance = 0.01;
-    const timeTolerance = 0.05; // Skip frames during slow animations
-
-    // Skip if nothing meaningful changed
-    if ((time - old.time).abs() < timeTolerance &&
-        (bass - old.bass).abs() < tolerance &&
-        (mid - old.mid).abs() < tolerance &&
-        (treble - old.treble).abs() < tolerance &&
-        (amplitude - old.amplitude).abs() < tolerance) {
-      return false;
-    }
-    return true;
+    // One repaint per visual frame (~30 fps). `bars` and `peaks` are buffers
+    // reused across frames, so comparing their contents can't detect change.
+    return old.frame != frame ||
+        old.primaryColor != primaryColor ||
+        old.opacity != opacity;
   }
 }
